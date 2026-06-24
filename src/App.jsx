@@ -11328,9 +11328,49 @@ onClick={() => setActiveReport("lateSla")}>
       </div>
     </div>
 
-    <div className="card">
-      <h3>Platform Users</h3>
-      <p>Add and manage platform accounts.</p>
+    <div className="stats-grid">
+      <div className="stat-card">
+        <h3>Total Users</h3>
+        <strong>{users.length}</strong>
+      </div>
+      <div className="stat-card">
+        <h3>Active Users</h3>
+        <strong>{users.filter((u) => u.status === "Active").length}</strong>
+      </div>
+      <div className="stat-card">
+        <h3>Disabled Users</h3>
+        <strong>{users.filter((u) => u.status !== "Active").length}</strong>
+      </div>
+    </div>
+
+    <div className="card" style={{ marginTop: 20 }}>
+      <h3>Platform Users List</h3>
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {users.length === 0 ? (
+            <tr>
+              <td colSpan="4">No users found</td>
+            </tr>
+          ) : (
+            users.map((user) => (
+              <tr key={user.id}>
+                <td>{user.name || "-"}</td>
+                <td>{user.email || "-"}</td>
+                <td>{user.role || "-"}</td>
+                <td>{user.status || "-"}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </div>
   </div>
 )}
