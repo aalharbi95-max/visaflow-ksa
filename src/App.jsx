@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabase";
 import "./style.css";
-
+import "./New folder/style.css";
 const PAGES = [
   "Executive Dashboard",
   "AI Commander",
@@ -32,9 +32,10 @@ const PAGES = [
   "Office Portal",
   "Notifications",
   "Reports",
-  "Platform Dashboard",
-  "Companies Management",
-  "Subscription Invoices",
+ "Platform Dashboard",
+"Companies Management",
+"Platform Users",
+"Subscription Invoices",
   "Company Requests Report",
   "Backup Center",
   "Central Support",
@@ -74,7 +75,15 @@ const SIDEBAR_GROUPS = [
   {
     title: "Platform Administration",
     icon: "👑",
-    pages: ["Platform Dashboard", "Companies Management", "Subscription Invoices", "Company Requests Report", "Backup Center", "Central Support"],
+    pages: [
+  "Platform Dashboard",
+  "Companies Management",
+  "Platform Users",
+  "Subscription Invoices",
+  "Company Requests Report",
+  "Backup Center",
+  "Central Support",
+],
   },
   {
     title: "Administration",
@@ -106,8 +115,10 @@ function buildSidebarGroups(visiblePages = []) {
 }
 
 const ROLE_OPTIONS = [
-  "Platform Owner",
-  "Admin",
+ "Platform Owner",
+"Platform Accounts User",
+"Platform Support User",
+"Admin",
   "CEO",
   "Operations Manager",
   "Project Manager",
@@ -700,6 +711,8 @@ const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
 const [resetEmail, setResetEmail] = useState("");
 const [resetMessage, setResetMessage] = useState("");
 const [resetLoading, setResetLoading] = useState(false);
+const [loginLanguage, setLoginLanguage] = useState("EN");
+const [showLoginPassword, setShowLoginPassword] = useState(false);
 const [aiQuestion, setAiQuestion] = useState("What are the most important recruitment risks today?");
 const [aiAnswer, setAiAnswer] = useState("");
 const [aiLoading, setAiLoading] = useState(false);
@@ -777,15 +790,33 @@ const currentRole = normalizeUserRole(currentUser?.role);
 const PLATFORM_PAGES = [
   "Platform Dashboard",
   "Companies Management",
+  "Platform Users",
   "Subscription Invoices",
   "Company Requests Report",
   "Backup Center",
   "Central Support",
 ];
 
+const PLATFORM_ACCOUNT_PAGES = [
+  "Platform Dashboard",
+  "Companies Management",
+  "Platform Users",
+  "Subscription Invoices",
+  "Company Requests Report",
+  "Backup Center",
+];
+
+const PLATFORM_SUPPORT_PAGES = [
+  "Platform Dashboard",
+  "Central Support",
+];
+
 const ROLE_PAGES = {
   // SaaS owner only. This role manages the platform, not client operations.
   "Platform Owner": PLATFORM_PAGES,
+  "Platform Accounts User": PLATFORM_ACCOUNT_PAGES,
+
+"Platform Support User": PLATFORM_SUPPORT_PAGES,
 
   // Company Admin: full tenant administration and all company operations, excluding SaaS platform screens.
   Admin: [...PAGES.filter((page) => !PLATFORM_PAGES.includes(page)), "RequestDetails"],
@@ -903,7 +934,25 @@ const visiblePages = currentRole === "Platform Owner"
 const roleActions = ACTION_PERMISSIONS[currentRole] || ACTION_PERMISSIONS.Viewer;
 const hasAction = (action) => roleActions.includes(action);
 
-const canManagePlatform = currentRole === "Platform Owner";
+const isPlatformOwner = currentRole === "Platform Owner";
+const isPlatformAccountsUser = currentRole === "Platform Accounts User";
+const isPlatformSupportUser = currentRole === "Platform Support User";
+
+const canManagePlatform = [
+  "Platform Owner",
+  "Platform Accounts User",
+  "Platform Support User",
+].includes(currentRole);
+
+const canManagePlatformAccounts = [
+  "Platform Owner",
+  "Platform Accounts User",
+].includes(currentRole);
+
+const canManagePlatformSupport = [
+  "Platform Owner",
+  "Platform Support User",
+].includes(currentRole);
 
 const canManageUsers = currentRole === "Admin";
 const canManagePermissions = currentRole === "Admin";
@@ -6483,481 +6532,179 @@ function exportCurrentPage() {
 }
 
 if (!currentUser) {
-  const brandLogo = (
-    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-      <div
-        style={{
-          width: 76,
-          height: 76,
-          borderRadius: 22,
-          background: "linear-gradient(145deg, #ffffff 0%, #dbeafe 40%, #0b5cad 100%)",
-          display: "grid",
-          placeItems: "center",
-          boxShadow: "0 22px 50px rgba(0, 78, 164, 0.35)",
-          border: "1px solid rgba(255,255,255,0.55)",
-          position: "relative",
-        }}
-      >
-        <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: 16,
-            background: "linear-gradient(135deg, #082f63, #0b5cad)",
-            color: "#fff",
-            display: "grid",
-            placeItems: "center",
-            fontWeight: 950,
-            fontSize: 19,
-            letterSpacing: "-0.04em",
-          }}
-        >
-          VF
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            right: -8,
-            top: -8,
-            width: 28,
-            height: 28,
-            borderRadius: "50%",
-            background: "linear-gradient(135deg, #f7c85a, #d99b24)",
-            color: "#082f63",
-            display: "grid",
-            placeItems: "center",
-            fontSize: 15,
-            fontWeight: 900,
-            boxShadow: "0 8px 20px rgba(217,155,36,0.35)",
-          }}
-        >
-          ✈
-        </div>
-      </div>
-      <div>
-        <div style={{ fontSize: 43, lineHeight: 0.95, fontWeight: 950, letterSpacing: "0.02em" }}>
-          <span style={{ color: "#fff" }}>VISA</span>{" "}
-          <span style={{ color: "#d9a441" }}>FLOW</span>
-        </div>
-        <div
-          style={{
-            marginTop: 10,
-            color: "rgba(255,255,255,0.86)",
-            fontSize: 13,
-            fontWeight: 900,
-            letterSpacing: "0.22em",
-          }}
-        >
-          MANPOWER. MOBILIZED. MANAGED.
-        </div>
-      </div>
-    </div>
-  );
-
-  const compactLogo = (
-    <div style={{ textAlign: "center" }}>
-      <div
-        style={{
-          width: 78,
-          height: 78,
-          margin: "0 auto 16px",
-          borderRadius: 22,
-          background: "linear-gradient(145deg, #ffffff 0%, #dbeafe 38%, #0b5cad 100%)",
-          display: "grid",
-          placeItems: "center",
-          position: "relative",
-          boxShadow: "0 18px 45px rgba(8,47,99,0.22)",
-        }}
-      >
-        <div
-          style={{
-            width: 50,
-            height: 50,
-            borderRadius: 16,
-            background: "linear-gradient(135deg, #082f63, #0b5cad)",
-            color: "#fff",
-            display: "grid",
-            placeItems: "center",
-            fontWeight: 950,
-            fontSize: 20,
-          }}
-        >
-          VF
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            right: -5,
-            top: -5,
-            width: 26,
-            height: 26,
-            borderRadius: "50%",
-            background: "#d9a441",
-            color: "#082f63",
-            fontWeight: 900,
-            display: "grid",
-            placeItems: "center",
-            fontSize: 14,
-          }}
-        >
-          ✈
-        </div>
-      </div>
-      <div style={{ fontSize: 26, fontWeight: 950, color: "#082f63", letterSpacing: "0.04em" }}>
-        VISA <span style={{ color: "#d9a441" }}>FLOW</span>
-      </div>
-      <div style={{ fontSize: 9, fontWeight: 950, letterSpacing: "0.18em", color: "#334155", marginTop: 4 }}>
-        MANPOWER. MOBILIZED. MANAGED.
-      </div>
-    </div>
-  );
-
-  const featureCards = [
-    ["👥", "Smart Recruitment", "AI ranking, candidate matching and tracking"],
-    ["🛂", "Visa & Authorization", "Inventory, allocation and authorization control"],
-    ["✈️", "Mobilization", "Travel, arrival and joining management"],
-    ["📊", "Executive Insights", "Real-time dashboards and performance reports"],
-  ];
-
-  const trustedItems = ["Vision 2030", "QIWA", "MUSANED", "JADARAT"];
-
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        width: "100%",
-        display: "grid",
-        gridTemplateColumns: "58% 42%",
-        background: "#f8fbff",
-        fontFamily: "Inter, Arial, sans-serif",
-        color: "#0f172a",
-        overflow: "hidden",
-      }}
-    >
-      <section
-        style={{
-          position: "relative",
-          minHeight: "100vh",
-          padding: "58px 72px 34px",
-          color: "#fff",
-          background:
-            "linear-gradient(135deg, rgba(1,20,48,0.98), rgba(4,47,99,0.96)), radial-gradient(circle at 75% 40%, rgba(14,165,233,0.25), transparent 28%)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            opacity: 0.35,
-            backgroundImage:
-              "linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)",
-            backgroundSize: "28px 28px",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            right: -90,
-            top: 90,
-            width: 520,
-            height: 520,
-            borderRadius: "50%",
-            border: "1px solid rgba(96,165,250,0.22)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            right: 90,
-            top: 250,
-            width: 330,
-            height: 250,
-            opacity: 0.28,
-            background:
-              "linear-gradient(to top, rgba(255,255,255,0.08), transparent), linear-gradient(90deg, transparent 0 8%, rgba(255,255,255,0.18) 8% 10%, transparent 10% 18%, rgba(255,255,255,0.12) 18% 20%, transparent 20% 32%, rgba(255,255,255,0.16) 32% 35%, transparent 35% 46%, rgba(255,255,255,0.1) 46% 49%, transparent 49% 100%)",
-            clipPath: "polygon(0 100%, 0 45%, 10% 45%, 10% 25%, 22% 25%, 22% 55%, 35% 55%, 35% 10%, 47% 10%, 47% 65%, 58% 65%, 58% 35%, 70% 35%, 70% 0, 82% 0, 82% 50%, 100% 50%, 100% 100%)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            right: 120,
-            bottom: 215,
-            width: 560,
-            height: 3,
-            background: "linear-gradient(90deg, transparent, #1d9bf0, #d9a441, transparent)",
-            transform: "rotate(-18deg)",
-            boxShadow: "0 0 24px rgba(29,155,240,0.8)",
-          }}
-        />
+    <main className="vf-login-shell">
+      <section className="vf-login-left">
+        <div className="vf-orb vf-orb-a" />
+        <div className="vf-orb vf-orb-b" />
+        <div className="vf-grid-layer" />
 
-        <div style={{ position: "relative", zIndex: 2, height: "100%", display: "flex", flexDirection: "column" }}>
-          {brandLogo}
+        <div className="vf-left-content">
+          <header className="vf-brand-row">
+            <div className="vf-symbol vf-symbol-large" aria-hidden="true">
+              <span className="vf-globe" />
+              <span className="vf-plane">✈</span>
+              <span className="vf-vmark">V</span>
+            </div>
 
-          <div
-            style={{
-              marginTop: 38,
-              width: "fit-content",
-              padding: "9px 18px",
-              borderRadius: 999,
-              background: "rgba(37,99,235,0.24)",
-              border: "1px solid rgba(147,197,253,0.35)",
-              color: "#dbeafe",
-              fontWeight: 900,
-              fontSize: 15,
-              boxShadow: "inset 0 0 18px rgba(59,130,246,0.22)",
-            }}
-          >
-            🛡️ End-to-End Recruitment & Visa Management Platform
-          </div>
-
-          <h1
-            style={{
-              margin: "42px 0 18px",
-              fontSize: "clamp(42px, 4.2vw, 68px)",
-              lineHeight: 1.04,
-              letterSpacing: "-0.07em",
-              maxWidth: 850,
-              fontWeight: 950,
-            }}
-          >
-            Recruit. Mobilize.
-            <br />
-            Manage. <span style={{ color: "#d9a441" }}>Succeed.</span>
-          </h1>
-
-          <p
-            style={{
-              margin: 0,
-              maxWidth: 770,
-              fontSize: 19,
-              lineHeight: 1.85,
-              color: "rgba(255,255,255,0.82)",
-            }}
-          >
-            A unified platform to manage recruitment requests, visas, candidates, interviews,
-            mobilization, Saudi hiring, and workforce operations — all in one secure place.
-          </p>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-              gap: 16,
-              marginTop: 50,
-              maxWidth: 920,
-            }}
-          >
-            {featureCards.map(([icon, title, desc]) => (
-              <div
-                key={title}
-                style={{
-                  minHeight: 140,
-                  padding: "24px 18px",
-                  borderRadius: 22,
-                  background: "rgba(255,255,255,0.08)",
-                  border: "1px solid rgba(147,197,253,0.22)",
-                  backdropFilter: "blur(14px)",
-                  boxShadow: "0 24px 70px rgba(0,0,0,0.18)",
-                }}
-              >
-                <div
-                  style={{
-                    width: 56,
-                    height: 56,
-                    borderRadius: "50%",
-                    background: "rgba(37,99,235,0.35)",
-                    border: "1px solid rgba(147,197,253,0.35)",
-                    display: "grid",
-                    placeItems: "center",
-                    fontSize: 26,
-                    marginBottom: 16,
-                  }}
-                >
-                  {icon}
-                </div>
-                <div style={{ fontWeight: 950, fontSize: 16, marginBottom: 8 }}>{title}</div>
-                <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 1.55 }}>{desc}</div>
+            <div>
+              <div className="vf-brand-title">
+                VISA <span>FLOW</span>
               </div>
-            ))}
+              <div className="vf-brand-subtitle">MANPOWER. MOBILIZED. MANAGED.</div>
+            </div>
+          </header>
+
+          <div className="vf-platform-badge">
+            <span>🛡</span>
+            End-to-End Recruitment & Visa Management Platform
           </div>
 
-          <div
-            style={{
-              marginTop: "auto",
-              maxWidth: 850,
-              borderRadius: 24,
-              border: "1px solid rgba(147,197,253,0.22)",
-              background: "rgba(255,255,255,0.07)",
-              backdropFilter: "blur(14px)",
-              padding: "22px 28px",
-            }}
-          >
-            <div style={{ textAlign: "center", color: "rgba(255,255,255,0.78)", fontWeight: 800, marginBottom: 18 }}>
-              Trusted & Compliant with
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              {trustedItems.map((item) => (
-                <div
-                  key={item}
-                  style={{
-                    textAlign: "center",
-                    padding: "14px 8px",
-                    borderRight: "1px solid rgba(255,255,255,0.18)",
-                    fontWeight: 950,
-                    fontSize: 18,
-                    color: item === "Vision 2030" ? "#d9a441" : "#fff",
-                  }}
-                >
-                  {item}
-                </div>
-              ))}
-            </div>
-          </div>
+          <section className="vf-hero-copy">
+            <h1>
+              Recruit. Mobilize.
+              <br />
+              Manage. <strong>Succeed.</strong>
+            </h1>
+            <p>
+              A unified platform to manage recruitment requests, visas, candidates,
+              interviews, mobilization, Saudi hiring, and workforce operations —
+              all in one secure place.
+            </p>
+          </section>
 
-          <div style={{ marginTop: 24, fontSize: 13, color: "rgba(255,255,255,0.62)" }}>
-            © 2026 VisaFlow KSA. All rights reserved. &nbsp; | &nbsp; Privacy Policy &nbsp; | &nbsp; Terms of Service &nbsp; | &nbsp; Support
-          </div>
+          <section className="vf-feature-cards" aria-label="VisaFlow features">
+            <article>
+              <div className="vf-feature-icon">👥</div>
+              <h3>Smart Recruitment</h3>
+              <p>AI ranking, candidate matching & tracking</p>
+            </article>
+
+            <article>
+              <div className="vf-feature-icon">🛂</div>
+              <h3>Visa & Authorization</h3>
+              <p>Inventory, allocation & authorization control</p>
+            </article>
+
+            <article>
+              <div className="vf-feature-icon">✈️</div>
+              <h3>Mobilization</h3>
+              <p>Travel, arrival & joining management</p>
+            </article>
+
+            <article>
+              <div className="vf-feature-icon">📊</div>
+              <h3>Executive Insights</h3>
+              <p>Dashboards, reports & performance visibility</p>
+            </article>
+          </section>
+
+          <section className="vf-compliance-strip">
+            <div>
+              <span>رؤية</span>
+              <strong>2030</strong>
+            </div>
+            <div>
+              <span>QIWA</span>
+              <strong>قوى</strong>
+            </div>
+            <div>
+              <span>MUSANED</span>
+              <strong>مساند</strong>
+            </div>
+            <div>
+              <span>JADARAT</span>
+              <strong>جدارات</strong>
+            </div>
+          </section>
         </div>
       </section>
 
-      <section
-        style={{
-          position: "relative",
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 48,
-          background:
-            "radial-gradient(circle at 10% 12%, rgba(20,184,166,0.14), transparent 28%), radial-gradient(circle at 90% 85%, rgba(37,99,235,0.13), transparent 28%), linear-gradient(135deg, #ffffff, #eef6ff)",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            right: 52,
-            top: 30,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 16px",
-            borderRadius: 18,
-            background: "rgba(255,255,255,0.86)",
-            border: "1px solid #dbeafe",
-            boxShadow: "0 14px 34px rgba(15,23,42,0.08)",
-            fontWeight: 900,
-            color: "#0b5cad",
-          }}
-        >
-          🌐 <span>EN</span><span style={{ color: "#64748b" }}>العربية</span>
+      <section className="vf-login-right">
+        <div className="vf-language-switch" aria-label="Language switch">
+          <button
+            type="button"
+            className={loginLanguage === "EN" ? "active" : ""}
+            onClick={() => setLoginLanguage("EN")}
+          >
+            EN
+          </button>
+          <button
+            type="button"
+            className={loginLanguage === "AR" ? "active" : ""}
+            onClick={() => setLoginLanguage("AR")}
+          >
+            العربية
+          </button>
         </div>
 
-        <div
-          style={{
-            width: "100%",
-            maxWidth: 560,
-            borderRadius: 38,
-            background: "rgba(255,255,255,0.92)",
-            border: "1px solid rgba(203,213,225,0.9)",
-            boxShadow: "0 40px 100px rgba(15,23,42,0.14)",
-            padding: "48px 46px",
-          }}
-        >
-          {compactLogo}
-
-          <h2
-            style={{
-              margin: "22px 0 8px",
-              textAlign: "center",
-              fontSize: 38,
-              lineHeight: 1.1,
-              letterSpacing: "-0.05em",
-              color: "#082f63",
-              fontWeight: 950,
-            }}
-          >
-            Welcome Back!
-          </h2>
-
-          <p style={{ margin: "0 0 34px", textAlign: "center", color: "#64748b", fontSize: 16 }}>
-            Sign in to access your VisaFlow dashboard
-          </p>
-
-          <label style={{ display: "block", fontWeight: 900, color: "#082f63", marginBottom: 10 }}>
-            Email Address
-          </label>
-          <div style={{ position: "relative", marginBottom: 22 }}>
-            <span style={{ position: "absolute", left: 18, top: 16, color: "#64748b" }}>✉️</span>
-            <input
-              type="email"
-              placeholder="Enter your email"
-              value={loginForm.email}
-              onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              style={{
-                width: "100%",
-                height: 58,
-                borderRadius: 16,
-                border: "1px solid #cbd5e1",
-                padding: "0 18px 0 52px",
-                fontSize: 16,
-                outline: "none",
-                background: "#fff",
-                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.8)",
-              }}
-            />
+        <div className="vf-login-card">
+          <div className="vf-login-logo">
+            <div className="vf-symbol vf-symbol-small" aria-hidden="true">
+              <span className="vf-globe" />
+              <span className="vf-plane">✈</span>
+              <span className="vf-vmark">V</span>
+            </div>
           </div>
 
-          <label style={{ display: "block", fontWeight: 900, color: "#082f63", marginBottom: 10 }}>
-            Password
-          </label>
-          <div style={{ position: "relative", marginBottom: 20 }}>
-            <span style={{ position: "absolute", left: 18, top: 16, color: "#64748b" }}>🔒</span>
-            <input
-              type="password"
-              placeholder="Enter your password"
-              value={loginForm.password}
-              onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              style={{
-                width: "100%",
-                height: 58,
-                borderRadius: 16,
-                border: "1px solid #cbd5e1",
-                padding: "0 18px 0 52px",
-                fontSize: 16,
-                outline: "none",
-                background: "#fff",
-              }}
-            />
+          <h2>Welcome Back!</h2>
+          <p className="vf-login-subtitle">Sign in to access your VisaFlow dashboard</p>
+
+          <div className="vf-form-group">
+            <label>Email Address</label>
+            <div className="vf-input-box">
+              <span className="vf-input-icon">✉</span>
+              <input
+                type="email"
+                placeholder="Enter your email"
+                value={loginForm.email}
+                onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                autoComplete="email"
+              />
+            </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 26 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 10, color: "#475569", fontWeight: 700 }}>
+          <div className="vf-form-group">
+            <label>Password</label>
+            <div className="vf-input-box">
+              <span className="vf-input-icon">🔒</span>
+              <input
+                type={showLoginPassword ? "text" : "password"}
+                placeholder="Enter your password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="vf-password-toggle"
+                onClick={() => setShowLoginPassword((prev) => !prev)}
+                aria-label={showLoginPassword ? "Hide password" : "Show password"}
+              >
+                {showLoginPassword ? "🙈" : "👁"}
+              </button>
+            </div>
+          </div>
+
+          <div className="vf-login-options">
+            <label className="vf-remember">
               <input
                 type="checkbox"
                 checked={rememberMe}
                 onChange={(e) => setRememberMe(e.target.checked)}
-                style={{ width: 16, height: 16 }}
               />
-              Remember Me
+              <span>Remember Me</span>
             </label>
 
             <button
               type="button"
+              className="vf-forgot-link"
               onClick={() => {
                 setResetEmail(loginForm.email || "");
                 setResetMessage("");
                 setForgotPasswordOpen(true);
-              }}
-              style={{
-                border: "none",
-                background: "transparent",
-                color: "#0b5cad",
-                fontWeight: 950,
-                cursor: "pointer",
               }}
             >
               Forgot Password?
@@ -6965,123 +6712,68 @@ if (!currentUser) {
           </div>
 
           <button
+            type="button"
+            className="vf-primary-login"
             onClick={handleLogin}
             disabled={loginLoading}
-            style={{
-              width: "100%",
-              height: 62,
-              borderRadius: 16,
-              border: "none",
-              color: "#fff",
-              fontWeight: 950,
-              fontSize: 18,
-              background: loginLoading
-                ? "#94a3b8"
-                : "linear-gradient(135deg, #082f63, #0b5cad)",
-              boxShadow: "0 20px 42px rgba(8,47,99,0.28)",
-              cursor: loginLoading ? "not-allowed" : "pointer",
-            }}
           >
-            🔐 {loginLoading ? "Signing in..." : "Sign In"}
+            {loginLoading ? "Signing in..." : "🔐 Sign In"}
           </button>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "26px 0" }}>
-            <div style={{ height: 1, background: "#e2e8f0", flex: 1 }} />
-            <span style={{ color: "#64748b" }}>or</span>
-            <div style={{ height: 1, background: "#e2e8f0", flex: 1 }} />
+          <div className="vf-divider">
+            <span />
+            <em>or</em>
+            <span />
           </div>
 
           <button
             type="button"
-            style={{
-              width: "100%",
-              height: 58,
-              borderRadius: 16,
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#082f63",
-              fontWeight: 950,
-              fontSize: 16,
-            }}
-            onClick={() => alert("SSO will be enabled in the next enterprise release.")}
+            className="vf-microsoft-login"
+            onClick={() => alert("Microsoft SSO can be connected after domain setup.")}
           >
-            🟦 Sign in with Microsoft
+            <span className="vf-ms-mark">
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+            Sign in with Microsoft
           </button>
 
-          <div style={{ textAlign: "center", marginTop: 26, color: "#64748b", fontSize: 14 }}>
-            🛡️ Your data is secure and encrypted
-          </div>
+          <p className="vf-secure-note">🛡 Your data is secure and encrypted</p>
+        </div>
+
+        <div className="vf-login-footer">
+          VisaFlow KSA · Version 1.0.0
         </div>
 
         {forgotPasswordOpen && (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(2,6,23,0.62)",
-              display: "grid",
-              placeItems: "center",
-              zIndex: 99999,
-              padding: 20,
-            }}
-          >
-            <div
-              style={{
-                width: "100%",
-                maxWidth: 440,
-                background: "#fff",
-                borderRadius: 26,
-                padding: 30,
-                boxShadow: "0 30px 90px rgba(0,0,0,0.28)",
-              }}
-            >
-              <h3 style={{ margin: "0 0 8px", color: "#082f63", fontSize: 24 }}>Forgot Password</h3>
-              <p style={{ margin: "0 0 18px", color: "#64748b" }}>Enter your email and the system admin will be notified.</p>
+          <div className="vf-reset-overlay">
+            <div className="vf-reset-modal">
+              <h3>Forgot Password</h3>
+              <p>Enter your email and the system administrator will be notified.</p>
+
               <input
                 type="email"
                 placeholder="Enter your email"
                 value={resetEmail}
                 onChange={(e) => setResetEmail(e.target.value)}
-                style={{
-                  width: "100%",
-                  height: 52,
-                  borderRadius: 15,
-                  border: "1px solid #cbd5e1",
-                  padding: "0 16px",
-                  marginBottom: 14,
-                }}
               />
-              {resetMessage && (
-                <div style={{ marginBottom: 14, color: "#334155", lineHeight: 1.6 }}>
-                  {resetMessage}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 10 }}>
+
+              {resetMessage && <div className="vf-reset-message">{resetMessage}</div>}
+
+              <div className="vf-reset-actions">
                 <button
+                  type="button"
                   onClick={handleForgotPasswordSubmit}
                   disabled={resetLoading}
-                  style={{
-                    flex: 1,
-                    height: 48,
-                    borderRadius: 14,
-                    border: "none",
-                    background: "#082f63",
-                    color: "#fff",
-                    fontWeight: 950,
-                  }}
                 >
                   {resetLoading ? "Sending..." : "Send Request"}
                 </button>
                 <button
+                  type="button"
+                  className="secondary"
                   onClick={() => setForgotPasswordOpen(false)}
-                  style={{
-                    height: 48,
-                    borderRadius: 14,
-                    border: "1px solid #cbd5e1",
-                    background: "#fff",
-                    padding: "0 18px",
-                    fontWeight: 900,
-                  }}
                 >
                   Close
                 </button>
@@ -7090,10 +6782,9 @@ if (!currentUser) {
           </div>
         )}
       </section>
-    </div>
+    </main>
   );
 }
-
 
   return (
     <div className="layout">
