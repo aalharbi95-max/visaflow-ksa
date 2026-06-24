@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "./supabase";
 import "./style.css";
 import "./New folder/style.css";
+
 const PAGES = [
   "Executive Dashboard",
   "AI Commander",
@@ -11315,6 +11316,22 @@ onClick={() => setActiveReport("lateSla")}>
         </table>
       </div>
     )}
+  </div>
+)}
+{activePage === "Platform Users" && canManagePlatformAccounts && (
+  <div className="page-section">
+    <div className="executive-hero">
+      <div>
+        <p className="eyebrow">Platform Administration</p>
+        <h1>Platform Users</h1>
+        <p>Manage internal platform users.</p>
+      </div>
+    </div>
+
+    <div className="card">
+      <h3>Platform Users</h3>
+      <p>Add and manage platform accounts.</p>
+    </div>
   </div>
 )}
 
