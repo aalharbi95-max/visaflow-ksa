@@ -788,6 +788,14 @@ function normalizeUserRole(role) {
 
 const currentRole = normalizeUserRole(currentUser?.role);
 
+function isPlatformRole(role) {
+  return [
+    "Platform Owner",
+    "Platform Accounts User",
+    "Platform Support User",
+  ].includes(normalizeUserRole(role));
+}
+
 const PLATFORM_PAGES = [
   "Platform Dashboard",
   "Companies Management",
@@ -955,7 +963,8 @@ const canManagePlatformSupport = [
   "Platform Support User",
 ].includes(currentRole);
 
-const canManageUsers = currentRole === "Admin";
+const canManageUsers =
+  currentRole === "Admin" || canManagePlatformAccounts;
 const canManagePermissions = currentRole === "Admin";
 const canManageAgencies = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
@@ -1371,6 +1380,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       }
 
       setUsers(data || []);
+      console.log("USERS DATA:", data);
       return;
     }
 
@@ -2747,19 +2757,31 @@ if (existingUser) {
   return alert("Email already exists");
 }
 
+  const savingPlatformUser =
+    canManagePlatformAccounts && activePage === "Platform Users";
+
+  const effectiveRole = savingPlatformUser
+    ? (isPlatformRole(userForm.role) ? userForm.role : "Platform Accounts User")
+    : (userForm.role || "Viewer");
+
   const payload = {
     name: userForm.name,
     email: userForm.email.trim().toLowerCase(),
     password: userForm.password.trim(),
-    role: userForm.role || "Viewer",
+    role: effectiveRole,
     status: userForm.status || "Active",
-    agency_id: userForm.role === "Agency" ? (userForm.agency_id || null) : null,
-    agency_name: userForm.role === "Agency" ? (userForm.agency_name || "") : "",
+    agency_id: effectiveRole === "Agency" ? (userForm.agency_id || null) : null,
+    agency_name: effectiveRole === "Agency" ? (userForm.agency_name || "") : "",
   };
 
+  const isInternalPlatformUser = isPlatformRole(payload.role);
+  const userPayload = isInternalPlatformUser
+    ? { ...payload, company_id: null }
+    : withCompany(payload);
+
   const result = userEditingId
-    ? await supabase.from("users").update(payload).eq("id", userEditingId)
-    : await supabase.from("users").insert([withCompany(payload)]);
+    ? await supabase.from("users").update(userPayload).eq("id", userEditingId)
+    : await supabase.from("users").insert([userPayload]);
 
   if (result.error) return alert(result.error.message);
 
@@ -2767,7 +2789,7 @@ if (existingUser) {
     name: "",
     email: "",
     password: "",
-    role: "Viewer",
+    role: savingPlatformUser ? "Platform Accounts User" : "Viewer",
     status: "Active",
     agency_id: "",
     agency_name: "",
@@ -11324,27 +11346,118 @@ onClick={() => setActiveReport("lateSla")}>
       <div>
         <p className="eyebrow">Platform Administration</p>
         <h1>Platform Users</h1>
-        <p>Manage internal platform users.</p>
+        <p>Add and manage internal platform users only.</p>
       </div>
     </div>
 
     <div className="stats-grid">
       <div className="stat-card">
-        <h3>Total Users</h3>
-        <strong>{users.length}</strong>
+        <h3>Total Platform Users</h3>
+        <strong>{users.filter((u) => isPlatformRole(u.role)).length}</strong>
       </div>
+
       <div className="stat-card">
-        <h3>Active Users</h3>
-        <strong>{users.filter((u) => u.status === "Active").length}</strong>
+        <h3>Active Platform Users</h3>
+        <strong>
+          {
+            users.filter(
+              (u) =>
+                isPlatformRole(u.role) &&
+                String(u.status || "Active").trim().toLowerCase() === "active"
+            ).length
+          }
+        </strong>
       </div>
+
       <div className="stat-card">
-        <h3>Disabled Users</h3>
-        <strong>{users.filter((u) => u.status !== "Active").length}</strong>
+        <h3>Disabled Platform Users</h3>
+        <strong>
+          {
+            users.filter(
+              (u) =>
+                isPlatformRole(u.role) &&
+                String(u.status || "Active").trim().toLowerCase() !== "active"
+            ).length
+          }
+        </strong>
       </div>
     </div>
 
-    <div className="card" style={{ marginTop: 20 }}>
-      <h3>Platform Users List</h3>
+    <div className="card">
+      <h3>{userEditingId ? "Edit Platform User" : "Add Platform User"}</h3>
+
+      <div className="form-grid">
+        <input
+          placeholder="Full Name"
+          value={userForm.name}
+          onChange={(e) => setUserForm({ ...userForm, name: e.target.value })}
+        />
+
+        <input
+          placeholder="Email"
+          value={userForm.email}
+          onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
+        />
+
+        <input
+          type="password"
+          placeholder="Password"
+          value={userForm.password}
+          onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+        />
+
+        <select
+          value={isPlatformRole(userForm.role) ? userForm.role : "Platform Accounts User"}
+          onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
+        >
+          <option value="Platform Owner">Platform Owner</option>
+          <option value="Platform Accounts User">Platform Accounts User</option>
+          <option value="Platform Support User">Platform Support User</option>
+        </select>
+
+        <select
+          value={userForm.status || "Active"}
+          onChange={(e) => setUserForm({ ...userForm, status: e.target.value })}
+        >
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+        </select>
+
+        <button onClick={saveUser}>
+          {userEditingId ? "Update User" : "Add User"}
+        </button>
+
+        {userEditingId && (
+          <button
+            type="button"
+            onClick={() => {
+              setUserEditingId(null);
+              setUserForm({
+                name: "",
+                email: "",
+                password: "",
+                role: "Platform Accounts User",
+                status: "Active",
+                agency_id: "",
+                agency_name: "",
+              });
+            }}
+          >
+            Cancel Edit
+          </button>
+        )}
+      </div>
+    </div>
+
+    <div className="card">
+      <div className="section-title-row">
+        <div>
+          <h3>Platform Users List</h3>
+          <p>Only Platform Owner, Platform Accounts User, and Platform Support User are shown here.</p>
+        </div>
+        <button onClick={loadUsers}>Refresh Users</button>
+      </div>
+
       <table className="data-table">
         <thead>
           <tr>
@@ -11352,28 +11465,41 @@ onClick={() => setActiveReport("lateSla")}>
             <th>Email</th>
             <th>Role</th>
             <th>Status</th>
+            <th>Company ID</th>
+            <th>Actions</th>
           </tr>
         </thead>
+
         <tbody>
-          {users.length === 0 ? (
+          {users.filter((user) => isPlatformRole(user.role)).length === 0 ? (
             <tr>
-              <td colSpan="4">No users found</td>
+              <td colSpan="6">No platform users found</td>
             </tr>
           ) : (
-            users.map((user) => (
-              <tr key={user.id}>
-                <td>{user.name || "-"}</td>
-                <td>{user.email || "-"}</td>
-                <td>{user.role || "-"}</td>
-                <td>{user.status || "-"}</td>
-              </tr>
-            ))
+            users
+              .filter((user) => isPlatformRole(user.role))
+              .map((user) => (
+                <tr key={user.id}>
+                  <td>{user.name || "-"}</td>
+                  <td>{user.email || "-"}</td>
+                  <td>{user.role || "-"}</td>
+                  <td><Badge value={user.status || "Active"} /></td>
+                  <td>{user.company_id || "-"}</td>
+                  <td>
+                    <button onClick={() => editUser(user)}>Edit</button>
+                    <button className="danger" onClick={() => deleteUser(user.id)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))
           )}
         </tbody>
       </table>
     </div>
   </div>
 )}
+
 
 {activePage === "Subscription Invoices" && canManagePlatform && (
   <div className="page-section">
