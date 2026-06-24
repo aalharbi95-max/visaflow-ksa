@@ -331,3 +331,43 @@ td {
     grid-template-columns: 1fr;
   }
 }
+.login-page,
+.vf-login-shell {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px;
+  gap: 48px;
+  align-items: center;
+}
+
+.vf-login-left,
+.login-page .login-left {
+  min-height: 640px;
+  border-radius: 0;
+}
+
+.vf-login-card,
+.login-card {
+  position: relative;
+  z-index: 5;
+}
+
+.vf-language-switch {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+}
+
+.vf-login-right,
+.login-page .login-right {
+  position: relative;
+}
+
+.vf-login-version,
+.login-version {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  color: #64748b;
+  font-size: 12px;
+}
