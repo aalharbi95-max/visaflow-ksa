@@ -5186,42 +5186,271 @@ async function saveAgencyPerformanceSnapshot() {
   alert(`Agency performance calculated and saved for ${rows.length} agency/agencies.`);
 }
 
-function buildRequestHealthRows() {
-  return mobilizationRequestRows
-    .map((row) => {
-      const visaGap = row.isSaudi ? 0 : Math.max(Number(row.qty || 0) - Number(row.allocatedVisaQty || 0), 0);
-      const candidateGap = Math.max(Number(row.qty || 0) - Number(row.candidates || 0), 0);
-      const joiningGap = Math.max(Number(row.qty || 0) - Number(row.joined || 0), 0);
+function candidateMatchesRequestLine(candidate, line) {
+  if (!candidate || !line) return false;
+
+  return (
+    isCompatibleText(candidate.profession, line.profession) &&
+    normalize(candidate.nationality) === normalize(line.nationality) &&
+    (!line.gender || !candidate.gender || normalize(candidate.gender) === normalize(line.gender))
+  );
+}
+
+function authorizationMatchesRequestLine(authorization, line, relatedAllocations = []) {
+  if (!authorization || !line) return false;
+
+  if (
+    authorization.visa_allocation_id &&
+    relatedAllocations.some((allocation) => String(allocation.id || "") === String(authorization.visa_allocation_id || ""))
+  ) {
+    return true;
+  }
+
+  if (
+    authorization.visa_batch_line_id &&
+    relatedAllocations.some((allocation) => String(allocation.visa_batch_line_id || "") === String(authorization.visa_batch_line_id || ""))
+  ) {
+    return true;
+  }
+
+  return (
+    isCompatibleText(authorization.profession, line.profession) &&
+    normalize(authorization.nationality) === normalize(line.nationality) &&
+    (!line.gender || !authorization.gender || normalize(authorization.gender) === normalize(line.gender))
+  );
+}
+
+function buildOperationalRequestLineRows() {
+  const countPercent = (value, total) =>
+    total ? Math.min(Math.round((Number(value || 0) / Number(total || 0)) * 100), 100) : 0;
+
+  const blockedCandidateStatuses = [
+    "Rejected",
+    "Interview Failed",
+    "Medical Failed",
+    "Medical Fail",
+    "Cancelled",
+  ];
+
+  return requests.flatMap((request) => {
+    const requestNo = request.request_no || "-";
+    const lines = getRequestLinesForRequest(request);
+    const saudiRequest = isSaudiRequest(request);
+
+    return lines.map((line, index) => {
+      const requestedQty = Number(line.quantity || 0);
+      const lineKey = `${requestNo}-L${line.line_no || index + 1}`;
+      const isSaudiLine = saudiRequest || isSaudiNationality(line.nationality);
+
+      const matchingVisaLines = isSaudiLine
+        ? []
+        : visaInventoryLines.filter((visaLine) => isCompatibleVisaLineForRequestLine(line, visaLine));
+
+      const availableVisaQty = matchingVisaLines.reduce(
+        (sum, visaLine) => sum + Math.max(getVisaLineRemainingQty(visaLine), 0),
+        0
+      );
+
+      const relatedAllocations = visaAllocations.filter((allocation) => {
+        if (String(allocation.request_no || "") !== String(requestNo || "")) return false;
+        const allocationVisaLine = visaInventoryLines.find(
+          (visaLine) => String(visaLine.id || "") === String(allocation.visa_batch_line_id || "")
+        );
+
+        if (allocationVisaLine) return isCompatibleVisaLineForRequestLine(line, allocationVisaLine);
+
+        return matchingVisaLines.some((visaLine) => String(visaLine.visa_no || "") === String(allocation.visa_no || ""));
+      });
+
+      const allocatedVisaQty = isSaudiLine
+        ? 0
+        : relatedAllocations.reduce((sum, allocation) => sum + Number(allocation.allocated_qty || 0), 0);
+
+      const relatedAuthorizations = isSaudiLine
+        ? []
+        : visaAuthorizations.filter(
+            (authorization) =>
+              authorization.status !== "Cancelled" &&
+              String(authorization.request_no || "") === String(requestNo || "") &&
+              authorizationMatchesRequestLine(authorization, line, relatedAllocations)
+          );
+
+      const authorizedQty = relatedAuthorizations.reduce(
+        (sum, authorization) => sum + Number(authorization.allocated_qty || 0),
+        0
+      );
+
+      const allLineCandidates = candidates.filter(
+        (candidate) =>
+          String(candidate.request_no || "") === String(requestNo || "") &&
+          candidateMatchesRequestLine(candidate, line)
+      );
+
+      const activeLineCandidates = allLineCandidates.filter(
+        (candidate) => !blockedCandidateStatuses.includes(candidate.status)
+      );
+
+      const relatedInterviews = interviews.filter((interview) =>
+        allLineCandidates.some(
+          (candidate) =>
+            String(interview.candidate_id || "") === String(candidate.id || "") ||
+            String(interview.passport_no || "") === String(candidate.passport_no || "") ||
+            normalize(interview.candidate_name) === normalize(candidate.candidate_name)
+        )
+      );
+
+      const interviewRequired = line.interview_required || request.interview_required || "Required";
+      const interviewType = line.interview_type || request.interview_type || "Online";
+
+      const interviewPassed =
+        interviewRequired === "No Interview"
+          ? activeLineCandidates.length
+          : relatedInterviews.filter((interview) => interview.status === "Passed").length;
+
+      const medicalDone = activeLineCandidates.filter(
+        (candidate) =>
+          ["Passed", "Fit", "Medical Passed"].includes(candidate.medical_status) ||
+          ["Medical Passed", "Visa Stamped", "Ticket Booked", "Departure", "Arrived KSA", "Arrived", "Joined"].includes(candidate.status) ||
+          Boolean(candidate.medical_date)
+      ).length;
+
+      const visaReady = isSaudiLine
+        ? requestedQty
+        : activeLineCandidates.filter((candidate) =>
+            ["Visa Stamped", "Embassy Submitted", "Embassy Delayed", "Ticket Booked", "Departure", "Arrived KSA", "Arrived", "Joined"].includes(candidate.status)
+          ).length;
+
+      const ticketIssued = activeLineCandidates.filter(
+        (candidate) => Boolean(candidate.ticket_no) || candidate.status === "Ticket Booked"
+      ).length;
+
+      const arrived = activeLineCandidates.filter(
+        (candidate) =>
+          Boolean(candidate.arrival_date) ||
+          candidate.status === "Arrived KSA" ||
+          candidate.status === "Arrived" ||
+          candidate.status === "Joined"
+      ).length;
+
+      const joined = activeLineCandidates.filter(
+        (candidate) => candidate.status === "Joined" || candidate.joining_date
+      ).length;
+
+      const candidatesCount = activeLineCandidates.length;
+      const rejectedCandidates = allLineCandidates.length - activeLineCandidates.length;
+      const candidateGap = Math.max(requestedQty - candidatesCount, 0);
+      const visaGap = isSaudiLine ? 0 : Math.max(requestedQty - allocatedVisaQty, 0);
+      const authorizationGap = isSaudiLine ? 0 : Math.max(allocatedVisaQty - authorizedQty, 0);
+      const joiningGap = Math.max(requestedQty - joined, 0);
+
+      const progressSteps = isSaudiLine
+        ? [
+            countPercent(candidatesCount, requestedQty),
+            interviewRequired === "No Interview" ? 100 : countPercent(interviewPassed, requestedQty),
+            countPercent(joined, requestedQty),
+          ]
+        : [
+            countPercent(allocatedVisaQty, requestedQty),
+            countPercent(authorizedQty, requestedQty),
+            countPercent(candidatesCount, requestedQty),
+            interviewRequired === "No Interview" ? 100 : countPercent(interviewPassed, requestedQty),
+            countPercent(medicalDone, requestedQty),
+            countPercent(visaReady, requestedQty),
+            countPercent(ticketIssued, requestedQty),
+            countPercent(arrived, requestedQty),
+            countPercent(joined, requestedQty),
+          ];
+
+      const progress = requestedQty
+        ? Math.round(progressSteps.reduce((sum, value) => sum + value, 0) / progressSteps.length)
+        : 0;
+
+      let bottleneck = "Monitoring";
+      if (!isSaudiLine && visaGap > 0) bottleneck = "Visa Allocation";
+      else if (!isSaudiLine && authorizationGap > 0) bottleneck = "Authorization";
+      else if (candidateGap > 0) bottleneck = "Sourcing / Agency Submission";
+      else if (interviewRequired !== "No Interview" && interviewPassed < requestedQty) bottleneck = "Interview";
+      else if (!isSaudiLine && medicalDone < requestedQty) bottleneck = "Medical";
+      else if (!isSaudiLine && visaReady < requestedQty) bottleneck = "Embassy / Visa Stamping";
+      else if (!isSaudiLine && ticketIssued < requestedQty) bottleneck = "Ticketing";
+      else if (joiningGap > 0) bottleneck = "Arrival / Joining";
+      else bottleneck = "Completed";
+
       const riskPoints =
-        (row.progress < 30 ? 35 : row.progress < 60 ? 20 : 0) +
-        (candidateGap > 0 ? 15 : 0) +
+        (progress < 30 ? 35 : progress < 60 ? 20 : 0) +
         (visaGap > 0 ? 20 : 0) +
+        (authorizationGap > 0 ? 15 : 0) +
+        (candidateGap > 0 ? 15 : 0) +
         (joiningGap > 0 ? 10 : 0) +
-        (row.status === "Cancelled" ? 30 : 0);
+        (request.status === "Cancelled" ? 30 : 0);
 
       const riskScore = Math.min(100, riskPoints);
       const riskLevel = riskScore >= 60 ? "High" : riskScore >= 30 ? "Medium" : "Low";
 
       let recommendation = "Keep monitoring until joining is completed.";
-      if (visaGap > 0) recommendation = "Secure matching visa balance or change nationality/profession plan.";
-      else if (candidateGap > 0) recommendation = "Push sourcing and agency submissions immediately.";
-      else if (row.interviewRequired !== "No Interview" && row.interviewPassed < row.qty) recommendation = "Schedule/complete interviews and close selection gap.";
-      else if (!row.isSaudi && row.medicalDone < row.qty) recommendation = "Accelerate medical and embassy readiness.";
-      else if (!row.isSaudi && row.ticketIssued < row.qty) recommendation = "Finalize ticketing plan for ready candidates.";
-      else if (joiningGap > 0) recommendation = "Follow up arrival, onboarding, and site joining.";
+      if (bottleneck === "Visa Allocation") recommendation = "Allocate matching visa line for this exact profession / nationality / gender.";
+      else if (bottleneck === "Authorization") recommendation = "Issue authorization for the allocated visa line and assign the responsible agency.";
+      else if (bottleneck === "Sourcing / Agency Submission") recommendation = "Push the assigned agency to submit candidates against this line only.";
+      else if (bottleneck === "Interview") recommendation = "Schedule or complete interviews for this request line.";
+      else if (bottleneck === "Medical") recommendation = "Accelerate medical stage for passed candidates.";
+      else if (bottleneck === "Embassy / Visa Stamping") recommendation = "Follow embassy / visa stamping stage for ready candidates.";
+      else if (bottleneck === "Ticketing") recommendation = "Finalize ticketing for ready candidates.";
+      else if (bottleneck === "Arrival / Joining") recommendation = "Follow arrival, onboarding and joining confirmation.";
+      else if (bottleneck === "Completed") recommendation = "Line completed. No immediate action required.";
+
+      const agenciesForLine = Array.from(
+        new Set([
+          ...relatedAuthorizations.map((authorization) => authorization.agency).filter(Boolean),
+          ...activeLineCandidates.map((candidate) => candidate.agency).filter(Boolean),
+        ])
+      );
 
       return {
-        ...row,
+        line_key: lineKey,
+        request_no: requestNo,
+        request_id: request.id || null,
+        request_line_id: line.id || null,
+        line_no: line.line_no || index + 1,
+        project: request.project_name || request.project || "-",
+        profession: line.profession || "-",
+        nationality: line.nationality || "-",
+        gender: line.gender || "-",
+        requested_qty: requestedQty,
+        isSaudi: isSaudiLine,
+        matching_available_visa_qty: availableVisaQty,
+        allocatedVisaQty,
+        authorizedQty,
+        candidates: candidatesCount,
+        rejectedCandidates,
+        interviewRequired,
+        interviewType,
+        interviewPassed,
+        medicalDone,
+        visaReady,
+        ticketIssued,
+        arrived,
+        joined,
         visaGap,
+        authorizationGap,
         candidateGap,
         joiningGap,
+        progress,
+        bottleneck,
         riskScore,
         riskLevel,
+        agencies: agenciesForLine.join(", ") || "-",
+        status: request.status || "-",
+        approval_status: request.approval_status || "-",
         recommendation,
       };
-    })
-    .sort((a, b) => b.riskScore - a.riskScore);
+    });
+  });
 }
+
+function buildRequestHealthRows() {
+  return buildOperationalRequestLineRows().sort((a, b) => b.riskScore - a.riskScore);
+}
+
 
 function buildRecruitmentForecast() {
   const openRows = mobilizationRequestRows.filter((row) => row.status !== "Completed" && row.status !== "Closed");
@@ -5252,6 +5481,7 @@ function buildRecruitmentForecast() {
 function buildAICommanderSnapshot() {
   const agencyScorecard = buildAgencyScorecard();
   const requestHealth = buildRequestHealthRows();
+  const operationalLines = buildOperationalRequestLineRows();
   const forecast = buildRecruitmentForecast();
 
   const topDelayed = reports.lateItems.slice(0, 10).map((item) => ({
@@ -5262,20 +5492,66 @@ function buildAICommanderSnapshot() {
     status: item.status,
   }));
 
-  const visaShortage = requestsWithoutVisa.slice(0, 10).map((request) => ({
-    request_no: request.request_no,
-    project: request.project_name || request.project || "-",
-    profession: request.profession || "-",
-    nationality: request.nationality || "-",
-    gender: request.gender || "-",
-    required: Number(request.quantity || 0),
-    available: getVisaBalanceForRequest(request),
-    shortage: Math.max(Number(request.quantity || 0) - getVisaBalanceForRequest(request), 0),
-  }));
+  const visaShortage = operationalLines
+    .filter((line) => !line.isSaudi && line.visaGap > 0)
+    .slice(0, 20)
+    .map((line) => ({
+      line_key: line.line_key,
+      request_no: line.request_no,
+      line_no: line.line_no,
+      project: line.project,
+      profession: line.profession,
+      nationality: line.nationality,
+      gender: line.gender,
+      required: line.requested_qty,
+      allocated: line.allocatedVisaQty,
+      matching_available_after_allocation: line.matching_available_visa_qty,
+      shortage: line.visaGap,
+      bottleneck: line.bottleneck,
+    }));
+
+  const authorizationGaps = operationalLines
+    .filter((line) => !line.isSaudi && line.authorizationGap > 0)
+    .slice(0, 20)
+    .map((line) => ({
+      line_key: line.line_key,
+      request_no: line.request_no,
+      line_no: line.line_no,
+      profession: line.profession,
+      nationality: line.nationality,
+      gender: line.gender,
+      allocated: line.allocatedVisaQty,
+      authorized: line.authorizedQty,
+      gap: line.authorizationGap,
+      agencies: line.agencies,
+    }));
+
+  const candidateGaps = operationalLines
+    .filter((line) => line.candidateGap > 0)
+    .slice(0, 20)
+    .map((line) => ({
+      line_key: line.line_key,
+      request_no: line.request_no,
+      line_no: line.line_no,
+      profession: line.profession,
+      nationality: line.nationality,
+      gender: line.gender,
+      required: line.requested_qty,
+      candidates: line.candidates,
+      gap: line.candidateGap,
+      agencies: line.agencies,
+    }));
 
   return {
     generated_at: new Date().toISOString(),
     company_system: "VisaFlow KSA",
+    ai_data_contract: {
+      version: "request-line-operational-model-v1",
+      rule_1: "Always analyze request_lines / operational_request_lines first. Never treat request header profession or quantity as the full request when lines exist.",
+      rule_2: "Each request line is a separate operational demand: profession + nationality + gender + quantity.",
+      rule_3: "Visa allocation, authorization, candidates, interviews and mobilization must be interpreted per request line.",
+      rule_4: "Do not combine all quantities under the first profession.",
+    },
     executive_dashboard: {
       total_required: executiveDashboard.totalRequired,
       open_requests: executiveDashboard.openRequests,
@@ -5296,9 +5572,12 @@ function buildAICommanderSnapshot() {
       joined: executiveDashboard.joined,
     },
     forecast,
+    operational_request_lines: operationalLines,
     critical_alerts: {
       delayed_items: topDelayed,
-      visa_shortage: visaShortage,
+      visa_shortage_by_request_line: visaShortage,
+      authorization_gap_by_request_line: authorizationGaps,
+      candidate_gap_by_request_line: candidateGaps,
       authorizations_without_candidates: reports.authorizationsWithoutCandidates.slice(0, 10).map((a) => ({
         visa_no: a.visa_no,
         authorization_no: a.authorization_no,
@@ -5313,35 +5592,42 @@ function buildAICommanderSnapshot() {
         status: c.status,
       })),
     },
-    request_health: requestHealth.slice(0, 12),
+    request_health: requestHealth.slice(0, 20),
     agency_scorecard: agencyScorecard.slice(0, 12),
     top_projects: executiveDashboard.topProjects,
     arrivals_next_30_days: executiveDashboard.arrivalsNext30Days,
   };
 }
 
+
 function getLocalAICommanderBrief() {
   const agencyScorecard = buildAgencyScorecard();
   const requestHealth = buildRequestHealthRows();
   const forecast = buildRecruitmentForecast();
   const delayed = reports.lateItems.length;
-  const shortage = requestsWithoutVisa.length;
+  const lineVisaShortage = requestHealth.filter((row) => !row.isSaudi && row.visaGap > 0).length;
+  const lineAuthorizationGaps = requestHealth.filter((row) => !row.isSaudi && row.authorizationGap > 0).length;
+  const lineCandidateGaps = requestHealth.filter((row) => row.candidateGap > 0).length;
   const noCandidates = reports.authorizationsWithoutCandidates.length;
-  const highRiskRequests = requestHealth.filter((row) => row.riskLevel === "High").length;
+  const highRiskLines = requestHealth.filter((row) => row.riskLevel === "High").length;
   const topAgency = agencyScorecard[0];
   const weakestAgency = agencyScorecard[agencyScorecard.length - 1];
+  const topLine = requestHealth[0];
 
   return [
     `VisaFlow AI Commander - Executive Brief`,
     ``,
-    `Overall risk: ${delayed + shortage + noCandidates + highRiskRequests} item(s) require management attention.`,
+    `Overall risk: ${delayed + lineVisaShortage + lineAuthorizationGaps + lineCandidateGaps + highRiskLines} request-line item(s) require management attention.`,
     `- Open requests: ${executiveDashboard.openRequests}`,
     `- Recruitment progress: ${executiveDashboard.recruitmentProgress}%`,
     `- Delayed SLA items: ${delayed}`,
-    `- Foreign requests with visa shortage: ${shortage}`,
+    `- Request lines with visa allocation gap: ${lineVisaShortage}`,
+    `- Request lines with authorization gap: ${lineAuthorizationGaps}`,
+    `- Request lines with candidate gap: ${lineCandidateGaps}`,
     `- Authorizations without candidates: ${noCandidates}`,
-    `- High-risk requests: ${highRiskRequests}`,
+    `- High-risk request lines: ${highRiskLines}`,
     `- Saudization rate: ${executiveDashboard.saudizationRate}%`,
+    topLine ? `- Highest risk line: ${topLine.request_no} / Line ${topLine.line_no} / ${topLine.profession} / Required ${topLine.requested_qty} / Progress ${topLine.progress}% / Bottleneck: ${topLine.bottleneck}` : ``,
     ``,
     `Forecast: ${forecast.forecastMessage}`,
     `- Remaining recruitment gap: ${forecast.totalRemainingRecruitment}`,
@@ -5353,13 +5639,15 @@ function getLocalAICommanderBrief() {
     weakestAgency && weakestAgency !== topAgency ? `- Agency requiring follow-up: ${weakestAgency.agency} / Score ${weakestAgency.score}` : ``,
     ``,
     `Recommended actions:`,
-    `1. Escalate high-risk requests and assign an owner for each request today.`,
-    `2. Resolve visa shortages before adding more candidates to foreign requests.`,
-    `3. Push offices/agencies with open authorizations but no submitted candidates.`,
-    `4. Move ready candidates from medical/visa stages to ticketing and arrival.`,
-    `5. Use Saudi Hiring path for Saudi positions and hide visa/ticket steps from the Saudi workflow.`,
-  ].filter(Boolean).join("\n");
+    `1. Review high-risk request lines, not only request headers.`,
+    `2. Resolve visa allocation gaps per profession / nationality / gender line.`,
+    `3. Issue authorizations against the exact allocated line and agency.`,
+    `4. Push agencies by request line where candidates are below required quantity.`,
+    `5. Move ready candidates from medical/visa stages to ticketing and arrival.`,
+  ].filter(Boolean).join("
+");
 }
+
 
 async function runAICommander(question = aiQuestion) {
   const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
@@ -5389,7 +5677,7 @@ async function runAICommander(question = aiQuestion) {
           {
             role: "system",
             content:
-              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use only the provided data. Provide: Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the JSON.",
+              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use only the provided data. Mandatory rule: analyze operational_request_lines first. If a request has multiple lines, never assign the total request quantity to the first profession. Treat each line as a separate demand by profession, nationality, gender, and quantity. Provide: Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the JSON.",
           },
           {
             role: "user",
