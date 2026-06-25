@@ -1007,6 +1007,8 @@ const [allocationForm, setAllocationForm] = useState({
   visa_batch_line_id: "",
   allocated_qty: 0,
 });
+const [allocationDraft, setAllocationDraft] = useState({});
+const [allocationSearch, setAllocationSearch] = useState("");
 
 async function saveAuthorization(){
   if (!canManageVisas) return alert("You do not have permission to manage authorizations.");
@@ -1307,6 +1309,97 @@ const extraVisaRequests = visaInventoryLines.filter((line) => {
 
   await loadAll();
   alert(allocationEditingId ? "Allocation updated" : "Allocation saved");
+}
+
+
+function getRequestAllocationSummary(requestNo) {
+  const req = requests.find((r) => String(r.request_no || "") === String(requestNo || ""));
+  if (!req) {
+    return {
+      request: null,
+      totalRequested: 0,
+      totalAllocated: 0,
+      remaining: 0,
+      lines: [],
+    };
+  }
+
+  const lines = getRequestLinesForRequest(req).filter((line) => !isSaudiNationality(line.nationality));
+  const totalRequested = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0) || Number(req.quantity || 0);
+  const totalAllocated = visaAllocations
+    .filter((allocation) => String(allocation.request_no || "") === String(requestNo || ""))
+    .reduce((sum, allocation) => sum + Number(allocation.allocated_qty || 0), 0);
+
+  return {
+    request: req,
+    totalRequested,
+    totalAllocated,
+    remaining: Math.max(totalRequested - totalAllocated, 0),
+    lines,
+  };
+}
+
+function getAllocationLineCurrentQty(lineId) {
+  return Number(allocationDraft[String(lineId)] || 0);
+}
+
+function updateAllocationDraft(lineId, value, maxQty) {
+  const qty = Math.max(0, Math.min(Number(value || 0), Number(maxQty || 0)));
+  setAllocationDraft((prev) => ({
+    ...prev,
+    [String(lineId)]: qty,
+  }));
+}
+
+async function saveSelectedAllocations() {
+  if (!canManageVisas) return alert("You do not have permission to manage visa allocations.");
+  if (!allocationForm.request_no) return alert("Please select request first.");
+
+  const rows = Object.entries(allocationDraft)
+    .map(([lineId, qty]) => {
+      const line = visaInventoryLines.find((item) => String(item.id) === String(lineId));
+      return { line, qty: Number(qty || 0) };
+    })
+    .filter((row) => row.line && row.qty > 0);
+
+  if (rows.length === 0) return alert("Please enter quantity for at least one visa line.");
+
+  const summary = getRequestAllocationSummary(allocationForm.request_no);
+  const totalToAllocate = rows.reduce((sum, row) => sum + row.qty, 0);
+
+  if (totalToAllocate > summary.remaining) {
+    return alert(`Cannot allocate more than request remaining quantity. Remaining: ${summary.remaining}`);
+  }
+
+  for (const row of rows) {
+    const available = getVisaLineRemainingQty(row.line);
+    if (row.qty > available) {
+      return alert(`Only ${available} visas are available for ${row.line.visa_no}`);
+    }
+  }
+
+  const payload = rows.map(({ line, qty }) =>
+    withCompany({
+      request_no: allocationForm.request_no,
+      visa_no: line.visa_no,
+      visa_batch_line_id: line.legacy ? null : line.id,
+      allocated_qty: qty,
+    })
+  );
+
+  const { error } = await supabase.from("visa_allocations").insert(payload);
+  if (error) return alert(error.message);
+
+  setAllocationDraft({});
+  setAllocationForm({
+    request_no: allocationForm.request_no,
+    visa_no: "",
+    visa_batch_line_id: "",
+    allocated_qty: 0,
+  });
+
+  await loadAll();
+  alert("Selected visa lines allocated successfully");
 }
 
 
@@ -8677,131 +8770,246 @@ Save Authorization
 )}
 
 
-{activePage === "Visa Allocation" && (
-  <>
-    {canManageVisas && (
-      <FormCard title={allocationEditingId ? "Edit Visa Allocation" : "Allocate Visa Line to Request"}>
-        <div className="form-grid">
-          <Select
-            value={allocationForm.request_no}
-            onChange={(v) => {
-              setAllocationForm((prev) => ({
-                ...prev,
-                request_no: v,
-                visa_batch_line_id: "",
-                visa_no: "",
-              }));
-            }}
-            placeholder="Request"
-            searchable
-            options={requests.map((r) => r.request_no)}
-          />
+{activePage === "Visa Allocation" && (() => {
+  const selectedAllocationSummary = getRequestAllocationSummary(allocationForm.request_no);
+  const selectedAllocationRequest = selectedAllocationSummary.request;
+  const requestLinesForAllocation = selectedAllocationSummary.lines;
+  const matchingVisaLines = visaInventoryLines
+    .filter((line) => {
+      const remaining = getVisaLineRemainingQty(line);
+      if (remaining <= 0) return false;
 
-          <Select
-            value={allocationForm.visa_batch_line_id}
-            onChange={(v) => {
-              const selectedLine = visaInventoryLines.find((line) => String(line.id) === String(v));
-              setAllocationForm((prev) => ({
-                ...prev,
-                visa_batch_line_id: v,
-                visa_no: selectedLine?.visa_no || "",
-              }));
-            }}
-            placeholder="Visa Line / Profession / Nationality / Gender"
-            searchable
-            options={visaInventoryLines
-              .filter((line) => {
-                const req = requests.find((r) => String(r.request_no || "") === String(allocationForm.request_no || ""));
-                if (!req) return getVisaLineRemainingQty(line) > 0;
+      const matchesRequest = requestLinesForAllocation.length === 0 || requestLinesForAllocation.some(
+        (reqLine) =>
+          normalize(reqLine.profession) === normalize(line.profession) &&
+          normalize(reqLine.nationality) === normalize(line.nationality) &&
+          normalize(reqLine.gender) === normalize(line.gender)
+      );
+
+      const keyword = allocationSearch.trim().toLowerCase();
+      const matchesSearch = !keyword || [line.visa_no, line.profession, line.nationality, line.gender]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+
+      return matchesRequest && matchesSearch;
+    })
+    .sort((a, b) => String(a.visa_no || "").localeCompare(String(b.visa_no || "")));
+
+  const totalToAllocate = matchingVisaLines.reduce(
+    (sum, line) => sum + getAllocationLineCurrentQty(line.id),
+    0
+  );
+
+  return (
+    <>
+      {canManageVisas && (
+        <>
+          <FormCard title="1. Select Request">
+            <div className="form-grid">
+              <Select
+                value={allocationForm.request_no}
+                onChange={(v) => {
+                  setAllocationForm({
+                    request_no: v,
+                    visa_no: "",
+                    visa_batch_line_id: "",
+                    allocated_qty: 0,
+                  });
+                  setAllocationDraft({});
+                  setAllocationEditingId(null);
+                }}
+                placeholder="Select Request"
+                searchable
+                options={requests.filter((r) => !isSaudiRequest(r)).map((r) => r.request_no)}
+              />
+
+              <div className="stat-card">
+                <h3>Request No</h3>
+                <strong>{selectedAllocationRequest?.request_no || "-"}</strong>
+              </div>
+              <div className="stat-card">
+                <h3>Total Requested</h3>
+                <strong>{selectedAllocationSummary.totalRequested}</strong>
+              </div>
+              <div className="stat-card">
+                <h3>Total Allocated</h3>
+                <strong>{selectedAllocationSummary.totalAllocated}</strong>
+              </div>
+              <div className="stat-card">
+                <h3>Remaining</h3>
+                <strong>{selectedAllocationSummary.remaining}</strong>
+              </div>
+            </div>
+          </FormCard>
+
+          {allocationEditingId ? (
+            <FormCard title="Edit Visa Allocation">
+              <div className="form-grid">
+                <Input placeholder="Request No" value={allocationForm.request_no} onChange={(v) => updateForm(setAllocationForm, "request_no", v)} />
+                <Input placeholder="Visa No" value={allocationForm.visa_no} onChange={(v) => updateForm(setAllocationForm, "visa_no", v)} />
+                <Input type="number" placeholder="Allocated Quantity" value={allocationForm.allocated_qty} onChange={(v) => updateForm(setAllocationForm, "allocated_qty", v)} />
+                <button className="primary-btn" onClick={saveAllocation}>Update Allocation</button>
+                <button
+                  onClick={() => {
+                    setAllocationEditingId(null);
+                    setAllocationForm({ request_no: "", visa_no: "", visa_batch_line_id: "", allocated_qty: 0 });
+                  }}
+                >
+                  Cancel Edit
+                </button>
+              </div>
+            </FormCard>
+          ) : (
+            <FormCard title="2. Allocate Visa Lines">
+              <div className="toolbar">
+                <input
+                  placeholder="Search visa lines..."
+                  value={allocationSearch}
+                  onChange={(e) => setAllocationSearch(e.target.value)}
+                />
+                <button className="primary-btn" onClick={saveSelectedAllocations} disabled={!allocationForm.request_no || totalToAllocate <= 0}>
+                  Allocate Selected ({totalToAllocate})
+                </button>
+              </div>
+
+              {!allocationForm.request_no ? (
+                <p>Please select a request first.</p>
+              ) : matchingVisaLines.length === 0 ? (
+                <p>No matching available visa lines for this request.</p>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Visa No</th>
+                      <th>Profession</th>
+                      <th>Nationality</th>
+                      <th>Gender</th>
+                      <th>Available</th>
+                      <th>Already Allocated</th>
+                      <th>To Allocate</th>
+                      <th>After Allocation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {matchingVisaLines.map((line) => {
+                      const available = getVisaLineRemainingQty(line);
+                      const qty = getAllocationLineCurrentQty(line.id);
+                      const maxForLine = Math.min(available, selectedAllocationSummary.remaining);
+                      return (
+                        <tr key={line.id}>
+                          <td>{line.visa_no}</td>
+                          <td>{line.profession || "-"}</td>
+                          <td>{line.nationality || "-"}</td>
+                          <td>{line.gender || "-"}</td>
+                          <td>{available}</td>
+                          <td>{getVisaLineAllocatedQty(line.legacy ? "" : line.id, line.visa_no)}</td>
+                          <td>
+                            <input
+                              type="number"
+                              min="0"
+                              max={maxForLine}
+                              value={qty}
+                              onChange={(e) => updateAllocationDraft(line.id, e.target.value, maxForLine)}
+                              style={{ maxWidth: 110 }}
+                            />
+                          </td>
+                          <td>{available - qty}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+
+              <div className="toolbar">
+                <strong>Selected Lines: {Object.values(allocationDraft).filter((qty) => Number(qty || 0) > 0).length}</strong>
+                <strong>Total To Allocate: {totalToAllocate}</strong>
+                <strong>Request Remaining: {selectedAllocationSummary.remaining}</strong>
+              </div>
+            </FormCard>
+          )}
+        </>
+      )}
+
+      <TableCard title="3. Current Allocations for This Request">
+        <p>
+          Total Allocations: {
+            allocationForm.request_no
+              ? visaAllocations.filter((item) => String(item.request_no || "") === String(allocationForm.request_no || "")).length
+              : visaAllocations.length
+          }
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Request No</th>
+              <th>Visa No</th>
+              <th>Profession</th>
+              <th>Nationality</th>
+              <th>Gender</th>
+              <th>Allocated Qty</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(allocationForm.request_no
+              ? visaAllocations.filter((item) => String(item.request_no || "") === String(allocationForm.request_no || ""))
+              : visaAllocations
+            ).length === 0 ? (
+              <tr>
+                <td colSpan="7">No allocations yet</td>
+              </tr>
+            ) : (
+              (allocationForm.request_no
+                ? visaAllocations.filter((item) => String(item.request_no || "") === String(allocationForm.request_no || ""))
+                : visaAllocations
+              ).map((item) => {
+                const line = visaInventoryLines.find((vLine) => String(vLine.id) === String(item.visa_batch_line_id || ""));
                 return (
-                  normalize(req.profession) === normalize(line.profession) &&
-                  normalize(req.nationality) === normalize(line.nationality) &&
-                  normalize(req.gender) === normalize(line.gender) &&
-                  getVisaLineRemainingQty(line) > 0
+                  <tr key={item.id}>
+                    <td>{item.request_no}</td>
+                    <td>{item.visa_no}</td>
+                    <td>{line?.profession || "-"}</td>
+                    <td>{line?.nationality || "-"}</td>
+                    <td>{line?.gender || "-"}</td>
+                    <td>{item.allocated_qty}</td>
+                    <td>
+                      {canManageVisas ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setAllocationForm({
+                                request_no: item.request_no,
+                                visa_no: item.visa_no,
+                                visa_batch_line_id: item.visa_batch_line_id || "",
+                                allocated_qty: item.allocated_qty,
+                              });
+                              setAllocationEditingId(item.id);
+                              window.scrollTo({ top: 0, behavior: "smooth" });
+                            }}
+                          >
+                            Edit
+                          </button>
+
+                          <button className="danger" onClick={() => deleteAllocation(item.id)}>
+                            Delete
+                          </button>
+                        </>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
                 );
               })
-              .map((line) => ({ value: String(line.id), label: getVisaLineLabel(line) }))}
-          />
-
-          <Input
-            type="number"
-            placeholder="Allocated Quantity"
-            value={allocationForm.allocated_qty}
-            onChange={(v) => updateForm(setAllocationForm, "allocated_qty", v)}
-          />
-
-          <button className="primary-btn" onClick={saveAllocation}>
-            {allocationEditingId ? "Update Allocation" : "Allocate"}
-          </button>
-        </div>
-      </FormCard>
-    )}
-
-    <TableCard title="Visa Allocations List">
-      <p>Total Allocations: {visaAllocations.length}</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Request No</th>
-            <th>Visa No</th>
-            <th>Profession</th>
-            <th>Nationality</th>
-            <th>Gender</th>
-            <th>Allocated Qty</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visaAllocations.length === 0 ? (
-            <tr>
-              <td colSpan="7">No allocations yet</td>
-            </tr>
-          ) : (
-            visaAllocations.map((item) => {
-              const line = visaInventoryLines.find((vLine) => String(vLine.id) === String(item.visa_batch_line_id || ""));
-              return (
-                <tr key={item.id}>
-                  <td>{item.request_no}</td>
-                  <td>{item.visa_no}</td>
-                  <td>{line?.profession || "-"}</td>
-                  <td>{line?.nationality || "-"}</td>
-                  <td>{line?.gender || "-"}</td>
-                  <td>{item.allocated_qty}</td>
-                  <td>
-                    {canManageVisas ? (
-                      <>
-                        <button
-                          onClick={() => {
-                            setAllocationForm({
-                              request_no: item.request_no,
-                              visa_no: item.visa_no,
-                              visa_batch_line_id: item.visa_batch_line_id || "",
-                              allocated_qty: item.allocated_qty,
-                            });
-                            setAllocationEditingId(item.id);
-                            window.scrollTo({ top: 0, behavior: "smooth" });
-                          }}
-                        >
-                          Edit
-                        </button>
-
-                        <button className="danger" onClick={() => deleteAllocation(item.id)}>
-                          Delete
-                        </button>
-                      </>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
-    </TableCard>
-  </>
-)}
+            )}
+          </tbody>
+        </table>
+      </TableCard>
+    </>
+  );
+})()}
 
 {activePage === "Visa Inventory" && (
   <div>
