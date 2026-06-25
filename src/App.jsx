@@ -1906,15 +1906,26 @@ const getVisaAvailableQty = (visaNo) => {
   
 
   const stats = useMemo(() => {
-    const totalQty = visaRecords.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    // SSOT: visa quantity must come from visa_batch_lines, not visa_batches.profession/quantity header.
+    const totalQty = visaRecords.reduce((sum, item) => sum + getVisaBatchTotalQty(item), 0);
     const totalCandidates = candidates.length;
 
-const totalRemaining = requests.reduce((sum, item) => {
-  const used = candidates.filter(
-    (c) => c.request_no === item.request_no
-  ).length;
+const blockedCandidateStatuses = ["Rejected", "Interview Failed", "Medical Failed", "Medical Fail", "Cancelled"];
 
-  return sum + (Number(item.quantity || 0) - used);
+const totalRemaining = requests.reduce((sum, request) => {
+  const lines = getRequestLinesForRequest(request);
+  const remainingByLines = lines.reduce((lineSum, line) => {
+    const used = candidates.filter(
+      (candidate) =>
+        String(candidate.request_no || "") === String(request.request_no || "") &&
+        !blockedCandidateStatuses.includes(candidate.status) &&
+        candidateMatchesRequestLine(candidate, line)
+    ).length;
+
+    return lineSum + Math.max(Number(line.quantity || 0) - used, 0);
+  }, 0);
+
+  return sum + remainingByLines;
 }, 0);
 
 const underRecruitmentCount = requests.filter(
@@ -1928,9 +1939,12 @@ const visaProcessCount = requests.filter(
 const totalMobilizationCost = candidates.reduce((sum, candidate) => sum + getCandidateTotalCost(candidate), 0);
 
 const totalRequestBudget = requests.reduce((sum, request) => {
-  const qty = Number(request.quantity || 0);
-  const budget = Number(request.salary || request.budget || 0);
-  return sum + (budget * qty);
+  const lines = getRequestLinesForRequest(request);
+  return sum + lines.reduce((lineSum, line) => {
+    const qty = Number(line.quantity || 0);
+    const budget = Number(line.salary || request.salary || request.budget || 0);
+    return lineSum + (budget * qty);
+  }, 0);
 }, 0);
 
    return {
@@ -1961,7 +1975,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
   openRequests: requests.filter((item) => item.status === "Open").length,
   urgentRequests: requests.filter((item) => item.priority === "Urgent").length,
 };
-  }, [visaRecords, agencies, requests, candidates, interviews, mobilizations]);
+  }, [visaRecords, visaBatchLines, visaAllocations, agencies, requests, requestLines, candidates, interviews, mobilizations]);
   const reports = useMemo(() => {
   const today = new Date();
 
@@ -2082,9 +2096,9 @@ const totalRequestBudget = requests.reduce((sum, request) => {
 
       return {
         request_no: r.request_no,
-        profession: r.profession,
-        nationality: r.nationality,
-        qty: r.quantity,
+        profession: getRequestLineSummary(r, "profession"),
+        nationality: getRequestLineSummary(r, "nationality"),
+        qty: getRequestTotalQty(r),
         completedCandidates,
         visas: relatedVisas.map((v) => v.visa_no).filter(Boolean).join(", "),
         authorizations: relatedAuths.length,
@@ -2105,7 +2119,8 @@ const mobilizationRequestRows = useMemo(() => {
 
   return requests.map((request) => {
     const requestNo = request.request_no;
-    const qty = Number(request.quantity || request.qty || 0);
+    // SSOT: request required quantity comes from request_lines.
+    const qty = getRequestTotalQty(request);
     const saudiRequest = isSaudiRequest(request);
 
     const requestCandidates = candidates.filter(
@@ -2275,9 +2290,9 @@ const mobilizationRequestRows = useMemo(() => {
     return {
       request_no: requestNo,
       project_name: request.project_name || request.project || "-",
-      profession: request.profession || "-",
-      nationality: request.nationality || "-",
-      gender: request.gender || "-",
+      profession: getRequestLineSummary(request, "profession"),
+      nationality: getRequestLineSummary(request, "nationality"),
+      gender: getRequestLineSummary(request, "gender"),
       qty,
       isSaudi: saudiRequest,
       allocatedVisaQty,
@@ -2546,6 +2561,33 @@ const executiveDashboard = useMemo(() => {
     recruitmentFunnel,
   };
 }, [requests, requestLines, visaRecords, visaAllocations, visaAuthorizations, candidates, interviews, reports]);
+
+const dashboardRequestRows = useMemo(() => {
+  return requests.slice(0, 6).map((request) => ({
+    ...request,
+    profession: getRequestLineSummary(request, "profession"),
+    nationality: getRequestLineSummary(request, "nationality"),
+    gender: getRequestLineSummary(request, "gender"),
+    quantity: getRequestTotalQty(request),
+  }));
+}, [requests, requestLines]);
+
+const dashboardVisaRows = useMemo(() => {
+  return visaRecords.slice(0, 6).map((visa) => {
+    const lines = getVisaLinesForBatch(visa);
+    const professions = Array.from(new Set(lines.map((line) => line.profession).filter(Boolean)));
+    const nationalities = Array.from(new Set(lines.map((line) => line.nationality).filter(Boolean)));
+    const genders = Array.from(new Set(lines.map((line) => line.gender).filter(Boolean)));
+
+    return {
+      ...visa,
+      profession: professions.length === 0 ? "-" : professions.length === 1 ? professions[0] : `Multiple (${professions.length})`,
+      nationality: nationalities.length === 0 ? "-" : nationalities.length === 1 ? nationalities[0] : `Multiple (${nationalities.length})`,
+      gender: genders.length === 0 ? "-" : genders.length === 1 ? genders[0] : `Multiple (${genders.length})`,
+      quantity: getVisaBatchTotalQty(visa),
+    };
+  });
+}, [visaRecords, visaBatchLines, visaAllocations]);
 
  async function generateRequestNo() {
   const year = new Date().getFullYear();
@@ -8665,8 +8707,8 @@ if (!currentUser) {
               <Stat title="Active Agencies" value={stats.activeAgencies} />
             </div>
             <div className="grid">
-              <SimpleList title="Latest Requests" rows={requests.slice(0, 6)} columns={["request_no", "profession", "gender", "quantity", "approval_status"]} />
-              <SimpleList title="Latest Visa Records" rows={visaRecords.slice(0, 6)} columns={["visa_no", "project", "profession", "status"]} />
+              <SimpleList title="Latest Requests" rows={dashboardRequestRows} columns={["request_no", "profession", "gender", "quantity", "approval_status"]} />
+              <SimpleList title="Latest Visa Records" rows={dashboardVisaRows} columns={["visa_no", "project", "profession", "quantity", "status"]} />
             </div>
           </>
         )}
