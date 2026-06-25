@@ -366,6 +366,14 @@ const emptyVisa = {
   notes: "",
 };
 
+const emptyVisaLine = {
+  profession: "",
+  nationality: "",
+  gender: "",
+  quantity: "",
+  notes: "",
+};
+
 const emptyAgency = {
   name: "",
   country: "",
@@ -568,6 +576,7 @@ function App() {
   const [requests, setRequests] = useState([]);
   const [requestLines, setRequestLines] = useState([]);
   const [visaRecords, setVisaRecords] = useState([]);
+  const [visaBatchLines, setVisaBatchLines] = useState([]);
   const [visaAuthorizations, setVisaAuthorizations] = useState([]);
   const [visaAllocations, setVisaAllocations] = useState([]);
 const [agencies, setAgencies] = useState([]);
@@ -994,6 +1003,7 @@ const [authForm,setAuthForm] = useState({
 const [allocationForm, setAllocationForm] = useState({
   request_no: "",
   visa_no: "",
+  visa_batch_line_id: "",
   allocated_qty: 0,
 });
 
@@ -1098,17 +1108,101 @@ function openAuthorization(item){
   setSelectedVisa(item);
   setActivePage("Authorization");
 }
+const getVisaLinesForBatch = (batch) => {
+  if (!batch) return [];
+
+  const storedLines = visaBatchLines
+    .filter((line) => String(line.visa_batch_id || "") === String(batch.id || ""))
+    .sort((a, b) => Number(a.line_no || 0) - Number(b.line_no || 0));
+
+  if (storedLines.length > 0) return storedLines;
+
+  if (batch.profession || batch.nationality || batch.gender || batch.quantity) {
+    return [
+      {
+        id: `${batch.id}-legacy`,
+        visa_batch_id: batch.id,
+        line_no: 1,
+        visa_no: batch.visa_no,
+        profession: batch.profession || "",
+        nationality: batch.nationality || "",
+        gender: batch.gender || "",
+        quantity: Number(batch.quantity || 0),
+        notes: batch.notes || "",
+        legacy: true,
+      },
+    ];
+  }
+
+  return [];
+};
+
+const visaInventoryLines = useMemo(() => {
+  return visaRecords.flatMap((batch) => {
+    const lines = getVisaLinesForBatch(batch);
+    return lines.map((line) => ({
+      ...line,
+      batch_id: batch.id,
+      visa_no: batch.visa_no,
+      moi_no: batch.moi_no,
+      project: batch.project,
+      agency: batch.agency,
+      office_country: batch.office_country,
+      issue_date: batch.issue_date,
+      expiry_date: batch.expiry_date,
+      status: batch.status,
+      batch_notes: batch.notes,
+      batch,
+    }));
+  });
+}, [visaRecords, visaBatchLines]);
+
+function getVisaLineAllocatedQty(lineId, visaNo = "") {
+  return visaAllocations
+    .filter((allocation) => {
+      if (lineId && String(allocation.visa_batch_line_id || "") === String(lineId)) return true;
+      if (!lineId && visaNo && String(allocation.visa_no || "") === String(visaNo)) return true;
+      return false;
+    })
+    .reduce((sum, allocation) => sum + Number(allocation.allocated_qty || 0), 0);
+}
+
+function getVisaLineRemainingQty(line) {
+  if (!line) return 0;
+  const allocated = line.legacy
+    ? getVisaLineAllocatedQty("", line.visa_no)
+    : getVisaLineAllocatedQty(line.id, line.visa_no);
+  return Number(line.quantity || 0) - allocated;
+}
+
+function getVisaBatchTotalQty(batch) {
+  return getVisaLinesForBatch(batch).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+}
+
+function getVisaBatchAllocatedQty(batch) {
+  return getVisaLinesForBatch(batch).reduce((sum, line) => sum + getVisaLineAllocatedQty(line.id), 0);
+}
+
+function getVisaBatchRemainingQty(batch) {
+  return getVisaBatchTotalQty(batch) - getVisaBatchAllocatedQty(batch);
+}
+
+function getVisaLineLabel(line) {
+  if (!line) return "";
+  return `${line.visa_no || "Visa"} | ${line.profession || "-"} | ${line.nationality || "-"} | ${line.gender || "-"} | Remaining: ${getVisaLineRemainingQty(line)}`;
+}
+
 const getVisaBalanceForRequest = (req) => {
   if (isSaudiNationality(req.nationality)) return 0;
 
-  return visaRecords
+  return visaInventoryLines
     .filter(
-      (v) =>
-        normalize(v.profession) === normalize(req.profession) &&
-        normalize(v.nationality) === normalize(req.nationality) &&
-        normalize(v.gender) === normalize(req.gender)
+      (line) =>
+        normalize(line.profession) === normalize(req.profession) &&
+        normalize(line.nationality) === normalize(req.nationality) &&
+        normalize(line.gender) === normalize(req.gender)
     )
-    .reduce((sum, v) => sum + Number(v.quantity || 0), 0);
+    .reduce((sum, line) => sum + Math.max(getVisaLineRemainingQty(line), 0), 0);
 };
 
 const nonSaudiRequests = requests.filter(
@@ -1123,20 +1217,20 @@ const requestsWithoutVisa = nonSaudiRequests.filter(
   (r) => getVisaBalanceForRequest(r) < Number(r.quantity || 0)
 );
 
-const extraVisaRequests = visaRecords.filter((v) => {
-  if (isSaudiNationality(v.nationality)) return false;
+const extraVisaRequests = visaInventoryLines.filter((line) => {
+  if (isSaudiNationality(line.nationality)) return false;
 
   const matchingRequestQty = requests
     .filter(
       (r) =>
         !isSaudiRequest(r) &&
-        normalize(r.profession) === normalize(v.profession) &&
-        normalize(r.nationality) === normalize(v.nationality) &&
-        normalize(r.gender) === normalize(v.gender)
+        normalize(r.profession) === normalize(line.profession) &&
+        normalize(r.nationality) === normalize(line.nationality) &&
+        normalize(r.gender) === normalize(line.gender)
     )
     .reduce((sum, r) => sum + Number(r.quantity || 0), 0);
 
-  return Number(v.quantity || 0) > matchingRequestQty;
+  return getVisaLineRemainingQty(line) > matchingRequestQty;
 });
   async function deleteAllocation(id) {
   if (!canManageVisas) return alert("You do not have permission to delete allocations.");
@@ -1156,83 +1250,66 @@ const extraVisaRequests = visaRecords.filter((v) => {
 }
   async function saveAllocation() {
   if (!canManageVisas) return alert("You do not have permission to manage visa allocations.");
-  if (!allocationForm.request_no || !allocationForm.visa_no || !allocationForm.allocated_qty) {
-    alert("Please select request, visa, and allocated quantity");
+  if (!allocationForm.request_no || !allocationForm.visa_batch_line_id || !allocationForm.allocated_qty) {
+    alert("Please select request, visa line, and allocated quantity");
     return;
   }
+
   const req = requests.find((r) => String(r.request_no) === String(allocationForm.request_no));
-const visa = visaRecords.find((v) => String(v.visa_no) === String(allocationForm.visa_no));
+  const selectedLine = visaInventoryLines.find((line) => String(line.id) === String(allocationForm.visa_batch_line_id));
 
-if (
-  !allocationEditingId &&
-  (
-    !req ||
-    !visa ||
-    normalize(req.profession) !== normalize(visa.profession) ||
-    normalize(req.nationality) !== normalize(visa.nationality) ||
-    normalize(req.gender) !== normalize(visa.gender)
-  )
-) {
-  alert("Selected visa does not match request profession, nationality, and gender");
-  return;
-}
-const available = getVisaAvailableQty(allocationForm.visa_no);
+  if (!req || !selectedLine) {
+    alert("Selected request or visa line was not found");
+    return;
+  }
 
-if (Number(allocationForm.allocated_qty) > available) {
-  alert(`Only ${available} visas are available`);
-  return;
-}
-  const newAllocation = {
-    id: Date.now(),
+  if (
+    normalize(req.profession) !== normalize(selectedLine.profession) ||
+    normalize(req.nationality) !== normalize(selectedLine.nationality) ||
+    normalize(req.gender) !== normalize(selectedLine.gender)
+  ) {
+    alert("Selected visa line does not match request profession, nationality, and gender");
+    return;
+  }
+
+  const currentAllocationQty = allocationEditingId
+    ? Number(visaAllocations.find((a) => String(a.id) === String(allocationEditingId))?.allocated_qty || 0)
+    : 0;
+  const available = getVisaLineRemainingQty(selectedLine) + currentAllocationQty;
+
+  if (Number(allocationForm.allocated_qty) > available) {
+    alert(`Only ${available} visas are available for this visa line`);
+    return;
+  }
+
+  const payload = {
     request_no: allocationForm.request_no,
-    visa_no: allocationForm.visa_no,
+    visa_no: selectedLine.visa_no,
+    visa_batch_line_id: selectedLine.legacy ? null : selectedLine.id,
     allocated_qty: Number(allocationForm.allocated_qty),
   };
 
-if (allocationEditingId) {
-  const { error } = await supabase
-    .from("visa_allocations")
-    .update({
-      request_no: allocationForm.request_no,
-      visa_no: allocationForm.visa_no,
-      allocated_qty: Number(allocationForm.allocated_qty),
-    })
-    .eq("id", allocationEditingId);
+  const result = allocationEditingId
+    ? await supabase.from("visa_allocations").update(payload).eq("id", allocationEditingId)
+    : await supabase.from("visa_allocations").insert([withCompany(payload)]);
 
-  if (error) {
-    alert(error.message);
+  if (result.error) {
+    alert(result.error.message);
     return;
   }
 
   setAllocationEditingId(null);
-  await loadVisaAllocations();
-
-  alert("Allocation updated");
-  return;
-}
-const { error } = await supabase
-  .from("visa_allocations")
-  .insert([withCompany({
-    request_no: allocationForm.request_no,
-    visa_no: allocationForm.visa_no,
-    allocated_qty: Number(allocationForm.allocated_qty)
-  })]);
-
-if (error) {
-  alert(error.message);
-  return;
-}
-
-await loadAll();
-
-alert("Allocation saved");
-
   setAllocationForm({
     request_no: "",
     visa_no: "",
+    visa_batch_line_id: "",
     allocated_qty: 0,
   });
+
+  await loadAll();
+  alert(allocationEditingId ? "Allocation updated" : "Allocation saved");
 }
+
 
   const [auditLogs, setAuditLogs] = useState([]);
 
@@ -1241,6 +1318,8 @@ alert("Allocation saved");
   const [requestLinesDraft, setRequestLinesDraft] = useState([]);
   const [requestEditingId, setRequestEditingId] = useState(null);
   const [visaForm, setVisaForm] = useState(emptyVisa);
+  const [visaLineForm, setVisaLineForm] = useState(emptyVisaLine);
+  const [visaLinesDraft, setVisaLinesDraft] = useState([]);
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
   const [agencyEditingId, setAgencyEditingId] = useState(null);
@@ -1264,6 +1343,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadRequests(),
       loadRequestLines(),
       loadVisaRecords(),
+      loadVisaBatchLines(),
       loadVisaAuthorizations(),
       loadVisaAllocations(),
       loadAgencies(),
@@ -1304,6 +1384,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   const agencyBlockedTables = [
     "requests",
     "visa_batches",
+    "visa_batch_lines",
     "visa_allocations",
     "users",
     "companies",
@@ -1359,6 +1440,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   const loadRequests = () => loadTable("requests", setRequests);
   const loadRequestLines = () => loadTable("request_lines", setRequestLines);
   const loadVisaRecords = () => loadTable("visa_batches", setVisaRecords);
+  const loadVisaBatchLines = () => loadTable("visa_batch_lines", setVisaBatchLines);
   const loadVisaAuthorizations = () => loadTable("visa_authorizations", setVisaAuthorizations);
   const loadVisaAllocations = () => loadTable("visa_allocations", setVisaAllocations);
   const loadAgencies = () => loadTable("agencies", setAgencies);
@@ -1574,6 +1656,11 @@ useEffect(() => {
 }, [currentRole, activePage, visiblePages]);
   
 const getVisaAvailableQty = (visaNo) => {
+  const matchingLines = visaInventoryLines.filter((line) => String(line.visa_no) === String(visaNo));
+  if (matchingLines.length > 0) {
+    return matchingLines.reduce((sum, line) => sum + Math.max(getVisaLineRemainingQty(line), 0), 0);
+  }
+
   const visa = visaRecords.find(
     (v) => String(v.visa_no) === String(visaNo)
   );
@@ -1589,14 +1676,18 @@ const getVisaAvailableQty = (visaNo) => {
   const filteredVisaRecords = useMemo(() => {
     const keyword = search.toLowerCase();
     return visaRecords.filter((item) => {
-      const matchesSearch = [item.visa_no, item.request_no, item.project, item.profession, item.nationality, item.agency]
+      const lines = getVisaLinesForBatch(item);
+      const lineText = lines
+        .map((line) => [line.profession, line.nationality, line.gender, line.quantity].join(" "))
+        .join(" ");
+      const matchesSearch = [item.visa_no, item.moi_no, item.request_no, item.project, item.agency, item.office_country, lineText]
         .join(" ")
         .toLowerCase()
         .includes(keyword);
       const matchesStatus = filterStatus === "All" || item.status === filterStatus;
       return matchesSearch && matchesStatus;
     });
-  }, [visaRecords, search, filterStatus]);
+  }, [visaRecords, visaBatchLines, visaAllocations, search, filterStatus]);
 
   const filteredCandidates = useMemo(() => {
   const keyword = search.toLowerCase();
@@ -2582,46 +2673,129 @@ const executiveDashboard = useMemo(() => {
 
   function resetVisaForm() {
     setVisaForm(emptyVisa);
+    setVisaLineForm(emptyVisaLine);
+    setVisaLinesDraft([]);
     setVisaEditingId(null);
   }
 
+  function addVisaLineToDraft() {
+    if (!visaLineForm.profession || !visaLineForm.nationality || !visaLineForm.gender || !visaLineForm.quantity) {
+      return alert("Please fill profession, nationality, gender and quantity for the visa line.");
+    }
+
+    setVisaLinesDraft((prev) => [
+      ...prev,
+      {
+        ...visaLineForm,
+        quantity: Number(visaLineForm.quantity || 0),
+      },
+    ]);
+
+    setVisaLineForm(emptyVisaLine);
+  }
+
+  function removeVisaLineFromDraft(index) {
+    setVisaLinesDraft((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function buildVisaLinesToSave() {
+    if (visaLinesDraft.length > 0) {
+      return visaLinesDraft.map((line) => ({
+        profession: line.profession || "",
+        nationality: line.nationality || "",
+        gender: line.gender || "",
+        quantity: Number(line.quantity || 0),
+        notes: line.notes || "",
+      }));
+    }
+
+    if (visaForm.profession && visaForm.nationality && visaForm.gender && visaForm.quantity) {
+      return [
+        {
+          profession: visaForm.profession || "",
+          nationality: visaForm.nationality || "",
+          gender: visaForm.gender || "",
+          quantity: Number(visaForm.quantity || 0),
+          notes: visaForm.notes || "",
+        },
+      ];
+    }
+
+    return [];
+  }
+
   function editVisa(item) {
+    const lines = getVisaLinesForBatch(item);
+    const firstLine = lines[0] || {};
+
     setVisaEditingId(item.id);
     setVisaForm({
       request_no: item.request_no || "",
       visa_no: item.visa_no || "",
       moi_no: item.moi_no || "",
       project: item.project || "",
-      profession: item.profession || "",
-      nationality: item.nationality || "",
-      gender: item.gender || "",
+      profession: firstLine.profession || item.profession || "",
+      nationality: firstLine.nationality || item.nationality || "",
+      gender: firstLine.gender || item.gender || "",
       agency: item.agency || "",
       office_country: item.office_country || "",
-      quantity: item.quantity || "",
+      quantity: getVisaBatchTotalQty(item) || item.quantity || "",
       authorized: item.authorized || "",
-      allocated_qty: item.allocated_qty || "",
-      remaining_qty: item.remaining_qty || "",
+      allocated_qty: getVisaBatchAllocatedQty(item) || item.allocated_qty || "",
+      remaining_qty: getVisaBatchRemainingQty(item) || item.remaining_qty || "",
       authorization_no: item.authorization_no || "",
       issue_date: item.issue_date || "",
       expiry_date: item.expiry_date || "",
       status: item.status || "Pending",
       notes: item.notes || "",
     });
+
+    setVisaLinesDraft(
+      lines.map((line) => ({
+        profession: line.profession || "",
+        nationality: line.nationality || "",
+        gender: line.gender || "",
+        quantity: Number(line.quantity || 0),
+        notes: line.notes || "",
+      }))
+    );
+
     setActivePage("Visa Inventory");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
 async function saveVisa() {
   if (!canManageVisas) return alert("You do not have permission to manage visas.");
+
+  if (!visaForm.visa_no) return alert("Visa No is required.");
+
+  const linesToSave = buildVisaLinesToSave();
+  if (linesToSave.length === 0) {
+    return alert("Please add at least one visa line with profession, nationality, gender and quantity.");
+  }
+
+  const totalQuantity = linesToSave.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+  const firstLine = linesToSave[0] || {};
+
   const payload = {
-    ...visaForm,
-    notes: visaForm.notes || "",
-    quantity: Number(visaForm.quantity || 0),
+    request_no: visaForm.request_no || "",
+    visa_no: visaForm.visa_no || "",
+    moi_no: visaForm.moi_no || "",
+    project: visaForm.project || "",
+    profession: firstLine.profession || "",
+    nationality: firstLine.nationality || "",
+    gender: firstLine.gender || "",
+    agency: visaForm.agency || "",
+    office_country: visaForm.office_country || "",
+    quantity: totalQuantity,
     authorized: Number(visaForm.authorized || 0),
-    allocated_qty: Number(visaForm.allocated_qty || 0),
-    remaining_qty: Number(visaForm.remaining_qty || 0),
+    allocated_qty: visaEditingId ? getVisaBatchAllocatedQty(visaRecords.find((v) => String(v.id) === String(visaEditingId))) : 0,
+    remaining_qty: totalQuantity,
+    authorization_no: visaForm.authorization_no || "",
     issue_date: visaForm.issue_date || null,
     expiry_date: visaForm.expiry_date || null,
+    status: visaForm.status || "Pending",
+    notes: visaForm.notes || "",
     updated_at: new Date().toISOString(),
   };
 
@@ -2631,9 +2805,39 @@ async function saveVisa() {
 
   if (result.error) return alert(result.error.message);
 
-  alert(visaEditingId ? "Visa updated successfully" : "Visa saved successfully");
+  const savedBatch = result.data;
+
+  if (visaEditingId) {
+    const deleteLines = await supabase
+      .from("visa_batch_lines")
+      .delete()
+      .eq("visa_batch_id", savedBatch.id)
+      .eq("company_id", currentCompanyId);
+
+    if (deleteLines.error) return alert(`visa_batch_lines delete: ${deleteLines.error.message}`);
+  }
+
+  const linePayload = linesToSave.map((line, index) =>
+    withCompany({
+      visa_batch_id: savedBatch.id,
+      visa_no: savedBatch.visa_no,
+      line_no: index + 1,
+      profession: line.profession || "",
+      nationality: line.nationality || "",
+      gender: line.gender || "",
+      quantity: Number(line.quantity || 0),
+      allocated_qty: 0,
+      notes: line.notes || "",
+    })
+  );
+
+  const lineResult = await supabase.from("visa_batch_lines").insert(linePayload);
+  if (lineResult.error) return alert(`visa_batch_lines insert: ${lineResult.error.message}`);
+
+  alert(visaEditingId ? "Visa batch updated successfully" : "Visa batch saved successfully");
   resetVisaForm();
-  loadVisaRecords();
+  await loadVisaRecords();
+  await loadVisaBatchLines();
 }
 
   async function deleteVisa(id) {
@@ -4221,51 +4425,44 @@ async function createVisaFromRequest(item) {
   const firstLine = lines[0] || item;
   const neededQty = Number(firstLine.quantity || item.quantity || 0);
 
-  const matchedVisa = visaRecords.find(
-    (v) =>
-      !isSaudiNationality(v.nationality) &&
-      normalize(v.profession).includes(normalize(firstLine.profession || item.profession)) &&
-normalize(v.nationality) === normalize(firstLine.nationality || item.nationality) &&
-(
-  !firstLine.gender ||
-  !v.gender ||
-  normalize(v.gender) === normalize(firstLine.gender)
-) &&
-      Number(v.quantity || 0) >= neededQty
+  const matchedLine = visaInventoryLines.find(
+    (line) =>
+      !isSaudiNationality(line.nationality) &&
+      normalize(line.profession) === normalize(firstLine.profession || item.profession) &&
+      normalize(line.nationality) === normalize(firstLine.nationality || item.nationality) &&
+      (!firstLine.gender || !line.gender || normalize(line.gender) === normalize(firstLine.gender)) &&
+      getVisaLineRemainingQty(line) >= neededQty
   );
 
-  if (!matchedVisa) {
-    return alert("No available visa balance matching this request.");
+  if (!matchedLine) {
+    return alert("No available visa line matching this request.");
   }
 
-  const remainingVisaQty = Number(matchedVisa.quantity || 0) - neededQty;
+  const { error } = await supabase
+    .from("visa_allocations")
+    .insert([withCompany({
+      request_no: item.request_no,
+      visa_no: matchedLine.visa_no,
+      visa_batch_line_id: matchedLine.legacy ? null : matchedLine.id,
+      allocated_qty: neededQty,
+    })]);
 
-  const { error: visaError } = await supabase
-    .from("visa_batches")
-    .update({
-      quantity: remainingVisaQty,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", matchedVisa.id);
+  if (error) return alert(error.message);
 
-  if (visaError) return alert(visaError.message);
-
-  const { error: requestError } = await supabase
+  await supabase
     .from("requests")
     .update({
-   status: "Visa Process",
-visa_no: matchedVisa.visa_no,
-allocated_visa_qty: neededQty,
-updated_at: new Date().toISOString(),
+      status: "Visa Process",
+      visa_no: matchedLine.visa_no,
+      allocated_visa_qty: neededQty,
+      updated_at: new Date().toISOString(),
     })
     .eq("id", item.id);
 
-  if (requestError) return alert(requestError.message);
-
-  alert(`Visa allocated successfully. Remaining visa balance: ${remainingVisaQty}`);
+  alert(`Visa allocated successfully. Remaining visa line balance: ${getVisaLineRemainingQty(matchedLine) - neededQty}`);
 
   loadAll();
-  setActivePage("Visa Inventory");
+  setActivePage("Visa Allocation");
 }
   function createCandidateFromRequest(item) {
   if (!canManageCandidates) return alert("You do not have permission to add candidates.");
@@ -8267,319 +8464,309 @@ Save Authorization
 
 {activePage === "Visa Allocation" && (
   <>
- 
     {canManageVisas && (
-    <FormCard title="Allocate Visa to Request">
-      <div className="form-grid">
+      <FormCard title={allocationEditingId ? "Edit Visa Allocation" : "Allocate Visa Line to Request"}>
+        <div className="form-grid">
+          <Select
+            value={allocationForm.request_no}
+            onChange={(v) => {
+              setAllocationForm((prev) => ({
+                ...prev,
+                request_no: v,
+                visa_batch_line_id: "",
+                visa_no: "",
+              }));
+            }}
+            placeholder="Request"
+            searchable
+            options={requests.map((r) => r.request_no)}
+          />
 
-        <Select
-          value={allocationForm.request_no}
-          onChange={(v) =>
-            updateForm(setAllocationForm, "request_no", v)
-          }
-          placeholder="Request"
-          options={requests.map((r) => r.request_no)}
-        />
+          <Select
+            value={allocationForm.visa_batch_line_id}
+            onChange={(v) => {
+              const selectedLine = visaInventoryLines.find((line) => String(line.id) === String(v));
+              setAllocationForm((prev) => ({
+                ...prev,
+                visa_batch_line_id: v,
+                visa_no: selectedLine?.visa_no || "",
+              }));
+            }}
+            placeholder="Visa Line / Profession / Nationality / Gender"
+            searchable
+            options={visaInventoryLines
+              .filter((line) => {
+                const req = requests.find((r) => String(r.request_no || "") === String(allocationForm.request_no || ""));
+                if (!req) return getVisaLineRemainingQty(line) > 0;
+                return (
+                  normalize(req.profession) === normalize(line.profession) &&
+                  normalize(req.nationality) === normalize(line.nationality) &&
+                  normalize(req.gender) === normalize(line.gender) &&
+                  getVisaLineRemainingQty(line) > 0
+                );
+              })
+              .map((line) => ({ value: String(line.id), label: getVisaLineLabel(line) }))}
+          />
 
-        <Select
-          value={allocationForm.visa_no}
-          onChange={(v) =>
-            updateForm(setAllocationForm, "visa_no", v)
-          }
-          placeholder="Visa Number"
-          options={visaRecords.map((v) => v.visa_no)}
-        />
+          <Input
+            type="number"
+            placeholder="Allocated Quantity"
+            value={allocationForm.allocated_qty}
+            onChange={(v) => updateForm(setAllocationForm, "allocated_qty", v)}
+          />
 
-        <Input
-          type="number"
-          placeholder="Allocated Quantity"
-          value={allocationForm.allocated_qty}
-          onChange={(v) =>
-            updateForm(setAllocationForm, "allocated_qty", v)
-          }
-        />
-
-        <button
-          className="primary-btn"
-          onClick={saveAllocation}
-        >
-          {allocationEditingId ? "Update Allocation" : "Allocate"}
-        </button>
-
-      </div>
-    </FormCard>
+          <button className="primary-btn" onClick={saveAllocation}>
+            {allocationEditingId ? "Update Allocation" : "Allocate"}
+          </button>
+        </div>
+      </FormCard>
     )}
-    
-  <TableCard title="Visa Allocations List">
-    <p>Total Allocations: {visaAllocations.length}</p>
-  <table>
-    <thead>
-      <tr>
-        <th>Request No</th>
-        <th>Visa No</th>
-        <th>Allocated Qty</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {visaAllocations.length === 0 ? (
-  <tr>
-    <td colSpan="3">No allocations yet</td>
-  </tr>
-) : (
-  visaAllocations.map((item) => (
-        <tr key={item.id}>
-          <td>{item.request_no}</td>
-          <td>{item.visa_no}</td>
-          <td>{item.allocated_qty}</td>
-          <td>
-  {canManageVisas ? (
-    <>
-      <button
-        onClick={() => {
-          setAllocationForm({
-            request_no: item.request_no,
-            visa_no: item.visa_no,
-            allocated_qty: item.allocated_qty,
-          });
 
-          setAllocationEditingId(item.id);
+    <TableCard title="Visa Allocations List">
+      <p>Total Allocations: {visaAllocations.length}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Request No</th>
+            <th>Visa No</th>
+            <th>Profession</th>
+            <th>Nationality</th>
+            <th>Gender</th>
+            <th>Allocated Qty</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visaAllocations.length === 0 ? (
+            <tr>
+              <td colSpan="7">No allocations yet</td>
+            </tr>
+          ) : (
+            visaAllocations.map((item) => {
+              const line = visaInventoryLines.find((vLine) => String(vLine.id) === String(item.visa_batch_line_id || ""));
+              return (
+                <tr key={item.id}>
+                  <td>{item.request_no}</td>
+                  <td>{item.visa_no}</td>
+                  <td>{line?.profession || "-"}</td>
+                  <td>{line?.nationality || "-"}</td>
+                  <td>{line?.gender || "-"}</td>
+                  <td>{item.allocated_qty}</td>
+                  <td>
+                    {canManageVisas ? (
+                      <>
+                        <button
+                          onClick={() => {
+                            setAllocationForm({
+                              request_no: item.request_no,
+                              visa_no: item.visa_no,
+                              visa_batch_line_id: item.visa_batch_line_id || "",
+                              allocated_qty: item.allocated_qty,
+                            });
+                            setAllocationEditingId(item.id);
+                            window.scrollTo({ top: 0, behavior: "smooth" });
+                          }}
+                        >
+                          Edit
+                        </button>
 
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        }}
-      >
-        Edit
-      </button>
-
-      <button
-        className="danger"
-        onClick={() => deleteAllocation(item.id)}
-      >
-        Delete
-      </button>
-    </>
-  ) : (
-    "-"
-  )}
-</td>
-        </tr>
-      ))
-)}
-    </tbody>
-  </table>
-</TableCard>
-</>
-)}
-{activePage === "Visa Inventory" && (
-  <div>
-    <div className="dashboard-grid">
-  <Stat title="Requests With Visa" value={requestsWithVisa.length} className="passed" />
-  <Stat title="Requests Without Visa" value={requestsWithoutVisa.length} className="warning" />
-  <Stat title="Extra Visa Requests" value={extraVisaRequests.length} className="danger" />
-</div>
-            <div className="toolbar"><input placeholder="Search visa, request no, project, profession, nationality, agency" value={search} onChange={(e) => setSearch(e.target.value)} /><select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}><option>All</option>{VISA_STATUSES.map((s) => <option key={s}>{s}</option>)}</select></div>
-            {canManageVisas && (
-            <FormCard title={visaEditingId ? "Edit Visa Batch" : "Add Visa Batch"}>
-              <div className="form-grid">
-<Input
-  placeholder="Request No"
-  value={visaForm.request_no}
-  onChange={(v) => {
-    const req = requests.find((r) => String(r.request_no) === String(v));
-
-    setVisaForm((prev) => ({
-      ...prev,
-      request_no: v,
-      project: req?.project_name || "",
-      profession: req?.profession || "",
-      nationality: req?.nationality || "",
-      gender: req?.gender || "",
-      quantity: Number(req?.quantity || 0),
-allocated_qty: Number(req?.allocated_visa_qty || 0),
-remaining_qty:
-Number(req?.quantity || 0)
--
-Number(req?.allocated_visa_qty || 0),
-    }));
-}}
-/>
-<Input placeholder="Visa No"
-value={visaForm.visa_no}
-onChange={(v)=>updateForm(setVisaForm,"visa_no",v)}
-/>
-
-<Input placeholder="MOI No"
-value={visaForm.moi_no}
-onChange={(v)=>updateForm(setVisaForm,"moi_no",v)}
-/>
-
-<Input placeholder="Project"
-value={visaForm.project}
-onChange={(v)=>updateForm(setVisaForm,"project",v)}
-/>
-
-<Input placeholder="Profession"
-value={visaForm.profession}
-onChange={(v)=>updateForm(setVisaForm,"profession",v)}
-/>
-
-<Input placeholder="Nationality"
-value={visaForm.nationality}
-onChange={(v)=>updateForm(setVisaForm,"nationality",v)}
-/>
-
-<Select
-value={visaForm.gender}
-onChange={(v)=>updateForm(setVisaForm,"gender",v)}
-placeholder="Gender"
-options={GENDERS}
-/>
-
-<Select
-value={visaForm.agency}
-onChange={(v)=>updateForm(setVisaForm,"agency",v)}
-placeholder="Agency"
-options={agencies.map(x=>x.name)}
-/>
-
-<Input placeholder="Office Country"
-value={visaForm.office_country}
-onChange={(v)=>updateForm(setVisaForm,"office_country",v)}
-/>
-
-<Input type="number"
-placeholder="Quantity"
-value={visaForm.quantity}
-onChange={(v)=>updateForm(setVisaForm,"quantity",v)}
-/>
-
-<Input type="number"
-placeholder="Authorized Qty"
-value={visaForm.authorized}
-onChange={(v)=>updateForm(setVisaForm,"authorized",v)}
-/>
-
-<Input type="number"
-placeholder="Allocated Qty"
-value={visaForm.allocated_qty}
-onChange={(v)=>updateForm(setVisaForm,"allocated_qty",v)}
-/>
-
-<Input type="number"
-placeholder="Remaining Qty"
-value={visaForm.remaining_qty}
-onChange={(v)=>updateForm(setVisaForm,"remaining_qty",v)}
-/>
-
-<Input placeholder="Authorization No"
-value={visaForm.authorization_no}
-onChange={(v)=>updateForm(setVisaForm,"authorization_no",v)}
-/>
-
-<label>Issue Date</label>
-<Input
-type="date"
-value={visaForm.issue_date}
-onChange={(v)=>updateForm(setVisaForm,"issue_date",v)}
-/>
-
-<label>Expiry Date</label>
-<Input
-type="date"
-value={visaForm.expiry_date}
-onChange={(v)=>updateForm(setVisaForm,"expiry_date",v)}
-/>
-
-<Select
-value={visaForm.status}
-onChange={(v)=>updateForm(setVisaForm,"status",v)}
-placeholder="Status"
-options={VISA_STATUSES}
-/>
-
-<textarea
-rows="3"
-placeholder="Notes"
-value={visaForm.notes}
-onChange={(e)=>updateForm(setVisaForm,"notes",e.target.value)}
-/>
-              </div>
-              <div className="actions-line"><button className="save-btn" onClick={saveVisa}>{visaEditingId ? "Update Visa" : "Save Visa"}</button><button className="light-btn" onClick={resetVisaForm}>Clear</button></div>
-            </FormCard>
-            )}
-<TableCard title="Visa Records">
-<table>
-<thead>
-<tr>
-<th>Request No</th>
-<th>Visa No</th>
-<th>Project</th>
-<th>Profession</th>
-<th>Nationality</th>
-<th>Gender</th>
-<th>Agency</th>
-<th>Qty</th>
-<th>Status</th>
-<th>Actions</th>
-</tr>
-</thead>
-
-<tbody>
-{filteredVisaRecords.map((item) => (
-
-<tr key={item.id}>
-<td>{item.request_no || "-"}</td>
-<td>
-  <button
-    className="link-btn"
-    onClick={() => editVisa(item)}
-  >
-    {item.visa_no || "-"}
-  </button>
-</td>
-<td>{item.project || "-"}</td>
-<td>{item.profession || "-"}</td>
-<td>{item.nationality || "-"}</td>
-<td>{item.gender || "-"}</td>
-<td>{item.agency || "-"}</td>
-<td>{item.quantity || 0}</td>
-
-<td>
-<Badge value={item.status}/>
-</td>
-
-<td className="table-actions">
-
-{canManageVisas && (
-  <>
-    <button onClick={() => editVisa(item)}>
-      Edit
-    </button>
-
-    <button onClick={() => openAuthorization(item)}>
-      Authorizations
-    </button>
-
-    <button
-      className="danger"
-      onClick={() => deleteVisa(item.id)}
-    >
-      Delete
-    </button>
+                        <button className="danger" onClick={() => deleteAllocation(item.id)}>
+                          Delete
+                        </button>
+                      </>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </TableCard>
   </>
 )}
 
-{!canManageVisas && <button onClick={() => openAuthorization(item)}>View</button>}
+{activePage === "Visa Inventory" && (
+  <div>
+    <div className="dashboard-grid">
+      <Stat title="Requests With Visa" value={requestsWithVisa.length} className="passed" />
+      <Stat title="Requests Without Visa" value={requestsWithoutVisa.length} className="warning" />
+      <Stat title="Extra Visa Lines" value={extraVisaRequests.length} className="danger" />
+    </div>
 
-</td>
-</tr>
+    <div className="toolbar">
+      <input
+        placeholder="Search visa, MOI, project, profession, nationality, agency"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+        <option>All</option>
+        {VISA_STATUSES.map((s) => <option key={s}>{s}</option>)}
+      </select>
+    </div>
 
-))}
-</tbody>
-</table>
-</TableCard>        
-       
-</div>
+    {canManageVisas && (
+      <FormCard title={visaEditingId ? "Edit Visa Batch" : "Add Visa Batch"}>
+        <div className="form-grid">
+          <Input placeholder="Visa No" value={visaForm.visa_no} onChange={(v) => updateForm(setVisaForm, "visa_no", v)} />
+          <Input placeholder="MOI No" value={visaForm.moi_no} onChange={(v) => updateForm(setVisaForm, "moi_no", v)} />
+          <Input placeholder="Project" value={visaForm.project} onChange={(v) => updateForm(setVisaForm, "project", v)} />
+          <Select value={visaForm.agency} onChange={(v) => updateForm(setVisaForm, "agency", v)} placeholder="Agency" searchable options={agencies.map((x) => x.name)} />
+          <Input placeholder="Office Country" value={visaForm.office_country} onChange={(v) => updateForm(setVisaForm, "office_country", v)} />
+          <Input placeholder="Issue Date" type="date" value={visaForm.issue_date} onChange={(v) => updateForm(setVisaForm, "issue_date", v)} />
+          <Input placeholder="Expiry Date" type="date" value={visaForm.expiry_date} onChange={(v) => updateForm(setVisaForm, "expiry_date", v)} />
+          <Select value={visaForm.status} onChange={(v) => updateForm(setVisaForm, "status", v)} placeholder="Status" options={VISA_STATUSES} />
+          <textarea rows="3" placeholder="Batch Notes" value={visaForm.notes} onChange={(e) => updateForm(setVisaForm, "notes", e.target.value)} />
+        </div>
+
+        <div className="card" style={{ marginTop: "12px" }}>
+          <h3 style={{ marginBottom: "12px" }}>Visa Batch Lines</h3>
+          <p>Use this section when one visa batch contains more than one profession, nationality, gender, or quantity.</p>
+          <div className="form-grid">
+            <Select
+              value={visaLineForm.profession}
+              onChange={(v) => updateForm(setVisaLineForm, "profession", v)}
+              placeholder="Profession"
+              searchable
+              options={professions.length ? professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar) : PROFESSIONS}
+            />
+            <Select
+              value={visaLineForm.nationality}
+              onChange={(v) => updateForm(setVisaLineForm, "nationality", v)}
+              placeholder="Nationality"
+              searchable
+              options={countries.length ? countries.map((c) => `${c.nationality} (${c.name})`) : COUNTRIES}
+            />
+            <Select value={visaLineForm.gender} onChange={(v) => updateForm(setVisaLineForm, "gender", v)} placeholder="Gender" options={GENDERS} />
+            <Input type="number" placeholder="Line Quantity" value={visaLineForm.quantity} onChange={(v) => updateForm(setVisaLineForm, "quantity", v)} />
+            <Input placeholder="Line Notes" value={visaLineForm.notes} onChange={(v) => updateForm(setVisaLineForm, "notes", v)} />
+            <button type="button" className="light-btn" onClick={addVisaLineToDraft}>Add Line</button>
+          </div>
+
+          <div className="mini-table-scroll" style={{ marginTop: "12px", height: "auto", maxHeight: "260px" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Profession</th>
+                  <th>Nationality</th>
+                  <th>Gender</th>
+                  <th>Qty</th>
+                  <th>Notes</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visaLinesDraft.length === 0 ? (
+                  <tr><td colSpan="7">No visa lines added yet</td></tr>
+                ) : (
+                  visaLinesDraft.map((line, index) => (
+                    <tr key={`${line.profession}-${line.nationality}-${line.gender}-${index}`}>
+                      <td>{index + 1}</td>
+                      <td>{line.profession}</td>
+                      <td>{line.nationality}</td>
+                      <td>{line.gender}</td>
+                      <td>{line.quantity}</td>
+                      <td>{line.notes || "-"}</td>
+                      <td><button className="danger" onClick={() => removeVisaLineFromDraft(index)}>Remove</button></td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="actions-line">
+          <button className="save-btn" onClick={saveVisa}>{visaEditingId ? "Update Visa Batch" : "Save Visa Batch"}</button>
+          <button className="light-btn" onClick={resetVisaForm}>Clear</button>
+        </div>
+      </FormCard>
+    )}
+
+    <TableCard title="Visa Batches">
+      <table>
+        <thead>
+          <tr>
+            <th>Visa No</th>
+            <th>MOI No</th>
+            <th>Project</th>
+            <th>Agency</th>
+            <th>Total Qty</th>
+            <th>Allocated</th>
+            <th>Remaining</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredVisaRecords.map((item) => (
+            <tr key={item.id}>
+              <td><button className="link-btn" onClick={() => editVisa(item)}>{item.visa_no || "-"}</button></td>
+              <td>{item.moi_no || "-"}</td>
+              <td>{item.project || "-"}</td>
+              <td>{item.agency || "-"}</td>
+              <td>{getVisaBatchTotalQty(item)}</td>
+              <td>{getVisaBatchAllocatedQty(item)}</td>
+              <td>{getVisaBatchRemainingQty(item)}</td>
+              <td><Badge value={item.status} /></td>
+              <td className="table-actions">
+                {canManageVisas ? (
+                  <>
+                    <button onClick={() => editVisa(item)}>Edit</button>
+                    <button onClick={() => openAuthorization(item)}>Authorizations</button>
+                    <button className="danger" onClick={() => deleteVisa(item.id)}>Delete</button>
+                  </>
+                ) : (
+                  <button onClick={() => openAuthorization(item)}>View</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableCard>
+
+    <TableCard title="Visa Batch Lines">
+      <table>
+        <thead>
+          <tr>
+            <th>Visa No</th>
+            <th>Profession</th>
+            <th>Nationality</th>
+            <th>Gender</th>
+            <th>Qty</th>
+            <th>Allocated</th>
+            <th>Remaining</th>
+            <th>Agency</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visaInventoryLines.length === 0 ? (
+            <tr><td colSpan="9">No visa lines found</td></tr>
+          ) : (
+            visaInventoryLines.map((line) => (
+              <tr key={line.id}>
+                <td>{line.visa_no || "-"}</td>
+                <td>{line.profession || "-"}</td>
+                <td>{line.nationality || "-"}</td>
+                <td>{line.gender || "-"}</td>
+                <td>{line.quantity || 0}</td>
+                <td>{getVisaLineAllocatedQty(line.legacy ? "" : line.id, line.visa_no)}</td>
+                <td>{getVisaLineRemainingQty(line)}</td>
+                <td>{line.agency || "-"}</td>
+                <td><Badge value={line.status} /></td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </TableCard>
+  </div>
 )}
 
             {activePage === "Candidates" && (
@@ -11989,26 +12176,30 @@ function TableCard({ title, children, className = "" }) {
 function Select({ value, onChange, placeholder, options = [], searchable = false }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const getOptionValue = (option) => typeof option === "object" ? String(option.value ?? "") : String(option ?? "");
+  const getOptionLabel = (option) => typeof option === "object" ? String(option.label ?? option.value ?? "") : String(option ?? "");
+  const selectedOption = options.find((option) => getOptionValue(option) === String(value || ""));
+  const selectedLabel = selectedOption ? getOptionLabel(selectedOption) : value || "";
 
   if (!searchable) {
     return (
       <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder}</option>
         {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
+          <option key={getOptionValue(option)} value={getOptionValue(option)}>{getOptionLabel(option)}</option>
         ))}
       </select>
     );
   }
 
   const filtered = options.filter((option) =>
-    String(option).toLowerCase().includes(query.toLowerCase())
+    getOptionLabel(option).toLowerCase().includes(query.toLowerCase())
   );
 
   return (
     <div style={{ position: "relative" }}>
       <input
-        value={open ? query : value || ""}
+        value={open ? query : selectedLabel}
         placeholder={placeholder}
         onFocus={() => {
           setOpen(true);
@@ -12022,17 +12213,17 @@ function Select({ value, onChange, placeholder, options = [], searchable = false
 
       {open && (
         <div style={{ position: "absolute", background: "#fff", border: "1px solid #ddd", maxHeight: "250px", overflowY: "auto", width: "100%", zIndex: 9999 }}>
-          {filtered.slice(0, 50).map((option) => (
+          {filtered.slice(0, 80).map((option) => (
             <div
-              key={option}
+              key={getOptionValue(option)}
               style={{ padding: "8px", cursor: "pointer" }}
               onMouseDown={() => {
-                onChange(option);
+                onChange(getOptionValue(option));
                 setOpen(false);
                 setQuery("");
               }}
             >
-              {option}
+              {getOptionLabel(option)}
             </div>
           ))}
         </div>
