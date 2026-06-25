@@ -472,6 +472,59 @@ function normalize(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+
+function normalizeMatchText(value) {
+  return normalize(value)
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function getMatchTokens(value) {
+  const stopWords = new Set([
+    "and",
+    "or",
+    "the",
+    "of",
+    "for",
+    "في",
+    "من",
+    "و",
+    "عامل",
+    "فني",
+  ]);
+
+  return normalizeMatchText(value)
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && !stopWords.has(token));
+}
+
+function isCompatibleText(left, right) {
+  const a = normalizeMatchText(left);
+  const b = normalizeMatchText(right);
+
+  if (!a || !b) return true;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+
+  const aTokens = getMatchTokens(a);
+  const bTokens = getMatchTokens(b);
+  if (!aTokens.length || !bTokens.length) return false;
+
+  const shared = aTokens.filter((token) => bTokens.includes(token));
+  return shared.length >= 1;
+}
+
+function isCompatibleVisaLineForRequestLine(reqLine, visaLine) {
+  return (
+    isCompatibleText(reqLine.profession, visaLine.profession) &&
+    normalize(reqLine.nationality) === normalize(visaLine.nationality) &&
+    (!reqLine.gender || !visaLine.gender || normalize(reqLine.gender) === normalize(visaLine.gender))
+  );
+}
+
 function isSaudiNationality(value) {
   const text = normalize(value || "");
 
@@ -1264,11 +1317,16 @@ const extraVisaRequests = visaInventoryLines.filter((line) => {
     return;
   }
 
-  if (
-    normalize(req.profession) !== normalize(selectedLine.profession) ||
-    normalize(req.nationality) !== normalize(selectedLine.nationality) ||
-    normalize(req.gender) !== normalize(selectedLine.gender)
-  ) {
+  const requestLinesForSelectedRequest = getRequestLinesForRequest(req).filter((line) => !isSaudiNationality(line.nationality));
+  const selectedLineMatchesRequest = requestLinesForSelectedRequest.length === 0
+    ? (
+        isCompatibleText(req.profession, selectedLine.profession) &&
+        normalize(req.nationality) === normalize(selectedLine.nationality) &&
+        (!req.gender || !selectedLine.gender || normalize(req.gender) === normalize(selectedLine.gender))
+      )
+    : requestLinesForSelectedRequest.some((reqLine) => isCompatibleVisaLineForRequestLine(reqLine, selectedLine));
+
+  if (!selectedLineMatchesRequest) {
     alert("Selected visa line does not match request profession, nationality, and gender");
     return;
   }
@@ -1375,6 +1433,13 @@ async function saveSelectedAllocations() {
     const available = getVisaLineRemainingQty(row.line);
     if (row.qty > available) {
       return alert(`Only ${available} visas are available for ${row.line.visa_no}`);
+    }
+
+    const lineMatchesRequest = summary.lines.length === 0 || summary.lines.some(
+      (reqLine) => isCompatibleVisaLineForRequestLine(reqLine, row.line)
+    );
+    if (!lineMatchesRequest) {
+      return alert(`Visa line ${row.line.visa_no} / ${row.line.profession || "-"} does not match this request.`);
     }
   }
 
@@ -8780,10 +8845,7 @@ Save Authorization
       if (remaining <= 0) return false;
 
       const matchesRequest = requestLinesForAllocation.length === 0 || requestLinesForAllocation.some(
-        (reqLine) =>
-          normalize(reqLine.profession) === normalize(line.profession) &&
-          normalize(reqLine.nationality) === normalize(line.nationality) &&
-          normalize(reqLine.gender) === normalize(line.gender)
+        (reqLine) => isCompatibleVisaLineForRequestLine(reqLine, line)
       );
 
       const keyword = allocationSearch.trim().toLowerCase();
