@@ -5891,7 +5891,12 @@ async function runAICommander(question = aiQuestion) {
           },
           {
             role: "user",
-            content: `Question: ${question}\n\nOperational snapshot JSON:\n${JSON.stringify(snapshot, null, 2)}`,
+            content: `Question: ${question}
+
+${authoritativeLineBrief}
+
+Operational request-line JSON (secondary reference only):
+${JSON.stringify(snapshot, null, 2)}`,
           },
         ],
       }),
