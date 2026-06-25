@@ -6767,7 +6767,7 @@ if (!currentUser) {
         </div>
 
         <div className="vf-login-footer">
-          VisaFlow KSA · Version 1.0.0
+          VisaFlow KSA · Enterprise Edition · Version 1.0.0
         </div>
 
         {forgotPasswordOpen && (
