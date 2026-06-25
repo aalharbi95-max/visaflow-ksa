@@ -383,6 +383,7 @@ const emptyAgency = {
 
 const emptyCandidate = {
   candidate_name: "",
+  request_line_id: "",
   profession: "",
   nationality: "",
   gender: "",
@@ -3311,6 +3312,7 @@ async function deleteAgreement(id) {
     setCandidateEditingId(item.id);
     setCandidateForm({
       candidate_name: item.candidate_name || "",
+      request_line_id: item.request_line_id || "",
       profession: item.profession || "",
       nationality: item.nationality || "",
       gender: item.gender || "",
@@ -3359,6 +3361,30 @@ if (
 ) {
   return alert("Candidates cannot be added until the request is approved.");
 }
+
+    let matchedCandidateLine = null;
+    if (candidateForm.request_no) {
+      const relatedRequest = requests.find((request) => String(request.request_no || "") === String(candidateForm.request_no || ""));
+      const candidateRequestLines = relatedRequest ? getRequestLinesForRequest(relatedRequest) : [];
+
+      if (candidateRequestLines.length === 1) {
+        matchedCandidateLine = candidateRequestLines[0];
+      } else if (candidateRequestLines.length > 1) {
+        matchedCandidateLine = candidateRequestLines.find((line) => {
+          if (candidateForm.request_line_id && String(candidateForm.request_line_id) === String(line.id)) return true;
+          return (
+            isCompatibleText(candidateForm.profession, line.profession) &&
+            normalize(candidateForm.nationality) === normalize(line.nationality) &&
+            (!candidateForm.gender || !line.gender || normalize(candidateForm.gender) === normalize(line.gender))
+          );
+        });
+
+        if (!matchedCandidateLine) {
+          return alert("Please select or enter a candidate profession, nationality, and gender matching one request line exactly.");
+        }
+      }
+    }
+
     if (!candidateForm.candidate_name) return alert("Candidate name is required.");
     const oldCandidate = candidateEditingId
   ? candidates.find((c) => String(c.id) === String(candidateEditingId))
@@ -3399,6 +3425,10 @@ const shouldGenerateContract = ["Selected", "Interview Passed"].includes(autoSta
 
 const payload = {
   ...candidateForm,
+  request_line_id: matchedCandidateLine?.id || candidateForm.request_line_id || null,
+  profession: matchedCandidateLine?.profession || candidateForm.profession || "",
+  nationality: matchedCandidateLine?.nationality || candidateForm.nationality || "",
+  gender: matchedCandidateLine?.gender || candidateForm.gender || "",
   agency: currentRole === "Agency" ? (currentUser?.agency_name || candidateForm.agency || "") : candidateForm.agency,
   notes: candidateForm.notes || "",
   status: autoStatus,
@@ -4769,6 +4799,7 @@ async function createVisaFromRequest(item) {
 
   setCandidateForm({
     ...emptyCandidate,
+    request_line_id: firstLine.id && !String(firstLine.id).includes("legacy") ? firstLine.id : "",
     profession: firstLine.profession || item.profession || "",
     nationality: firstLine.nationality || item.nationality || "",
     gender: firstLine.gender || item.gender || "",
@@ -5591,6 +5622,74 @@ function buildRecruitmentForecast() {
   };
 }
 
+
+function buildOperationalLineBriefText() {
+  const lines = buildOperationalRequestLineRows();
+  const totals = lines.reduce((acc, line) => {
+    acc.required += Number(line.requested_qty || 0);
+    acc.allocated += Number(line.allocatedVisaQty || 0);
+    acc.authorized += Number(line.authorizedQty || 0);
+    acc.candidates += Number(line.candidates || 0);
+    acc.joined += Number(line.joined || 0);
+    acc.visaGap += Number(line.visaGap || 0);
+    acc.authorizationGap += Number(line.authorizationGap || 0);
+    acc.candidateGap += Number(line.candidateGap || 0);
+    acc.joiningGap += Number(line.joiningGap || 0);
+    return acc;
+  }, { required: 0, allocated: 0, authorized: 0, candidates: 0, joined: 0, visaGap: 0, authorizationGap: 0, candidateGap: 0, joiningGap: 0 });
+
+  const grouped = lines.reduce((acc, line) => {
+    const key = line.request_no || "-";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(line);
+    return acc;
+  }, {});
+
+  const sections = Object.entries(grouped).map(([requestNo, requestLines]) => {
+    const requestTitle = `Request ${requestNo}`;
+    const lineRows = requestLines
+      .sort((a, b) => Number(a.line_no || 0) - Number(b.line_no || 0))
+      .map((line) =>
+        [
+          `Line ${line.line_no}`,
+          `Project: ${line.project}`,
+          `Profession: ${line.profession}`,
+          `Nationality: ${line.nationality}`,
+          `Gender: ${line.gender}`,
+          `Required: ${line.requested_qty}`,
+          `Allocated Visas: ${line.allocatedVisaQty}`,
+          `Authorized: ${line.authorizedQty}`,
+          `Candidates: ${line.candidates}`,
+          `Interview Passed: ${line.interviewPassed}`,
+          `Medical: ${line.medicalDone}`,
+          `Visa Ready: ${line.visaReady}`,
+          `Ticketed: ${line.ticketIssued}`,
+          `Arrived: ${line.arrived}`,
+          `Joined: ${line.joined}`,
+          `Candidate Gap: ${line.candidateGap}`,
+          `Visa Gap: ${line.visaGap}`,
+          `Authorization Gap: ${line.authorizationGap}`,
+          `Joining Gap: ${line.joiningGap}`,
+          `Progress: ${line.progress}%`,
+          `Risk: ${line.riskLevel}`,
+          `Bottleneck: ${line.bottleneck}`,
+          `Agencies: ${line.agencies}`,
+        ].join(" | ")
+      )
+      .join("\n");
+
+    return `${requestTitle}\n${lineRows}`;
+  });
+
+  return [
+    "AUTHORITATIVE VisaFlow Request-Line Brief",
+    "IMPORTANT: This brief is already calculated by VisaFlow Intelligence Engine. Do not recalculate, regroup, or use request headers.",
+    `Totals from request lines only: Required ${totals.required}, Allocated Visas ${totals.allocated}, Authorized ${totals.authorized}, Candidates ${totals.candidates}, Joined ${totals.joined}, Visa Gap ${totals.visaGap}, Authorization Gap ${totals.authorizationGap}, Candidate Gap ${totals.candidateGap}, Joining Gap ${totals.joiningGap}`,
+    "",
+    ...sections,
+  ].join("\n");
+}
+
 function buildAICommanderSnapshot() {
   const agencyScorecard = buildAgencyScorecard();
   const operationalLines = buildOperationalRequestLineRows();
@@ -5762,6 +5861,7 @@ function getLocalAICommanderBrief() {
 async function runAICommander(question = aiQuestion) {
   const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
   const snapshot = buildAICommanderSnapshot();
+  const authoritativeLineBrief = buildOperationalLineBriefText();
 
   if (!apiKey) {
     setAiAnswer(getLocalAICommanderBrief());
@@ -5787,7 +5887,7 @@ async function runAICommander(question = aiQuestion) {
           {
             role: "system",
             content:
-              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use only the provided JSON. STRICT DATA RULES: (1) Use operational_request_lines as the only source for request profession, nationality, gender, quantity, progress, visa gaps, authorization gaps, candidate gaps and risks. (2) Never use request header summaries for profession or quantity. (3) Never combine all quantities under the first profession. (4) If a request has multiple operational_request_lines, list all lines separately before the executive summary. (5) If REQ-2026-0003 has lines for plumber 5, electrician 5 and cleaner 50, you must report exactly that, not 60 plumbers. Provide: Request Line Breakdown, Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the JSON.",
+              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use ONLY the AUTHORITATIVE VisaFlow Request-Line Brief and operational_request_lines JSON. You are NOT allowed to calculate from request headers, request summaries, available visa totals, or raw candidate totals. First, reproduce the Request Line Breakdown exactly from the authoritative brief. Never combine multiple lines under the first profession. Never say a request is 60 plumbers when the lines show plumber 5, electrician 5, cleaner 50. Treat Remaining Visa as balance, not shortage. Shortage is only visaGap. Provide: Request Line Breakdown, Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the provided brief/JSON.",
           },
           {
             role: "user",
@@ -8145,7 +8245,7 @@ if (!currentUser) {
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: "10px", marginTop: "24px" }}>
                       {[
                         ["SLA Risk", reports.lateItems.length],
-                        ["Visa Gaps", requestsWithoutVisa.length],
+                        ["Line Visa Gaps", buildRequestHealthRows().filter((x) => !x.isSaudi && x.visaGap > 0).length],
                         ["Agency Risk", buildAgencyScorecard().filter((x) => x.risk !== "Low").length],
                         ["High-Risk Requests", buildRequestHealthRows().filter((x) => x.riskLevel === "High").length],
                         ["Arrivals 30D", executiveDashboard.arrivalsNext30Days.length],
@@ -8164,14 +8264,14 @@ if (!currentUser) {
                     title="AI Risk Score"
                     value={
                       reports.lateItems.length +
-                      requestsWithoutVisa.length +
-                      reports.authorizationsWithoutCandidates.length +
+                      buildRequestHealthRows().filter((row) => !row.isSaudi && row.visaGap > 0).length +
+                      buildRequestHealthRows().filter((row) => !row.isSaudi && row.authorizationGap > 0).length +
                       buildRequestHealthRows().filter((row) => row.riskLevel === "High").length
                     }
                     className={executiveAlertClass(
                       reports.lateItems.length +
-                      requestsWithoutVisa.length +
-                      reports.authorizationsWithoutCandidates.length +
+                      buildRequestHealthRows().filter((row) => !row.isSaudi && row.visaGap > 0).length +
+                      buildRequestHealthRows().filter((row) => !row.isSaudi && row.authorizationGap > 0).length +
                       buildRequestHealthRows().filter((row) => row.riskLevel === "High").length
                     )}
                   />
@@ -8315,26 +8415,31 @@ if (!currentUser) {
             </TableCard>
 
             <div className="grid">
-              <TableCard title="🔥 Request Health Analyzer">
+              <TableCard title="🔥 Request Line Health Analyzer (VIE)">
                 <table>
                   <thead>
                     <tr>
-                      <th>Request No</th>
+                      <th>Request</th>
+                      <th>Line</th>
                       <th>Project</th>
+                      <th>Profession</th>
+                      <th>Nationality</th>
                       <th>Qty</th>
                       <th>Candidates</th>
+                      <th>Medical</th>
+                      <th>Arrived</th>
                       <th>Joined</th>
                       <th>Progress</th>
+                      <th>Bottleneck</th>
                       <th>Risk</th>
-                      <th>AI Recommendation</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {buildRequestHealthRows().slice(0, 10).length === 0 ? (
-                      <tr><td colSpan="8">No request health data</td></tr>
+                    {buildRequestHealthRows().slice(0, 12).length === 0 ? (
+                      <tr><td colSpan="13">No request line health data</td></tr>
                     ) : (
-                      buildRequestHealthRows().slice(0, 10).map((row) => (
-                        <tr key={row.request_no}>
+                      buildRequestHealthRows().slice(0, 12).map((row) => (
+                        <tr key={row.line_key}>
                           <td>
                             <button className="link-btn" onClick={() => {
                               const req = requests.find((request) => request.request_no === row.request_no);
@@ -8343,9 +8448,14 @@ if (!currentUser) {
                               {row.request_no}
                             </button>
                           </td>
-                          <td>{row.project_name}</td>
-                          <td>{row.qty}</td>
+                          <td>{row.line_no}</td>
+                          <td>{row.project}</td>
+                          <td>{row.profession}</td>
+                          <td>{row.nationality}</td>
+                          <td>{row.requested_qty}</td>
                           <td>{row.candidates}</td>
+                          <td>{row.medicalDone}</td>
+                          <td>{row.arrived}</td>
                           <td>{row.joined}</td>
                           <td>
                             <b>{row.progress}%</b>
@@ -8359,8 +8469,8 @@ if (!currentUser) {
                               />
                             </div>
                           </td>
+                          <td>{row.bottleneck}</td>
                           <td><Badge value={`${row.riskLevel} (${row.riskScore})`} /></td>
-                          <td>{row.recommendation}</td>
                         </tr>
                       ))
                     )}
@@ -8405,38 +8515,36 @@ if (!currentUser) {
             </div>
 
             <div className="grid">
-              <TableCard title="🛂 AI Detected Visa Shortage">
+              <TableCard title="🛂 Visa Allocation Gaps by Request Line">
                 <table>
                   <thead>
                     <tr>
-                      <th>Request No</th>
-                      <th>Project</th>
+                      <th>Request</th>
+                      <th>Line</th>
                       <th>Profession</th>
                       <th>Nationality</th>
                       <th>Required</th>
-                      <th>Available</th>
-                      <th>Shortage</th>
+                      <th>Allocated</th>
+                      <th>Available Balance</th>
+                      <th>Visa Gap</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {requestsWithoutVisa.length === 0 ? (
-                      <tr><td colSpan="7">No visa shortage detected</td></tr>
+                    {buildRequestHealthRows().filter((line) => !line.isSaudi && line.visaGap > 0).length === 0 ? (
+                      <tr><td colSpan="8">No visa allocation gaps detected by request line</td></tr>
                     ) : (
-                      requestsWithoutVisa.slice(0, 8).map((request) => {
-                        const available = getVisaBalanceForRequest(request);
-                        const required = Number(request.quantity || 0);
-                        return (
-                          <tr key={request.id}>
-                            <td>{request.request_no}</td>
-                            <td>{request.project_name || "-"}</td>
-                            <td>{request.profession || "-"}</td>
-                            <td>{request.nationality || "-"}</td>
-                            <td>{required}</td>
-                            <td>{available}</td>
-                            <td><Badge value={Math.max(required - available, 0)} /></td>
-                          </tr>
-                        );
-                      })
+                      buildRequestHealthRows().filter((line) => !line.isSaudi && line.visaGap > 0).slice(0, 8).map((line) => (
+                        <tr key={line.line_key}>
+                          <td>{line.request_no}</td>
+                          <td>{line.line_no}</td>
+                          <td>{line.profession}</td>
+                          <td>{line.nationality}</td>
+                          <td>{line.requested_qty}</td>
+                          <td>{line.allocatedVisaQty}</td>
+                          <td>{line.matching_available_visa_qty}</td>
+                          <td><Badge value={line.visaGap} /></td>
+                        </tr>
+                      ))
                     )}
                   </tbody>
                 </table>
