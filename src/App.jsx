@@ -1906,26 +1906,15 @@ const getVisaAvailableQty = (visaNo) => {
   
 
   const stats = useMemo(() => {
-    // SSOT: visa quantity must come from visa_batch_lines, not visa_batches.profession/quantity header.
-    const totalQty = visaRecords.reduce((sum, item) => sum + getVisaBatchTotalQty(item), 0);
+    const totalQty = visaRecords.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const totalCandidates = candidates.length;
 
-const blockedCandidateStatuses = ["Rejected", "Interview Failed", "Medical Failed", "Medical Fail", "Cancelled"];
+const totalRemaining = requests.reduce((sum, item) => {
+  const used = candidates.filter(
+    (c) => c.request_no === item.request_no
+  ).length;
 
-const totalRemaining = requests.reduce((sum, request) => {
-  const lines = getRequestLinesForRequest(request);
-  const remainingByLines = lines.reduce((lineSum, line) => {
-    const used = candidates.filter(
-      (candidate) =>
-        String(candidate.request_no || "") === String(request.request_no || "") &&
-        !blockedCandidateStatuses.includes(candidate.status) &&
-        candidateMatchesRequestLine(candidate, line)
-    ).length;
-
-    return lineSum + Math.max(Number(line.quantity || 0) - used, 0);
-  }, 0);
-
-  return sum + remainingByLines;
+  return sum + (Number(item.quantity || 0) - used);
 }, 0);
 
 const underRecruitmentCount = requests.filter(
@@ -1939,12 +1928,9 @@ const visaProcessCount = requests.filter(
 const totalMobilizationCost = candidates.reduce((sum, candidate) => sum + getCandidateTotalCost(candidate), 0);
 
 const totalRequestBudget = requests.reduce((sum, request) => {
-  const lines = getRequestLinesForRequest(request);
-  return sum + lines.reduce((lineSum, line) => {
-    const qty = Number(line.quantity || 0);
-    const budget = Number(line.salary || request.salary || request.budget || 0);
-    return lineSum + (budget * qty);
-  }, 0);
+  const qty = Number(request.quantity || 0);
+  const budget = Number(request.salary || request.budget || 0);
+  return sum + (budget * qty);
 }, 0);
 
    return {
@@ -1975,7 +1961,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
   openRequests: requests.filter((item) => item.status === "Open").length,
   urgentRequests: requests.filter((item) => item.priority === "Urgent").length,
 };
-  }, [visaRecords, visaBatchLines, visaAllocations, agencies, requests, requestLines, candidates, interviews, mobilizations]);
+  }, [visaRecords, agencies, requests, candidates, interviews, mobilizations]);
   const reports = useMemo(() => {
   const today = new Date();
 
@@ -2096,9 +2082,9 @@ const totalRequestBudget = requests.reduce((sum, request) => {
 
       return {
         request_no: r.request_no,
-        profession: getRequestLineSummary(r, "profession"),
-        nationality: getRequestLineSummary(r, "nationality"),
-        qty: getRequestTotalQty(r),
+        profession: r.profession,
+        nationality: r.nationality,
+        qty: r.quantity,
         completedCandidates,
         visas: relatedVisas.map((v) => v.visa_no).filter(Boolean).join(", "),
         authorizations: relatedAuths.length,
@@ -2119,8 +2105,7 @@ const mobilizationRequestRows = useMemo(() => {
 
   return requests.map((request) => {
     const requestNo = request.request_no;
-    // SSOT: request required quantity comes from request_lines.
-    const qty = getRequestTotalQty(request);
+    const qty = Number(request.quantity || request.qty || 0);
     const saudiRequest = isSaudiRequest(request);
 
     const requestCandidates = candidates.filter(
@@ -2290,9 +2275,9 @@ const mobilizationRequestRows = useMemo(() => {
     return {
       request_no: requestNo,
       project_name: request.project_name || request.project || "-",
-      profession: getRequestLineSummary(request, "profession"),
-      nationality: getRequestLineSummary(request, "nationality"),
-      gender: getRequestLineSummary(request, "gender"),
+      profession: request.profession || "-",
+      nationality: request.nationality || "-",
+      gender: request.gender || "-",
       qty,
       isSaudi: saudiRequest,
       allocatedVisaQty,
@@ -2561,33 +2546,6 @@ const executiveDashboard = useMemo(() => {
     recruitmentFunnel,
   };
 }, [requests, requestLines, visaRecords, visaAllocations, visaAuthorizations, candidates, interviews, reports]);
-
-const dashboardRequestRows = useMemo(() => {
-  return requests.slice(0, 6).map((request) => ({
-    ...request,
-    profession: getRequestLineSummary(request, "profession"),
-    nationality: getRequestLineSummary(request, "nationality"),
-    gender: getRequestLineSummary(request, "gender"),
-    quantity: getRequestTotalQty(request),
-  }));
-}, [requests, requestLines]);
-
-const dashboardVisaRows = useMemo(() => {
-  return visaRecords.slice(0, 6).map((visa) => {
-    const lines = getVisaLinesForBatch(visa);
-    const professions = Array.from(new Set(lines.map((line) => line.profession).filter(Boolean)));
-    const nationalities = Array.from(new Set(lines.map((line) => line.nationality).filter(Boolean)));
-    const genders = Array.from(new Set(lines.map((line) => line.gender).filter(Boolean)));
-
-    return {
-      ...visa,
-      profession: professions.length === 0 ? "-" : professions.length === 1 ? professions[0] : `Multiple (${professions.length})`,
-      nationality: nationalities.length === 0 ? "-" : nationalities.length === 1 ? nationalities[0] : `Multiple (${nationalities.length})`,
-      gender: genders.length === 0 ? "-" : genders.length === 1 ? genders[0] : `Multiple (${genders.length})`,
-      quantity: getVisaBatchTotalQty(visa),
-    };
-  });
-}, [visaRecords, visaBatchLines, visaAllocations]);
 
  async function generateRequestNo() {
   const year = new Date().getFullYear();
@@ -6017,10 +5975,69 @@ async function runAICommander(question = aiQuestion) {
 
   try {
     const lockedReport = buildLockedVIEReport(question);
-    setAiAnswer(lockedReport);
+    const snapshot = buildAICommanderSnapshot();
+    const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
+
+    if (!apiKey) {
+      setAiAnswer(
+        lockedReport +
+          "\n\n---\nAI Executive Analysis is not connected yet. Add VITE_OPENAI_API_KEY to enable OpenAI analysis."
+      );
+      setAiLastRun(new Date().toLocaleString());
+      return;
+    }
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        temperature: 0.1,
+        max_output_tokens: 1200,
+        input: [
+          {
+            role: "system",
+            content:
+              "You are VisaFlow KSA AI Commander, an executive recruitment operations advisor. You MUST use only the Locked VIE Facts and operational_request_lines provided by VisaFlow. Do not use request header profession, quantity, nationality, or gender. Do not recalculate totals. Do not combine multiple request lines under the first profession. Keep the Locked VIE Facts unchanged in meaning, then provide a concise Executive Analysis with risks, root causes, forecast, agency follow-up, and recommended actions.",
+          },
+          {
+            role: "user",
+            content:
+              `User question: ${question || "Executive recruitment status"}\n\n` +
+              `LOCKED VIE FACTS - DO NOT ALTER OR RECALCULATE:\n${lockedReport}\n\n` +
+              `STRICT OPERATIONAL SNAPSHOT JSON:\n${JSON.stringify(snapshot, null, 2)}\n\n` +
+              "Write the answer in Arabic business style. Start with a short note that the numbers are based on request lines. Never say REQ-2026-0003 is 60 plumbers if the locked facts show multiple lines.",
+          },
+        ],
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || "OpenAI analysis failed");
+
+    const aiText =
+      result.output_text ||
+      result.output
+        ?.flatMap((item) => item.content || [])
+        ?.map((content) => content.text || "")
+        ?.join("\n") ||
+      "";
+
+    setAiAnswer(
+      lockedReport +
+        "\n\n---\n🤖 AI Executive Analysis\n" +
+        (aiText || "AI did not return analysis. Locked VIE report is shown above.")
+    );
     setAiLastRun(new Date().toLocaleString());
   } catch (error) {
-    setAiAnswer(`VIE report failed: ${error.message}`);
+    const fallbackReport = buildLockedVIEReport(question);
+    setAiAnswer(
+      fallbackReport +
+        `\n\n---\nAI Executive Analysis failed: ${error.message}\nShowing locked VisaFlow VIE report only.`
+    );
   } finally {
     setAiLoading(false);
   }
@@ -8707,8 +8724,8 @@ if (!currentUser) {
               <Stat title="Active Agencies" value={stats.activeAgencies} />
             </div>
             <div className="grid">
-              <SimpleList title="Latest Requests" rows={dashboardRequestRows} columns={["request_no", "profession", "gender", "quantity", "approval_status"]} />
-              <SimpleList title="Latest Visa Records" rows={dashboardVisaRows} columns={["visa_no", "project", "profession", "quantity", "status"]} />
+              <SimpleList title="Latest Requests" rows={requests.slice(0, 6)} columns={["request_no", "profession", "gender", "quantity", "approval_status"]} />
+              <SimpleList title="Latest Visa Records" rows={visaRecords.slice(0, 6)} columns={["visa_no", "project", "profession", "status"]} />
             </div>
           </>
         )}
