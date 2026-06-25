@@ -5690,52 +5690,6 @@ function buildOperationalLineBriefText() {
   ].join("\n");
 }
 
-
-function buildLockedRequestLineReport() {
-  const lines = buildOperationalRequestLineRows()
-    .sort((a, b) => String(a.request_no || "").localeCompare(String(b.request_no || "")) || Number(a.line_no || 0) - Number(b.line_no || 0));
-
-  if (!lines.length) {
-    return "VisaFlow Locked Request-Line Report\nNo request lines found.";
-  }
-
-  const totals = lines.reduce((acc, line) => {
-    acc.required += Number(line.requested_qty || 0);
-    acc.allocated += Number(line.allocatedVisaQty || 0);
-    acc.authorized += Number(line.authorizedQty || 0);
-    acc.candidates += Number(line.candidates || 0);
-    acc.arrived += Number(line.arrived || 0);
-    acc.joined += Number(line.joined || 0);
-    acc.visaGap += Number(line.visaGap || 0);
-    acc.candidateGap += Number(line.candidateGap || 0);
-    acc.joiningGap += Number(line.joiningGap || 0);
-    return acc;
-  }, { required: 0, allocated: 0, authorized: 0, candidates: 0, arrived: 0, joined: 0, visaGap: 0, candidateGap: 0, joiningGap: 0 });
-
-  const grouped = lines.reduce((acc, line) => {
-    const key = line.request_no || "-";
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(line);
-    return acc;
-  }, {});
-
-  const requestSections = Object.entries(grouped).map(([requestNo, requestLines]) => {
-    const project = requestLines[0]?.project || "-";
-    const rows = requestLines.map((line) =>
-      `- Line ${line.line_no}: ${line.profession} | ${line.nationality} | ${line.gender} | المطلوب ${line.requested_qty} | المرشحين ${line.candidates} | وصل ${line.arrived} | انضم ${line.joined} | نقص المرشحين ${line.candidateGap} | نقص التأشيرات ${line.visaGap} | الاختناق ${line.bottleneck}`
-    );
-    return [`الطلب ${requestNo} - المشروع: ${project}`, ...rows].join("\n");
-  });
-
-  return [
-    "🔒 VisaFlow Locked Request-Line Report",
-    "هذا الجزء محسوب من النظام مباشرة وليس من الذكاء الاصطناعي.",
-    `الإجمالي من سطور الطلب فقط: المطلوب ${totals.required} | المخصص من التأشيرات ${totals.allocated} | التفويض ${totals.authorized} | المرشحين ${totals.candidates} | وصل ${totals.arrived} | انضم ${totals.joined} | نقص التأشيرات ${totals.visaGap} | نقص المرشحين ${totals.candidateGap} | متبقي الانضمام ${totals.joiningGap}`,
-    "",
-    ...requestSections,
-  ].join("\n");
-}
-
 function buildAICommanderSnapshot() {
   const agencyScorecard = buildAgencyScorecard();
   const operationalLines = buildOperationalRequestLineRows();
@@ -5904,83 +5858,127 @@ function getLocalAICommanderBrief() {
 }
 
 
+function buildLockedVIEReport(question = "") {
+  const operationalLines = buildOperationalRequestLineRows();
+  const activeLines = operationalLines.filter((line) => !["Cancelled"].includes(line.status));
+  const totals = activeLines.reduce((acc, line) => {
+    acc.required += Number(line.requested_qty || 0);
+    acc.allocated += Number(line.allocatedVisaQty || 0);
+    acc.authorized += Number(line.authorizedQty || 0);
+    acc.candidates += Number(line.candidates || 0);
+    acc.interviewPassed += Number(line.interviewPassed || 0);
+    acc.medicalDone += Number(line.medicalDone || 0);
+    acc.arrived += Number(line.arrived || 0);
+    acc.joined += Number(line.joined || 0);
+    acc.candidateGap += Number(line.candidateGap || 0);
+    acc.visaGap += Number(line.visaGap || 0);
+    acc.authorizationGap += Number(line.authorizationGap || 0);
+    acc.joiningGap += Number(line.joiningGap || 0);
+    if (line.riskLevel === "High") acc.highRisk += 1;
+    return acc;
+  }, {
+    required: 0,
+    allocated: 0,
+    authorized: 0,
+    candidates: 0,
+    interviewPassed: 0,
+    medicalDone: 0,
+    arrived: 0,
+    joined: 0,
+    candidateGap: 0,
+    visaGap: 0,
+    authorizationGap: 0,
+    joiningGap: 0,
+    highRisk: 0,
+  });
+
+  const requestGroups = activeLines.reduce((map, line) => {
+    const key = line.request_no || "-";
+    if (!map[key]) {
+      map[key] = {
+        request_no: key,
+        project: line.project || "-",
+        lines: [],
+      };
+    }
+    map[key].lines.push(line);
+    return map;
+  }, {});
+
+  const requestSections = Object.values(requestGroups).map((request) => {
+    const lineRows = request.lines
+      .sort((a, b) => Number(a.line_no || 0) - Number(b.line_no || 0))
+      .map((line) =>
+        `Line ${line.line_no}: ${line.profession} | ${line.nationality} | ${line.gender} | Required ${line.requested_qty} | Allocated ${line.allocatedVisaQty} | Authorized ${line.authorizedQty} | Candidates ${line.candidates} | Interview Passed ${line.interviewPassed} | Medical ${line.medicalDone} | Arrived ${line.arrived} | Joined ${line.joined} | Bottleneck: ${line.bottleneck} | Risk: ${line.riskLevel}`
+      )
+      .join("\n");
+
+    return `Request: ${request.request_no}\nProject: ${request.project}\n${lineRows}`;
+  }).join("\n\n");
+
+  const highRiskLines = activeLines
+    .filter((line) => line.riskLevel === "High")
+    .sort((a, b) => Number(b.riskScore || 0) - Number(a.riskScore || 0))
+    .slice(0, 10);
+
+  const riskRows = highRiskLines.length
+    ? highRiskLines.map((line) => `- ${line.request_no} / Line ${line.line_no} / ${line.profession}: ${line.bottleneck}. ${line.recommendation}`).join("\n")
+    : "- No high-risk request lines detected.";
+
+  const agencyRows = buildAgencyScorecard().slice(0, 8).map((agency) =>
+    `- ${agency.agency}: Candidates ${agency.candidates}, Authorized ${agency.authorizedQty}, Success ${agency.successRate}%, Risk ${agency.risk}, Score ${agency.score}`
+  ).join("\n") || "- No agency data available.";
+
+  const progress = totals.required ? Math.round((totals.candidates / totals.required) * 100) : 0;
+  const joinedProgress = totals.required ? Math.round((totals.joined / totals.required) * 100) : 0;
+
+  return [
+    "🔒 VisaFlow Locked Request-Line Report",
+    "",
+    "This report is generated by VisaFlow VIE from request_lines only. Request header profession/quantity is ignored.",
+    question ? `Question: ${question}` : "",
+    "",
+    "Executive Totals",
+    `- Total required: ${totals.required}`,
+    `- Active candidates: ${totals.candidates} (${progress}%)`,
+    `- Allocated visas: ${totals.allocated}`,
+    `- Authorized quantity: ${totals.authorized}`,
+    `- Interview passed: ${totals.interviewPassed}`,
+    `- Medical done: ${totals.medicalDone}`,
+    `- Arrived: ${totals.arrived}`,
+    `- Joined: ${totals.joined} (${joinedProgress}%)`,
+    `- Visa allocation gap: ${totals.visaGap}`,
+    `- Authorization gap: ${totals.authorizationGap}`,
+    `- Candidate gap: ${totals.candidateGap}`,
+    `- Joining gap: ${totals.joiningGap}`,
+    `- High-risk lines: ${totals.highRisk}`,
+    "",
+    "Request Line Breakdown",
+    requestSections || "No request lines available.",
+    "",
+    "Critical Risks by Line",
+    riskRows,
+    "",
+    "Agency Follow-up",
+    agencyRows,
+    "",
+    "Recommended Actions",
+    "1. Do not evaluate any request as one profession when it has multiple request lines.",
+    "2. Follow each line separately by profession, nationality, gender, quantity, authorization, candidate pipeline, and joining.",
+    "3. Use the bottleneck shown for each line as the next operational action.",
+  ].filter(Boolean).join("\n");
+}
+
 async function runAICommander(question = aiQuestion) {
-  const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
-  const snapshot = buildAICommanderSnapshot();
-  const authoritativeLineBrief = buildOperationalLineBriefText();
-
-  const lockedReport = buildLockedRequestLineReport();
-  console.log("VIE locked request-line report", lockedReport);
-  console.log("VIE snapshot", snapshot);
-
-  if (!apiKey) {
-    setAiAnswer(`${lockedReport}
-
----
-
-${getLocalAICommanderBrief()}`);
-    setAiLastRun(new Date().toLocaleString());
-    return;
-  }
-
   setAiLoading(true);
   setAiAnswer("");
 
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        temperature: 0.15,
-        max_output_tokens: 1200,
-        input: [
-          {
-            role: "system",
-            content:
-              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. The system will display a LOCKED Request-Line Report before your answer. Do NOT rewrite quantities from request headers. Do NOT create a new request breakdown. Use ONLY the locked report and operational_request_lines JSON. Treat Remaining Visa as balance, not shortage. Shortage is only visaGap. Your job is commentary only: Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Never say 60 plumbers if the locked report shows multiple lines.",
-          },
-          {
-            role: "user",
-            content: `Question: ${question}
-
-${lockedReport}
-
-${authoritativeLineBrief}
-
-Operational request-line JSON (secondary reference only):
-${JSON.stringify(snapshot, null, 2)}`,
-          },
-        ],
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data?.error?.message || "OpenAI request failed");
-    }
-
-    const outputText =
-      data.output_text ||
-      data.output
-        ?.flatMap((item) => item.content || [])
-        ?.map((content) => content.text || "")
-        ?.join("\n") ||
-      "No AI response returned.";
-
-    setAiAnswer(`${lockedReport}
-
----
-
-AI Commentary:
-${outputText}`);
+    const lockedReport = buildLockedVIEReport(question);
+    setAiAnswer(lockedReport);
     setAiLastRun(new Date().toLocaleString());
   } catch (error) {
-    setAiAnswer(`AI connection failed: ${error.message}\n\nFallback local summary:\n\n${getLocalAICommanderBrief()}`);
+    setAiAnswer(`VIE report failed: ${error.message}`);
   } finally {
     setAiLoading(false);
   }
