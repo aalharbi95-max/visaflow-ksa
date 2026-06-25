@@ -12418,17 +12418,30 @@ function Select({ value, onChange, placeholder, options = [], searchable = false
   return (
     <div style={{ position: "relative" }}>
       <input
-        value={open ? query : selectedLabel}
-        placeholder={placeholder}
-        onFocus={() => {
-          setOpen(true);
-          setQuery("");
-        }}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setOpen(true);
-        }}
-      />
+  value={open ? query : selectedLabel}
+  placeholder={placeholder}
+  onFocus={() => {
+    setOpen(true);
+    setQuery("");
+  }}
+  onBlur={() => {
+    setTimeout(() => {
+      setOpen(false);
+      setQuery("");
+    }, 150);
+  }}
+  onKeyDown={(e) => {
+    if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+      e.target.blur();
+    }
+  }}
+  onChange={(e) => {
+    setQuery(e.target.value);
+    setOpen(true);
+  }}
+/>
 
       {open && (
         <div style={{ position: "absolute", background: "#fff", border: "1px solid #ddd", maxHeight: "250px", overflowY: "auto", width: "100%", zIndex: 9999 }}>
