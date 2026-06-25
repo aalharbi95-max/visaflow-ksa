@@ -190,27 +190,6 @@ td {
   border-bottom: 1px solid #e5e7eb;
 }
 
-@media (max-width: 900px) {
-  .layout {
-    flex-direction: column;
-  }
-
-  .sidebar {
-    position: relative;
-    width: 100%;
-  }
-
-  .content,
-  main {
-    margin-left: 0;
-    width: 100%;
-  }
-}
-.mini-table-scroll {
-  max-height: 360px;
-  overflow-y: auto;
-  overflow-x: auto;
-}
 .mini-table-scroll {
   height: 350px;
   overflow-y: auto;
@@ -220,6 +199,7 @@ td {
 .mini-table-scroll table {
   width: 100%;
 }
+
 .timeline-box {
   display: flex;
   flex-direction: column;
@@ -269,105 +249,330 @@ td {
   font-size: 11px;
   color: #64748b;
 }
+
+/* FINAL PROFESSIONAL LOGIN */
 .login-page,
 .vf-login-shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 1.05fr 0.95fr;
-  background: #eef3fb;
+  min-height: 100vh !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: grid !important;
+  grid-template-columns: 58% 42% !important;
+  gap: 0 !important;
+  background: linear-gradient(135deg, #eef3fb 0%, #f8fafc 100%) !important;
 }
 
 .login-page main,
-.vf-login-right {
+.vf-login-right,
+.login-right {
   margin-left: 0 !important;
   width: 100% !important;
 }
 
 .vf-login-left,
+.login-left,
 .login-page .login-left {
-  background: linear-gradient(145deg, #06183d, #071d49, #0b3b7a);
-  color: white;
-  padding: 70px;
+  min-height: 100vh !important;
+  border-radius: 0 !important;
+  padding: 80px 90px !important;
+  background:
+    radial-gradient(circle at 85% 15%, rgba(43,159,255,.20), transparent 32%),
+    linear-gradient(145deg, #06183d 0%, #071d49 50%, #0b3b7a 100%) !important;
+  color: #fff !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.vf-left-content {
+  max-width: 680px !important;
+}
+
+.vf-brand-row {
   display: flex;
   align-items: center;
+  gap: 14px;
+  margin-bottom: 34px;
+}
+
+.vf-symbol {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #2b9fff, #7dd3fc);
+  color: #071d49;
+  font-weight: 900;
+  font-size: 22px;
+}
+
+.vf-login-left h1,
+.login-left h1 {
+  font-size: 52px !important;
+  line-height: 1.08 !important;
+  color: #fff !important;
+  margin-bottom: 22px !important;
+  letter-spacing: -1px;
+}
+
+.vf-login-left h2,
+.vf-login-left h3,
+.login-left h2,
+.login-left h3 {
+  color: #fff !important;
+}
+
+.vf-login-left p,
+.login-left p {
+  color: rgba(255,255,255,.72) !important;
+  font-size: 16px !important;
+  line-height: 1.55 !important;
+}
+
+.vf-feature-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.vf-feature-card {
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.vf-feature-card strong,
+.vf-feature-card h3 {
+  display: block;
+  color: #fff !important;
+  margin-bottom: 6px;
+}
+
+.vf-feature-card p {
+  font-size: 13px !important;
+  margin: 0 !important;
+}
+
+.vf-compliance-strip {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+}
+
+.vf-compliance-strip span {
+  color: #fff;
+  background: rgba(255,255,255,.11);
+  border: 1px solid rgba(255,255,255,.14);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .vf-login-right,
+.login-right,
 .login-page .login-right {
-  padding: 50px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  min-height: 100vh !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative !important;
 }
 
 .vf-login-card,
 .login-card {
-  width: 100%;
-  max-width: 500px;
-  background: white;
-  border-radius: 28px;
-  padding: 36px;
-  box-shadow: 0 28px 80px rgba(7,29,73,.16);
+  width: 430px !important;
+  max-width: 430px !important;
+  padding: 38px !important;
+  border-radius: 28px !important;
+  background: #fff !important;
+  box-shadow: 0 30px 80px rgba(7,29,73,.15) !important;
+  position: relative !important;
+  z-index: 5 !important;
+}
+
+.vf-login-card h1,
+.login-card h1 {
+  font-size: 28px !important;
+  color: #071d49 !important;
+}
+
+.vf-login-card p,
+.login-card p {
+  color: #64748b !important;
+}
+
+.vf-form-group {
+  margin-bottom: 16px;
+}
+
+.vf-form-group label {
+  display: block;
+  font-weight: 800;
+  color: #071d49;
+  margin-bottom: 8px;
+}
+
+.vf-input-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d5dbe7;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 0 12px;
 }
 
 .vf-input-box input {
-  margin-bottom: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  outline: 0 !important;
+  padding: 14px 0 !important;
 }
 
 .vf-login-options {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  margin: 12px 0 18px !important;
+}
+
+.vf-remember {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-weight: 700;
 }
 
 .vf-remember input {
-  width: auto;
-  margin: 0;
+  width: auto !important;
+  margin: 0 !important;
 }
 
-@media (max-width: 900px) {
-  .login-page,
-  .vf-login-shell {
-    grid-template-columns: 1fr;
-  }
+.vf-forgot-link {
+  background: transparent !important;
+  color: #0b63ce !important;
+  padding: 0 !important;
 }
-.login-page,
-.vf-login-shell {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 32px;
-  gap: 48px;
+
+.vf-primary-login,
+.login-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #071d49, #0b3b7a) !important;
+  color: white !important;
+  padding: 14px 18px !important;
+  border-radius: 14px !important;
+}
+
+.vf-password-toggle {
+  background: transparent !important;
+  color: #071d49 !important;
+  padding: 6px !important;
+}
+
+.vf-divider {
+  display: flex;
   align-items: center;
+  gap: 10px;
+  color: #94a3b8;
+  margin: 18px 0;
+  font-size: 13px;
 }
 
-.vf-login-left,
-.login-page .login-left {
-  min-height: 640px;
-  border-radius: 0;
+.vf-divider::before,
+.vf-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #e2e8f0;
 }
 
-.vf-login-card,
-.login-card {
-  position: relative;
-  z-index: 5;
+.vf-microsoft-login {
+  width: 100%;
+  background: #fff !important;
+  color: #071d49 !important;
+  border: 1px solid #d5dbe7 !important;
+  border-radius: 14px !important;
 }
 
 .vf-language-switch {
-  position: absolute;
-  top: 24px;
-  right: 24px;
+  position: absolute !important;
+  top: 42px !important;
+  right: 70px !important;
+  display: flex !important;
+  gap: 8px !important;
+  z-index: 10;
 }
 
-.vf-login-right,
-.login-page .login-right {
-  position: relative;
+.vf-language-switch button {
+  background: #071d49 !important;
+  color: #fff !important;
+  padding: 10px 14px !important;
+  border-radius: 12px !important;
 }
 
 .vf-login-version,
 .login-version {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
-  color: #64748b;
-  font-size: 12px;
+  position: absolute !important;
+  right: 70px !important;
+  bottom: 42px !important;
+  color: #64748b !important;
+  font-size: 12px !important;
+}
+
+@media (max-width: 950px) {
+  .login-page,
+  .vf-login-shell {
+    grid-template-columns: 1fr !important;
+  }
+
+  .vf-login-left,
+  .login-left,
+  .login-page .login-left {
+    min-height: auto !important;
+    padding: 40px 28px !important;
+  }
+
+  .vf-login-right,
+  .login-right,
+  .login-page .login-right {
+    min-height: auto !important;
+    padding: 30px 20px !important;
+  }
+
+  .vf-login-card,
+  .login-card {
+    width: 100% !important;
+  }
+
+  .vf-language-switch,
+  .vf-login-version,
+  .login-version {
+    position: static !important;
+    margin: 16px auto !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .layout {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: relative;
+    width: 100%;
+  }
+
+  .content,
+  main {
+    margin-left: 0;
+    width: 100%;
+  }
 }
