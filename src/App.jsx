@@ -727,6 +727,9 @@ const [aiQuestion, setAiQuestion] = useState("What are the most important recrui
 const [aiAnswer, setAiAnswer] = useState("");
 const [aiLoading, setAiLoading] = useState(false);
 const [aiLastRun, setAiLastRun] = useState("");
+const [aiAgentLoading, setAiAgentLoading] = useState(false);
+const [aiAgentLastRun, setAiAgentLastRun] = useState("");
+const [aiAgentLog, setAiAgentLog] = useState("");
 const [offerModalOpen, setOfferModalOpen] = useState(false);
 const [offerCandidate, setOfferCandidate] = useState(null);
 const [offerSubject, setOfferSubject] = useState("");
@@ -5233,6 +5236,168 @@ async function runAICommander(question = aiQuestion) {
   }
 }
 
+
+function getAIAgentAgencyTasks() {
+  const today = new Date();
+
+  const agencyContactMap = agencies.reduce((map, agency) => {
+    map[normalize(agency.name)] = agency;
+    return map;
+  }, {});
+
+  const agencyContact = (agencyName) => agencyContactMap[normalize(agencyName)] || {};
+
+  const staleCandidateTasks = getAgencySlaEscalationAlerts().map((item) => {
+    const agency = agencyContact(item.agency);
+    return {
+      type: "Candidate Update Follow-up",
+      priority: item.risk === "High" ? "High" : "Medium",
+      agency: item.agency || "Unassigned Agency",
+      agency_id: agency.id || null,
+      agency_email: agency.email || "",
+      reference: item.candidate_name,
+      request_no: item.request_no,
+      related_table: "candidates",
+      related_id: String(item.candidate_id || ""),
+      title: `Candidate update required: ${item.candidate_name}`,
+      reason: `${item.candidate_name} has no update for ${item.days_without_update} day(s). Current status: ${item.status}.`,
+      action_required: "Update candidate status, latest stage, expected next date, and blockers within 24 hours.",
+    };
+  });
+
+  const authorizationTasks = reports.authorizationsWithoutCandidates.map((auth) => {
+    const agency = agencyContact(auth.agency);
+    const daysOpen = auth.created_at
+      ? Math.floor((today - new Date(auth.created_at)) / (1000 * 60 * 60 * 24))
+      : 0;
+
+    return {
+      type: "Authorization Follow-up",
+      priority: daysOpen >= 7 ? "High" : "Medium",
+      agency: auth.agency || "Unassigned Agency",
+      agency_id: agency.id || null,
+      agency_email: agency.email || "",
+      reference: auth.authorization_no || auth.visa_no || "Authorization",
+      request_no: auth.request_no || "-",
+      related_table: "visa_authorizations",
+      related_id: String(auth.id || ""),
+      title: `No candidates submitted for authorization ${auth.authorization_no || auth.visa_no || ""}`,
+      reason: `Authorization ${auth.authorization_no || "-"} / Visa ${auth.visa_no || "-"} has allocated quantity ${auth.allocated_qty || 0} but no submitted candidates yet.`,
+      action_required: "Submit candidates or provide a clear sourcing recovery plan today.",
+    };
+  });
+
+  const agencyRiskTasks = buildAgencyScorecard()
+    .filter((row) => row.risk !== "Low")
+    .map((row) => {
+      const agency = agencyContact(row.agency);
+      return {
+        type: "Agency Performance Follow-up",
+        priority: row.risk === "High" ? "High" : "Medium",
+        agency: row.agency || "Unassigned Agency",
+        agency_id: agency.id || null,
+        agency_email: agency.email || "",
+        reference: `Agency score ${row.score}`,
+        request_no: "-",
+        related_table: "agencies",
+        related_id: String(agency.id || ""),
+        title: `Agency performance follow-up: ${row.agency}`,
+        reason: `Agency risk level is ${row.risk}. Score: ${row.score}. Success rate: ${row.successRate}%. Fail rate: ${row.failRate}%.`,
+        action_required: "Confirm corrective action plan, pending candidates, and expected delivery dates.",
+      };
+    });
+
+  const uniqueMap = new Map();
+  [...staleCandidateTasks, ...authorizationTasks, ...agencyRiskTasks].forEach((task) => {
+    const key = `${task.type}-${task.agency}-${task.reference}-${task.related_id}`;
+    if (!uniqueMap.has(key)) uniqueMap.set(key, task);
+  });
+
+  return Array.from(uniqueMap.values()).sort((a, b) => {
+    const priorityWeight = { High: 2, Medium: 1, Low: 0 };
+    return (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0);
+  });
+}
+
+function buildAIAgentAgencyEmail(task) {
+  const subject = `[VisaFlow Follow-up] ${task.title}`;
+  const body = `Dear ${task.agency} Team,
+
+VisaFlow AI Agent detected an item requiring your immediate update.
+
+Follow-up Type: ${task.type}
+Priority: ${task.priority}
+Reference: ${task.reference || "-"}
+Request No: ${task.request_no || "-"}
+
+Reason:
+${task.reason}
+
+Required Action:
+${task.action_required}
+
+Please update the candidate / authorization record in the Office Portal or reply with the latest status, expected completion date, and any blockers.
+
+Best regards,
+VisaFlow AI Agent
+Recruitment Follow-up Assistant`;
+
+  return { subject, body };
+}
+
+async function runAIAgentAgencyFollowUp() {
+  if (!canManageAgencyAgreements && !canManageCandidates && !canManageVisas) {
+    return alert("You do not have permission to run AI Agent follow-up.");
+  }
+
+  const tasks = getAIAgentAgencyTasks();
+  if (!tasks.length) {
+    setAiAgentLog("No agency follow-up tasks found. All agencies are within current follow-up rules.");
+    setAiAgentLastRun(new Date().toLocaleString());
+    return alert("No agency follow-up tasks found.");
+  }
+
+  setAiAgentLoading(true);
+  setAiAgentLog("");
+
+  try {
+    const selectedTasks = tasks.slice(0, 50);
+
+    for (const task of selectedTasks) {
+      const email = buildAIAgentAgencyEmail(task);
+      await triggerExternalNotification("AI_AGENT_AGENCY_FOLLOWUP", {
+        company_id: currentCompanyId,
+        agency_id: task.agency_id || null,
+        agency_name: task.agency,
+        agency_email: task.agency_email || "",
+        title: task.title,
+        message: email.body,
+        subject: email.subject,
+        priority: task.priority,
+        related_table: task.related_table,
+        related_id: task.related_id,
+        source: "AI Commander / AI Agent",
+        delivery_channel: "Notification + Webhook/Email Automation",
+        task,
+      });
+    }
+
+    const summary = `AI Agent completed follow-up preparation for ${selectedTasks.length} item(s).\n\n` +
+      selectedTasks.slice(0, 10).map((task, index) => `${index + 1}. [${task.priority}] ${task.agency} - ${task.title}`).join("\n") +
+      (selectedTasks.length > 10 ? `\n...and ${selectedTasks.length - 10} more.` : "");
+
+    setAiAgentLog(summary);
+    setAiAgentLastRun(new Date().toLocaleString());
+    alert(`AI Agent follow-up created: ${selectedTasks.length} item(s).`);
+    await loadNotifications();
+  } catch (error) {
+    setAiAgentLog(`AI Agent failed: ${error.message}`);
+    alert(error.message);
+  } finally {
+    setAiAgentLoading(false);
+  }
+}
+
 function getCandidateRequest(candidate) {
   return requests.find((request) => String(request.request_no || "") === String(candidate?.request_no || ""));
 }
@@ -7454,6 +7619,60 @@ if (!currentUser) {
               <div style={{ marginTop: "14px", padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
                 <b>AI Forecast:</b> {buildRecruitmentForecast().forecastMessage}
               </div>
+            </TableCard>
+
+            <TableCard title="🤖 AI Agent - Agency Follow-up Employee">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+                <Stat title="Open Follow-ups" value={getAIAgentAgencyTasks().length} className={getAIAgentAgencyTasks().length ? "warning" : "passed"} />
+                <Stat title="SLA Candidate Delays" value={getAgencySlaEscalationAlerts().length} className={executiveAlertClass(getAgencySlaEscalationAlerts().length)} />
+                <Stat title="Auths Without Candidates" value={reports.authorizationsWithoutCandidates.length} className={executiveAlertClass(reports.authorizationsWithoutCandidates.length)} />
+                <Stat title="Agency Risk" value={buildAgencyScorecard().filter((x) => x.risk !== "Low").length} className={executiveAlertClass(buildAgencyScorecard().filter((x) => x.risk !== "Low").length)} />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "14px", alignItems: "center", marginBottom: "16px" }}>
+                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
+                  <b>AI Agent Role:</b> يعمل كموظف متابعة آلي للمكاتب: يكتشف التأخير، يجهز رسالة المتابعة، يسجلها في Notifications، ويرسلها للـ webhook / email automation إذا كان مربوط.
+                </div>
+                <button className="save-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading}>
+                  {aiAgentLoading ? "AI Agent Working..." : "Run AI Agent Follow-up"}
+                </button>
+              </div>
+
+              <div className="mini-table-scroll" style={{ maxHeight: "320px", overflow: "auto" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Priority</th>
+                      <th>Agency</th>
+                      <th>Type</th>
+                      <th>Reference</th>
+                      <th>Required Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {getAIAgentAgencyTasks().length === 0 ? (
+                      <tr><td colSpan="5">No AI Agent follow-up tasks. Agencies are within current follow-up rules.</td></tr>
+                    ) : (
+                      getAIAgentAgencyTasks().slice(0, 12).map((task, index) => (
+                        <tr key={`${task.type}-${task.agency}-${task.reference}-${index}`}>
+                          <td><Badge value={task.priority} /></td>
+                          <td><b>{task.agency}</b><br /><small>{task.agency_email || "No email saved"}</small></td>
+                          <td>{task.type}</td>
+                          <td>{task.reference}<br /><small>{task.request_no}</small></td>
+                          <td>{task.action_required}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {aiAgentLog && (
+                <div style={{ marginTop: "14px", padding: "18px", borderRadius: "18px", background: "#ecfeff", border: "1px solid #a5f3fc", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
+                  {aiAgentLog}
+                </div>
+              )}
+              {aiAgentLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last AI Agent run: {aiAgentLastRun}</p>}
             </TableCard>
 
             <TableCard title="💬 Ask VisaFlow AI Commander">
