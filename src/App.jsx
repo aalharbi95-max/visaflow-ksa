@@ -353,8 +353,6 @@ const emptyVisa = {
   profession: "",
   nationality: "",
   gender: "",
-  agency: "",
-  office_country: "",
   quantity: "",
   authorized: "",
   allocated_qty: "",
@@ -1149,8 +1147,6 @@ const visaInventoryLines = useMemo(() => {
       visa_no: batch.visa_no,
       moi_no: batch.moi_no,
       project: batch.project,
-      agency: batch.agency,
-      office_country: batch.office_country,
       issue_date: batch.issue_date,
       expiry_date: batch.expiry_date,
       status: batch.status,
@@ -1683,7 +1679,7 @@ const getVisaAvailableQty = (visaNo) => {
       const lineText = lines
         .map((line) => [line.profession, line.nationality, line.gender, line.quantity].join(" "))
         .join(" ");
-      const matchesSearch = [item.visa_no, item.moi_no, item.request_no, item.project, item.agency, item.office_country, lineText]
+      const matchesSearch = [item.visa_no, item.moi_no, item.request_no, item.project, lineText]
         .join(" ")
         .toLowerCase()
         .includes(keyword);
@@ -2740,8 +2736,8 @@ const executiveDashboard = useMemo(() => {
       profession: firstLine.profession || item.profession || "",
       nationality: firstLine.nationality || item.nationality || "",
       gender: firstLine.gender || item.gender || "",
-      agency: item.agency || "",
-      office_country: item.office_country || "",
+      
+      
       quantity: getVisaBatchTotalQty(item) || item.quantity || "",
       authorized: item.authorized || "",
       allocated_qty: getVisaBatchAllocatedQty(item) || item.allocated_qty || "",
@@ -2788,8 +2784,8 @@ async function saveVisa() {
     profession: firstLine.profession || "",
     nationality: firstLine.nationality || "",
     gender: firstLine.gender || "",
-    agency: visaForm.agency || "",
-    office_country: visaForm.office_country || "",
+    
+    
     quantity: totalQuantity,
     authorized: Number(visaForm.authorized || 0),
     allocated_qty: visaEditingId ? getVisaBatchAllocatedQty(visaRecords.find((v) => String(v.id) === String(visaEditingId))) : 0,
@@ -8817,7 +8813,7 @@ Save Authorization
 
     <div className="toolbar">
       <input
-        placeholder="Search visa, MOI, project, profession, nationality, agency"
+        placeholder="Search visa, MOI, project, profession, nationality, gender"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
@@ -8833,8 +8829,7 @@ Save Authorization
           <Input placeholder="Visa No" value={visaForm.visa_no} onChange={(v) => updateForm(setVisaForm, "visa_no", v)} />
           <Input placeholder="MOI No" value={visaForm.moi_no} onChange={(v) => updateForm(setVisaForm, "moi_no", v)} />
           <Input placeholder="Project" value={visaForm.project} onChange={(v) => updateForm(setVisaForm, "project", v)} />
-          <Select value={visaForm.agency} onChange={(v) => updateForm(setVisaForm, "agency", v)} placeholder="Agency" searchable options={agencies.map((x) => x.name)} />
-          <Input placeholder="Office Country" value={visaForm.office_country} onChange={(v) => updateForm(setVisaForm, "office_country", v)} />
+                    
           <Input placeholder="Issue Date" type="date" value={visaForm.issue_date} onChange={(v) => updateForm(setVisaForm, "issue_date", v)} />
           <Input placeholder="Expiry Date" type="date" value={visaForm.expiry_date} onChange={(v) => updateForm(setVisaForm, "expiry_date", v)} />
           <Select value={visaForm.status} onChange={(v) => updateForm(setVisaForm, "status", v)} placeholder="Status" options={VISA_STATUSES} />
@@ -8913,7 +8908,6 @@ Save Authorization
             <th>Visa No</th>
             <th>MOI No</th>
             <th>Project</th>
-            <th>Agency</th>
             <th>Total Qty</th>
             <th>Allocated</th>
             <th>Remaining</th>
@@ -8927,7 +8921,6 @@ Save Authorization
               <td><button className="link-btn" onClick={() => editVisa(item)}>{item.visa_no || "-"}</button></td>
               <td>{item.moi_no || "-"}</td>
               <td>{item.project || "-"}</td>
-              <td>{item.agency || "-"}</td>
               <td>{getVisaBatchTotalQty(item)}</td>
               <td>{getVisaBatchAllocatedQty(item)}</td>
               <td>{getVisaBatchRemainingQty(item)}</td>
@@ -8960,13 +8953,12 @@ Save Authorization
             <th>Qty</th>
             <th>Allocated</th>
             <th>Remaining</th>
-            <th>Agency</th>
             <th>Status</th>
           </tr>
         </thead>
         <tbody>
           {visaInventoryLines.length === 0 ? (
-            <tr><td colSpan="9">No visa lines found</td></tr>
+            <tr><td colSpan="8">No visa lines found</td></tr>
           ) : (
             visaInventoryLines.map((line) => (
               <tr key={line.id}>
@@ -8977,7 +8969,6 @@ Save Authorization
                 <td>{line.quantity || 0}</td>
                 <td>{getVisaLineAllocatedQty(line.legacy ? "" : line.id, line.visa_no)}</td>
                 <td>{getVisaLineRemainingQty(line)}</td>
-                <td>{line.agency || "-"}</td>
                 <td><Badge value={line.status} /></td>
               </tr>
             ))
