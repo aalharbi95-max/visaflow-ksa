@@ -1075,12 +1075,23 @@ const allocationQty = Number(
 );
 
 const alreadyAuthorized = visaAuthorizations
-  .filter(
-    (a) =>
+  .filter((a) => {
+    if (a.status === "Cancelled") return false;
+
+    // New accurate match: same visa allocation line.
+    if (a.visa_allocation_id) {
+      return String(a.visa_allocation_id) === String(selectedVisa?.id);
+    }
+
+    // Backward-compatible fallback for old authorization records.
+    return (
       String(a.visa_no) === String(selectedVisa?.visa_no) &&
       String(a.request_no) === String(selectedVisa?.request_no) &&
-      a.status !== "Cancelled"
-  )
+      (!a.profession || !selectedVisa?.profession || normalize(a.profession) === normalize(selectedVisa.profession)) &&
+      (!a.nationality || !selectedVisa?.nationality || normalize(a.nationality) === normalize(selectedVisa.nationality)) &&
+      (!a.gender || !selectedVisa?.gender || normalize(a.gender) === normalize(selectedVisa.gender))
+    );
+  })
   .reduce((sum, a) => sum + Number(a.allocated_qty || 0), 0);
 
 const requestedAuthQty = Number(authForm.allocated_qty || 0);
@@ -1098,6 +1109,11 @@ const payload={
 
 visa_no: selectedVisa?.visa_no,
 request_no: selectedVisa?.request_no,
+visa_allocation_id: selectedVisa?.id || null,
+visa_batch_line_id: selectedVisa?.visa_batch_line_id || null,
+profession: selectedVisa?.profession || "",
+nationality: selectedVisa?.nationality || "",
+gender: selectedVisa?.gender || "",
 authorization_no: authForm.authorization_no,
 agency: authForm.agency,
 office_country: authForm.office_country,
@@ -1161,7 +1177,23 @@ async function cancelAuthorization(id) {
   alert("Authorization cancelled");
 }
 function openAuthorization(item){
-  setSelectedVisa(item);
+  // Authorization must be linked to a specific visa allocation line, not only visa batch.
+  // When coming from Visa Inventory, clear the selection and let the user choose the exact allocation line.
+  if (!item?.allocated_qty || !item?.visa_batch_line_id) {
+    setSelectedVisa(null);
+  } else {
+    const line = visaInventoryLines.find((vLine) => String(vLine.id) === String(item.visa_batch_line_id || ""));
+    setSelectedVisa({
+      id: item.id,
+      visa_no: item.visa_no,
+      request_no: item.request_no,
+      visa_batch_line_id: item.visa_batch_line_id || "",
+      profession: line?.profession || item.profession || "-",
+      nationality: line?.nationality || item.nationality || "-",
+      gender: line?.gender || item.gender || "-",
+      allocated_qty: Number(item.allocated_qty || 0),
+    });
+  }
   setActivePage("Authorization");
 }
 const getVisaLinesForBatch = (batch) => {
@@ -8634,10 +8666,13 @@ selectedVisa
 >
 
 {selectedVisa && (
-<div style={{marginBottom:"20px"}}>
-<b>Visa:</b> {selectedVisa.visa_no} |
-<b> Profession:</b> {selectedVisa.profession} |
-<b> Nationality:</b> {selectedVisa.nationality}
+<div style={{ marginBottom: "20px" }}>
+  <b>Visa:</b> {selectedVisa.visa_no} |
+  <b> Request:</b> {selectedVisa.request_no} |
+  <b> Profession:</b> {selectedVisa.profession || "-"} |
+  <b> Nationality:</b> {selectedVisa.nationality || "-"} |
+  <b> Gender:</b> {selectedVisa.gender || "-"} |
+  <b> Allocated:</b> {selectedVisa.allocated_qty || 0}
 </div>
 )}
 <div className="actions-line">
@@ -8655,25 +8690,46 @@ selectedVisa
     value={selectedVisa ? selectedVisa.id : ""}
     onChange={(e) => {
       const visa = visaAllocations.find(
-        (v) => String(v.id) === e.target.value
+        (v) => String(v.id) === String(e.target.value)
       );
 
-      if (visa) {
-        setSelectedVisa({
-          id: visa.id,
-          visa_no: visa.visa_no,
-          request_no: visa.request_no,
-        });
+      if (!visa) {
+        setSelectedVisa(null);
+        return;
       }
+
+      const line = visaInventoryLines.find(
+        (vLine) => String(vLine.id) === String(visa.visa_batch_line_id || "")
+      );
+
+      setSelectedVisa({
+        id: visa.id,
+        visa_no: visa.visa_no,
+        request_no: visa.request_no,
+        visa_batch_line_id: visa.visa_batch_line_id || "",
+        profession: line?.profession || visa.profession || "-",
+        nationality: line?.nationality || visa.nationality || "-",
+        gender: line?.gender || visa.gender || "-",
+        allocated_qty: Number(visa.allocated_qty || 0),
+      });
     }}
   >
     <option value="">Select Visa Allocation</option>
 
-    {visaAllocations.map((item) => (
-      <option key={item.id} value={item.id}>
-        {item.request_no} - Visa {item.visa_no}
-      </option>
-    ))}
+    {visaAllocations.map((item) => {
+      const line = visaInventoryLines.find(
+        (vLine) => String(vLine.id) === String(item.visa_batch_line_id || "")
+      );
+      const profession = line?.profession || item.profession || "-";
+      const nationality = line?.nationality || item.nationality || "-";
+      const gender = line?.gender || item.gender || "-";
+
+      return (
+        <option key={item.id} value={item.id}>
+          {item.request_no} | Visa {item.visa_no} | {profession} | {nationality} | {gender} | Qty {item.allocated_qty}
+        </option>
+      );
+    })}
   </select>
 
   
@@ -8727,6 +8783,9 @@ Save Authorization
 <thead>
 <tr>
 <th>Visa No</th>
+<th>Profession</th>
+<th>Nationality</th>
+<th>Gender</th>
 <th>Office</th>
 <th>Authorization No</th>
 <th>Allocated</th>
@@ -8745,18 +8804,28 @@ Save Authorization
 {console.log("Authorizations:", visaAuthorizations)}
 
 {visaAuthorizations
-  .filter(
-    (a) =>
-      !selectedVisa ||
-      (
-        String(a.visa_no) === String(selectedVisa?.visa_no) &&
-        String(a.request_no) === String(selectedVisa?.request_no)
-      )
-  )
+  .filter((a) => {
+    if (!selectedVisa) return true;
+
+    if (a.visa_allocation_id) {
+      return String(a.visa_allocation_id) === String(selectedVisa.id);
+    }
+
+    return (
+      String(a.visa_no) === String(selectedVisa?.visa_no) &&
+      String(a.request_no) === String(selectedVisa?.request_no) &&
+      (!a.profession || !selectedVisa?.profession || normalize(a.profession) === normalize(selectedVisa.profession)) &&
+      (!a.nationality || !selectedVisa?.nationality || normalize(a.nationality) === normalize(selectedVisa.nationality)) &&
+      (!a.gender || !selectedVisa?.gender || normalize(a.gender) === normalize(selectedVisa.gender))
+    );
+  })
   .map((item) => (
 
 <tr key={item.id}>
 <td>{item.visa_no}</td>
+<td>{item.profession || selectedVisa?.profession || "-"}</td>
+<td>{item.nationality || selectedVisa?.nationality || "-"}</td>
+<td>{item.gender || selectedVisa?.gender || "-"}</td>
 <td>{item.agency}</td>
 <td>{item.authorization_no}</td>
 <td>{item.allocated_qty}</td>
