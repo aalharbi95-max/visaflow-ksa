@@ -5690,6 +5690,52 @@ function buildOperationalLineBriefText() {
   ].join("\n");
 }
 
+
+function buildLockedRequestLineReport() {
+  const lines = buildOperationalRequestLineRows()
+    .sort((a, b) => String(a.request_no || "").localeCompare(String(b.request_no || "")) || Number(a.line_no || 0) - Number(b.line_no || 0));
+
+  if (!lines.length) {
+    return "VisaFlow Locked Request-Line Report\nNo request lines found.";
+  }
+
+  const totals = lines.reduce((acc, line) => {
+    acc.required += Number(line.requested_qty || 0);
+    acc.allocated += Number(line.allocatedVisaQty || 0);
+    acc.authorized += Number(line.authorizedQty || 0);
+    acc.candidates += Number(line.candidates || 0);
+    acc.arrived += Number(line.arrived || 0);
+    acc.joined += Number(line.joined || 0);
+    acc.visaGap += Number(line.visaGap || 0);
+    acc.candidateGap += Number(line.candidateGap || 0);
+    acc.joiningGap += Number(line.joiningGap || 0);
+    return acc;
+  }, { required: 0, allocated: 0, authorized: 0, candidates: 0, arrived: 0, joined: 0, visaGap: 0, candidateGap: 0, joiningGap: 0 });
+
+  const grouped = lines.reduce((acc, line) => {
+    const key = line.request_no || "-";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(line);
+    return acc;
+  }, {});
+
+  const requestSections = Object.entries(grouped).map(([requestNo, requestLines]) => {
+    const project = requestLines[0]?.project || "-";
+    const rows = requestLines.map((line) =>
+      `- Line ${line.line_no}: ${line.profession} | ${line.nationality} | ${line.gender} | المطلوب ${line.requested_qty} | المرشحين ${line.candidates} | وصل ${line.arrived} | انضم ${line.joined} | نقص المرشحين ${line.candidateGap} | نقص التأشيرات ${line.visaGap} | الاختناق ${line.bottleneck}`
+    );
+    return [`الطلب ${requestNo} - المشروع: ${project}`, ...rows].join("\n");
+  });
+
+  return [
+    "🔒 VisaFlow Locked Request-Line Report",
+    "هذا الجزء محسوب من النظام مباشرة وليس من الذكاء الاصطناعي.",
+    `الإجمالي من سطور الطلب فقط: المطلوب ${totals.required} | المخصص من التأشيرات ${totals.allocated} | التفويض ${totals.authorized} | المرشحين ${totals.candidates} | وصل ${totals.arrived} | انضم ${totals.joined} | نقص التأشيرات ${totals.visaGap} | نقص المرشحين ${totals.candidateGap} | متبقي الانضمام ${totals.joiningGap}`,
+    "",
+    ...requestSections,
+  ].join("\n");
+}
+
 function buildAICommanderSnapshot() {
   const agencyScorecard = buildAgencyScorecard();
   const operationalLines = buildOperationalRequestLineRows();
@@ -5863,8 +5909,16 @@ async function runAICommander(question = aiQuestion) {
   const snapshot = buildAICommanderSnapshot();
   const authoritativeLineBrief = buildOperationalLineBriefText();
 
+  const lockedReport = buildLockedRequestLineReport();
+  console.log("VIE locked request-line report", lockedReport);
+  console.log("VIE snapshot", snapshot);
+
   if (!apiKey) {
-    setAiAnswer(getLocalAICommanderBrief());
+    setAiAnswer(`${lockedReport}
+
+---
+
+${getLocalAICommanderBrief()}`);
     setAiLastRun(new Date().toLocaleString());
     return;
   }
@@ -5887,11 +5941,13 @@ async function runAICommander(question = aiQuestion) {
           {
             role: "system",
             content:
-              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use ONLY the AUTHORITATIVE VisaFlow Request-Line Brief and operational_request_lines JSON. You are NOT allowed to calculate from request headers, request summaries, available visa totals, or raw candidate totals. First, reproduce the Request Line Breakdown exactly from the authoritative brief. Never combine multiple lines under the first profession. Never say a request is 60 plumbers when the lines show plumber 5, electrician 5, cleaner 50. Treat Remaining Visa as balance, not shortage. Shortage is only visaGap. Provide: Request Line Breakdown, Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the provided brief/JSON.",
+              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. The system will display a LOCKED Request-Line Report before your answer. Do NOT rewrite quantities from request headers. Do NOT create a new request breakdown. Use ONLY the locked report and operational_request_lines JSON. Treat Remaining Visa as balance, not shortage. Shortage is only visaGap. Your job is commentary only: Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Never say 60 plumbers if the locked report shows multiple lines.",
           },
           {
             role: "user",
             content: `Question: ${question}
+
+${lockedReport}
 
 ${authoritativeLineBrief}
 
@@ -5916,7 +5972,12 @@ ${JSON.stringify(snapshot, null, 2)}`,
         ?.join("\n") ||
       "No AI response returned.";
 
-    setAiAnswer(outputText);
+    setAiAnswer(`${lockedReport}
+
+---
+
+AI Commentary:
+${outputText}`);
     setAiLastRun(new Date().toLocaleString());
   } catch (error) {
     setAiAnswer(`AI connection failed: ${error.message}\n\nFallback local summary:\n\n${getLocalAICommanderBrief()}`);
