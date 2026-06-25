@@ -5969,23 +5969,154 @@ function buildLockedVIEReport(question = "") {
   ].filter(Boolean).join("\n");
 }
 
+function getAICommanderIntent(question = "") {
+  const q = String(question || "").trim().toLowerCase();
+
+  const operationalKeywords = [
+    "req-",
+    "report",
+    "dashboard",
+    "analyze",
+    "analysis",
+    "status",
+    "risk",
+    "risks",
+    "forecast",
+    "request",
+    "requests",
+    "visa",
+    "candidate",
+    "candidates",
+    "agency",
+    "agencies",
+    "authorization",
+    "mobilization",
+    "joining",
+    "arrival",
+    "sla",
+    "performance",
+    "تقرير",
+    "حلل",
+    "تحليل",
+    "حالة",
+    "وضع",
+    "مخاطر",
+    "توقع",
+    "توقعات",
+    "طلب",
+    "طلبات",
+    "تأشيرة",
+    "تأشيرات",
+    "تفويض",
+    "تفويضات",
+    "مرشح",
+    "مرشحين",
+    "مكتب",
+    "مكاتب",
+    "وكالة",
+    "وكالات",
+    "انضمام",
+    "وصول",
+    "تعبئة",
+    "اداء",
+    "أداء",
+  ];
+
+  const greetings = [
+    "كيف الحال",
+    "كيفك",
+    "شلونك",
+    "السلام عليكم",
+    "هلا",
+    "مرحبا",
+    "hi",
+    "hello",
+  ];
+
+  const writingKeywords = [
+    "وصف وظيفي",
+    "job description",
+    "اكتب",
+    "صياغة",
+    "ترجم",
+    "translate",
+    "email",
+    "ايميل",
+    "رسالة",
+    "خطاب",
+  ];
+
+  if (!q) return "general";
+  if (greetings.some((keyword) => q.includes(keyword))) return "general";
+  if (writingKeywords.some((keyword) => q.includes(keyword)) && !q.includes("req-")) return "general";
+  if (operationalKeywords.some((keyword) => q.includes(keyword))) return "operational";
+  return "general";
+}
+
 async function runAICommander(question = aiQuestion) {
   setAiLoading(true);
   setAiAnswer("");
 
-  try {
-    const lockedReport = buildLockedVIEReport(question);
-    const snapshot = buildAICommanderSnapshot();
-    const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
+  const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
+  const intent = getAICommanderIntent(question);
 
+  try {
     if (!apiKey) {
-      setAiAnswer(
-        lockedReport +
-          "\n\n---\nAI Executive Analysis is not connected yet. Add VITE_OPENAI_API_KEY to enable OpenAI analysis."
-      );
+      if (intent === "operational") {
+        setAiAnswer(
+          buildLockedVIEReport(question) +
+            "\n\n---\nOpenAI is not connected. Add VITE_OPENAI_API_KEY to enable executive analysis."
+        );
+      } else {
+        setAiAnswer("OpenAI is not connected. Add VITE_OPENAI_API_KEY to use general AI chat.");
+      }
       setAiLastRun(new Date().toLocaleString());
       return;
     }
+
+    if (intent !== "operational") {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4.1-mini",
+          temperature: 0.4,
+          max_output_tokens: 1400,
+          input: [
+            {
+              role: "system",
+              content:
+                "You are VisaFlow KSA AI Assistant. Answer the user's question directly. Do not generate recruitment operational reports unless the user explicitly asks for a report, dashboard, request analysis, visa, candidates, agencies, mobilization, risks, or forecast. For greetings, reply briefly and naturally. For HR writing such as job descriptions, emails, translations, and letters, provide the requested text only.",
+            },
+            {
+              role: "user",
+              content: String(question || ""),
+            },
+          ],
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result?.error?.message || "OpenAI request failed");
+
+      const aiText =
+        result.output_text ||
+        result.output
+          ?.flatMap((item) => item.content || [])
+          ?.map((content) => content.text || "")
+          ?.join("\n") ||
+        "";
+
+      setAiAnswer(aiText || "AI did not return an answer.");
+      setAiLastRun(new Date().toLocaleString());
+      return;
+    }
+
+    const lockedReport = buildLockedVIEReport(question);
+    const snapshot = buildAICommanderSnapshot();
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -6033,11 +6164,14 @@ async function runAICommander(question = aiQuestion) {
     );
     setAiLastRun(new Date().toLocaleString());
   } catch (error) {
-    const fallbackReport = buildLockedVIEReport(question);
-    setAiAnswer(
-      fallbackReport +
-        `\n\n---\nAI Executive Analysis failed: ${error.message}\nShowing locked VisaFlow VIE report only.`
-    );
+    if (intent === "operational") {
+      setAiAnswer(
+        buildLockedVIEReport(question) +
+          `\n\n---\nAI Executive Analysis failed: ${error.message}\nShowing locked VisaFlow VIE report only.`
+      );
+    } else {
+      setAiAnswer(`AI request failed: ${error.message}`);
+    }
   } finally {
     setAiLoading(false);
   }
