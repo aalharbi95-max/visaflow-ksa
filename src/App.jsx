@@ -3514,144 +3514,251 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
   try {
     const data = await file.arrayBuffer();
-    const workbook = XLSX.read(data);
+    const workbook = XLSX.read(data, { cellDates: true });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
     if (!rows.length) return alert("Excel file is empty.");
 
-    const requestNoFromExcel = getRowValue(rows[0], ["Request No", "RequestNo", "request_no"]);
+    const requestNoFromExcel = getRowValue(rows[0], ["Request No", "RequestNo", "request_no", "رقم الطلب"]);
     const requestNo = excelRequestNo ? excelRequestNo : requestNoFromExcel;
 
     if (!requestNo) {
-      return alert("Request No is required. Please upload from the Request row.");
+      return alert("Request No is required. Please upload from the Request row or include Request No in Excel.");
     }
 
     const { data: requestData, error: requestError } = await supabase
       .from("requests")
-      .select("request_no, quantity, profession, nationality, gender, project_name, approval_status")
+      .select("id, request_no, quantity, project_name, project, approval_status, recruitment_type, profession, nationality, gender")
       .eq("request_no", requestNo)
       .eq("company_id", currentCompanyId)
       .single();
 
     if (requestError || !requestData) return alert("Request not found.");
-if (requestData.approval_status !== "Approved by Recruitment" && requestData.approval_status !== "Approved") {
-  return alert("Candidates cannot be uploaded until the request is approved.");
-}
-    const { count, error: countError } = await supabase
+
+    if (
+      requestData.approval_status !== "Approved by Recruitment" &&
+      requestData.approval_status !== "Approved"
+    ) {
+      return alert("Candidates cannot be uploaded until the request is approved.");
+    }
+
+    const { data: dbRequestLines, error: lineError } = await supabase
+      .from("request_lines")
+      .select("id, request_id, request_no, line_no, profession, nationality, gender, quantity")
+      .eq("request_no", requestNo)
+      .eq("company_id", currentCompanyId)
+      .order("line_no", { ascending: true });
+
+    if (lineError) return alert(`request_lines: ${lineError.message}`);
+
+    const requestLinesForImport =
+      dbRequestLines && dbRequestLines.length > 0
+        ? dbRequestLines
+        : getRequestLinesForRequest(requestData);
+
+    if (!requestLinesForImport.length) {
+      return alert("No request lines found for this request. Please create request lines first.");
+    }
+
+    const { data: existingCandidates, error: existingError } = await supabase
       .from("candidates")
-      .select("*", { count: "exact", head: true })
+      .select("id, request_line_id, request_no, profession, nationality, gender, passport_no, status")
+      .eq("request_no", requestNo)
+      .eq("company_id", currentCompanyId)
+      .range(0, 5000);
+
+    if (existingError) return alert(existingError.message);
+
+    const blockedStatuses = ["Rejected", "Interview Failed", "Medical Failed", "Medical Fail", "Cancelled"];
+    const existingActiveCandidates = (existingCandidates || []).filter(
+      (candidate) => !blockedStatuses.includes(candidate.status)
+    );
+
+    const getLineUsedQty = (line) =>
+      existingActiveCandidates.filter((candidate) => {
+        if (candidate.request_line_id) {
+          return String(candidate.request_line_id) === String(line.id);
+        }
+        return candidateMatchesRequestLine(candidate, line);
+      }).length;
+
+    const importLineUsage = {};
+    const payloads = [];
+    const errors = [];
+    const filePassports = new Set();
+
+    for (const [index, row] of rows.entries()) {
+      const rowNo = index + 2;
+      const candidateName = getRowValue(row, ["Name", "Candidate Name", "candidate_name", "اسم المرشح"]);
+
+      if (!candidateName) {
+        errors.push(`Row ${rowNo}: Candidate name is missing`);
+        continue;
+      }
+
+      const rowRequestNo = getRowValue(row, ["Request No", "RequestNo", "request_no", "رقم الطلب"]) || requestNo;
+      if (String(rowRequestNo) !== String(requestNo)) {
+        errors.push(`Row ${rowNo} / ${candidateName}: Request No does not match selected request (${requestNo}).`);
+        continue;
+      }
+
+      const requestLineIdFromExcel = getRowValue(row, ["Request Line ID", "request_line_id", "Line ID", "line_id"]);
+      const rowProfession = getRowValue(row, ["Profession", "Job", "Position", "profession", "المهنة"]);
+      const rowNationality = getRowValue(row, ["Nationality", "nationality", "الجنسية"]);
+      const rowGender = getRowValue(row, ["Gender", "gender", "الجنس"]);
+
+      let matchedLine = null;
+
+      if (requestLineIdFromExcel) {
+        matchedLine = requestLinesForImport.find(
+          (line) => String(line.id || "") === String(requestLineIdFromExcel)
+        );
+      } else if (requestLinesForImport.length === 1 && !rowProfession && !rowNationality && !rowGender) {
+        matchedLine = requestLinesForImport[0];
+      } else {
+        matchedLine = requestLinesForImport.find(
+          (line) =>
+            isCompatibleText(rowProfession, line.profession) &&
+            normalize(rowNationality) === normalize(line.nationality) &&
+            (!rowGender || !line.gender || normalize(rowGender) === normalize(line.gender))
+        );
+      }
+
+      if (!matchedLine) {
+        errors.push(
+          `Row ${rowNo} / ${candidateName}: No matching request line. Use exact Profession + Nationality + Gender or Request Line ID.`
+        );
+        continue;
+      }
+
+      const lineKey = String(matchedLine.id || `${matchedLine.line_no}-${matchedLine.profession}`);
+      const usedInDb = getLineUsedQty(matchedLine);
+      const usedInFile = Number(importLineUsage[lineKey] || 0);
+      const lineQty = Number(matchedLine.quantity || 0);
+
+      if (usedInDb + usedInFile + 1 > lineQty) {
+        errors.push(
+          `Row ${rowNo} / ${candidateName}: Request line capacity exceeded for ${matchedLine.profession}. Required: ${lineQty}, Existing: ${usedInDb}, In this file: ${usedInFile}.`
+        );
+        continue;
+      }
+
+      const passportNo = getRowValue(row, ["Passport No", "Passport", "PassportNo", "passport_no", "رقم الجواز"]);
+
+      if (passportNo) {
+        if (filePassports.has(passportNo)) {
+          errors.push(`Row ${rowNo} / ${candidateName}: Duplicate passport inside file (${passportNo}).`);
+          continue;
+        }
+
+        const existingPassport = (existingCandidates || []).find(
+          (candidate) => normalize(candidate.passport_no) === normalize(passportNo)
+        );
+
+        if (existingPassport) {
+          errors.push(`${candidateName}: Passport already exists (${passportNo}).`);
+          continue;
+        }
+
+        const { data: duplicatePassport, error: duplicateError } = await supabase
+          .from("candidates")
+          .select("id")
+          .eq("passport_no", passportNo)
+          .eq("company_id", currentCompanyId)
+          .limit(1);
+
+        if (duplicateError) {
+          errors.push(`${candidateName}: Passport check failed (${duplicateError.message}).`);
+          continue;
+        }
+
+        if (duplicatePassport && duplicatePassport.length > 0) {
+          errors.push(`${candidateName}: Passport already exists (${passportNo}).`);
+          continue;
+        }
+
+        filePassports.add(passportNo);
+      }
+
+      const ticketNo = getRowValue(row, ["Ticket No", "Ticket", "ticket_no"]);
+      const flightDate = parseExcelDateValue(row["Flight Date"] || row["flight_date"] || row["تاريخ الرحلة"]);
+      const arrivalDate = parseExcelDateValue(row["Arrival Date"] || row["arrival_date"] || row["تاريخ الوصول"]);
+      const medicalDate = parseExcelDateValue(row["Medical Date"] || row["medical_date"] || row["تاريخ الفحص"]);
+      const rawMedicalStatus = getRowValue(row, ["Medical Status", "medical_status", "حالة الفحص"]);
+      const contractStatus = getRowValue(row, ["Contract Status", "contract_status", "حالة العقد"]) || "Pending";
+      const rawStatus = getRowValue(row, ["Status", "status", "الحالة"]) || "New";
+
+      let autoStatus = rawStatus;
+      if (arrivalDate) autoStatus = "Arrived KSA";
+      else if (flightDate) autoStatus = "Departure";
+      else if (ticketNo) autoStatus = "Ticket Booked";
+      else if (rawMedicalStatus === "Passed" || rawMedicalStatus === "Fit") autoStatus = "Medical Passed";
+
+      importLineUsage[lineKey] = usedInFile + 1;
+
+      payloads.push(
+        withCompany({
+          candidate_name: candidateName,
+          request_line_id: matchedLine.id || null,
+          profession: matchedLine.profession || "",
+          nationality: matchedLine.nationality || "",
+          gender: matchedLine.gender || "",
+          project: requestData.project_name || requestData.project || "",
+          request_no: requestData.request_no || requestNo,
+          agency: currentRole === "Agency" ? (currentUser?.agency_name || "") : getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
+          passport_no: passportNo,
+          mobile: getRowValue(row, ["Mobile", "Phone", "mobile", "الجوال"]),
+          email: getRowValue(row, ["Email", "email", "البريد"]),
+          notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
+          status: autoStatus,
+          medical_status: rawMedicalStatus || "Pending",
+          medical_date: medicalDate,
+          ticket_no: ticketNo,
+          flight_date: flightDate,
+          arrival_date: arrivalDate,
+          contract_status: contractStatus,
+          updated_at: new Date().toISOString(),
+        })
+      );
+    }
+
+    if (!payloads.length) {
+      return alert(
+        "No candidates uploaded.\n\n" +
+          (errors.length ? "Reasons:\n" + errors.slice(0, 15).join("\n") : "")
+      );
+    }
+
+    const { error: insertError } = await supabase.from("candidates").insert(payloads);
+    if (insertError) return alert(insertError.message);
+
+    const totalActiveAfterUpload = existingActiveCandidates.length + payloads.filter(
+      (candidate) => !blockedStatuses.includes(candidate.status)
+    ).length;
+
+    const newRemaining = Math.max(0, Number(requestData.quantity || 0) - totalActiveAfterUpload);
+
+    await supabase
+      .from("requests")
+      .update({
+        remaining: newRemaining,
+        remaining_qty: newRemaining,
+        status: newRemaining === 0 ? "Visa Process" : "Under Recruitment",
+        updated_at: new Date().toISOString(),
+      })
       .eq("request_no", requestNo)
       .eq("company_id", currentCompanyId);
 
-    if (countError) return alert(countError.message);
+    await loadCandidates();
+    await loadRequests();
+    setActivePage("Candidates");
 
-    const remaining = Number(requestData.quantity || 0) - Number(count || 0);
-
-    if (rows.length > remaining) {
-      alert(`لا يمكن رفع عدد أكبر من المتبقي.\n\nالمتبقي: ${remaining}\nعدد الملف: ${rows.length}`);
-      return;
-    }
-
-    let inserted = 0;
-    let skipped = 0;
-    const errors = [];
-
-    for (const row of rows) {
-      const candidateName = getRowValue(row, ["Name", "Candidate Name", "candidate_name"]);
-
-      if (!candidateName) {
-        skipped++;
-        errors.push("Unnamed row: Candidate name is missing");
-        continue;
-      }
-const passportNo = getRowValue(
-  row,
-  ["Passport No", "Passport", "PassportNo"]
-);
-
-if (passportNo) {
-  const { data: existing } = await supabase
-    .from("candidates")
-    .select("id")
-    .eq("passport_no", passportNo)
-    .eq("nationality", requestData.nationality)
-    .eq("company_id", currentCompanyId)
-    .limit(1);
-
-  if (existing && existing.length > 0) {
-    skipped++;
-    errors.push(
-      `${candidateName}: Passport already exists (${passportNo})`
+    alert(
+      `Uploaded: ${payloads.length} candidate(s)\n\n` +
+        `Skipped / Errors: ${errors.length}\n\n` +
+        (errors.length ? `First errors:\n${errors.slice(0, 10).join("\n")}` : "")
     );
-    continue;
-  }
-}
-let autoStatus = candidateForm.status;
-
-if (candidateForm.arrival_date) {
-  autoStatus = "Arrived KSA";
-} else if (candidateForm.flight_date) {
-  autoStatus = "Departure";
-} else if (candidateForm.ticket_no) {
-  autoStatus = "Ticket Booked";
-} else if (candidateForm.medical_status === "Passed") {
-  autoStatus = "Medical Passed";
-}
-
-      const payload = {
-        candidate_name: candidateName,
-        
-
-        profession: requestData.profession || "",
-        nationality: requestData.nationality || "",
-        gender: requestData.gender || "",
-        project: requestData.project_name || "",
-        request_no: requestData.request_no || requestNo,
-
-        agency: currentRole === "Agency" ? (currentUser?.agency_name || "") : getRowValue(row, ["Agency", "Office"]),
-        passport_no: passportNo,
-        mobile: getRowValue(row, ["Mobile", "Phone"]),
-        notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
-        status: "New",
-      };
-
-      const { error } = await supabase.from("candidates").insert([withCompany(payload)]);
-
-      if (error) {
-        skipped++;
-errors.push("[" + candidateName + "] - " + error.message);      } else {
-        inserted++;
-      }
-    }
-alert(
-"Uploaded: " + inserted + " candidate(s)\n\n" +
-"Skipped: " + skipped + " candidate(s)\n\n" +
-(errors.length
- ? "Reasons:\n" + errors.slice(0,5).join("\n")
- : "")
-);
-   const newRemaining = Math.max(
-0,
-Number(requestData.quantity || 0) -
-(Number(count || 0) + inserted)
-);
-
-await supabase
-.from("requests")
-.update({
-    remaining: newRemaining,
-    status: newRemaining === 0
-        ? "Visa Process"
-        : "Under Recruitment",
-    updated_at: new Date().toISOString(),
-})
-.eq("request_no", requestNo)
-.eq("company_id", currentCompanyId);
-
-loadCandidates();
-loadRequests();
-setActivePage("Candidates");
   } catch (error) {
     alert(`Excel upload failed: ${error.message}`);
   }
@@ -5189,6 +5296,12 @@ async function saveAgencyPerformanceSnapshot() {
 function candidateMatchesRequestLine(candidate, line) {
   if (!candidate || !line) return false;
 
+  // Primary accurate link: candidate belongs to the exact request line.
+  if (candidate.request_line_id && line.id) {
+    return String(candidate.request_line_id) === String(line.id);
+  }
+
+  // Backward-compatible fallback for old records before request_line_id existed.
   return (
     isCompatibleText(candidate.profession, line.profession) &&
     normalize(candidate.nationality) === normalize(line.nationality) &&
@@ -5453,22 +5566,22 @@ function buildRequestHealthRows() {
 
 
 function buildRecruitmentForecast() {
-  const openRows = mobilizationRequestRows.filter((row) => row.status !== "Completed" && row.status !== "Closed");
-  const totalRemainingRecruitment = openRows.reduce((sum, row) => sum + Number(row.remaining || 0), 0);
-  const totalRemainingJoining = openRows.reduce((sum, row) => sum + Number(row.remainingJoining || 0), 0);
+  const openLines = buildRequestHealthRows().filter((row) => !["Completed", "Closed", "Cancelled"].includes(row.status));
+  const totalRemainingRecruitment = openLines.reduce((sum, row) => sum + Number(row.candidateGap || 0), 0);
+  const totalRemainingJoining = openLines.reduce((sum, row) => sum + Number(row.joiningGap || 0), 0);
   const arrivingNext30 = executiveDashboard.arrivalsNext30Days.length;
-  const avgProgress = openRows.length
-    ? Math.round(openRows.reduce((sum, row) => sum + Number(row.progress || 0), 0) / openRows.length)
+  const avgProgress = openLines.length
+    ? Math.round(openLines.reduce((sum, row) => sum + Number(row.progress || 0), 0) / openLines.length)
     : 0;
-  const highRiskRequests = buildRequestHealthRows().filter((row) => row.riskLevel === "High").length;
+  const highRiskRequests = openLines.filter((row) => row.riskLevel === "High").length;
 
-  let forecastMessage = "Pipeline is stable if current pace continues.";
-  if (highRiskRequests > 0) forecastMessage = "High-risk requests may affect project mobilization unless escalated.";
-  else if (totalRemainingRecruitment > 0) forecastMessage = "Recruitment still requires active sourcing to close open gaps.";
+  let forecastMessage = "Pipeline is stable if current request-line pace continues.";
+  if (highRiskRequests > 0) forecastMessage = "High-risk request lines may affect project mobilization unless escalated.";
+  else if (totalRemainingRecruitment > 0) forecastMessage = "Recruitment still requires active sourcing by request line.";
   else if (totalRemainingJoining > 0) forecastMessage = "Main focus should shift from recruitment to joining and site onboarding.";
 
   return {
-    openRequests: openRows.length,
+    open_request_lines: openLines.length,
     totalRemainingRecruitment,
     totalRemainingJoining,
     arrivingNext30,
@@ -5480,21 +5593,53 @@ function buildRecruitmentForecast() {
 
 function buildAICommanderSnapshot() {
   const agencyScorecard = buildAgencyScorecard();
-  const requestHealth = buildRequestHealthRows();
   const operationalLines = buildOperationalRequestLineRows();
+  const requestHealth = [...operationalLines].sort((a, b) => b.riskScore - a.riskScore);
   const forecast = buildRecruitmentForecast();
 
-  const topDelayed = reports.lateItems.slice(0, 10).map((item) => ({
-    type: item.type,
-    reference: item.reference,
-    name: item.name,
-    days: item.days,
-    status: item.status,
-  }));
+  const totalsFromLines = operationalLines.reduce((acc, line) => {
+    acc.total_required += Number(line.requested_qty || 0);
+    acc.allocated_visas += Number(line.allocatedVisaQty || 0);
+    acc.authorized_qty += Number(line.authorizedQty || 0);
+    acc.candidates += Number(line.candidates || 0);
+    acc.interview_passed += Number(line.interviewPassed || 0);
+    acc.medical_done += Number(line.medicalDone || 0);
+    acc.visa_ready += Number(line.visaReady || 0);
+    acc.ticket_issued += Number(line.ticketIssued || 0);
+    acc.arrived += Number(line.arrived || 0);
+    acc.joined += Number(line.joined || 0);
+    acc.candidate_gap += Number(line.candidateGap || 0);
+    acc.joining_gap += Number(line.joiningGap || 0);
+    if (!line.isSaudi) {
+      acc.visa_gap += Number(line.visaGap || 0);
+      acc.authorization_gap += Number(line.authorizationGap || 0);
+    }
+    if (line.riskLevel === "High") acc.high_risk_lines += 1;
+    return acc;
+  }, {
+    total_required: 0,
+    allocated_visas: 0,
+    authorized_qty: 0,
+    candidates: 0,
+    interview_passed: 0,
+    medical_done: 0,
+    visa_ready: 0,
+    ticket_issued: 0,
+    arrived: 0,
+    joined: 0,
+    visa_gap: 0,
+    authorization_gap: 0,
+    candidate_gap: 0,
+    joining_gap: 0,
+    high_risk_lines: 0,
+  });
+
+  totalsFromLines.progress_percent = totalsFromLines.total_required
+    ? Math.round((totalsFromLines.candidates / totalsFromLines.total_required) * 100)
+    : 0;
 
   const visaShortage = operationalLines
     .filter((line) => !line.isSaudi && line.visaGap > 0)
-    .slice(0, 20)
     .map((line) => ({
       line_key: line.line_key,
       request_no: line.request_no,
@@ -5505,14 +5650,12 @@ function buildAICommanderSnapshot() {
       gender: line.gender,
       required: line.requested_qty,
       allocated: line.allocatedVisaQty,
-      matching_available_after_allocation: line.matching_available_visa_qty,
       shortage: line.visaGap,
       bottleneck: line.bottleneck,
     }));
 
   const authorizationGaps = operationalLines
     .filter((line) => !line.isSaudi && line.authorizationGap > 0)
-    .slice(0, 20)
     .map((line) => ({
       line_key: line.line_key,
       request_no: line.request_no,
@@ -5528,7 +5671,6 @@ function buildAICommanderSnapshot() {
 
   const candidateGaps = operationalLines
     .filter((line) => line.candidateGap > 0)
-    .slice(0, 20)
     .map((line) => ({
       line_key: line.line_key,
       request_no: line.request_no,
@@ -5546,56 +5688,25 @@ function buildAICommanderSnapshot() {
     generated_at: new Date().toISOString(),
     company_system: "VisaFlow KSA",
     ai_data_contract: {
-      version: "request-line-operational-model-v1",
-      rule_1: "Always analyze request_lines / operational_request_lines first. Never treat request header profession or quantity as the full request when lines exist.",
-      rule_2: "Each request line is a separate operational demand: profession + nationality + gender + quantity.",
-      rule_3: "Visa allocation, authorization, candidates, interviews and mobilization must be interpreted per request line.",
-      rule_4: "Do not combine all quantities under the first profession.",
+      version: "request-line-operational-model-v2-strict",
+      mandatory: "Use ONLY operational_request_lines and line_totals for request quantities, professions, nationalities, progress, gaps and risks.",
+      forbidden_1: "Do NOT use request header fields or top project summaries to describe a request line.",
+      forbidden_2: "Do NOT combine all quantities under the first profession.",
+      forbidden_3: "Do NOT state that REQ-2026-0003 is 60 plumbers if operational_request_lines show multiple lines.",
+      rule_1: "Each operational_request_line is a separate demand: profession + nationality + gender + requested_qty.",
+      rule_2: "Visa allocation, authorization, candidates, interviews and mobilization must be interpreted per operational_request_line.",
+      rule_3: "When reporting one request, list every line separately before any summary.",
     },
-    executive_dashboard: {
-      total_required: executiveDashboard.totalRequired,
-      open_requests: executiveDashboard.openRequests,
-      under_recruitment: executiveDashboard.underRecruitment,
-      completed_requests: executiveDashboard.completedRequests,
-      active_candidates: executiveDashboard.activeCandidates,
-      recruitment_progress: `${executiveDashboard.recruitmentProgress}%`,
-      saudi_requests: executiveDashboard.saudiRequests,
-      foreign_requests: executiveDashboard.foreignRequests,
-      saudization_rate: `${executiveDashboard.saudizationRate}%`,
-      available_visas: executiveDashboard.availableVisas,
-      allocated_visas: executiveDashboard.allocatedVisas,
-      open_authorizations: executiveDashboard.openAuthorizations,
-      cancelled_authorizations: executiveDashboard.cancelledAuthorizations,
-      medical_passed: executiveDashboard.medicalPassed,
-      tickets_issued: executiveDashboard.ticketsIssued,
-      arrived_ksa: executiveDashboard.arrived,
-      joined: executiveDashboard.joined,
-    },
-    forecast,
+    line_totals: totalsFromLines,
     operational_request_lines: operationalLines,
-    critical_alerts: {
-      delayed_items: topDelayed,
+    critical_alerts_by_line: {
       visa_shortage_by_request_line: visaShortage,
       authorization_gap_by_request_line: authorizationGaps,
       candidate_gap_by_request_line: candidateGaps,
-      authorizations_without_candidates: reports.authorizationsWithoutCandidates.slice(0, 10).map((a) => ({
-        visa_no: a.visa_no,
-        authorization_no: a.authorization_no,
-        agency: a.agency,
-        allocated_qty: a.allocated_qty,
-        status: a.status,
-      })),
-      candidates_without_interviews: reports.candidatesWithoutInterviews.slice(0, 10).map((c) => ({
-        candidate: c.candidate_name,
-        request_no: c.request_no,
-        profession: c.profession,
-        status: c.status,
-      })),
     },
-    request_health: requestHealth.slice(0, 20),
+    request_health_by_line: requestHealth.slice(0, 20),
     agency_scorecard: agencyScorecard.slice(0, 12),
-    top_projects: executiveDashboard.topProjects,
-    arrivals_next_30_days: executiveDashboard.arrivalsNext30Days,
+    forecast,
   };
 }
 
@@ -5644,8 +5755,7 @@ function getLocalAICommanderBrief() {
     `3. Issue authorizations against the exact allocated line and agency.`,
     `4. Push agencies by request line where candidates are below required quantity.`,
     `5. Move ready candidates from medical/visa stages to ticketing and arrival.`,
-  ].filter(Boolean).join("
-");
+  ].filter(Boolean).join("\n");
 }
 
 
@@ -5677,7 +5787,7 @@ async function runAICommander(question = aiQuestion) {
           {
             role: "system",
             content:
-              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use only the provided data. Mandatory rule: analyze operational_request_lines first. If a request has multiple lines, never assign the total request quantity to the first profession. Treat each line as a separate demand by profession, nationality, gender, and quantity. Provide: Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the JSON.",
+              "You are VisaFlow AI Commander for a Saudi recruitment, visa authorization, manpower mobilization, and O&M workforce platform. Act like a Recruitment Director briefing a CEO. Use only the provided JSON. STRICT DATA RULES: (1) Use operational_request_lines as the only source for request profession, nationality, gender, quantity, progress, visa gaps, authorization gaps, candidate gaps and risks. (2) Never use request header summaries for profession or quantity. (3) Never combine all quantities under the first profession. (4) If a request has multiple operational_request_lines, list all lines separately before the executive summary. (5) If REQ-2026-0003 has lines for plumber 5, electrician 5 and cleaner 50, you must report exactly that, not 60 plumbers. Provide: Request Line Breakdown, Executive Summary, Critical Risks, Root Causes, Recommended Actions, Agency Follow-up, and Forecast. Keep it practical, decisive, and concise. Never invent numbers beyond the JSON.",
           },
           {
             role: "user",
