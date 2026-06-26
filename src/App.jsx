@@ -649,6 +649,16 @@ const REPORT_STUDIO_SECTIONS = [
   "Appendices",
 ];
 
+const AGREEMENT_TEMPLATE_TYPES = [
+  "Standard Recruitment SLA",
+  "High Volume Mobilization SLA",
+  "Premium Agency Partnership",
+  "Project-Based Recruitment SLA",
+];
+
+const AGREEMENT_STATUSES = ["Draft", "Pending Signature", "Active", "Expired", "Terminated", "Rejected"];
+
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [loading, setLoading] = useState(false);
@@ -669,25 +679,31 @@ const [agreementEditingId, setAgreementEditingId] = useState(null);
 const emptyAgreement = {
   agreement_no: "",
   agency_name: "",
+  template_type: "Standard Recruitment SLA",
+  policy_name: "Standard Recruitment Agency Policy",
   signed_by_company: "",
   signed_by_agency: "",
   company_signature: "",
   agency_signature: "",
   status: "Draft",
   sla_days: 60,
+  response_sla_hours: 24,
+  update_frequency_days: 7,
+  delay_penalty_type: "Fixed Amount",
+  delay_penalty_amount: 0,
+  delay_penalty_after_days: 7,
+  financial_guarantee_required: "No",
+  financial_guarantee_amount: "",
+  replacement_guarantee_days: 90,
+  payment_terms: "Payment after arrival and joining confirmation unless otherwise agreed.",
+  cancellation_terms: "The company may suspend allocation or terminate the agreement in case of repeated SLA breach, data manipulation, or non-compliance.",
   effective_date: "",
   expiry_date: "",
-  terms: `AGENCY SERVICE LEVEL AGREEMENT
+  terms: `AGENCY SERVICE LEVEL AGREEMENT / اتفاقية مستوى خدمة مكتب الاستقدام
 
-The Recruitment Agency agrees to:
-1. Update all candidate records continuously through VisaFlow KSA.
-2. Maintain accurate candidate status information.
-3. Respond to requests within agreed SLA timelines.
-4. Complete recruitment cycle within 60 calendar days.
-5. Keep all documents and recruitment data updated.
-6. Accept that lack of timely updates will affect agency ranking and future allocation priority.
+This agreement defines the recruitment service level, update commitment, delay penalties, replacement guarantee and financial guarantee requirements between the company and the recruitment agency.
 
-Failure to update records for more than 7 consecutive days may negatively impact agency performance evaluation and future allocation opportunities.`,
+تحدد هذه الاتفاقية مستوى الخدمة المطلوب من مكتب الاستقدام، والالتزام بتحديث البيانات، وغرامات التأخير، وضمان الاستبدال، ومتطلبات الضمان المالي بين الشركة والمكتب.`,
 };
 
 const [agreementForm, setAgreementForm] = useState(emptyAgreement);
@@ -3443,6 +3459,143 @@ async function deleteUser(id) {
     loadAgencies();
   }
 
+function getAgreementTemplateDefaults(templateType) {
+  const type = templateType || "Standard Recruitment SLA";
+
+  if (type === "High Volume Mobilization SLA") {
+    return {
+      sla_days: 45,
+      response_sla_hours: 12,
+      update_frequency_days: 3,
+      delay_penalty_type: "Fixed Amount",
+      delay_penalty_amount: 250,
+      delay_penalty_after_days: 3,
+      financial_guarantee_required: "Yes",
+      financial_guarantee_amount: 50000,
+      replacement_guarantee_days: 120,
+      payment_terms: "Payment may be linked to arrival, joining confirmation and accepted replacement guarantee terms.",
+    };
+  }
+
+  if (type === "Premium Agency Partnership") {
+    return {
+      sla_days: 30,
+      response_sla_hours: 8,
+      update_frequency_days: 2,
+      delay_penalty_type: "Percentage",
+      delay_penalty_amount: 5,
+      delay_penalty_after_days: 2,
+      financial_guarantee_required: "Yes",
+      financial_guarantee_amount: 100000,
+      replacement_guarantee_days: 180,
+      payment_terms: "Priority payment cycle applies after verified arrival, joining and complete documentation.",
+    };
+  }
+
+  if (type === "Project-Based Recruitment SLA") {
+    return {
+      sla_days: 60,
+      response_sla_hours: 24,
+      update_frequency_days: 7,
+      delay_penalty_type: "Fixed Amount",
+      delay_penalty_amount: 100,
+      delay_penalty_after_days: 7,
+      financial_guarantee_required: "Optional",
+      financial_guarantee_amount: "",
+      replacement_guarantee_days: 90,
+      payment_terms: "Payment is linked to project mobilization milestones and joining confirmation.",
+    };
+  }
+
+  return {
+    sla_days: 60,
+    response_sla_hours: 24,
+    update_frequency_days: 7,
+    delay_penalty_type: "Fixed Amount",
+    delay_penalty_amount: 0,
+    delay_penalty_after_days: 7,
+    financial_guarantee_required: "No",
+    financial_guarantee_amount: "",
+    replacement_guarantee_days: 90,
+    payment_terms: "Payment after arrival and joining confirmation unless otherwise agreed.",
+  };
+}
+
+function buildAgreementTermsFromPolicy(source = agreementForm) {
+  const guaranteeText = source.financial_guarantee_required === "Yes"
+    ? `Financial guarantee required: ${Number(source.financial_guarantee_amount || 0).toLocaleString()} SAR.`
+    : source.financial_guarantee_required === "Optional"
+      ? "Financial guarantee is optional and may be requested based on project risk."
+      : "No financial guarantee is required unless separately agreed.";
+
+  return `AGENCY SERVICE LEVEL AGREEMENT / اتفاقية مستوى خدمة مكتب الاستقدام
+
+Agreement Template / قالب الاتفاقية: ${source.template_type || "Standard Recruitment SLA"}
+Policy Name / اسم السياسة: ${source.policy_name || "Recruitment Agency Policy"}
+Agency / المكتب: ${source.agency_name || "-"}
+
+1. Scope of Service / نطاق الخدمة
+The recruitment agency shall source, submit, update and mobilize candidates through VisaFlow KSA according to the company requirements, request lines, profession, nationality, gender and approved quantities.
+يلتزم مكتب الاستقدام بتوفير المرشحين وتحديث بياناتهم ومتابعة إجراءاتهم عبر منصة VisaFlow KSA حسب طلبات الشركة والمهن والجنسيات والكميات المعتمدة.
+
+2. SLA Duration / مدة إنجاز الطلب
+The standard recruitment cycle must be completed within ${source.sla_days || 60} calendar day(s) from the assignment date unless a different written approval is issued.
+مدة الإنجاز المعتمدة هي ${source.sla_days || 60} يوم من تاريخ إسناد الطلب ما لم يصدر اعتماد مختلف من الشركة.
+
+3. Response and Data Update / الاستجابة وتحديث البيانات
+The agency must respond within ${source.response_sla_hours || 24} hour(s) and update candidate records at least every ${source.update_frequency_days || 7} day(s).
+يلتزم المكتب بالرد خلال ${source.response_sla_hours || 24} ساعة وتحديث بيانات المرشحين كل ${source.update_frequency_days || 7} يوم كحد أقصى.
+
+4. Delay Penalties / غرامات التأخير
+Delay penalty type: ${source.delay_penalty_type || "Fixed Amount"}. Penalty value: ${source.delay_penalty_amount || 0}. Penalty starts after ${source.delay_penalty_after_days || 7} day(s) of delay or no update, subject to company approval and applicable regulations.
+نوع الغرامة: ${source.delay_penalty_type || "Fixed Amount"}. قيمة الغرامة: ${source.delay_penalty_amount || 0}. تبدأ الغرامة بعد ${source.delay_penalty_after_days || 7} يوم من التأخير أو عدم التحديث، حسب اعتماد الشركة والأنظمة المعمول بها.
+
+5. Financial Guarantee / الضمان المالي
+${guaranteeText}
+
+6. Replacement Guarantee / ضمان الاستبدال
+The agency shall support replacement cases within ${source.replacement_guarantee_days || 90} day(s) for failed, refused, absconded or non-compliant candidates according to the agreed terms.
+يلتزم المكتب بدعم حالات الاستبدال خلال ${source.replacement_guarantee_days || 90} يوم للمرشحين غير المجتازين أو الرافضين للعمل أو المنقطعين أو غير المتوافقين حسب الشروط المتفق عليها.
+
+7. Payment Terms / شروط الدفع
+${source.payment_terms || "Payment after arrival and joining confirmation unless otherwise agreed."}
+
+8. Cancellation / الإلغاء
+${source.cancellation_terms || "The company may suspend allocation or terminate the agreement in case of repeated SLA breach, data manipulation, or non-compliance."}
+
+9. Electronic Acceptance / القبول الإلكتروني
+Agency approval through VisaFlow KSA is considered an electronic acceptance and operational signature for this agreement.
+تعتبر موافقة المكتب عبر منصة VisaFlow KSA قبولاً إلكترونياً وتوقيعاً تشغيلياً على هذه الاتفاقية.`;
+}
+
+function applyAgreementTemplate(templateType) {
+  const defaults = getAgreementTemplateDefaults(templateType);
+  setAgreementForm((prev) => {
+    const next = {
+      ...prev,
+      template_type: templateType,
+      ...defaults,
+    };
+    return {
+      ...next,
+      terms: buildAgreementTermsFromPolicy(next),
+    };
+  });
+}
+
+function refreshAgreementTerms() {
+  setAgreementForm((prev) => ({
+    ...prev,
+    terms: buildAgreementTermsFromPolicy(prev),
+  }));
+}
+
+function generateAgreementNo() {
+  const year = new Date().getFullYear();
+  const nextNumber = String(agencyAgreements.length + 1).padStart(4, "0");
+  return `AGR-${year}-${nextNumber}`;
+}
+
 function resetAgreementForm() {
   setAgreementForm(emptyAgreement);
   setAgreementEditingId(null);
@@ -3453,12 +3606,24 @@ function editAgreement(item) {
   setAgreementForm({
     agreement_no: item.agreement_no || "",
     agency_name: item.agency_name || "",
+    template_type: item.template_type || "Standard Recruitment SLA",
+    policy_name: item.policy_name || "Standard Recruitment Agency Policy",
     signed_by_company: item.signed_by_company || "",
     signed_by_agency: item.signed_by_agency || "",
     company_signature: item.company_signature || "",
     agency_signature: item.agency_signature || "",
     status: item.status || "Draft",
     sla_days: item.sla_days || 60,
+    response_sla_hours: item.response_sla_hours || 24,
+    update_frequency_days: item.update_frequency_days || 7,
+    delay_penalty_type: item.delay_penalty_type || "Fixed Amount",
+    delay_penalty_amount: item.delay_penalty_amount || 0,
+    delay_penalty_after_days: item.delay_penalty_after_days || 7,
+    financial_guarantee_required: item.financial_guarantee_required || "No",
+    financial_guarantee_amount: item.financial_guarantee_amount || "",
+    replacement_guarantee_days: item.replacement_guarantee_days || 90,
+    payment_terms: item.payment_terms || emptyAgreement.payment_terms,
+    cancellation_terms: item.cancellation_terms || emptyAgreement.cancellation_terms,
     effective_date: item.effective_date || "",
     expiry_date: item.expiry_date || "",
     terms: item.terms || emptyAgreement.terms,
@@ -3467,16 +3632,32 @@ function editAgreement(item) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-async function saveAgreement() {
+async function saveAgreement(statusOverride = "") {
   if (!canManageAgencyAgreements) return alert("You do not have permission to manage agency agreements.");
   if (!agreementForm.agency_name) return alert("Agency name is required.");
 
+  const nextStatus = statusOverride || agreementForm.status || "Draft";
+  const now = new Date().toISOString();
+  const terms = agreementForm.terms || buildAgreementTermsFromPolicy(agreementForm);
+
   const payload = {
     ...agreementForm,
+    agreement_no: agreementForm.agreement_no || generateAgreementNo(),
+    status: nextStatus,
     sla_days: Number(agreementForm.sla_days || 60),
+    response_sla_hours: Number(agreementForm.response_sla_hours || 24),
+    update_frequency_days: Number(agreementForm.update_frequency_days || 7),
+    delay_penalty_amount: Number(agreementForm.delay_penalty_amount || 0),
+    delay_penalty_after_days: Number(agreementForm.delay_penalty_after_days || 7),
+    financial_guarantee_amount: agreementForm.financial_guarantee_amount === "" ? null : Number(agreementForm.financial_guarantee_amount || 0),
+    replacement_guarantee_days: Number(agreementForm.replacement_guarantee_days || 90),
+    company_signature: agreementForm.company_signature || (nextStatus === "Pending Signature" ? `Sent electronically by ${currentUser?.name || "Company User"}` : ""),
+    signed_by_company: agreementForm.signed_by_company || currentUser?.name || "",
+    sent_to_agency_at: nextStatus === "Pending Signature" ? now : agreementForm.sent_to_agency_at || null,
     effective_date: agreementForm.effective_date || null,
     expiry_date: agreementForm.expiry_date || null,
-    updated_at: new Date().toISOString(),
+    terms,
+    updated_at: now,
   };
 
   const result = agreementEditingId
@@ -3489,9 +3670,81 @@ async function saveAgreement() {
 
   if (result.error) return alert(result.error.message);
 
-  alert(agreementEditingId ? "Agreement updated successfully" : "Agreement saved successfully");
+  if (nextStatus === "Pending Signature") {
+    await triggerExternalNotification("AGENCY_AGREEMENT_SENT", {
+      company_id: currentCompanyId,
+      title: "Agency Agreement Sent",
+      message: `${payload.agreement_no} sent to ${payload.agency_name} for electronic acceptance.`,
+      priority: "Medium",
+      related_table: "agency_agreements",
+      related_id: String(agreementEditingId || ""),
+      agency_name: payload.agency_name,
+    });
+  }
+
+  alert(nextStatus === "Pending Signature" ? "Agreement sent to agency portal" : agreementEditingId ? "Agreement updated successfully" : "Agreement saved successfully");
   resetAgreementForm();
   await loadAgencyAgreements();
+}
+
+async function sendExistingAgreementToAgency(item) {
+  if (!canManageAgencyAgreements) return alert("You do not have permission to send agency agreements.");
+  if (!item?.id) return;
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("agency_agreements")
+    .update({
+      status: "Pending Signature",
+      company_signature: item.company_signature || `Sent electronically by ${currentUser?.name || "Company User"}`,
+      signed_by_company: item.signed_by_company || currentUser?.name || "",
+      sent_to_agency_at: now,
+      terms: item.terms || buildAgreementTermsFromPolicy(item),
+      updated_at: now,
+    })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+  await loadAgencyAgreements();
+  alert("Agreement sent to agency portal");
+}
+
+async function acceptAgreementByAgency(item) {
+  if (currentRole !== "Agency") return alert("Only agency users can accept agreements from Office Portal.");
+  if (!window.confirm("Accept this agreement electronically?")) return;
+
+  const now = new Date().toISOString();
+  const agencySigner = currentUser?.name || currentUser?.email || "Agency User";
+
+  const { error } = await supabase
+    .from("agency_agreements")
+    .update({
+      status: "Active",
+      signed_by_agency: item.signed_by_agency || agencySigner,
+      agency_signature: `Accepted electronically by ${agencySigner} (${currentUser?.email || ""})`,
+      agency_accepted_by: agencySigner,
+      agency_accepted_email: currentUser?.email || "",
+      agency_accepted_at: now,
+      updated_at: now,
+    })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+
+  await triggerExternalNotification("AGENCY_AGREEMENT_ACCEPTED", {
+    company_id: currentCompanyId,
+    title: "Agency Agreement Accepted",
+    message: `${item.agreement_no || "Agreement"} accepted electronically by ${agencySigner}.`,
+    priority: "Medium",
+    related_table: "agency_agreements",
+    related_id: String(item.id || ""),
+    agency_name: item.agency_name,
+  });
+
+  await loadAgencyAgreements();
+  alert("Agreement accepted and activated successfully");
 }
 
 async function deleteAgreement(id) {
@@ -12559,6 +12812,56 @@ Save Authorization
       />
     </div>
 
+    {currentRole === "Agency" && agencyAgreements.length > 0 && (
+      <TableCard title="Agency Agreements / Electronic Signature">
+        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Agreement No</th>
+                <th>Company Workspace</th>
+                <th>Template</th>
+                <th>SLA</th>
+                <th>Penalty</th>
+                <th>Guarantee</th>
+                <th>Status</th>
+                <th>Agreement</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agencyAgreements.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.agreement_no || "-"}</td>
+                  <td>{currentUser?.company_name || item.company_name || "Current Client"}</td>
+                  <td>{item.template_type || "Standard"}</td>
+                  <td>{item.sla_days || 60} days</td>
+                  <td>{item.delay_penalty_type || "-"} / {item.delay_penalty_amount || 0}</td>
+                  <td>{item.financial_guarantee_required || "No"}{item.financial_guarantee_amount ? ` / ${Number(item.financial_guarantee_amount).toLocaleString()} SAR` : ""}</td>
+                  <td><Badge value={item.status || "Draft"} /></td>
+                  <td>
+                    <details>
+                      <summary>View</summary>
+                      <pre style={{ whiteSpace: "pre-wrap", maxWidth: 520, maxHeight: 260, overflow: "auto" }}>{item.terms || "No agreement terms"}</pre>
+                    </details>
+                  </td>
+                  <td className="table-actions">
+                    {item.status === "Pending Signature" ? (
+                      <button className="save-btn" onClick={() => acceptAgreementByAgency(item)}>Accept & Sign</button>
+                    ) : item.status === "Active" ? (
+                      <span>Accepted</span>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </TableCard>
+    )}
+
     {canManageOfficePortal && (
     <FormCard title={candidateEditingId ? "Edit Office Candidate" : "Add Office Candidate"}>
       <div className="form-grid">
@@ -13124,25 +13427,51 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     <div className="dashboard-grid">
       <Stat title="Total Agreements" value={agencyAgreements.length} />
       <Stat title="Active Agreements" value={agencyAgreements.filter((x) => x.status === "Active").length} className="passed" />
-      <Stat title="Pending Signature" value={agencyAgreements.filter((x) => x.status === "Pending Signature").length} className="warning" />
-      <Stat title="Default SLA Days" value="60" />
+      <Stat title="Pending Agency Signature" value={agencyAgreements.filter((x) => x.status === "Pending Signature").length} className="warning" />
+      <Stat title="Financial Guarantees" value={agencyAgreements.filter((x) => x.financial_guarantee_required === "Yes").length} className="warning" />
+      <Stat title="Avg SLA Days" value={agencyAgreements.length ? Math.round(agencyAgreements.reduce((sum, x) => sum + Number(x.sla_days || 0), 0) / agencyAgreements.length) : 60} />
     </div>
 
     {canManageAgencyAgreements && (
-      <FormCard title={agreementEditingId ? "Edit Agency Agreement" : "New Agency Agreement"}>
+      <FormCard title={agreementEditingId ? "Edit Agency Agreement Policy" : "Create Agency Agreement Policy"}>
         <div className="form-grid">
           <Input placeholder="Agreement No" value={agreementForm.agreement_no} onChange={(v) => updateForm(setAgreementForm, "agreement_no", v)} />
           <Select placeholder="Agency" value={agreementForm.agency_name} onChange={(v) => updateForm(setAgreementForm, "agency_name", v)} options={agencies.map((a) => a.name).filter(Boolean)} />
-          <Input type="number" placeholder="SLA Days" value={agreementForm.sla_days} onChange={(v) => updateForm(setAgreementForm, "sla_days", v)} />
+          <Select placeholder="Agreement Template" value={agreementForm.template_type} onChange={applyAgreementTemplate} options={AGREEMENT_TEMPLATE_TYPES} />
+          <Input placeholder="Policy Name" value={agreementForm.policy_name} onChange={(v) => updateForm(setAgreementForm, "policy_name", v)} />
           <Input type="date" placeholder="Effective Date" value={agreementForm.effective_date} onChange={(v) => updateForm(setAgreementForm, "effective_date", v)} />
           <Input type="date" placeholder="Expiry Date" value={agreementForm.expiry_date} onChange={(v) => updateForm(setAgreementForm, "expiry_date", v)} />
-          <Select placeholder="Status" value={agreementForm.status} onChange={(v) => updateForm(setAgreementForm, "status", v)} options={["Draft", "Pending Signature", "Active", "Expired", "Terminated"]} />
+          <Select placeholder="Status" value={agreementForm.status} onChange={(v) => updateForm(setAgreementForm, "status", v)} options={AGREEMENT_STATUSES} />
           <Input placeholder="Company Signatory Name" value={agreementForm.signed_by_company} onChange={(v) => updateForm(setAgreementForm, "signed_by_company", v)} />
-          <Input placeholder="Agency Signatory Name" value={agreementForm.signed_by_agency} onChange={(v) => updateForm(setAgreementForm, "signed_by_agency", v)} />
+        </div>
+
+        <div className="card" style={{ marginTop: "12px" }}>
+          <h3 style={{ marginBottom: "12px" }}>SLA, Penalties & Financial Guarantee</h3>
+          <div className="form-grid">
+            <Input type="number" placeholder="SLA Days" value={agreementForm.sla_days} onChange={(v) => updateForm(setAgreementForm, "sla_days", v)} />
+            <Input type="number" placeholder="Response SLA Hours" value={agreementForm.response_sla_hours} onChange={(v) => updateForm(setAgreementForm, "response_sla_hours", v)} />
+            <Input type="number" placeholder="Update Frequency Days" value={agreementForm.update_frequency_days} onChange={(v) => updateForm(setAgreementForm, "update_frequency_days", v)} />
+            <Select placeholder="Delay Penalty Type" value={agreementForm.delay_penalty_type} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_type", v)} options={["Fixed Amount", "Percentage", "Allocation Hold", "Warning Only"]} />
+            <Input type="number" placeholder="Delay Penalty Value" value={agreementForm.delay_penalty_amount} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_amount", v)} />
+            <Input type="number" placeholder="Penalty After Days" value={agreementForm.delay_penalty_after_days} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_after_days", v)} />
+            <Select placeholder="Financial Guarantee Required" value={agreementForm.financial_guarantee_required} onChange={(v) => updateForm(setAgreementForm, "financial_guarantee_required", v)} options={["No", "Yes", "Optional"]} />
+            <Input type="number" placeholder="Financial Guarantee Amount SAR" value={agreementForm.financial_guarantee_amount} onChange={(v) => updateForm(setAgreementForm, "financial_guarantee_amount", v)} />
+            <Input type="number" placeholder="Replacement Guarantee Days" value={agreementForm.replacement_guarantee_days} onChange={(v) => updateForm(setAgreementForm, "replacement_guarantee_days", v)} />
+          </div>
+        </div>
+
+        <label>Payment Terms</label>
+        <textarea rows="2" value={agreementForm.payment_terms} onChange={(e) => updateForm(setAgreementForm, "payment_terms", e.target.value)} />
+
+        <label>Cancellation / Suspension Terms</label>
+        <textarea rows="2" value={agreementForm.cancellation_terms} onChange={(e) => updateForm(setAgreementForm, "cancellation_terms", e.target.value)} />
+
+        <div className="actions-line">
+          <button className="light-btn" type="button" onClick={refreshAgreementTerms}>Build Terms From Policy</button>
         </div>
 
         <label>Agreement Terms / SLA Commitment</label>
-        <textarea rows="9" value={agreementForm.terms} onChange={(e) => updateForm(setAgreementForm, "terms", e.target.value)} />
+        <textarea rows="13" dir="auto" value={agreementForm.terms} onChange={(e) => updateForm(setAgreementForm, "terms", e.target.value)} />
 
         <div className="form-grid">
           <Input placeholder="Company Signature" value={agreementForm.company_signature} onChange={(v) => updateForm(setAgreementForm, "company_signature", v)} />
@@ -13150,7 +13479,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </div>
 
         <div className="actions-line">
-          <button className="save-btn" onClick={saveAgreement}>{agreementEditingId ? "Update Agreement" : "Save Agreement"}</button>
+          <button className="light-btn" onClick={() => saveAgreement("Draft")}>Save Draft</button>
+          <button className="save-btn" onClick={() => saveAgreement("Pending Signature")}>Send to Agency Portal</button>
           <button className="light-btn" onClick={resetAgreementForm}>Clear</button>
         </div>
       </FormCard>
@@ -13162,12 +13492,12 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <tr>
             <th>Agreement No</th>
             <th>Agency</th>
-            <th>SLA Days</th>
-            <th>Effective</th>
-            <th>Expiry</th>
+            <th>Template</th>
+            <th>SLA</th>
+            <th>Penalty</th>
+            <th>Guarantee</th>
             <th>Status</th>
-            <th>Company Signature</th>
-            <th>Agency Signature</th>
+            <th>Agency Accepted</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -13179,14 +13509,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <tr key={item.id}>
                 <td>{item.agreement_no || "-"}</td>
                 <td>{item.agency_name || "-"}</td>
-                <td>{item.sla_days || 60}</td>
-                <td>{item.effective_date || "-"}</td>
-                <td>{item.expiry_date || "-"}</td>
+                <td>{item.template_type || "Standard"}</td>
+                <td>{item.sla_days || 60} days</td>
+                <td>{item.delay_penalty_type || "-"} / {item.delay_penalty_amount || 0}</td>
+                <td>{item.financial_guarantee_required || "No"}{item.financial_guarantee_amount ? ` / ${Number(item.financial_guarantee_amount).toLocaleString()} SAR` : ""}</td>
                 <td><Badge value={item.status || "Draft"} /></td>
-                <td>{item.company_signature || "-"}</td>
-                <td>{item.agency_signature || "-"}</td>
+                <td>{item.agency_accepted_at ? new Date(item.agency_accepted_at).toLocaleDateString("en-GB") : item.agency_signature || "-"}</td>
                 <td className="table-actions">
                   {canManageAgencyAgreements && <button onClick={() => editAgreement(item)}>Edit</button>}
+                  {canManageAgencyAgreements && item.status !== "Pending Signature" && item.status !== "Active" && <button onClick={() => sendExistingAgreementToAgency(item)}>Send</button>}
                   {canManageAgencyAgreements && <button className="danger" onClick={() => deleteAgreement(item.id)}>Delete</button>}
                 </td>
               </tr>
