@@ -692,8 +692,8 @@ const emptyAgreement = {
   response_sla_hours: 24,
   update_frequency_days: 7,
   delay_penalty_type: "Fixed Amount Per Delayed Day",
-  delay_penalty_amount: 0,
-  delay_penalty_after_days: 7,
+  delay_penalty_amount: "",
+  delay_penalty_after_days: "",
   financial_guarantee_required: "No",
   financial_guarantee_amount: "",
   replacement_guarantee_days: 90,
@@ -703,9 +703,9 @@ const emptyAgreement = {
   expiry_date: "",
   terms: `AGENCY SERVICE LEVEL AGREEMENT / اتفاقية مستوى خدمة مكتب الاستقدام
 
-This agreement defines the recruitment service level, update commitment, delay penalties, replacement guarantee and financial guarantee requirements between the company and the recruitment agency.
+This agreement defines the recruitment service level, update commitment, company-defined labor SLA delay penalty, replacement guarantee and financial guarantee requirements between the company and the recruitment agency.
 
-تحدد هذه الاتفاقية مستوى الخدمة المطلوب من مكتب الاستقدام، والالتزام بتحديث البيانات، وغرامات التأخير، وضمان الاستبدال، ومتطلبات الضمان المالي بين الشركة والمكتب.`,
+تحدد هذه الاتفاقية مستوى الخدمة المطلوب من مكتب الاستقدام، والالتزام بتحديث البيانات، وغرامة تأخير العمالة عن SLA حسب قرار الشركة، وضمان الاستبدال، ومتطلبات الضمان المالي بين الشركة والمكتب.`,
 };
 
 const [agreementForm, setAgreementForm] = useState(emptyAgreement);
@@ -3473,16 +3473,13 @@ async function deleteUser(id) {
 function getAgreementTemplateDefaults(templateType) {
   const type = templateType || "Standard Recruitment SLA";
 
+  // Templates are operational presets only.
+  // The company remains the decision maker for financial penalty value, grace period and financial guarantee.
   if (type === "High Volume Mobilization SLA") {
     return {
       sla_days: 45,
       response_sla_hours: 12,
       update_frequency_days: 3,
-      delay_penalty_type: "Fixed Amount Per Delayed Day",
-      delay_penalty_amount: 250,
-      delay_penalty_after_days: 3,
-      financial_guarantee_required: "Yes",
-      financial_guarantee_amount: 50000,
       replacement_guarantee_days: 120,
       payment_terms: "Payment may be linked to arrival, joining confirmation and accepted replacement guarantee terms.",
     };
@@ -3493,11 +3490,6 @@ function getAgreementTemplateDefaults(templateType) {
       sla_days: 30,
       response_sla_hours: 8,
       update_frequency_days: 2,
-      delay_penalty_type: "Fixed Amount Per Delayed Day",
-      delay_penalty_amount: 5,
-      delay_penalty_after_days: 2,
-      financial_guarantee_required: "Yes",
-      financial_guarantee_amount: 100000,
       replacement_guarantee_days: 180,
       payment_terms: "Priority payment cycle applies after verified arrival, joining and complete documentation.",
     };
@@ -3508,11 +3500,6 @@ function getAgreementTemplateDefaults(templateType) {
       sla_days: 60,
       response_sla_hours: 24,
       update_frequency_days: 7,
-      delay_penalty_type: "Fixed Amount Per Delayed Day",
-      delay_penalty_amount: 100,
-      delay_penalty_after_days: 7,
-      financial_guarantee_required: "Optional",
-      financial_guarantee_amount: "",
       replacement_guarantee_days: 90,
       payment_terms: "Payment is linked to project mobilization milestones and joining confirmation.",
     };
@@ -3522,11 +3509,6 @@ function getAgreementTemplateDefaults(templateType) {
     sla_days: 60,
     response_sla_hours: 24,
     update_frequency_days: 7,
-    delay_penalty_type: "Fixed Amount Per Delayed Day",
-    delay_penalty_amount: 0,
-    delay_penalty_after_days: 7,
-    financial_guarantee_required: "No",
-    financial_guarantee_amount: "",
     replacement_guarantee_days: 90,
     payment_terms: "Payment after arrival and joining confirmation unless otherwise agreed.",
   };
@@ -3541,7 +3523,7 @@ function buildAgreementTermsFromPolicy(source = agreementForm) {
 
   return `AGENCY SERVICE LEVEL AGREEMENT / اتفاقية مستوى خدمة مكتب الاستقدام
 
-Agreement Template / قالب الاتفاقية: ${source.template_type || "Standard Recruitment SLA"}
+Agreement Operational Template / قالب التشغيل: ${source.template_type || "Standard Recruitment SLA"}
 Policy Name / اسم السياسة: ${source.policy_name || "Recruitment Agency Policy"}
 Agency / المكتب: ${source.agency_name || "-"}
 
@@ -3557,9 +3539,9 @@ The standard recruitment cycle must be completed within ${source.sla_days || 60}
 The agency must respond within ${source.response_sla_hours || 24} hour(s) and update candidate/case records at least every ${source.update_frequency_days || 7} day(s). These rules affect agency KPI, ranking, allocation decisions and performance reports only. They do not create financial penalties by themselves.
 يلتزم المكتب بالرد خلال ${source.response_sla_hours || 24} ساعة وتحديث بيانات المرشحين أو المعاملات كل ${source.update_frequency_days || 7} يوم كحد أقصى. هذه القواعد تؤثر على تقييم المكتب وترتيبه وقرارات إسناد الطلبات والتقارير فقط، ولا تتحول وحدها إلى غرامة مالية.
 
-4. Labor SLA Delay Penalty / غرامة تأخير العمالة عن SLA
-Financial penalties apply only when labor/candidates exceed the agreed SLA duration. Penalty type: ${source.delay_penalty_type || "Fixed Amount Per Delayed Day"}. Penalty value: ${source.delay_penalty_amount || 0} SAR per chargeable delayed day. Penalty starts after ${source.delay_penalty_after_days || 7} grace day(s), subject to company review and final approval.
-تطبق الغرامات المالية فقط عند تأخر العمالة أو المرشحين عن مدة SLA المتفق عليها. نوع الغرامة: ${source.delay_penalty_type || "Fixed Amount Per Delayed Day"}. قيمة الغرامة: ${source.delay_penalty_amount || 0} ريال عن كل يوم تأخير قابل للغرامة. تبدأ الغرامة بعد فترة سماح ${source.delay_penalty_after_days || 7} يوم، وتبقى خاضعة لمراجعة الشركة واعتمادها النهائي.
+4. Company-Defined Labor SLA Delay Penalty / غرامة تأخير العمالة حسب قرار الشركة
+Financial penalties apply only when labor/candidates exceed the agreed SLA duration. The company defines the penalty type, penalty value and grace period in this agreement. Penalty type: ${source.delay_penalty_type || "Fixed Amount Per Delayed Day"}. Penalty value: ${source.delay_penalty_amount === "" || source.delay_penalty_amount === null || source.delay_penalty_amount === undefined ? "Not specified" : `${Number(source.delay_penalty_amount || 0).toLocaleString()} SAR per chargeable delayed day`}. Grace period before penalty: ${source.delay_penalty_after_days === "" || source.delay_penalty_after_days === null || source.delay_penalty_after_days === undefined ? "Not specified" : `${source.delay_penalty_after_days} day(s)`}. All penalties remain subject to company review and final approval.
+تطبق الغرامات المالية فقط عند تأخر العمالة أو المرشحين عن مدة SLA المتفق عليها. الشركة هي صاحبة القرار في تحديد نوع الغرامة وقيمتها وفترة السماح داخل هذه الاتفاقية. نوع الغرامة: ${source.delay_penalty_type || "Fixed Amount Per Delayed Day"}. قيمة الغرامة: ${source.delay_penalty_amount === "" || source.delay_penalty_amount === null || source.delay_penalty_amount === undefined ? "غير محددة" : `${Number(source.delay_penalty_amount || 0).toLocaleString()} ريال عن كل يوم تأخير قابل للغرامة`}. فترة السماح قبل الغرامة: ${source.delay_penalty_after_days === "" || source.delay_penalty_after_days === null || source.delay_penalty_after_days === undefined ? "غير محددة" : `${source.delay_penalty_after_days} يوم`}. وتبقى جميع الغرامات خاضعة لمراجعة الشركة واعتمادها النهائي.
 
 5. Financial Guarantee / الضمان المالي
 ${guaranteeText}
@@ -13905,7 +13887,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         <div className="form-grid">
           <Input placeholder="Agreement No (Auto-generated)" value={agreementEditingId ? agreementForm.agreement_no : (agreementForm.agreement_no || "Auto-generated on save")} readOnly onChange={() => {}} />
           <Select placeholder="Agency" value={agreementForm.agency_name} onChange={(v) => updateForm(setAgreementForm, "agency_name", v)} options={agencies.map((a) => a.name).filter(Boolean)} />
-          <Select placeholder="Agreement Template" value={agreementForm.template_type} onChange={applyAgreementTemplate} options={AGREEMENT_TEMPLATE_TYPES} />
+          <Select placeholder="Operational Template (does not set penalty or guarantee)" value={agreementForm.template_type} onChange={applyAgreementTemplate} options={AGREEMENT_TEMPLATE_TYPES} />
           <Input placeholder="Policy Name" value={agreementForm.policy_name} onChange={(v) => updateForm(setAgreementForm, "policy_name", v)} />
           <Input type="date" placeholder="Effective Date" value={agreementForm.effective_date} onChange={(v) => updateForm(setAgreementForm, "effective_date", v)} />
           <Input type="date" placeholder="Expiry Date" value={agreementForm.expiry_date} onChange={(v) => updateForm(setAgreementForm, "expiry_date", v)} />
@@ -13914,13 +13896,13 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </div>
 
         <div className="card" style={{ marginTop: "12px" }}>
-          <h3 style={{ marginBottom: "6px" }}>Financial Penalty Terms - Labor SLA Delay Only</h3>
-          <p style={{ marginBottom: "12px", color: "#64748b" }}>Financial penalties are calculated only when labor/candidates exceed the agreed SLA. Updates, response speed and quality affect KPI only.</p>
+          <h3 style={{ marginBottom: "6px" }}>Company-Defined Financial Penalty - Labor SLA Delay Only</h3>
+          <p style={{ marginBottom: "12px", color: "#64748b" }}>The template fills operational SLA/KPI fields only. The company manually defines the penalty value, grace period and guarantee. Updates, response speed and quality affect KPI only.</p>
           <div className="form-grid">
             <Input type="number" placeholder="Labor SLA Days" value={agreementForm.sla_days} onChange={(v) => updateForm(setAgreementForm, "sla_days", v)} />
             <Select placeholder="Labor SLA Penalty Type" value={agreementForm.delay_penalty_type} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_type", v)} options={["Fixed Amount Per Delayed Day", "Warning Only"]} />
-            <Input type="number" placeholder="Penalty Value Per Delayed Day SAR" value={agreementForm.delay_penalty_amount} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_amount", v)} />
-            <Input type="number" placeholder="Grace Period Before Penalty Days" value={agreementForm.delay_penalty_after_days} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_after_days", v)} />
+            <Input type="number" placeholder="Company Penalty Value Per Delayed Day SAR" value={agreementForm.delay_penalty_amount} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_amount", v)} />
+            <Input type="number" placeholder="Company Grace Period Before Penalty Days" value={agreementForm.delay_penalty_after_days} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_after_days", v)} />
           </div>
         </div>
 
@@ -13935,7 +13917,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </div>
 
         <div className="card" style={{ marginTop: "12px" }}>
-          <h3 style={{ marginBottom: "12px" }}>Financial Guarantee</h3>
+          <h3 style={{ marginBottom: "6px" }}>Company-Defined Financial Guarantee</h3>
+          <p style={{ marginBottom: "12px", color: "#64748b" }}>Financial guarantee is not controlled by the template. The company decides whether it is required and the amount.</p>
           <div className="form-grid">
             <Select placeholder="Financial Guarantee Required" value={agreementForm.financial_guarantee_required} onChange={(v) => updateForm(setAgreementForm, "financial_guarantee_required", v)} options={["No", "Yes", "Optional"]} />
             <Input type="number" placeholder="Financial Guarantee Amount SAR" value={agreementForm.financial_guarantee_amount} onChange={(v) => updateForm(setAgreementForm, "financial_guarantee_amount", v)} />
