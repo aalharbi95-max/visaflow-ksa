@@ -7117,47 +7117,178 @@ function buildLocalAICommanderAnswer(question = "", mode = aiCommanderMode, lang
   ].filter(Boolean).join("\n");
 }
 
+function buildAICommanderWelcomeAnswer(question = "", mode = aiCommanderMode, language = aiCommanderLanguage) {
+  const isArabic = language !== "English";
+  const context = buildAICommanderDecisionContext();
+  const riskLabel = context.riskScore >= 10 ? (isArabic ? "مرتفع" : "High") : context.riskScore >= 4 ? (isArabic ? "متوسط" : "Medium") : (isArabic ? "منخفض" : "Low");
+
+  if (!isArabic) {
+    return [
+      "🧠 VisaFlow AI Commander",
+      "I am ready as your recruitment operations commander, not a general chatbot.",
+      "",
+      "📌 Executive Quick Snapshot",
+      `- Current risk level: ${riskLabel} / AI Risk Score: ${context.riskScore}`,
+      `- Open requests: ${executiveDashboard.openRequests}`,
+      `- Recruitment progress: ${executiveDashboard.recruitmentProgress}%`,
+      `- High-risk request lines: ${context.highRiskLines.length}`,
+      `- Agency follow-up cases: ${context.agencyRiskRows.length}`,
+      `- Expected arrivals next 30 days: ${context.forecast.arrivingNext30}`,
+      "",
+      "✅ What I can do",
+      "1. Give you a CEO executive brief.",
+      "2. Identify the highest-risk request lines and exact bottlenecks.",
+      "3. Rank agencies and recommend follow-up actions.",
+      "4. Forecast recruitment, arrival, and joining gaps for the next 30 days.",
+      "",
+      "Ask me for: top risks, agency performance, visa gaps, authorization gaps, or a CEO memo.",
+    ].join("\n");
+  }
+
+  return [
+    "🧠 VisaFlow AI Commander",
+    "مرحبًا يا أبو إبراهيم، أنا جاهز كمدير عمليات ذكي داخل VisaFlow، مو كشات عام.",
+    "",
+    "📌 لقطة تنفيذية سريعة",
+    `- مستوى المخاطر الحالي: ${riskLabel} / AI Risk Score: ${context.riskScore}`,
+    `- الطلبات المفتوحة: ${executiveDashboard.openRequests}`,
+    `- تقدم التوظيف: ${executiveDashboard.recruitmentProgress}%`,
+    `- بنود الطلبات عالية المخاطر: ${context.highRiskLines.length}`,
+    `- حالات متابعة المكاتب: ${context.agencyRiskRows.length}`,
+    `- المتوقع وصولهم خلال 30 يوم: ${context.forecast.arrivingNext30}`,
+    "",
+    "✅ أقدر أساعدك في",
+    "1. ملخص تنفيذي للرئيس التنفيذي.",
+    "2. تحديد أعلى بنود الطلب خطورة ومكان التعطل.",
+    "3. ترتيب المكاتب حسب الأداء وتحديد من يحتاج متابعة.",
+    "4. توقع فجوات التوظيف والوصول والمباشرة خلال 30 يوم.",
+    "",
+    "اسألني مثلًا: ما أعلى المخاطر؟ من أضعف مكتب؟ ما فجوة التأشيرات؟ أو اعطني مذكرة CEO.",
+  ].join("\n");
+}
+
+function parseAICommanderSections(answer = "") {
+  const lines = String(answer || "").split("\n");
+  const sections = [];
+  let current = { title: "Executive Note", lines: [] };
+
+  const isHeading = (text) => {
+    if (!text) return false;
+    if (/^[🧠📌📊🚨🏢🔮✅⚠️]/.test(text)) return true;
+    return [
+      "Executive Summary",
+      "Decision KPIs",
+      "Top Risks",
+      "Agency Follow-up",
+      "Agency View",
+      "Forecast",
+      "Recommended Decisions",
+      "Recommended Actions",
+      "CEO Decision Memo",
+    ].some((heading) => text.toLowerCase().startsWith(heading.toLowerCase()));
+  };
+
+  lines.forEach((raw) => {
+    const text = raw.trim();
+    if (!text) return;
+    if (isHeading(text)) {
+      if (current.lines.length || current.title !== "Executive Note") sections.push(current);
+      current = { title: text, lines: [] };
+    } else {
+      current.lines.push(text);
+    }
+  });
+
+  if (current.lines.length || current.title !== "Executive Note") sections.push(current);
+  return sections;
+}
+
+function getAICommanderSectionStyle(title = "") {
+  const text = String(title || "").toLowerCase();
+  if (text.includes("risk") || text.includes("مخاطر") || title.includes("🚨")) return { bg: "#fff1f2", border: "#fecdd3", color: "#9f1239", tag: "Risk" };
+  if (text.includes("agency") || text.includes("مكاتب") || text.includes("المكاتب") || title.includes("🏢")) return { bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8", tag: "Agencies" };
+  if (text.includes("forecast") || text.includes("توقع") || title.includes("🔮")) return { bg: "#f0fdf4", border: "#bbf7d0", color: "#15803d", tag: "Forecast" };
+  if (text.includes("decision") || text.includes("action") || text.includes("قرارات") || text.includes("إجراءات") || title.includes("✅")) return { bg: "#ecfeff", border: "#a5f3fc", color: "#0e7490", tag: "Decision" };
+  return { bg: "#eef2ff", border: "#c7d2fe", color: "#3730a3", tag: "Executive" };
+}
+
 function renderAICommanderAnswer() {
+  const context = buildAICommanderDecisionContext();
+  const kpis = [
+    { label: aiCommanderLanguage === "English" ? "AI Risk Score" : "درجة المخاطر", value: context.riskScore, className: executiveAlertClass(context.riskScore) },
+    { label: aiCommanderLanguage === "English" ? "High Risk Lines" : "بنود عالية المخاطر", value: context.highRiskLines.length, className: executiveAlertClass(context.highRiskLines.length) },
+    { label: aiCommanderLanguage === "English" ? "Agency Follow-ups" : "متابعة المكاتب", value: context.agencyRiskRows.length, className: executiveAlertClass(context.agencyRiskRows.length) },
+    { label: aiCommanderLanguage === "English" ? "Arrivals 30D" : "وصول 30 يوم", value: context.forecast.arrivingNext30, className: "passed" },
+  ];
+
   if (!aiAnswer) {
     return (
-      <div style={{ textAlign: "center", padding: "38px 18px", color: "#64748b" }}>
-        <div style={{ fontSize: "44px", marginBottom: "10px" }}>🧠</div>
-        <h3 style={{ margin: "0 0 8px", color: "#0f172a" }}>جاهز للتحليل التنفيذي</h3>
-        <p style={{ margin: 0, lineHeight: 1.7 }}>
-          اختر نوع التحليل، ثم اكتب السؤال أو استخدم أحد الأوامر الجاهزة. سيعتمد AI Commander على بيانات VisaFlow التشغيلية الحية.
-        </p>
+      <div style={{ display: "grid", gap: "14px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px" }}>
+          {kpis.map((kpi) => (
+            <div key={kpi.label} className={`stat-card ${kpi.className || ""}`} style={{ minHeight: "86px" }}>
+              <h3>{kpi.label}</h3>
+              <strong>{kpi.value}</strong>
+            </div>
+          ))}
+        </div>
+        <div style={{ textAlign: "center", padding: "34px 18px", color: "#64748b", border: "1px dashed #cbd5e1", borderRadius: "18px", background: "white" }}>
+          <div style={{ fontSize: "44px", marginBottom: "10px" }}>🧠</div>
+          <h3 style={{ margin: "0 0 8px", color: "#0f172a" }}>جاهز للتحليل التنفيذي</h3>
+          <p style={{ margin: 0, lineHeight: 1.7 }}>
+            اكتب سؤالك أو استخدم أحد الأوامر الجاهزة. حتى التحية العادية ستحصل على لقطة تنفيذية سريعة من بيانات VisaFlow.
+          </p>
+        </div>
       </div>
     );
   }
 
-  const lines = String(aiAnswer).split("\n");
+  const sections = parseAICommanderSections(aiAnswer);
+
   return (
-    <div style={{ display: "grid", gap: "10px" }}>
-      {lines.map((line, index) => {
-        const text = line.trim();
-        if (!text) return <div key={index} style={{ height: "4px" }} />;
-        const isTitle = /^[📌📊🚨🏢🔮✅🧠]/.test(text) || text.startsWith("Executive") || text.startsWith("Top Risks") || text.startsWith("Agency View") || text.startsWith("Recommended");
-        const isBullet = text.startsWith("-") || /^\d+\./.test(text);
-        if (isTitle) {
-          return (
-            <div key={index} style={{ marginTop: index ? "8px" : 0, padding: "12px 14px", borderRadius: "14px", background: "#eef2ff", color: "#1e1b4b", fontWeight: 900 }}>
-              {text}
-            </div>
-          );
-        }
+    <div style={{ display: "grid", gap: "14px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px" }}>
+        {kpis.map((kpi) => (
+          <div key={kpi.label} className={`stat-card ${kpi.className || ""}`} style={{ minHeight: "86px" }}>
+            <h3>{kpi.label}</h3>
+            <strong>{kpi.value}</strong>
+          </div>
+        ))}
+      </div>
+
+      {sections.map((section, index) => {
+        const style = getAICommanderSectionStyle(section.title);
         return (
-          <div
-            key={index}
-            style={{
-              padding: isBullet ? "10px 14px" : "8px 2px",
-              borderRadius: "12px",
-              background: isBullet ? "#ffffff" : "transparent",
-              border: isBullet ? "1px solid #e2e8f0" : "none",
-              color: "#0f172a",
-              lineHeight: 1.75,
-            }}
-          >
-            {text}
+          <div key={`${section.title}-${index}`} style={{ borderRadius: "18px", border: `1px solid ${style.border}`, background: "white", overflow: "hidden", boxShadow: "0 10px 24px rgba(15,23,42,0.04)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", padding: "13px 15px", background: style.bg, color: style.color }}>
+              <b style={{ fontSize: "15px" }}>{section.title}</b>
+              <span className="badge active" style={{ background: "rgba(255,255,255,0.70)", color: style.color, border: `1px solid ${style.border}` }}>{style.tag}</span>
+            </div>
+            <div style={{ display: "grid", gap: "8px", padding: "13px 15px" }}>
+              {section.lines.length === 0 ? (
+                <div style={{ color: "#64748b" }}>—</div>
+              ) : (
+                section.lines.map((line, lineIndex) => {
+                  const isBullet = line.startsWith("-") || /^\d+\./.test(line);
+                  const isWarning = /high|مرتفع|خطر|متأخر|gap|فجوة|warning|تعذر|⚠️/i.test(line);
+                  return (
+                    <div
+                      key={`${line}-${lineIndex}`}
+                      style={{
+                        padding: isBullet ? "10px 12px" : "8px 2px",
+                        borderRadius: "12px",
+                        background: isBullet ? (isWarning ? "#fff7ed" : "#f8fafc") : "transparent",
+                        border: isBullet ? `1px solid ${isWarning ? "#fed7aa" : "#e2e8f0"}` : "none",
+                        color: "#0f172a",
+                        lineHeight: 1.75,
+                      }}
+                    >
+                      {line}
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         );
       })}
@@ -7191,12 +7322,16 @@ function getAICommanderIntent(question = "") {
     "arrival",
     "sla",
     "performance",
+    "penalty",
+    "penalties",
+    "kpi",
     "تقرير",
     "حلل",
     "تحليل",
     "حالة",
     "وضع",
     "مخاطر",
+    "خطر",
     "توقع",
     "توقعات",
     "طلب",
@@ -7216,6 +7351,8 @@ function getAICommanderIntent(question = "") {
     "تعبئة",
     "اداء",
     "أداء",
+    "غرامة",
+    "غرامات",
   ];
 
   const greetings = [
@@ -7225,6 +7362,9 @@ function getAICommanderIntent(question = "") {
     "السلام عليكم",
     "هلا",
     "مرحبا",
+    "مرحباً",
+    "اهلا",
+    "أهلا",
     "hi",
     "hello",
   ];
@@ -7242,11 +7382,11 @@ function getAICommanderIntent(question = "") {
     "خطاب",
   ];
 
-  if (!q) return "general";
-  if (greetings.some((keyword) => q.includes(keyword))) return "general";
-  if (writingKeywords.some((keyword) => q.includes(keyword)) && !q.includes("req-")) return "general";
+  if (!q) return "welcome";
+  if (greetings.some((keyword) => q.includes(keyword))) return "welcome";
   if (operationalKeywords.some((keyword) => q.includes(keyword))) return "operational";
-  return "general";
+  if (writingKeywords.some((keyword) => q.includes(keyword)) && !q.includes("req-")) return "writing";
+  return "welcome";
 }
 
 async function callVisaFlowAIEdge(payload = {}) {
@@ -7267,16 +7407,22 @@ async function runAICommander(question = aiQuestion) {
   const intent = getAICommanderIntent(finalQuestion);
 
   try {
-    if (intent !== "operational") {
+    if (intent === "welcome") {
+      setAiAnswer(buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
+      setAiLastRun(new Date().toLocaleString());
+      return;
+    }
+
+    if (intent === "writing") {
       const aiText = await callVisaFlowAIEdge({
         action: "chat",
-        question: finalQuestion || "مرحبا",
+        question: finalQuestion,
         language: aiCommanderLanguage,
         mode: aiCommanderMode,
         intent,
       });
 
-      setAiAnswer(aiText || "AI did not return an answer.");
+      setAiAnswer(aiText || buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
       setAiLastRun(new Date().toLocaleString());
       return;
     }
@@ -7287,7 +7433,7 @@ async function runAICommander(question = aiQuestion) {
 
     const aiText = await callVisaFlowAIEdge({
       action: "commander",
-      question: finalQuestion || "Executive recruitment status",
+      question: finalQuestion || "اعطني لقطة تنفيذية سريعة عن حالة VisaFlow الحالية.",
       mode: aiCommanderMode,
       language: aiCommanderLanguage,
       intent,
@@ -7304,12 +7450,14 @@ async function runAICommander(question = aiQuestion) {
         buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage) +
           `\n\n⚠️ ملاحظة تقنية: تعذر الاتصال بخدمة الذكاء الاصطناعي الخارجية عبر Supabase Edge Function (${error.message}). تم عرض تحليل VisaFlow المحلي بدلًا من ذلك.`
       );
-    } else {
+    } else if (intent === "writing") {
       setAiAnswer(
         aiCommanderLanguage === "English"
-          ? `AI request failed through Edge Function: ${error.message}`
-          : `تعذر تشغيل AI عبر Edge Function: ${error.message}`
+          ? `AI writing request failed through Edge Function: ${error.message}`
+          : `تعذر تنفيذ طلب الكتابة عبر Edge Function: ${error.message}`
       );
+    } else {
+      setAiAnswer(buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
     }
   } finally {
     setAiLoading(false);
@@ -11060,7 +11208,7 @@ if (!currentUser) {
               {aiAgentLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last AI Agent run: {aiAgentLastRun}</p>}
             </TableCard>
 
-            <TableCard title="🧠 AI Commander Console - Command Center">
+            <TableCard title="🧠 AI Commander Console - Executive Command Center">
               <div style={{ display: "grid", gridTemplateColumns: "0.95fr 1.05fr", gap: "18px", alignItems: "stretch" }}>
                 <div style={{ display: "grid", gap: "14px" }}>
                   <div style={{ padding: "18px", borderRadius: "22px", background: "linear-gradient(135deg, #0f172a, #1e3a8a)", color: "white", boxShadow: "0 18px 45px rgba(15,23,42,0.16)" }}>
@@ -11102,7 +11250,7 @@ if (!currentUser) {
                     <textarea
                       value={aiQuestion}
                       onChange={(e) => setAiQuestion(e.target.value)}
-                      placeholder="مثال: اعطني ملخص تنفيذي عن الطلبات المتأخرة، أو من أسوأ مكتب يحتاج متابعة؟"
+                      placeholder="مثال: مرحبا، أو اعطني ملخص تنفيذي، أو ما أعلى المخاطر التشغيلية؟"
                       rows={4}
                       style={{ borderRadius: "16px", border: "1px solid #cbd5e1", padding: "14px", fontSize: "15px", resize: "vertical", lineHeight: 1.6 }}
                     />
@@ -11146,7 +11294,7 @@ if (!currentUser) {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", padding: "16px 18px", background: "white", borderBottom: "1px solid #e2e8f0" }}>
                     <div>
                       <b style={{ color: "#0f172a" }}>Commander Response</b>
-                      <div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>Structured response, not raw report dump</div>
+                      <div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>Structured executive cards powered by VIE + Edge Function</div>
                     </div>
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                       <span className="badge passed">VIE Lines</span>
