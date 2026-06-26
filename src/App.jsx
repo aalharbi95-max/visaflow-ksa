@@ -7249,64 +7249,32 @@ function getAICommanderIntent(question = "") {
   return "general";
 }
 
+async function callVisaFlowAIEdge(payload = {}) {
+  const { data, error } = await supabase.functions.invoke("visaflow-ai-commander", {
+    body: payload,
+  });
+
+  if (error) throw new Error(error.message || "AI Edge Function failed");
+  if (!data?.ok) throw new Error(data?.error || "AI returned no answer");
+  return data?.text || "";
+}
+
 async function runAICommander(question = aiQuestion) {
   const finalQuestion = String(question || "").trim();
   setAiLoading(true);
   setAiAnswer("");
 
-  const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
   const intent = getAICommanderIntent(finalQuestion);
 
   try {
-    if (!apiKey) {
-      if (intent === "operational") {
-        setAiAnswer(buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
-      } else {
-        setAiAnswer(
-          aiCommanderLanguage === "English"
-            ? "OpenAI is not connected. I can still provide operational summaries from VisaFlow data when you ask about requests, risks, agencies, visas, candidates, or forecasts."
-            : "OpenAI غير مربوط حاليًا. أقدر أعطيك ملخصات تشغيلية من بيانات VisaFlow إذا سألت عن الطلبات، المخاطر، المكاتب، التأشيرات، المرشحين، أو التوقعات."
-        );
-      }
-      setAiLastRun(new Date().toLocaleString());
-      return;
-    }
-
     if (intent !== "operational") {
-      const response = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4.1-mini",
-          temperature: 0.35,
-          max_output_tokens: 1200,
-          input: [
-            {
-              role: "system",
-              content:
-                "You are VisaFlow KSA AI Assistant. Answer naturally and directly. Do not generate locked recruitment reports unless the user explicitly asks about recruitment operations, requests, visas, candidates, agencies, mobilization, KPI, penalties, risks, or forecast. Use Arabic if the user writes Arabic.",
-            },
-            {
-              role: "user",
-              content: finalQuestion || "مرحبا",
-            },
-          ],
-        }),
+      const aiText = await callVisaFlowAIEdge({
+        action: "chat",
+        question: finalQuestion || "مرحبا",
+        language: aiCommanderLanguage,
+        mode: aiCommanderMode,
+        intent,
       });
-
-      const result = await response.json();
-      if (!response.ok) throw new Error(result?.error?.message || "OpenAI request failed");
-
-      const aiText =
-        result.output_text ||
-        result.output
-          ?.flatMap((item) => item.content || [])
-          ?.map((content) => content.text || "")
-          ?.join("\n") ||
-        "";
 
       setAiAnswer(aiText || "AI did not return an answer.");
       setAiLastRun(new Date().toLocaleString());
@@ -7317,47 +7285,16 @@ async function runAICommander(question = aiQuestion) {
     const snapshot = buildAICommanderSnapshot();
     const localDecisionContext = buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage);
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        temperature: 0.12,
-        max_output_tokens: 1800,
-        input: [
-          {
-            role: "system",
-            content:
-              "You are VisaFlow KSA AI Commander, an executive recruitment operations advisor. Use only the locked VisaFlow VIE facts and operational_request_lines. Do not use request header profession, quantity, nationality, or gender. Do not recalculate totals. Do not combine multiple request lines under the first profession. Provide a polished executive response with clear sections, not a raw data dump. Keep the answer actionable and management-ready.",
-          },
-          {
-            role: "user",
-            content:
-              `User question: ${finalQuestion || "Executive recruitment status"}\n` +
-              `Commander mode: ${aiCommanderMode}\n` +
-              `Language: ${aiCommanderLanguage}\n\n` +
-              `LOCKED VIE FACTS - DO NOT ALTER OR RECALCULATE:\n${lockedReport}\n\n` +
-              `STRICT OPERATIONAL SNAPSHOT JSON:\n${JSON.stringify(snapshot, null, 2)}\n\n` +
-              `LOCAL COMMANDER DECISION CONTEXT:\n${localDecisionContext}\n\n` +
-              "Write the answer in Arabic business style unless Language is English. Start with a short source note that numbers are based on request lines. Use headings with emojis. Include: executive summary, decision KPIs, top risks, agency follow-up, forecast, and recommended decisions. Do not show the full locked report unless the user explicitly asks for raw request-line breakdown.",
-          },
-        ],
-      }),
+    const aiText = await callVisaFlowAIEdge({
+      action: "commander",
+      question: finalQuestion || "Executive recruitment status",
+      mode: aiCommanderMode,
+      language: aiCommanderLanguage,
+      intent,
+      lockedReport,
+      snapshot,
+      localDecisionContext,
     });
-
-    const result = await response.json();
-    if (!response.ok) throw new Error(result?.error?.message || "OpenAI analysis failed");
-
-    const aiText =
-      result.output_text ||
-      result.output
-        ?.flatMap((item) => item.content || [])
-        ?.map((content) => content.text || "")
-        ?.join("\n") ||
-      "";
 
     setAiAnswer(aiText || localDecisionContext);
     setAiLastRun(new Date().toLocaleString());
@@ -7365,10 +7302,14 @@ async function runAICommander(question = aiQuestion) {
     if (intent === "operational") {
       setAiAnswer(
         buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage) +
-          `\n\n⚠️ ملاحظة تقنية: تعذر الاتصال بخدمة الذكاء الاصطناعي الخارجية (${error.message}). تم عرض تحليل VisaFlow المحلي بدلًا من ذلك.`
+          `\n\n⚠️ ملاحظة تقنية: تعذر الاتصال بخدمة الذكاء الاصطناعي الخارجية عبر Supabase Edge Function (${error.message}). تم عرض تحليل VisaFlow المحلي بدلًا من ذلك.`
       );
     } else {
-      setAiAnswer(`AI request failed: ${error.message}`);
+      setAiAnswer(
+        aiCommanderLanguage === "English"
+          ? `AI request failed through Edge Function: ${error.message}`
+          : `تعذر تشغيل AI عبر Edge Function: ${error.message}`
+      );
     }
   } finally {
     setAiLoading(false);
@@ -7589,47 +7530,16 @@ ${data.companyName}`;
 }
 
 async function generateOfferWithAI(candidate) {
-  const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
   const data = getCandidateOfferData(candidate);
 
-  if (!apiKey) return buildOfferBody(candidate);
-
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        temperature: 0.2,
-        max_output_tokens: 600,
-        input: [
-          {
-            role: "system",
-            content:
-              "You are an HR Recruitment Director. Generate a professional job offer email in clear business English. Keep it concise, formal, and ready to send. Do not invent benefits or legal terms beyond the provided data.",
-          },
-          {
-            role: "user",
-            content: `Generate a job offer email using this data:\n${JSON.stringify(data, null, 2)}`,
-          },
-        ],
-      }),
+    const aiDraft = await callVisaFlowAIEdge({
+      action: "offer",
+      offerData: data,
+      language: "English",
     });
 
-    const result = await response.json();
-    if (!response.ok) throw new Error(result?.error?.message || "OpenAI offer generation failed");
-
-    return (
-      result.output_text ||
-      result.output
-        ?.flatMap((item) => item.content || [])
-        ?.map((content) => content.text || "")
-        ?.join("\n") ||
-      buildOfferBody(candidate)
-    );
+    return aiDraft || buildOfferBody(candidate);
   } catch (error) {
     console.warn("AI offer generation failed", error?.message || error);
     return buildOfferBody(candidate);
