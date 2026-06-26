@@ -35,6 +35,7 @@ const PAGES = [
   "Notifications",
   "Reports",
  "Platform Dashboard",
+"Platform Intelligence",
 "Companies Management",
 "Platform Users",
 "Subscription Invoices",
@@ -47,7 +48,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Command Center",
     icon: "🏠",
-    pages: ["Executive Dashboard", "AI Commander", "AI Report Studio", "Dashboard"],
+    pages: ["Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Report Studio", "Dashboard"],
   },
   {
     title: "Recruitment",
@@ -915,7 +916,7 @@ function isPlatformRole(role) {
 
 const PLATFORM_PAGES = [
   "Platform Dashboard",
-  "AI Report Studio",
+  "Platform Intelligence",
   "Companies Management",
   "Platform Users",
   "Subscription Invoices",
@@ -926,7 +927,7 @@ const PLATFORM_PAGES = [
 
 const PLATFORM_ACCOUNT_PAGES = [
   "Platform Dashboard",
-  "AI Report Studio",
+  "Platform Intelligence",
   "Companies Management",
   "Platform Users",
   "Subscription Invoices",
@@ -9104,6 +9105,100 @@ if (!currentUser) {
         )}
 
 
+        {activePage === "Platform Intelligence" && (
+          <>
+            <TableCard title="📊 Platform Intelligence - SaaS Overview">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "14px" }}>
+                <Stat title="Total Companies" value={platformClients.length || companies.length} className="passed" />
+                <Stat title="Active Companies" value={(platformClients.length ? platformClients : companies).filter((item) => String(item.subscription_status || item.status || "Active").toLowerCase() === "active").length} className="passed" />
+                <Stat title="Subscription Invoices" value={subscriptionInvoices.length} className="warning" />
+                <Stat title="Open Support Tickets" value={supportTickets.filter((item) => String(item.status || "Open") !== "Resolved").length} className={executiveAlertClass(supportTickets.filter((item) => String(item.status || "Open") !== "Resolved").length)} />
+                <Stat title="System Backups" value={systemBackups.length} className="passed" />
+                <Stat title="Platform Users" value={users.filter((user) => isPlatformRole(user.role)).length} className="passed" />
+              </div>
+            </TableCard>
+
+            <div className="grid">
+              <TableCard title="🏢 Company Subscription Health">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Company</th>
+                      <th>Status</th>
+                      <th>Users</th>
+                      <th>End Date</th>
+                      <th>MRR</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(platformClients || []).length === 0 ? (
+                      <tr><td colSpan="5">No platform clients found</td></tr>
+                    ) : (
+                      platformClients.slice(0, 10).map((client) => (
+                        <tr key={client.id || client.company_name}>
+                          <td>{client.company_name || client.name || "-"}</td>
+                          <td><Badge value={client.subscription_status || client.status || "Active"} /></td>
+                          <td>{client.users_count || 0}</td>
+                          <td>{client.end_date || client.subscription_end || "-"}</td>
+                          <td>{Number(client.monthly_amount || 0).toLocaleString()} SAR</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </TableCard>
+
+              <TableCard title="🎫 Central Support & Platform Alerts">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ticket</th>
+                      <th>Client</th>
+                      <th>Priority</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(supportTickets || []).length === 0 ? (
+                      <tr><td colSpan="4">No support tickets</td></tr>
+                    ) : (
+                      supportTickets.slice(0, 10).map((ticket) => {
+                        const client = platformClients.find((item) => String(item.id || "") === String(ticket.client_id || ""));
+                        return (
+                          <tr key={ticket.id || ticket.ticket_no}>
+                            <td>{ticket.ticket_no || ticket.title || "-"}</td>
+                            <td>{client?.company_name || "-"}</td>
+                            <td><Badge value={ticket.priority || "Medium"} /></td>
+                            <td><Badge value={ticket.status || "Open"} /></td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </TableCard>
+            </div>
+
+            <TableCard title="🤖 Platform Intelligence Notes">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" }}>
+                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                  <h3 style={{ marginTop: 0 }}>Platform Only</h3>
+                  <p style={{ color: "#64748b", lineHeight: 1.7 }}>This screen is for SaaS administration only. It does not show operational recruitment data for client companies.</p>
+                </div>
+                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                  <h3 style={{ marginTop: 0 }}>AI Report Studio</h3>
+                  <p style={{ color: "#64748b", lineHeight: 1.7 }}>AI Report Studio remains available inside company accounts for CEO, Admin, Operations Manager and Recruitment Manager roles.</p>
+                </div>
+                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                  <h3 style={{ marginTop: 0 }}>Security Direction</h3>
+                  <p style={{ color: "#64748b", lineHeight: 1.7 }}>Platform Owner manages subscriptions, support, users and system health without entering company operational reports.</p>
+                </div>
+              </div>
+            </TableCard>
+          </>
+        )}
+
+
         {activePage === "AI Report Studio" && (
           <>
             <TableCard title="📊 AI Report Studio - Executive Documents & Presentations">
@@ -13948,4 +14043,4 @@ function SimpleList({ title, rows, columns }) {
   return <div className="table-card"><h2>{title}</h2><table><thead><tr>{columns.map((c) => <th key={c}>{c.replaceAll("_", " ")}</th>)}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={columns.length}>No data</td></tr> : rows.map((row, index) => <tr key={row.id || index}>{columns.map((c) => <td key={c}>{String(row[c] ?? "")}</td>)}</tr>)}</tbody></table></div>;
 }
 
-export default App;
+export default App
