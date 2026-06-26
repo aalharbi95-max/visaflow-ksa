@@ -5547,7 +5547,72 @@ function getAgencyRank(totalScore) {
 }
 
 
+
+function getActiveAgencyAgreement(agencyName) {
+  const now = new Date();
+  return [...agencyAgreements]
+    .filter((agreement) => {
+      const status = String(agreement.status || "").trim().toLowerCase();
+      const nameMatches = normalize(agreement.agency_name) === normalize(agencyName);
+      if (!nameMatches || status !== "active") return false;
+
+      const effectiveOk = !agreement.effective_date || new Date(agreement.effective_date) <= now;
+      const expiryOk = !agreement.expiry_date || new Date(agreement.expiry_date) >= now;
+      return effectiveOk && expiryOk;
+    })
+    .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))[0] || null;
+}
+
+function getAgencyAgreementPolicy(agencyName) {
+  const activeAgreement = getActiveAgencyAgreement(agencyName);
+  return {
+    agreement: activeAgreement,
+    agreement_no: activeAgreement?.agreement_no || "Default Policy",
+    has_active_agreement: Boolean(activeAgreement),
+    sla_days: Number(activeAgreement?.sla_days || 60),
+    response_sla_hours: Number(activeAgreement?.response_sla_hours || 24),
+    update_frequency_days: Number(activeAgreement?.update_frequency_days || 7),
+    delay_penalty_type: activeAgreement?.delay_penalty_type || "Fixed Amount",
+    delay_penalty_amount: Number(activeAgreement?.delay_penalty_amount || 0),
+    delay_penalty_after_days: Number(activeAgreement?.delay_penalty_after_days || 7),
+    financial_guarantee_required: activeAgreement?.financial_guarantee_required || "No",
+    financial_guarantee_amount: Number(activeAgreement?.financial_guarantee_amount || 0),
+    replacement_guarantee_days: Number(activeAgreement?.replacement_guarantee_days || 90),
+  };
+}
+
+function getCandidateCycleDays(candidate) {
+  if (!candidate) return 0;
+  const request = requests.find((item) => String(item.request_no || "") === String(candidate.request_no || ""));
+  const start = request?.created_at || candidate.created_at;
+  const end = candidate.joining_date || candidate.arrival_date || candidate.updated_at || new Date().toISOString();
+  if (!start || !end) return 0;
+  const days = Math.floor((new Date(end) - new Date(start)) / (1000 * 60 * 60 * 24));
+  return Number.isFinite(days) ? Math.max(days, 0) : 0;
+}
+
+function getCandidateSlaDelay(candidate, agencyName = candidate?.agency) {
+  const policy = getAgencyAgreementPolicy(agencyName);
+  const cycleDays = getCandidateCycleDays(candidate);
+  const delayDays = Math.max(cycleDays - Number(policy.sla_days || 60), 0);
+  const penaltyDays = Math.max(delayDays - Number(policy.delay_penalty_after_days || 0), 0);
+  const fixedPenalty = String(policy.delay_penalty_type || "").toLowerCase().includes("fixed")
+    ? penaltyDays * Number(policy.delay_penalty_amount || 0)
+    : 0;
+
+  return {
+    cycleDays,
+    delayDays,
+    penaltyDays,
+    penaltyExposure: fixedPenalty,
+    policy,
+    isDelayed: delayDays > 0,
+  };
+}
+
 function getCandidateSlaStagnation(candidate) {
+  const policy = getAgencyAgreementPolicy(candidate?.agency || "");
+  const updateFrequencyDays = Number(policy.update_frequency_days || 7);
   const finalStatuses = [
     "Joined",
     "Rejected",
@@ -5579,17 +5644,24 @@ function getCandidateSlaStagnation(candidate) {
   const lastUpdate = candidate?.updated_at || candidate?.medical_date || candidate?.flight_date || candidate?.arrival_date || candidate?.created_at;
 
   if (!lastUpdate || finalStatuses.includes(status)) {
-    return { days: 0, isStale: false, risk: "Low", lastUpdate: lastUpdate || "", stage: status };
+    return { days: 0, isStale: false, risk: "Low", lastUpdate: lastUpdate || "", stage: status, update_frequency_days: updateFrequencyDays, agreement_no: policy.agreement_no };
   }
 
   const days = Math.floor((new Date() - new Date(lastUpdate)) / (1000 * 60 * 60 * 24));
   const isTracked = trackedStatuses.includes(status) || Boolean(candidate?.agency);
-  const isStale = isTracked && days > 7;
-  const risk = days >= 14 ? "High" : days > 7 ? "Medium" : "Low";
+  const isStale = isTracked && days > updateFrequencyDays;
+  const risk = days >= updateFrequencyDays * 2 ? "High" : days > updateFrequencyDays ? "Medium" : "Low";
 
-  return { days: Number.isFinite(days) ? days : 0, isStale, risk, lastUpdate, stage: status };
+  return {
+    days: Number.isFinite(days) ? days : 0,
+    isStale,
+    risk,
+    lastUpdate,
+    stage: status,
+    update_frequency_days: updateFrequencyDays,
+    agreement_no: policy.agreement_no,
+  };
 }
-
 function getAgencySlaEscalationAlerts() {
   return candidates
     .map((candidate) => {
@@ -5610,11 +5682,13 @@ function getAgencySlaEscalationAlerts() {
         days_without_update: stagnation.days,
         last_update: stagnation.lastUpdate,
         risk: stagnation.risk,
-        penalty: Math.min(Math.max(stagnation.days - 7, 1) * 2, 15),
+        agreement_no: stagnation.agreement_no,
+        update_frequency_days: stagnation.update_frequency_days,
+        penalty: Math.min(Math.max(stagnation.days - Number(stagnation.update_frequency_days || 7), 1) * 2, 15),
         recommendation:
           stagnation.risk === "High"
-            ? "Escalate immediately to Recruitment Manager and hold new agency allocation until update is received."
-            : "Send follow-up to agency and require candidate status update within 24 hours.",
+            ? `Escalate immediately. This exceeds the agreement update frequency (${stagnation.update_frequency_days} day(s)). Hold new allocation until update is received.`
+            : `Send follow-up to agency. Agreement requires update every ${stagnation.update_frequency_days} day(s).`,
       };
     })
     .filter(Boolean)
@@ -5665,11 +5739,13 @@ function calculateAgencyPerformanceRows() {
   return agencyNames
     .map((agencyName) => {
       const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
+      const agreementPolicy = getAgencyAgreementPolicy(agencyName);
+      const activeAgreement = agreementPolicy.agreement;
       const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
       const agencyInterviews = interviews.filter((interview) => normalize(interview.agency) === normalize(agencyName));
       const agencyAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName));
       const activeAuthorizations = agencyAuthorizations.filter((authorization) => authorization.status !== "Cancelled");
-      const signedAgreement = agencyAgreements.some((agreement) => normalize(agreement.agency_name) === normalize(agencyName) && agreement.status === "Active");
+      const signedAgreement = Boolean(activeAgreement);
 
       const totalInterviewed = agencyInterviews.length;
       const passedInterviews = agencyInterviews.filter((interview) => interview.status === "Passed").length;
@@ -5694,24 +5770,24 @@ function calculateAgencyPerformanceRows() {
         const updated = candidate.updated_at || candidate.created_at;
         if (!updated) return false;
         const days = Math.floor((today - new Date(updated)) / (1000 * 60 * 60 * 24));
-        return days <= 7;
+        return days <= Number(agreementPolicy.update_frequency_days || 7);
       }).length;
       const rawUpdateScore = submitted ? Math.round((recentUpdates / submitted) * 100) : 0;
       const updateScore = Math.max(0, rawUpdateScore - stalePenalty);
 
-      const baseSlaScore = agencyCandidates.length
-        ? Math.round(
-            (agencyCandidates.filter((candidate) => {
-              const req = requests.find((request) => String(request.request_no || "") === String(candidate.request_no || ""));
-              const start = req?.created_at || candidate.created_at;
-              const end = candidate.joining_date || candidate.arrival_date || candidate.updated_at || candidate.created_at;
-              if (!start || !end) return false;
-              const days = Math.floor((new Date(end) - new Date(start)) / (1000 * 60 * 60 * 24));
-              return days <= 60;
-            }).length / agencyCandidates.length) * 100
-          )
+      const candidateSlaRows = agencyCandidates.map((candidate) => getCandidateSlaDelay(candidate, agencyName));
+      const delayedRows = candidateSlaRows.filter((row) => row.isDelayed);
+      const delayedCandidates = delayedRows.length;
+      const averageDelayDays = delayedRows.length
+        ? Math.round((delayedRows.reduce((sum, row) => sum + Number(row.delayDays || 0), 0) / delayedRows.length) * 10) / 10
         : 0;
-      const slaScore = Math.max(0, baseSlaScore - stalePenalty);
+      const penaltyExposure = delayedRows.reduce((sum, row) => sum + Number(row.penaltyExposure || 0), 0);
+
+      const baseSlaScore = agencyCandidates.length
+        ? Math.round(((agencyCandidates.length - delayedCandidates) / agencyCandidates.length) * 100)
+        : 0;
+      const slaDelayPenalty = Math.min(delayedCandidates * 5, 35);
+      const slaScore = Math.max(0, baseSlaScore - stalePenalty - slaDelayPenalty);
 
       const agreementScore = signedAgreement ? 100 : 0;
 
@@ -5727,17 +5803,26 @@ function calculateAgencyPerformanceRows() {
 
       const rank = getAgencyRank(totalScore);
       let recommendation = "Keep monitoring and maintain current allocation level.";
-      if (rank === "Platinum") recommendation = "Preferred agency. Increase allocations for matching professions and countries.";
+      if (!signedAgreement) recommendation = "No active agreement found. Use default SLA 60 days until the agreement is activated.";
+      else if (delayedCandidates > 0 && penaltyExposure > 0) recommendation = `${delayedCandidates} candidate(s) exceeded the agreed SLA (${agreementPolicy.sla_days} day(s)). Potential fixed penalty exposure: ${Number(penaltyExposure || 0).toLocaleString()} SAR.`;
+      else if (staleCandidates.length > 0) recommendation = `${staleCandidates.length} stale candidate update(s). Agreement requires update every ${agreementPolicy.update_frequency_days} day(s). Escalate before new allocation.`;
+      else if (rank === "Platinum") recommendation = "Preferred agency. Increase allocations for matching professions and countries.";
       else if (rank === "Gold") recommendation = "Strong agency. Continue allocations with normal follow-up.";
       else if (rank === "Silver") recommendation = "Acceptable agency. Follow up on weak indicators before increasing volume.";
       else recommendation = "Under review. Hold new allocations until performance improves.";
-      if (staleCandidates.length > 0) {
-        recommendation = `${staleCandidates.length} stale candidate update(s) over 7 days. Escalate to agency and Recruitment Manager before new allocation.`;
-      }
 
       return {
         agency_id: agency?.id || null,
         agency_name: agencyName,
+        agreement_no: agreementPolicy.agreement_no,
+        has_active_agreement: signedAgreement,
+        agreement_sla_days: agreementPolicy.sla_days,
+        update_frequency_days: agreementPolicy.update_frequency_days,
+        delay_penalty_type: agreementPolicy.delay_penalty_type,
+        delay_penalty_amount: agreementPolicy.delay_penalty_amount,
+        delay_penalty_after_days: agreementPolicy.delay_penalty_after_days,
+        financial_guarantee_required: agreementPolicy.financial_guarantee_required,
+        financial_guarantee_amount: agreementPolicy.financial_guarantee_amount,
         authorizedQty,
         candidates: submitted,
         passedInterviews,
@@ -5745,6 +5830,9 @@ function calculateAgencyPerformanceRows() {
         arrived,
         joined,
         failed,
+        delayed_candidates: delayedCandidates,
+        average_delay_days: averageDelayDays,
+        penalty_exposure: penaltyExposure,
         stale_candidates: staleCandidates.length,
         stale_penalty: stalePenalty,
         sla_score: slaScore,
@@ -5761,7 +5849,6 @@ function calculateAgencyPerformanceRows() {
     })
     .sort((a, b) => Number(b.total_score || 0) - Number(a.total_score || 0));
 }
-
 async function saveAgencyPerformanceSnapshot() {
   if (!canManageAgencyAgreements) return alert("You do not have permission to calculate agency performance.");
 
@@ -5777,6 +5864,12 @@ async function saveAgencyPerformanceSnapshot() {
     mobilization_score: row.mobilization_score,
     update_score: row.update_score,
     agreement_score: row.agreement_score,
+    agreement_sla_days: row.agreement_sla_days,
+    update_frequency_days: row.update_frequency_days,
+    delayed_candidates: row.delayed_candidates,
+    average_delay_days: row.average_delay_days,
+    penalty_exposure: row.penalty_exposure,
+    agreement_no: row.agreement_no,
     total_score: row.total_score,
     rank: row.rank,
   }));
@@ -5793,6 +5886,12 @@ async function saveAgencyPerformanceSnapshot() {
       update_score: row.update_score,
       quality_score: row.quality_score,
       arrival_score: row.mobilization_score,
+      agreement_sla_days: row.agreement_sla_days,
+      update_frequency_days: row.update_frequency_days,
+      delayed_candidates: row.delayed_candidates,
+      average_delay_days: row.average_delay_days,
+      penalty_exposure: row.penalty_exposure,
+      agreement_no: row.agreement_no,
       total_score: row.total_score,
       updated_at: new Date().toISOString(),
     };
@@ -8436,6 +8535,11 @@ const REPORT_AR_LABELS = {
   "Candidate coverage": "تغطية المرشحين",
   "Allocation shortage": "نقص التخصيص",
   "Authorization shortage": "نقص التفويض",
+  "Agreement SLA": "مدة SLA حسب الاتفاقية",
+  "SLA Compliance": "الالتزام بالـ SLA",
+  "Delayed Candidates": "مرشحون متأخرون",
+  "Penalty Exposure": "الغرامة المحتملة",
+  "Update Frequency": "تكرار التحديث",
 };
 
 function localizeReportText(textValue, language = reportStudioForm.language) {
@@ -8479,7 +8583,13 @@ function getLocalizedProject(value, language = reportStudioForm.language) {
 function buildAIReportStudioDataset() {
   const requestHealth = filterReportStudioRowsByProject(buildRequestHealthRows(), ["project"]);
   const mobilizationRows = filterReportStudioRowsByProject(mobilizationRequestRows, ["project_name"]);
-  const agencyRows = buildAgencyScorecard();
+  const agencyRows = calculateAgencyPerformanceRows().map((row) => ({
+    ...row,
+    agency: row.agency_name,
+    score: row.total_score,
+    risk: row.rank === "Under Review" ? "High" : row.rank === "Silver" ? "Medium" : "Low",
+    failRate: row.candidates ? Math.round((Number(row.failed || 0) / Number(row.candidates || 1)) * 100) : 0,
+  }));
   const forecast = buildRecruitmentForecast();
   const totalRequired = requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0);
   const totalCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0);
@@ -8509,6 +8619,9 @@ function buildAIReportStudioDataset() {
       { metric: "Saudization Rate", value: `${executiveDashboard.saudizationRate}%` },
       { metric: "Estimated Cost", value: `${Number(totalCost || stats.totalMobilizationCost || 0).toLocaleString()} SAR` },
       { metric: "Budget Variance", value: `${Number((totalBudget || stats.totalRequestBudget || 0) - (totalCost || stats.totalMobilizationCost || 0)).toLocaleString()} SAR` },
+      { metric: "SLA Compliance", value: `${agencyRows.length ? Math.round(agencyRows.reduce((sum, item) => sum + Number(item.sla_score || 0), 0) / agencyRows.length) : 0}%` },
+      { metric: "Delayed Candidates", value: agencyRows.reduce((sum, item) => sum + Number(item.delayed_candidates || 0), 0) },
+      { metric: "Penalty Exposure", value: `${Number(agencyRows.reduce((sum, item) => sum + Number(item.penalty_exposure || 0), 0)).toLocaleString()} SAR` },
     ],
     request_health: requestHealth,
     mobilization: mobilizationRows,
@@ -8548,7 +8661,7 @@ function buildAIReportStudioNarrative() {
       "",
       "تحليل أداء المكاتب",
       ...(topAgencies.length
-        ? topAgencies.map((agency) => `- ${agency.agency}: النقاط ${agency.score}، المخاطر ${localizeReportText(agency.risk, language)}، المرشحون ${agency.candidates}، المباشرون ${agency.joined}.`)
+        ? topAgencies.map((agency) => `- ${agency.agency}: النقاط ${agency.score}، SLA ${agency.agreement_sla_days || 60} يوم، المتأخرون ${agency.delayed_candidates || 0}، الغرامة المحتملة ${Number(agency.penalty_exposure || 0).toLocaleString()} ريال.`)
         : ["- لا توجد بيانات مكاتب متاحة حتى الآن."]),
       "",
       "المكاتب التي تحتاج متابعة",
@@ -8608,7 +8721,7 @@ function buildAIReportStudioNarrative() {
     ...(topRisks.length ? topRisks.map((row) => `- ${row.request_no} / Line ${row.line_no} / ${row.profession}: ${row.bottleneck}, progress ${row.progress}%, risk ${row.riskScore}.`) : ["- No high-risk request lines detected."]),
     "",
     "Agency Insights",
-    ...(topAgencies.length ? topAgencies.map((agency) => `- ${agency.agency}: Score ${agency.score}, Risk ${agency.risk}, Candidates ${agency.candidates}, Joined ${agency.joined}.`) : ["- No agency data available yet."]),
+    ...(topAgencies.length ? topAgencies.map((agency) => `- ${agency.agency}: Score ${agency.score}, Agreement SLA ${agency.agreement_sla_days || 60} days, Delayed ${agency.delayed_candidates || 0}, Penalty exposure ${Number(agency.penalty_exposure || 0).toLocaleString()} SAR.`) : ["- No agency data available yet."]),
     "",
     "Agencies Requiring Follow-up",
     ...(weakAgencies.length ? weakAgencies.map((agency) => `- ${agency.agency}: risk ${agency.risk}, fail rate ${agency.failRate}%, score ${agency.score}.`) : ["- No agency follow-up risk detected."]),
@@ -13257,7 +13370,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Gold" value={calculateAgencyPerformanceRows().filter((x) => x.rank === "Gold").length} className="passed" />
       <Stat title="Silver" value={calculateAgencyPerformanceRows().filter((x) => x.rank === "Silver").length} className="warning" />
       <Stat title="Under Review" value={calculateAgencyPerformanceRows().filter((x) => x.rank === "Under Review").length} className="danger" />
-      <Stat title="SLA Alerts > 7 Days" value={getAgencySlaEscalationAlerts().length} className={getAgencySlaEscalationAlerts().length ? "danger" : "passed"} />
+      <Stat title="SLA Alerts" value={getAgencySlaEscalationAlerts().length} className={getAgencySlaEscalationAlerts().length ? "danger" : "passed"} />
+      <Stat title="Delayed by Agreement" value={calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.delayed_candidates || 0), 0)} className={calculateAgencyPerformanceRows().some((x) => Number(x.delayed_candidates || 0) > 0) ? "danger" : "passed"} />
+      <Stat title="Penalty Exposure" value={`${Number(calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.penalty_exposure || 0), 0)).toLocaleString()} SAR`} className={calculateAgencyPerformanceRows().some((x) => Number(x.penalty_exposure || 0) > 0) ? "warning" : "passed"} />
     </div>
 
     <TableCard title="SLA Auto-Escalation Alerts">
@@ -13274,6 +13389,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Request No</th>
             <th>Project</th>
             <th>Status</th>
+            <th>Agreement</th>
+            <th>Update SLA</th>
             <th>Days Without Update</th>
             <th>Penalty</th>
             <th>Recommendation</th>
@@ -13281,7 +13398,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {getAgencySlaEscalationAlerts().length === 0 ? (
-            <tr><td colSpan="9">No stale agency updates. All records are within the 7-day SLA update rule.</td></tr>
+            <tr><td colSpan="11">No stale agency updates. All records are within the agreement update rule.</td></tr>
           ) : (
             getAgencySlaEscalationAlerts().slice(0, 50).map((item) => (
               <tr key={`${item.candidate_id}-${item.days_without_update}`}>
@@ -13291,6 +13408,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.request_no}</td>
                 <td>{item.project}</td>
                 <td><Badge value={item.status} /></td>
+                <td>{item.agreement_no || "Default Policy"}</td>
+                <td>{item.update_frequency_days || 7} days</td>
                 <td><b>{item.days_without_update}</b></td>
                 <td>{item.penalty} pts</td>
                 <td>{item.recommendation}</td>
@@ -13311,6 +13430,11 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <tr>
             <th>Rank</th>
             <th>Agency</th>
+            <th>Agreement SLA</th>
+            <th>Update SLA</th>
+            <th>Delayed</th>
+            <th>Avg Delay</th>
+            <th>Penalty Exposure</th>
             <th>SLA 30%</th>
             <th>Response 10%</th>
             <th>Quality 20%</th>
@@ -13326,12 +13450,17 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {calculateAgencyPerformanceRows().length === 0 ? (
-            <tr><td colSpan="13">No agency performance data yet</td></tr>
+            <tr><td colSpan="18">No agency performance data yet</td></tr>
           ) : (
             calculateAgencyPerformanceRows().map((item, index) => (
               <tr key={item.agency_name}>
                 <td>{index + 1}</td>
                 <td>{item.agency_name}</td>
+                <td>{item.agreement_sla_days || 60} days</td>
+                <td>{item.update_frequency_days || 7} days</td>
+                <td>{item.delayed_candidates || 0}</td>
+                <td>{item.average_delay_days || 0}</td>
+                <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                 <td>{item.sla_score}%</td>
                 <td>{item.response_score}%</td>
                 <td>{item.quality_score}%</td>
@@ -13355,6 +13484,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         <thead>
           <tr>
             <th>Agency</th>
+            <th>Agreement SLA</th>
+            <th>Delayed</th>
+            <th>Penalty Exposure</th>
             <th>Total Score</th>
             <th>Class</th>
             <th>Recommendation</th>
@@ -13362,11 +13494,14 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {calculateAgencyPerformanceRows().length === 0 ? (
-            <tr><td colSpan="4">No recommendations yet</td></tr>
+            <tr><td colSpan="7">No recommendations yet</td></tr>
           ) : (
             calculateAgencyPerformanceRows().map((item) => (
               <tr key={item.agency_name}>
                 <td>{item.agency_name}</td>
+                <td>{item.agreement_sla_days || 60} days</td>
+                <td>{item.delayed_candidates || 0}</td>
+                <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                 <td><b>{item.total_score}%</b></td>
                 <td><Badge value={item.rank} /></td>
                 <td>{item.recommendation}</td>
@@ -13383,6 +13518,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <tr>
             <th>Date</th>
             <th>Agency ID</th>
+            <th>Agreement SLA</th>
+            <th>Delayed</th>
+            <th>Penalty</th>
             <th>SLA</th>
             <th>Quality</th>
             <th>Response</th>
@@ -13395,7 +13533,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {agencyScoreHistory.length === 0 ? (
-            <tr><td colSpan="10">No saved score history yet</td></tr>
+            <tr><td colSpan="13">No saved score history yet</td></tr>
           ) : (
             agencyScoreHistory
               .slice()
@@ -13405,6 +13543,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <tr key={item.id}>
                   <td>{item.created_at ? new Date(item.created_at).toLocaleDateString("en-GB") : "-"}</td>
                   <td>{item.agency_id}</td>
+                  <td>{item.agreement_sla_days || "-"}</td>
+                  <td>{item.delayed_candidates || 0}</td>
+                  <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                   <td>{item.sla_score || 0}%</td>
                   <td>{item.quality_score || 0}%</td>
                   <td>{item.response_score || 0}%</td>
@@ -13532,9 +13673,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 {activePage === "Agency Ranking" && (
   <>
     <div className="dashboard-grid">
-      <Stat title="Agencies in Live Scorecard" value={buildAgencyScorecard().length} />
-      <Stat title="Excellent Agencies" value={buildAgencyScorecard().filter((x) => Number(x.score || 0) >= 90).length} className="passed" />
-      <Stat title="Medium / High Risk" value={buildAgencyScorecard().filter((x) => x.risk !== "Low").length} className="warning" />
+      <Stat title="Agencies in Live Scorecard" value={calculateAgencyPerformanceRows().length} />
+      <Stat title="Excellent Agencies" value={calculateAgencyPerformanceRows().filter((x) => Number(x.total_score || 0) >= 90).length} className="passed" />
+      <Stat title="Delayed by Agreement" value={calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.delayed_candidates || 0), 0)} className={calculateAgencyPerformanceRows().some((x) => Number(x.delayed_candidates || 0) > 0) ? "warning" : "passed"} />
       <Stat title="Signed Agreements" value={agencyAgreements.filter((x) => x.status === "Active").length} className="passed" />
     </div>
 
@@ -13544,6 +13685,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <tr>
             <th>Rank</th>
             <th>Agency</th>
+            <th>Agreement SLA</th>
+            <th>Delayed</th>
+            <th>Penalty Exposure</th>
             <th>Authorized Qty</th>
             <th>Candidates</th>
             <th>Submitted %</th>
@@ -13556,13 +13700,16 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </tr>
         </thead>
         <tbody>
-          {buildAgencyScorecard().length === 0 ? (
-            <tr><td colSpan="11">No agency performance data</td></tr>
+          {calculateAgencyPerformanceRows().length === 0 ? (
+            <tr><td colSpan="14">No agency performance data</td></tr>
           ) : (
-            buildAgencyScorecard().map((item, index) => (
-              <tr key={item.agency}>
+            calculateAgencyPerformanceRows().map((item, index) => (
+              <tr key={item.agency_name}>
                 <td>{index + 1}</td>
-                <td>{item.agency}</td>
+                <td>{item.agency_name}</td>
+                <td>{item.agreement_sla_days || 60} days</td>
+                <td>{item.delayed_candidates || 0}</td>
+                <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                 <td>{item.authorizedQty}</td>
                 <td>{item.candidates}</td>
                 <td>{item.submittedPercent}%</td>
@@ -13570,8 +13717,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.arrived}</td>
                 <td>{item.joined}</td>
                 <td>{item.failed}</td>
-                <td><b>{item.score}</b></td>
-                <td><Badge value={item.risk} /></td>
+                <td><b>{item.total_score}</b></td>
+                <td><Badge value={item.rank} /></td>
               </tr>
             ))
           )}
@@ -13585,6 +13732,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <thead>
             <tr>
               <th>Agency</th>
+              <th>Agreement SLA</th>
+              <th>Delayed</th>
+              <th>Penalty</th>
               <th>SLA</th>
               <th>Update</th>
               <th>Quality</th>
@@ -13599,6 +13749,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               .map((item) => (
                 <tr key={item.id}>
                   <td>{item.agency_name}</td>
+                  <td>{item.agreement_sla_days || "-"}</td>
+                  <td>{item.delayed_candidates || 0}</td>
+                  <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                   <td>{item.sla_score || 0}%</td>
                   <td>{item.update_score || 0}%</td>
                   <td>{item.quality_score || 0}%</td>
