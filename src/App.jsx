@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import pptxgen from "pptxgenjs";
 import { supabase } from "./supabase";
 import "./style.css";
 
@@ -8057,9 +8058,397 @@ body{font-family:Arial,Tahoma,sans-serif;margin:0;background:#f8fafc;color:#0f17
 </html>`;
 }
 
-function exportAIReportStudio() {
+function sanitizeReportFileName(value) {
+  return String(value || "VisaFlow_AI_Report")
+    .replace(/[^a-z0-9-_\u0600-\u06FF]+/gi, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "") || "VisaFlow_AI_Report";
+}
+
+function getReportKpiValue(data, metricName, fallback = "-") {
+  return data.kpis.find((item) => item.metric === metricName)?.value ?? fallback;
+}
+
+function getReportNumber(value) {
+  const number = Number(String(value ?? "0").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(number) ? number : 0;
+}
+
+function trimSlideText(value, maxLength = 90) {
+  const text = String(value || "-");
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function addReportSlideTitle(slide, title, subtitle = "") {
+  slide.addText(title, {
+    x: 0.45,
+    y: 0.32,
+    w: 7.9,
+    h: 0.36,
+    fontFace: "Aptos Display",
+    fontSize: 22,
+    bold: true,
+    color: "0F172A",
+    margin: 0,
+  });
+  if (subtitle) {
+    slide.addText(subtitle, {
+      x: 0.48,
+      y: 0.73,
+      w: 9.7,
+      h: 0.22,
+      fontFace: "Aptos",
+      fontSize: 8.5,
+      color: "64748B",
+      margin: 0,
+    });
+  }
+  slide.addShape("line", {
+    x: 0.45,
+    y: 1.02,
+    w: 12.4,
+    h: 0,
+    line: { color: "E2E8F0", width: 1 },
+  });
+}
+
+function addReportFooter(slide, data, pageNo) {
+  slide.addShape("line", {
+    x: 0.48,
+    y: 7.12,
+    w: 12.3,
+    h: 0,
+    line: { color: "E2E8F0", width: 0.8 },
+  });
+  slide.addText("VisaFlow KSA · AI Report Studio", {
+    x: 0.52,
+    y: 7.22,
+    w: 3.6,
+    h: 0.18,
+    fontFace: "Aptos",
+    fontSize: 7.5,
+    color: "64748B",
+    margin: 0,
+  });
+  slide.addText(`${reportStudioForm.confidential ? "Confidential · " : ""}${data.generated_at}`, {
+    x: 4.4,
+    y: 7.22,
+    w: 4.6,
+    h: 0.18,
+    fontFace: "Aptos",
+    fontSize: 7.5,
+    color: "94A3B8",
+    align: "center",
+    margin: 0,
+  });
+  slide.addText(String(pageNo), {
+    x: 12.15,
+    y: 7.22,
+    w: 0.6,
+    h: 0.18,
+    fontFace: "Aptos",
+    fontSize: 7.5,
+    color: "64748B",
+    align: "right",
+    margin: 0,
+  });
+}
+
+function addReportMetricCard(slide, x, y, w, h, label, value, accent = "2563EB", note = "") {
+  slide.addShape("roundRect", {
+    x,
+    y,
+    w,
+    h,
+    rectRadius: 0.08,
+    fill: { color: "FFFFFF", transparency: 0 },
+    line: { color: "E2E8F0", transparency: 0 },
+    shadow: { type: "outer", color: "94A3B8", opacity: 0.12, blur: 1, angle: 45, distance: 1 },
+  });
+  slide.addShape("rect", {
+    x,
+    y,
+    w: 0.08,
+    h,
+    fill: { color: accent },
+    line: { color: accent },
+  });
+  slide.addText(label.toUpperCase(), {
+    x: x + 0.18,
+    y: y + 0.13,
+    w: w - 0.3,
+    h: 0.18,
+    fontFace: "Aptos",
+    fontSize: 6.8,
+    bold: true,
+    charSpace: 1.1,
+    color: "64748B",
+    margin: 0,
+    breakLine: false,
+    fit: "shrink",
+  });
+  slide.addText(String(value), {
+    x: x + 0.18,
+    y: y + 0.42,
+    w: w - 0.3,
+    h: 0.36,
+    fontFace: "Aptos Display",
+    fontSize: 18,
+    bold: true,
+    color: "0F172A",
+    margin: 0,
+    breakLine: false,
+    fit: "shrink",
+  });
+  if (note) {
+    slide.addText(note, {
+      x: x + 0.18,
+      y: y + h - 0.27,
+      w: w - 0.3,
+      h: 0.18,
+      fontFace: "Aptos",
+      fontSize: 6.8,
+      color: "94A3B8",
+      margin: 0,
+      breakLine: false,
+      fit: "shrink",
+    });
+  }
+}
+
+function addReportProgressBar(slide, x, y, w, h, value, maxValue, color = "2563EB", label = "") {
+  const pct = maxValue ? Math.max(0.03, Math.min(Number(value || 0) / Number(maxValue || 1), 1)) : 0.03;
+  slide.addShape("roundRect", {
+    x,
+    y,
+    w,
+    h,
+    rectRadius: 0.05,
+    fill: { color: "E2E8F0" },
+    line: { color: "E2E8F0" },
+  });
+  slide.addShape("roundRect", {
+    x,
+    y,
+    w: w * pct,
+    h,
+    rectRadius: 0.05,
+    fill: { color },
+    line: { color },
+  });
+  if (label) {
+    slide.addText(label, {
+      x,
+      y: y - 0.18,
+      w,
+      h: 0.13,
+      fontFace: "Aptos",
+      fontSize: 6.5,
+      color: "475569",
+      margin: 0,
+      fit: "shrink",
+    });
+  }
+}
+
+async function buildReportStudioPptx(fileName) {
   const data = buildAIReportStudioDataset();
-  const safeName = String(reportStudioForm.reportName || "VisaFlow_AI_Report").replace(/[^a-z0-9-_]+/gi, "_");
+  const pptx = new pptxgen();
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.author = "VisaFlow KSA";
+  pptx.company = "VisaFlow KSA";
+  pptx.subject = data.template || data.report_name || "AI Report Studio";
+  pptx.title = data.report_name || "VisaFlow AI Report";
+  pptx.lang = data.language === "Arabic" ? "ar-SA" : "en-US";
+  pptx.theme = {
+    headFontFace: "Aptos Display",
+    bodyFontFace: "Aptos",
+    lang: data.language === "Arabic" ? "ar-SA" : "en-US",
+  };
+
+  const required = getReportNumber(getReportKpiValue(data, "Required Manpower", 0));
+  const candidatesTotal = getReportNumber(getReportKpiValue(data, "Active Candidates", 0));
+  const joinedTotal = getReportNumber(getReportKpiValue(data, "Joined", 0));
+  const topRisks = data.request_health.filter((row) => row.riskLevel === "High").slice(0, 5);
+  const riskRows = (topRisks.length ? topRisks : data.request_health.slice(0, 5));
+  const topAgencies = data.agencies.slice(0, 6);
+  const colors = ["2563EB", "14B8A6", "F97316", "A855F7", "06B6D4", "22C55E", "E11D48"];
+
+  let slide = pptx.addSlide();
+  slide.background = { color: "020617" };
+  slide.addShape("rect", { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: "020617" }, line: { color: "020617" } });
+  slide.addShape("rect", { x: 7.9, y: 0, w: 5.5, h: 7.5, fill: { color: "0F766E", transparency: 10 }, line: { color: "0F766E", transparency: 100 } });
+  slide.addShape("rect", { x: 10.4, y: 0, w: 3, h: 7.5, fill: { color: "7C3AED", transparency: 18 }, line: { color: "7C3AED", transparency: 100 } });
+  slide.addText("VisaFlow KSA · AI Report Studio", {
+    x: 0.7,
+    y: 0.62,
+    w: 4.7,
+    h: 0.25,
+    fontFace: "Aptos",
+    fontSize: 11,
+    bold: true,
+    color: "67E8F9",
+    margin: 0,
+  });
+  slide.addText(data.report_name || "VisaFlow AI Report", {
+    x: 0.68,
+    y: 1.52,
+    w: 7.2,
+    h: 0.96,
+    fontFace: "Aptos Display",
+    fontSize: 38,
+    bold: true,
+    color: "FFFFFF",
+    margin: 0,
+    fit: "shrink",
+  });
+  slide.addText(`${data.category} · ${data.project} · ${data.language}`, {
+    x: 0.72,
+    y: 2.56,
+    w: 6.8,
+    h: 0.28,
+    fontFace: "Aptos",
+    fontSize: 13,
+    color: "CBD5E1",
+    margin: 0,
+  });
+  slide.addShape("roundRect", { x: 0.72, y: 3.25, w: 2.05, h: 0.38, rectRadius: 0.07, fill: { color: "FFFFFF", transparency: 86 }, line: { color: "FFFFFF", transparency: 82 } });
+  slide.addText(reportStudioForm.confidential ? "CONFIDENTIAL" : "EXECUTIVE COPY", {
+    x: 0.88,
+    y: 3.35,
+    w: 1.7,
+    h: 0.14,
+    fontFace: "Aptos",
+    fontSize: 7.5,
+    bold: true,
+    color: "FFFFFF",
+    align: "center",
+    margin: 0,
+  });
+  addReportMetricCard(slide, 8.2, 1.05, 3.75, 1.05, "Recruitment Progress", getReportKpiValue(data, "Recruitment Progress"), "22C55E", `${candidatesTotal} active of ${required} required`);
+  addReportMetricCard(slide, 8.2, 2.35, 1.75, 1.05, "Visa Gap", getReportKpiValue(data, "Visa Gap"), "2563EB");
+  addReportMetricCard(slide, 10.2, 2.35, 1.75, 1.05, "High Risk", getReportKpiValue(data, "High Risk Lines"), "E11D48");
+  addReportMetricCard(slide, 8.2, 3.65, 1.75, 1.05, "Joined", joinedTotal, "14B8A6");
+  addReportMetricCard(slide, 10.2, 3.65, 1.75, 1.05, "Budget Variance", getReportKpiValue(data, "Budget Variance"), "F97316");
+  slide.addText(`Generated ${data.generated_at}`, { x: 0.74, y: 6.87, w: 5.4, h: 0.2, fontFace: "Aptos", fontSize: 8, color: "94A3B8", margin: 0 });
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, "KPI Dashboard", "Live recruitment, visa, authorization and mobilization indicators.");
+  const kpiCards = [
+    ["Required Manpower", getReportKpiValue(data, "Required Manpower"), "2563EB", "Demand volume"],
+    ["Active Candidates", getReportKpiValue(data, "Active Candidates"), "14B8A6", "Submitted / active"],
+    ["Joined", getReportKpiValue(data, "Joined"), "22C55E", "Confirmed joining"],
+    ["Recruitment Progress", getReportKpiValue(data, "Recruitment Progress"), "A855F7", "Candidate coverage"],
+    ["Visa Gap", getReportKpiValue(data, "Visa Gap"), "F97316", "Allocation shortage"],
+    ["Authorization Gap", getReportKpiValue(data, "Authorization Gap"), "E11D48", "Authorization shortage"],
+  ];
+  kpiCards.forEach((card, index) => {
+    const col = index % 3;
+    const row = Math.floor(index / 3);
+    addReportMetricCard(slide, 0.65 + col * 4.12, 1.35 + row * 1.25, 3.75, 0.95, card[0], card[1], card[2], card[3]);
+  });
+  slide.addText("Executive Summary", { x: 0.7, y: 4.1, w: 2.8, h: 0.25, fontFace: "Aptos Display", fontSize: 16, bold: true, color: "0F172A", margin: 0 });
+  slide.addText(`VisaFlow analyzed live recruitment, visa, authorization, candidate, mobilization and agency data. Current recruitment progress is ${executiveDashboard.recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} remaining recruitment gap(s) and ${data.forecast.totalRemainingJoining} remaining joining gap(s).`, {
+    x: 0.7,
+    y: 4.48,
+    w: 5.75,
+    h: 1.15,
+    fontFace: "Aptos",
+    fontSize: 12,
+    color: "334155",
+    fit: "shrink",
+    valign: "mid",
+    margin: 0.05,
+  });
+  slide.addShape("roundRect", { x: 7.0, y: 4.05, w: 5.45, h: 1.45, rectRadius: 0.08, fill: { color: "ECFEFF" }, line: { color: "A5F3FC" } });
+  slide.addText("AI Forecast", { x: 7.25, y: 4.25, w: 2.2, h: 0.25, fontFace: "Aptos Display", fontSize: 14, bold: true, color: "0E7490", margin: 0 });
+  slide.addText(data.forecast.forecastMessage || "Pipeline is stable if current pace continues.", { x: 7.25, y: 4.62, w: 4.85, h: 0.55, fontFace: "Aptos", fontSize: 11, color: "155E75", fit: "shrink", margin: 0.03 });
+  addReportFooter(slide, data, 2);
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, "Recruitment Funnel", "From required manpower to joined employees.");
+  const funnelRows = (executiveDashboard.recruitmentFunnel || []).filter((item) => item.value !== undefined);
+  const maxFunnel = Math.max(...funnelRows.map((item) => Number(item.value || 0)), required, 1);
+  funnelRows.slice(0, 7).forEach((item, index) => {
+    const y = 1.42 + index * 0.72;
+    const color = colors[index % colors.length];
+    slide.addText(item.stage, { x: 0.72, y: y - 0.02, w: 2.55, h: 0.18, fontFace: "Aptos", fontSize: 9, bold: true, color: "334155", margin: 0, fit: "shrink" });
+    addReportProgressBar(slide, 3.15, y, 7.35, 0.18, item.value, maxFunnel, color);
+    slide.addText(String(item.value || 0), { x: 10.8, y: y - 0.03, w: 1.0, h: 0.2, fontFace: "Aptos", fontSize: 9, bold: true, color, align: "right", margin: 0 });
+  });
+  slide.addShape("roundRect", { x: 0.72, y: 6.42, w: 11.7, h: 0.42, rectRadius: 0.06, fill: { color: "EEF2FF" }, line: { color: "C7D2FE" } });
+  slide.addText(`Main action: ${data.forecast.forecastMessage}`, { x: 0.92, y: 6.54, w: 11.25, h: 0.14, fontFace: "Aptos", fontSize: 8.5, color: "3730A3", margin: 0, fit: "shrink" });
+  addReportFooter(slide, data, 3);
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, "Risk & Gaps", "High-risk request lines and operational bottlenecks.");
+  addReportMetricCard(slide, 0.72, 1.28, 2.65, 0.92, "High Risk Lines", getReportKpiValue(data, "High Risk Lines"), "E11D48");
+  addReportMetricCard(slide, 3.62, 1.28, 2.65, 0.92, "Visa Gap", getReportKpiValue(data, "Visa Gap"), "F97316");
+  addReportMetricCard(slide, 6.52, 1.28, 2.65, 0.92, "Auth Gap", getReportKpiValue(data, "Authorization Gap"), "A855F7");
+  addReportMetricCard(slide, 9.42, 1.28, 2.65, 0.92, "Remaining Join", data.forecast.totalRemainingJoining, "06B6D4");
+  slide.addText("Top Request-Line Risks", { x: 0.72, y: 2.62, w: 4, h: 0.24, fontFace: "Aptos Display", fontSize: 15, bold: true, color: "0F172A", margin: 0 });
+  riskRows.slice(0, 5).forEach((row, index) => {
+    const y = 3.04 + index * 0.58;
+    const accent = row.riskLevel === "High" ? "E11D48" : row.riskLevel === "Medium" ? "F59E0B" : "22C55E";
+    slide.addShape("roundRect", { x: 0.72, y, w: 11.65, h: 0.42, rectRadius: 0.05, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
+    slide.addShape("rect", { x: 0.72, y, w: 0.08, h: 0.42, fill: { color: accent }, line: { color: accent } });
+    slide.addText(`${row.request_no} · Line ${row.line_no} · ${trimSlideText(row.profession, 48)}`, { x: 0.9, y: y + 0.11, w: 5.4, h: 0.15, fontFace: "Aptos", fontSize: 7.8, bold: true, color: "0F172A", margin: 0, fit: "shrink" });
+    slide.addText(trimSlideText(row.bottleneck, 32), { x: 6.4, y: y + 0.11, w: 2.35, h: 0.15, fontFace: "Aptos", fontSize: 7.6, color: "475569", margin: 0, fit: "shrink" });
+    addReportProgressBar(slide, 8.9, y + 0.14, 2.2, 0.1, row.progress || 0, 100, accent);
+    slide.addText(`${row.progress || 0}% / ${row.riskScore || 0}`, { x: 11.2, y: y + 0.1, w: 0.95, h: 0.15, fontFace: "Aptos", fontSize: 7.5, color: accent, bold: true, align: "right", margin: 0 });
+  });
+  addReportFooter(slide, data, 4);
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, "Agency Insights", "Agency scores, candidate submissions and joining performance.");
+  if (topAgencies.length) {
+    const maxScore = 100;
+    topAgencies.forEach((agency, index) => {
+      const y = 1.34 + index * 0.78;
+      const accent = agency.risk === "High" ? "E11D48" : agency.risk === "Medium" ? "F59E0B" : "22C55E";
+      slide.addShape("roundRect", { x: 0.72, y, w: 11.6, h: 0.55, rectRadius: 0.06, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
+      slide.addText(trimSlideText(agency.agency, 38), { x: 0.95, y: y + 0.11, w: 2.7, h: 0.16, fontFace: "Aptos", fontSize: 9, bold: true, color: "0F172A", margin: 0, fit: "shrink" });
+      addReportProgressBar(slide, 3.85, y + 0.2, 4.5, 0.12, agency.score || 0, maxScore, accent);
+      slide.addText(`Score ${agency.score || 0} · ${agency.risk || "Low"}`, { x: 8.55, y: y + 0.1, w: 1.55, h: 0.16, fontFace: "Aptos", fontSize: 8, bold: true, color: accent, margin: 0, fit: "shrink" });
+      slide.addText(`Candidates ${agency.candidates || 0} · Joined ${agency.joined || 0}`, { x: 10.28, y: y + 0.1, w: 1.8, h: 0.16, fontFace: "Aptos", fontSize: 7.5, color: "475569", align: "right", margin: 0, fit: "shrink" });
+    });
+  } else {
+    slide.addText("No agency data available yet.", { x: 0.72, y: 1.7, w: 6, h: 0.3, fontFace: "Aptos", fontSize: 15, color: "64748B", margin: 0 });
+  }
+  slide.addShape("roundRect", { x: 0.72, y: 6.25, w: 11.6, h: 0.48, rectRadius: 0.06, fill: { color: "FFF7ED" }, line: { color: "FED7AA" } });
+  slide.addText("Recommendation: push agencies with stale candidate updates or weak submission performance before increasing new allocations.", { x: 0.94, y: 6.4, w: 11.05, h: 0.14, fontFace: "Aptos", fontSize: 8.2, color: "9A3412", margin: 0, fit: "shrink" });
+  addReportFooter(slide, data, 5);
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, "Recommended Actions", "Suggested executive decisions for the weekly meeting.");
+  const actions = [
+    "Review high-risk request lines by profession, nationality and gender.",
+    "Close visa allocation and authorization gaps before escalating sourcing volume.",
+    "Push agencies with stale candidate updates or weak submission performance.",
+    "Move medically passed and visa-ready candidates to ticketing and arrival.",
+    "Assign one accountable owner for each bottleneck and review progress weekly.",
+  ];
+  actions.forEach((action, index) => {
+    const y = 1.45 + index * 0.86;
+    slide.addShape("ellipse", { x: 0.78, y, w: 0.42, h: 0.42, fill: { color: colors[index % colors.length] }, line: { color: colors[index % colors.length] } });
+    slide.addText(String(index + 1), { x: 0.9, y: y + 0.12, w: 0.18, h: 0.12, fontFace: "Aptos", fontSize: 8, bold: true, color: "FFFFFF", align: "center", margin: 0 });
+    slide.addText(action, { x: 1.45, y: y + 0.08, w: 10.2, h: 0.26, fontFace: "Aptos", fontSize: 13, color: "0F172A", margin: 0, fit: "shrink" });
+  });
+  slide.addShape("roundRect", { x: 0.78, y: 6.25, w: 11.5, h: 0.52, rectRadius: 0.08, fill: { color: "ECFDF5" }, line: { color: "A7F3D0" } });
+  slide.addText("This presentation was generated directly as a PowerPoint .pptx file from VisaFlow live data.", { x: 1.0, y: 6.42, w: 11.0, h: 0.14, fontFace: "Aptos", fontSize: 8.5, color: "047857", margin: 0, fit: "shrink" });
+  addReportFooter(slide, data, 6);
+
+  await pptx.writeFile({ fileName });
+}
+
+async function exportAIReportStudio() {
+  const data = buildAIReportStudioDataset();
+  const safeName = sanitizeReportFileName(reportStudioForm.reportName || "VisaFlow_AI_Report");
   const format = reportStudioForm.outputFormat;
   setReportStudioResult(buildAIReportStudioNarrative());
   setReportStudioLastRun(new Date().toLocaleString());
@@ -8079,7 +8468,13 @@ function exportAIReportStudio() {
   }
 
   if (format === "PowerPoint") {
-    return downloadReportStudioFile(`${safeName}_presentation.html`, buildReportStudioHtmlDocument("presentation"), "text/html;charset=utf-8");
+    try {
+      await buildReportStudioPptx(`${safeName}.pptx`);
+    } catch (error) {
+      console.error("PowerPoint export failed", error);
+      alert(`PowerPoint export failed: ${error?.message || error}`);
+    }
+    return;
   }
 
   if (format === "PDF") {
