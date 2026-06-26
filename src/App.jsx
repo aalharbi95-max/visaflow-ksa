@@ -691,7 +691,7 @@ const emptyAgreement = {
   sla_days: 60,
   response_sla_hours: 24,
   update_frequency_days: 7,
-  delay_penalty_type: "Fixed Amount",
+  delay_penalty_type: "Fixed Amount Per Delayed Day",
   delay_penalty_amount: 0,
   delay_penalty_after_days: 7,
   financial_guarantee_required: "No",
@@ -3478,7 +3478,7 @@ function getAgreementTemplateDefaults(templateType) {
       sla_days: 45,
       response_sla_hours: 12,
       update_frequency_days: 3,
-      delay_penalty_type: "Fixed Amount",
+      delay_penalty_type: "Fixed Amount Per Delayed Day",
       delay_penalty_amount: 250,
       delay_penalty_after_days: 3,
       financial_guarantee_required: "Yes",
@@ -3493,7 +3493,7 @@ function getAgreementTemplateDefaults(templateType) {
       sla_days: 30,
       response_sla_hours: 8,
       update_frequency_days: 2,
-      delay_penalty_type: "Percentage",
+      delay_penalty_type: "Fixed Amount Per Delayed Day",
       delay_penalty_amount: 5,
       delay_penalty_after_days: 2,
       financial_guarantee_required: "Yes",
@@ -3508,7 +3508,7 @@ function getAgreementTemplateDefaults(templateType) {
       sla_days: 60,
       response_sla_hours: 24,
       update_frequency_days: 7,
-      delay_penalty_type: "Fixed Amount",
+      delay_penalty_type: "Fixed Amount Per Delayed Day",
       delay_penalty_amount: 100,
       delay_penalty_after_days: 7,
       financial_guarantee_required: "Optional",
@@ -3522,7 +3522,7 @@ function getAgreementTemplateDefaults(templateType) {
     sla_days: 60,
     response_sla_hours: 24,
     update_frequency_days: 7,
-    delay_penalty_type: "Fixed Amount",
+    delay_penalty_type: "Fixed Amount Per Delayed Day",
     delay_penalty_amount: 0,
     delay_penalty_after_days: 7,
     financial_guarantee_required: "No",
@@ -3553,13 +3553,13 @@ The recruitment agency shall source, submit, update and mobilize candidates thro
 The standard recruitment cycle must be completed within ${source.sla_days || 60} calendar day(s) from the assignment date unless a different written approval is issued.
 مدة الإنجاز المعتمدة هي ${source.sla_days || 60} يوم من تاريخ إسناد الطلب ما لم يصدر اعتماد مختلف من الشركة.
 
-3. Response and Data Update / الاستجابة وتحديث البيانات
-The agency must respond within ${source.response_sla_hours || 24} hour(s) and update candidate records at least every ${source.update_frequency_days || 7} day(s).
-يلتزم المكتب بالرد خلال ${source.response_sla_hours || 24} ساعة وتحديث بيانات المرشحين كل ${source.update_frequency_days || 7} يوم كحد أقصى.
+3. Performance KPI Rules / قواعد تقييم أداء المكتب
+The agency must respond within ${source.response_sla_hours || 24} hour(s) and update candidate/case records at least every ${source.update_frequency_days || 7} day(s). These rules affect agency KPI, ranking, allocation decisions and performance reports only. They do not create financial penalties by themselves.
+يلتزم المكتب بالرد خلال ${source.response_sla_hours || 24} ساعة وتحديث بيانات المرشحين أو المعاملات كل ${source.update_frequency_days || 7} يوم كحد أقصى. هذه القواعد تؤثر على تقييم المكتب وترتيبه وقرارات إسناد الطلبات والتقارير فقط، ولا تتحول وحدها إلى غرامة مالية.
 
-4. Delay Penalties / غرامات التأخير
-Delay penalty type: ${source.delay_penalty_type || "Fixed Amount"}. Penalty value: ${source.delay_penalty_amount || 0}. Penalty starts after ${source.delay_penalty_after_days || 7} day(s) of delay or no update, subject to company approval and applicable regulations.
-نوع الغرامة: ${source.delay_penalty_type || "Fixed Amount"}. قيمة الغرامة: ${source.delay_penalty_amount || 0}. تبدأ الغرامة بعد ${source.delay_penalty_after_days || 7} يوم من التأخير أو عدم التحديث، حسب اعتماد الشركة والأنظمة المعمول بها.
+4. Labor SLA Delay Penalty / غرامة تأخير العمالة عن SLA
+Financial penalties apply only when labor/candidates exceed the agreed SLA duration. Penalty type: ${source.delay_penalty_type || "Fixed Amount Per Delayed Day"}. Penalty value: ${source.delay_penalty_amount || 0} SAR per chargeable delayed day. Penalty starts after ${source.delay_penalty_after_days || 7} grace day(s), subject to company review and final approval.
+تطبق الغرامات المالية فقط عند تأخر العمالة أو المرشحين عن مدة SLA المتفق عليها. نوع الغرامة: ${source.delay_penalty_type || "Fixed Amount Per Delayed Day"}. قيمة الغرامة: ${source.delay_penalty_amount || 0} ريال عن كل يوم تأخير قابل للغرامة. تبدأ الغرامة بعد فترة سماح ${source.delay_penalty_after_days || 7} يوم، وتبقى خاضعة لمراجعة الشركة واعتمادها النهائي.
 
 5. Financial Guarantee / الضمان المالي
 ${guaranteeText}
@@ -3634,7 +3634,7 @@ function editAgreement(item) {
     sla_days: item.sla_days || 60,
     response_sla_hours: item.response_sla_hours || 24,
     update_frequency_days: item.update_frequency_days || 7,
-    delay_penalty_type: item.delay_penalty_type || "Fixed Amount",
+    delay_penalty_type: item.delay_penalty_type || "Fixed Amount Per Delayed Day",
     delay_penalty_amount: item.delay_penalty_amount || 0,
     delay_penalty_after_days: item.delay_penalty_after_days || 7,
     financial_guarantee_required: item.financial_guarantee_required || "No",
@@ -5590,7 +5590,7 @@ function getAgencyAgreementPolicy(agencyName) {
     sla_days: Number(activeAgreement?.sla_days || 60),
     response_sla_hours: Number(activeAgreement?.response_sla_hours || 24),
     update_frequency_days: Number(activeAgreement?.update_frequency_days || 7),
-    delay_penalty_type: activeAgreement?.delay_penalty_type || "Fixed Amount",
+    delay_penalty_type: activeAgreement?.delay_penalty_type || "Fixed Amount Per Delayed Day",
     delay_penalty_amount: Number(activeAgreement?.delay_penalty_amount || 0),
     delay_penalty_after_days: Number(activeAgreement?.delay_penalty_after_days || 7),
     financial_guarantee_required: activeAgreement?.financial_guarantee_required || "No",
@@ -5672,7 +5672,7 @@ function calculatePenaltyRegisterRows() {
         delay_days: Number(sla.delayDays || 0),
         grace_days: Number(policy.delay_penalty_after_days || 0),
         penalty_days: Number(sla.penaltyDays || 0),
-        penalty_type: policy.delay_penalty_type || "Fixed Amount",
+        penalty_type: policy.delay_penalty_type || "Fixed Amount Per Delayed Day",
         penalty_rate: Number(policy.delay_penalty_amount || 0),
         calculated_amount: calculatedAmount,
         approved_amount: null,
@@ -5957,7 +5957,7 @@ function getAgencySlaEscalationAlerts() {
         risk: stagnation.risk,
         agreement_no: stagnation.agreement_no,
         update_frequency_days: stagnation.update_frequency_days,
-        penalty: Math.min(Math.max(stagnation.days - Number(stagnation.update_frequency_days || 7), 1) * 2, 15),
+        kpi_deduction: Math.min(Math.max(stagnation.days - Number(stagnation.update_frequency_days || 7), 1) * 2, 15),
         recommendation:
           stagnation.risk === "High"
             ? `Escalate immediately. This exceeds the agreement update frequency (${stagnation.update_frequency_days} day(s)). Hold new allocation until update is received.`
@@ -5970,15 +5970,15 @@ function getAgencySlaEscalationAlerts() {
 
 async function generateSlaEscalationNotifications() {
   const alerts = getAgencySlaEscalationAlerts();
-  if (!alerts.length) return alert("No SLA escalation alerts. All agency updates are within the 7-day rule.");
+  if (!alerts.length) return alert("No update compliance alerts. All agency updates are within the configured update frequency rule.");
 
   const payload = alerts.slice(0, 50).map((item) => {
     const agency = agencies.find((a) => normalize(a.name) === normalize(item.agency));
     return {
       company_id: currentCompanyId,
       agency_id: agency?.id || null,
-      type: "SLA_ESCALATION_ALERT",
-      title: "SLA Escalation Alert",
+      type: "UPDATE_COMPLIANCE_ALERT",
+      title: "Update Compliance Alert",
       message: `${item.candidate_name} has no update for ${item.days_without_update} day(s).`,
       priority: item.risk === "High" ? "High" : "Medium",
       status: "Unread",
@@ -5995,7 +5995,7 @@ async function generateSlaEscalationNotifications() {
   const { error } = await supabase.from("notification_events").insert(payload);
   if (error) return alert(error.message);
 
-  alert(`SLA escalation alerts generated: ${payload.length}`);
+  alert(`Update compliance alerts generated: ${payload.length}`);
 }
 
 function calculateAgencyPerformanceRows() {
@@ -6037,7 +6037,7 @@ function calculateAgencyPerformanceRows() {
       const responseScore = submittedPercent;
 
       const staleCandidates = agencyCandidates.filter((candidate) => getCandidateSlaStagnation(candidate).isStale);
-      const stalePenalty = Math.min(staleCandidates.length * 5, 30);
+      const staleUpdateDeduction = Math.min(staleCandidates.length * 5, 30);
 
       const recentUpdates = agencyCandidates.filter((candidate) => {
         const updated = candidate.updated_at || candidate.created_at;
@@ -6046,7 +6046,7 @@ function calculateAgencyPerformanceRows() {
         return days <= Number(agreementPolicy.update_frequency_days || 7);
       }).length;
       const rawUpdateScore = submitted ? Math.round((recentUpdates / submitted) * 100) : 0;
-      const updateScore = Math.max(0, rawUpdateScore - stalePenalty);
+      const updateScore = Math.max(0, rawUpdateScore - staleUpdateDeduction);
 
       const candidateSlaRows = agencyCandidates.map((candidate) => getCandidateSlaDelay(candidate, agencyName));
       const delayedRows = candidateSlaRows.filter((row) => row.isDelayed);
@@ -6060,7 +6060,7 @@ function calculateAgencyPerformanceRows() {
         ? Math.round(((agencyCandidates.length - delayedCandidates) / agencyCandidates.length) * 100)
         : 0;
       const slaDelayPenalty = Math.min(delayedCandidates * 5, 35);
-      const slaScore = Math.max(0, baseSlaScore - stalePenalty - slaDelayPenalty);
+      const slaScore = Math.max(0, baseSlaScore - slaDelayPenalty);
 
       const agreementScore = signedAgreement ? 100 : 0;
 
@@ -6077,8 +6077,8 @@ function calculateAgencyPerformanceRows() {
       const rank = getAgencyRank(totalScore);
       let recommendation = "Keep monitoring and maintain current allocation level.";
       if (!signedAgreement) recommendation = "No active agreement found. Use default SLA 60 days until the agreement is activated.";
-      else if (delayedCandidates > 0 && penaltyExposure > 0) recommendation = `${delayedCandidates} candidate(s) exceeded the agreed SLA (${agreementPolicy.sla_days} day(s)). Potential fixed penalty exposure: ${Number(penaltyExposure || 0).toLocaleString()} SAR.`;
-      else if (staleCandidates.length > 0) recommendation = `${staleCandidates.length} stale candidate update(s). Agreement requires update every ${agreementPolicy.update_frequency_days} day(s). Escalate before new allocation.`;
+      else if (delayedCandidates > 0 && penaltyExposure > 0) recommendation = `${delayedCandidates} candidate(s) exceeded the agreed SLA (${agreementPolicy.sla_days} day(s)). Potential labor SLA delay penalty exposure: ${Number(penaltyExposure || 0).toLocaleString()} SAR.`;
+      else if (staleCandidates.length > 0) recommendation = `${staleCandidates.length} candidate update compliance issue(s). Agreement requires update every ${agreementPolicy.update_frequency_days} day(s). Escalate before new allocation.`;
       else if (rank === "Platinum") recommendation = "Preferred agency. Increase allocations for matching professions and countries.";
       else if (rank === "Gold") recommendation = "Strong agency. Continue allocations with normal follow-up.";
       else if (rank === "Silver") recommendation = "Acceptable agency. Follow up on weak indicators before increasing volume.";
@@ -6097,6 +6097,7 @@ function calculateAgencyPerformanceRows() {
         financial_guarantee_required: agreementPolicy.financial_guarantee_required,
         financial_guarantee_amount: agreementPolicy.financial_guarantee_amount,
         authorizedQty,
+        submittedPercent,
         candidates: submitted,
         passedInterviews,
         rejectedInterviews,
@@ -6107,7 +6108,7 @@ function calculateAgencyPerformanceRows() {
         average_delay_days: averageDelayDays,
         penalty_exposure: penaltyExposure,
         stale_candidates: staleCandidates.length,
-        stale_penalty: stalePenalty,
+        stale_penalty: staleUpdateDeduction,
         sla_score: slaScore,
         response_score: responseScore,
         quality_score: qualityScore,
@@ -8811,8 +8812,8 @@ const REPORT_AR_LABELS = {
   "Agreement SLA": "مدة SLA حسب الاتفاقية",
   "SLA Compliance": "الالتزام بالـ SLA",
   "Delayed Candidates": "مرشحون متأخرون",
-  "Penalty Exposure": "الغرامة المحتملة",
-  "Update Frequency": "تكرار التحديث",
+  "SLA Penalty Exposure": "غرامة تأخير SLA المحتملة",
+  "Update Frequency": "دورية تحديث المعاملة",
 };
 
 function localizeReportText(textValue, language = reportStudioForm.language) {
@@ -8894,7 +8895,7 @@ function buildAIReportStudioDataset() {
       { metric: "Budget Variance", value: `${Number((totalBudget || stats.totalRequestBudget || 0) - (totalCost || stats.totalMobilizationCost || 0)).toLocaleString()} SAR` },
       { metric: "SLA Compliance", value: `${agencyRows.length ? Math.round(agencyRows.reduce((sum, item) => sum + Number(item.sla_score || 0), 0) / agencyRows.length) : 0}%` },
       { metric: "Delayed Candidates", value: agencyRows.reduce((sum, item) => sum + Number(item.delayed_candidates || 0), 0) },
-      { metric: "Penalty Exposure", value: `${Number(agencyRows.reduce((sum, item) => sum + Number(item.penalty_exposure || 0), 0)).toLocaleString()} SAR` },
+      { metric: "SLA Penalty Exposure", value: `${Number(agencyRows.reduce((sum, item) => sum + Number(item.penalty_exposure || 0), 0)).toLocaleString()} SAR` },
     ],
     request_health: requestHealth,
     mobilization: mobilizationRows,
@@ -8994,7 +8995,7 @@ function buildAIReportStudioNarrative() {
     ...(topRisks.length ? topRisks.map((row) => `- ${row.request_no} / Line ${row.line_no} / ${row.profession}: ${row.bottleneck}, progress ${row.progress}%, risk ${row.riskScore}.`) : ["- No high-risk request lines detected."]),
     "",
     "Agency Insights",
-    ...(topAgencies.length ? topAgencies.map((agency) => `- ${agency.agency}: Score ${agency.score}, Agreement SLA ${agency.agreement_sla_days || 60} days, Delayed ${agency.delayed_candidates || 0}, Penalty exposure ${Number(agency.penalty_exposure || 0).toLocaleString()} SAR.`) : ["- No agency data available yet."]),
+    ...(topAgencies.length ? topAgencies.map((agency) => `- ${agency.agency}: Score ${agency.score}, Agreement SLA ${agency.agreement_sla_days || 60} days, Delayed ${agency.delayed_candidates || 0}, Labor SLA penalty exposure ${Number(agency.penalty_exposure || 0).toLocaleString()} SAR.`) : ["- No agency data available yet."]),
     "",
     "Agencies Requiring Follow-up",
     ...(weakAgencies.length ? weakAgencies.map((agency) => `- ${agency.agency}: risk ${agency.risk}, fail rate ${agency.failRate}%, score ${agency.score}.`) : ["- No agency follow-up risk detected."]),
@@ -13201,7 +13202,7 @@ Save Authorization
 
 
     {currentRole === "Agency" && agencyPenalties.filter((item) => item.status !== "Pending Review").length > 0 && (
-      <TableCard title="Agency Penalties / الغرامات المطلوبة">
+      <TableCard title="Labor SLA Delay Penalties / الغرامات المطلوبة لتأخير العمالة">
         <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
           <table>
             <thead>
@@ -13210,7 +13211,7 @@ Save Authorization
                 <th>Agreement</th>
                 <th>Candidate</th>
                 <th>Request No</th>
-                <th>Delay</th>
+                <th>SLA Delay</th>
                 <th>Calculated</th>
                 <th>Required Amount</th>
                 <th>Status</th>
@@ -13261,7 +13262,7 @@ Save Authorization
                 <th>Company Workspace</th>
                 <th>Template</th>
                 <th>SLA</th>
-                <th>Penalty</th>
+                <th>Labor SLA Penalty</th>
                 <th>Guarantee</th>
                 <th>Status</th>
                 <th>Agreement</th>
@@ -13698,12 +13699,12 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Under Review" value={calculateAgencyPerformanceRows().filter((x) => x.rank === "Under Review").length} className="danger" />
       <Stat title="SLA Alerts" value={getAgencySlaEscalationAlerts().length} className={getAgencySlaEscalationAlerts().length ? "danger" : "passed"} />
       <Stat title="Delayed by Agreement" value={calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.delayed_candidates || 0), 0)} className={calculateAgencyPerformanceRows().some((x) => Number(x.delayed_candidates || 0) > 0) ? "danger" : "passed"} />
-      <Stat title="Penalty Exposure" value={`${Number(calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.penalty_exposure || 0), 0)).toLocaleString()} SAR`} className={calculateAgencyPerformanceRows().some((x) => Number(x.penalty_exposure || 0) > 0) ? "warning" : "passed"} />
+      <Stat title="SLA Penalty Exposure" value={`${Number(calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.penalty_exposure || 0), 0)).toLocaleString()} SAR`} className={calculateAgencyPerformanceRows().some((x) => Number(x.penalty_exposure || 0) > 0) ? "warning" : "passed"} />
     </div>
 
-    <TableCard title="SLA Auto-Escalation Alerts">
+    <TableCard title="Update Compliance Alerts (KPI Only)">
       <div className="actions-line" style={{ marginBottom: "14px" }}>
-        {canManageAgencyAgreements && <button className="save-btn" onClick={generateSlaEscalationNotifications}>Generate Escalation Alerts</button>}
+        {canManageAgencyAgreements && <button className="save-btn" onClick={generateSlaEscalationNotifications}>Generate Update Alerts</button>}
         <button className="light-btn" onClick={loadAll}>Refresh Data</button>
       </div>
       <table>
@@ -13716,15 +13717,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Project</th>
             <th>Status</th>
             <th>Agreement</th>
-            <th>Update SLA</th>
+            <th>Update Frequency</th>
             <th>Days Without Update</th>
-            <th>Penalty</th>
+            <th>KPI Deduction</th>
             <th>Recommendation</th>
           </tr>
         </thead>
         <tbody>
           {getAgencySlaEscalationAlerts().length === 0 ? (
-            <tr><td colSpan="11">No stale agency updates. All records are within the agreement update rule.</td></tr>
+            <tr><td colSpan="11">No update compliance alerts. Update frequency affects KPI only, not financial penalties.</td></tr>
           ) : (
             getAgencySlaEscalationAlerts().slice(0, 50).map((item) => (
               <tr key={`${item.candidate_id}-${item.days_without_update}`}>
@@ -13737,7 +13738,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.agreement_no || "Default Policy"}</td>
                 <td>{item.update_frequency_days || 7} days</td>
                 <td><b>{item.days_without_update}</b></td>
-                <td>{item.penalty} pts</td>
+                <td>{item.kpi_deduction} pts</td>
                 <td>{item.recommendation}</td>
               </tr>
             ))
@@ -13757,10 +13758,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Rank</th>
             <th>Agency</th>
             <th>Agreement SLA</th>
-            <th>Update SLA</th>
+            <th>Update Frequency</th>
             <th>Delayed</th>
             <th>Avg Delay</th>
-            <th>Penalty Exposure</th>
+            <th>SLA Penalty Exposure</th>
             <th>SLA 30%</th>
             <th>Response 10%</th>
             <th>Quality 20%</th>
@@ -13768,7 +13769,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Mobilization 15%</th>
             <th>Update 10%</th>
             <th>Stale Updates</th>
-            <th>Penalty</th>
+            <th>Update KPI Deduction</th>
             <th>Agreement 5%</th>
             <th>Total</th>
             <th>Class</th>
@@ -13812,7 +13813,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Agency</th>
             <th>Agreement SLA</th>
             <th>Delayed</th>
-            <th>Penalty Exposure</th>
+            <th>SLA Penalty Exposure</th>
             <th>Total Score</th>
             <th>Class</th>
             <th>Recommendation</th>
@@ -13846,7 +13847,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Agency ID</th>
             <th>Agreement SLA</th>
             <th>Delayed</th>
-            <th>Penalty</th>
+            <th>SLA Penalty</th>
             <th>SLA</th>
             <th>Quality</th>
             <th>Response</th>
@@ -13913,17 +13914,31 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </div>
 
         <div className="card" style={{ marginTop: "12px" }}>
-          <h3 style={{ marginBottom: "12px" }}>SLA, Penalties & Financial Guarantee</h3>
+          <h3 style={{ marginBottom: "6px" }}>Financial Penalty Terms - Labor SLA Delay Only</h3>
+          <p style={{ marginBottom: "12px", color: "#64748b" }}>Financial penalties are calculated only when labor/candidates exceed the agreed SLA. Updates, response speed and quality affect KPI only.</p>
           <div className="form-grid">
-            <Input type="number" placeholder="SLA Days" value={agreementForm.sla_days} onChange={(v) => updateForm(setAgreementForm, "sla_days", v)} />
-            <Input type="number" placeholder="Response SLA Hours" value={agreementForm.response_sla_hours} onChange={(v) => updateForm(setAgreementForm, "response_sla_hours", v)} />
-            <Input type="number" placeholder="Update Frequency Days" value={agreementForm.update_frequency_days} onChange={(v) => updateForm(setAgreementForm, "update_frequency_days", v)} />
-            <Select placeholder="Delay Penalty Type" value={agreementForm.delay_penalty_type} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_type", v)} options={["Fixed Amount", "Percentage", "Allocation Hold", "Warning Only"]} />
-            <Input type="number" placeholder="Delay Penalty Value" value={agreementForm.delay_penalty_amount} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_amount", v)} />
-            <Input type="number" placeholder="Penalty After Days" value={agreementForm.delay_penalty_after_days} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_after_days", v)} />
+            <Input type="number" placeholder="Labor SLA Days" value={agreementForm.sla_days} onChange={(v) => updateForm(setAgreementForm, "sla_days", v)} />
+            <Select placeholder="Labor SLA Penalty Type" value={agreementForm.delay_penalty_type} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_type", v)} options={["Fixed Amount Per Delayed Day", "Warning Only"]} />
+            <Input type="number" placeholder="Penalty Value Per Delayed Day SAR" value={agreementForm.delay_penalty_amount} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_amount", v)} />
+            <Input type="number" placeholder="Grace Period Before Penalty Days" value={agreementForm.delay_penalty_after_days} onChange={(v) => updateForm(setAgreementForm, "delay_penalty_after_days", v)} />
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: "12px" }}>
+          <h3 style={{ marginBottom: "6px" }}>Performance KPI Rules - No Financial Penalty</h3>
+          <p style={{ marginBottom: "12px", color: "#64748b" }}>These rules affect agency score, ranking, reports and future allocation decisions.</p>
+          <div className="form-grid">
+            <Input type="number" placeholder="Response Target Hours" value={agreementForm.response_sla_hours} onChange={(v) => updateForm(setAgreementForm, "response_sla_hours", v)} />
+            <Input type="number" placeholder="Case Update Frequency Days" value={agreementForm.update_frequency_days} onChange={(v) => updateForm(setAgreementForm, "update_frequency_days", v)} />
+            <Input type="number" placeholder="Replacement Guarantee Days" value={agreementForm.replacement_guarantee_days} onChange={(v) => updateForm(setAgreementForm, "replacement_guarantee_days", v)} />
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: "12px" }}>
+          <h3 style={{ marginBottom: "12px" }}>Financial Guarantee</h3>
+          <div className="form-grid">
             <Select placeholder="Financial Guarantee Required" value={agreementForm.financial_guarantee_required} onChange={(v) => updateForm(setAgreementForm, "financial_guarantee_required", v)} options={["No", "Yes", "Optional"]} />
             <Input type="number" placeholder="Financial Guarantee Amount SAR" value={agreementForm.financial_guarantee_amount} onChange={(v) => updateForm(setAgreementForm, "financial_guarantee_amount", v)} />
-            <Input type="number" placeholder="Replacement Guarantee Days" value={agreementForm.replacement_guarantee_days} onChange={(v) => updateForm(setAgreementForm, "replacement_guarantee_days", v)} />
           </div>
         </div>
 
@@ -13961,7 +13976,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Agency</th>
             <th>Template</th>
             <th>SLA</th>
-            <th>Penalty</th>
+            <th>Labor SLA Penalty</th>
             <th>Guarantee</th>
             <th>Status</th>
             <th>Agency Accepted</th>
@@ -14007,7 +14022,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Waived" value={`${Number(agencyPenalties.filter((x) => x.status === "Waived").reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
     </div>
 
-    <TableCard title="Penalty Register / Approval Workflow">
+    <TableCard title="Labor SLA Delay Penalties / Approval Workflow">
       <div className="actions-line" style={{ marginBottom: "14px" }}>
         <button className="save-btn" onClick={generatePenaltyRegister}>Generate / Refresh Calculated Penalties</button>
         <button className="light-btn" onClick={loadAll}>Refresh Data</button>
@@ -14036,7 +14051,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {getPenaltyRegisterDisplayRows().length === 0 ? (
-            <tr><td colSpan="17">No penalties calculated yet. Generate the register after agreements and candidate timelines are updated.</td></tr>
+            <tr><td colSpan="17">No labor SLA delay penalties calculated yet. Penalties are generated only for workers/candidates delayed beyond the agreed SLA.</td></tr>
           ) : (
             getPenaltyRegisterDisplayRows().map((item) => (
               <tr key={`${item.source}-${item.id || item.candidate_id}-${item.agreement_no}`}>
@@ -14108,7 +14123,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Agency</th>
             <th>Agreement SLA</th>
             <th>Delayed</th>
-            <th>Penalty Exposure</th>
+            <th>SLA Penalty Exposure</th>
             <th>Authorized Qty</th>
             <th>Candidates</th>
             <th>Submitted %</th>
@@ -14155,7 +14170,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <th>Agency</th>
               <th>Agreement SLA</th>
               <th>Delayed</th>
-              <th>Penalty</th>
+              <th>SLA Penalty</th>
               <th>SLA</th>
               <th>Update</th>
               <th>Quality</th>
