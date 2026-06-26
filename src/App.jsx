@@ -7929,6 +7929,128 @@ function filterReportStudioRowsByProject(rows, fieldCandidates = ["project", "pr
   );
 }
 
+
+function isReportArabic(language = reportStudioForm.language) {
+  return language === "Arabic";
+}
+
+function isReportBilingual(language = reportStudioForm.language) {
+  return language === "Bilingual";
+}
+
+const REPORT_AR_LABELS = {
+  "CEO Executive Report": "تقرير تنفيذي للرئيس التنفيذي",
+  "Executive Board Presentation": "عرض تنفيذي لمجلس الإدارة",
+  "Weekly Recruitment Report": "تقرير التوظيف الأسبوعي",
+  "Visa & Mobilization Report": "تقرير التأشيرات والحشد",
+  "Agency Performance Report": "تقرير أداء المكاتب",
+  "Budget & Finance Summary": "ملخص الميزانية والتكاليف",
+  "Project Progress Report": "تقرير تقدم المشروع",
+  "Client Progress Report": "تقرير تقدم العميل",
+  "Executive": "تنفيذي",
+  "Recruitment": "التوظيف",
+  "Operations": "العمليات",
+  "Agencies": "المكاتب",
+  "Finance": "المالية",
+  "All": "الكل",
+  "Required Manpower": "القوى العاملة المطلوبة",
+  "Active Candidates": "المرشحون النشطون",
+  "Joined": "المباشرون",
+  "Recruitment Progress": "نسبة تقدم التوظيف",
+  "Visa Gap": "فجوة التأشيرات",
+  "Authorization Gap": "فجوة التفويض",
+  "High Risk Lines": "بنود عالية المخاطر",
+  "Saudization Rate": "نسبة السعودة",
+  "Estimated Cost": "التكلفة التقديرية",
+  "Budget Variance": "فرق الميزانية",
+  "Required": "المطلوب",
+  "Interview Passed": "اجتازوا المقابلة",
+  "Medical Passed": "اجتازوا الفحص الطبي",
+  "Tickets Issued": "تم إصدار التذاكر",
+  "Arrived KSA": "وصلوا المملكة",
+  "Low": "منخفض",
+  "Medium": "متوسط",
+  "High": "مرتفع",
+  "High Risk": "مخاطر عالية",
+  "Medium Risk": "مخاطر متوسطة",
+  "Safe Lines": "بنود آمنة",
+  "Candidate Gap": "فجوة المرشحين",
+  "Joining Gap": "فجوة المباشرة",
+  "Sourcing / Agency Submission": "التوريد / ترشيحات المكتب",
+  "Visa Allocation": "تخصيص التأشيرات",
+  "Authorization": "التفويض",
+  "Interview": "المقابلات",
+  "Medical": "الفحص الطبي",
+  "Embassy / Visa Stamping": "السفارة / التختيم",
+  "Ticketing": "إصدار التذاكر",
+  "Arrival / Joining": "الوصول / المباشرة",
+  "Completed": "مكتمل",
+  "Monitoring": "متابعة",
+  "KPI Dashboard": "لوحة المؤشرات",
+  "Charts & Performance": "الرسوم البيانية والأداء",
+  "Recruitment Funnel": "قمع التوظيف",
+  "Risk & Gaps": "المخاطر والفجوات",
+  "Agency Insights": "تحليل أداء المكاتب",
+  "Recommended Actions": "الإجراءات المقترحة",
+  "AI Forecast": "توقعات الذكاء الاصطناعي",
+  "Executive Summary": "الملخص التنفيذي",
+  "Top Request-Line Risks": "أعلى مخاطر بنود الطلبات",
+  "Agency Score": "تقييم المكتب",
+  "Candidates": "المرشحون",
+  "Score": "النقاط",
+  "Risk": "المخاطر",
+  "Confidential": "سري",
+  "Executive Copy": "نسخة تنفيذية",
+  "Generated": "تاريخ التوليد",
+  "Main action": "الإجراء الرئيسي",
+  "No agency data available yet.": "لا توجد بيانات مكاتب متاحة حتى الآن.",
+  "No high-risk request lines detected.": "لا توجد بنود عالية المخاطر حاليًا.",
+  "Demand volume": "حجم الطلب",
+  "Submitted / active": "المقدمون / النشطون",
+  "Confirmed joining": "مباشرة مؤكدة",
+  "Candidate coverage": "تغطية المرشحين",
+  "Allocation shortage": "نقص التخصيص",
+  "Authorization shortage": "نقص التفويض",
+};
+
+function localizeReportText(textValue, language = reportStudioForm.language) {
+  const value = String(textValue || "");
+  const ar = REPORT_AR_LABELS[value] || value;
+  if (isReportArabic(language)) return ar;
+  if (isReportBilingual(language) && ar !== value) return `${ar} | ${value}`;
+  return value;
+}
+
+function reportPhrase(en, ar, language = reportStudioForm.language) {
+  if (isReportArabic(language)) return ar;
+  if (isReportBilingual(language)) return `${ar}\n${en}`;
+  return en;
+}
+
+function getReportFont(language = reportStudioForm.language) {
+  return isReportArabic(language) ? "Arial" : "Aptos";
+}
+
+function getReportHeadFont(language = reportStudioForm.language) {
+  return isReportArabic(language) ? "Arial" : "Aptos Display";
+}
+
+function getReportTextAlign(language = reportStudioForm.language) {
+  return isReportArabic(language) ? "right" : "left";
+}
+
+function getLocalizedReportName(data, language = reportStudioForm.language) {
+  return localizeReportText(data.report_name || data.template || "VisaFlow AI Report", language);
+}
+
+function getLocalizedCategory(value, language = reportStudioForm.language) {
+  return localizeReportText(value || "Executive", language);
+}
+
+function getLocalizedProject(value, language = reportStudioForm.language) {
+  return localizeReportText(value || "All", language);
+}
+
 function buildAIReportStudioDataset() {
   const requestHealth = filterReportStudioRowsByProject(buildRequestHealthRows(), ["project"]);
   const mobilizationRows = filterReportStudioRowsByProject(mobilizationRequestRows, ["project_name"]);
@@ -7972,9 +8094,77 @@ function buildAIReportStudioDataset() {
 
 function buildAIReportStudioNarrative() {
   const data = buildAIReportStudioDataset();
+  const language = data.language;
   const topRisks = data.request_health.filter((row) => row.riskLevel === "High").slice(0, 5);
   const topAgencies = data.agencies.slice(0, 5);
   const weakAgencies = data.agencies.filter((agency) => agency.risk !== "Low").slice(0, 5);
+  const reportName = getLocalizedReportName(data, language);
+
+  if (isReportArabic(language)) {
+    return [
+      `${reportName}`,
+      `تاريخ التوليد: ${data.generated_at}`,
+      `النطاق: ${getLocalizedProject(data.project, language)} | اللغة: العربية | المخرج: ${data.output_format}`,
+      `درجة السرية: ${reportStudioForm.confidential ? "سري" : "غير سري"}`,
+      "",
+      "الملخص التنفيذي",
+      `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والمرشحين والحشد والمكاتب. نسبة تقدم التوظيف الحالية ${executiveDashboard.recruitmentProgress}%، مع وجود ${data.forecast.totalRemainingRecruitment} فجوة توظيف متبقية و ${data.forecast.totalRemainingJoining} فجوة مباشرة متبقية.`,
+      data.forecast.highRiskRequests > 0
+        ? "توجد بنود طلبات عالية المخاطر قد تؤثر على الحشد إذا لم يتم التصعيد والمتابعة."
+        : "المسار العام مستقر مع الحاجة إلى متابعة دورية للمؤشرات التشغيلية.",
+      "",
+      "لوحة المؤشرات",
+      ...data.kpis.map((item) => `- ${localizeReportText(item.metric, language)}: ${item.value}`),
+      "",
+      "أعلى المخاطر",
+      ...(topRisks.length
+        ? topRisks.map((row) => `- ${row.request_no} / البند ${row.line_no} / ${row.profession}: ${localizeReportText(row.bottleneck, language)}، التقدم ${row.progress}%، درجة المخاطر ${row.riskScore}.`)
+        : ["- لا توجد بنود عالية المخاطر حاليًا."]),
+      "",
+      "تحليل أداء المكاتب",
+      ...(topAgencies.length
+        ? topAgencies.map((agency) => `- ${agency.agency}: النقاط ${agency.score}، المخاطر ${localizeReportText(agency.risk, language)}، المرشحون ${agency.candidates}، المباشرون ${agency.joined}.`)
+        : ["- لا توجد بيانات مكاتب متاحة حتى الآن."]),
+      "",
+      "المكاتب التي تحتاج متابعة",
+      ...(weakAgencies.length
+        ? weakAgencies.map((agency) => `- ${agency.agency}: مستوى المخاطر ${localizeReportText(agency.risk, language)}، نسبة التعثر ${agency.failRate}%، النقاط ${agency.score}.`)
+        : ["- لا توجد مخاطر متابعة واضحة على المكاتب حاليًا."]),
+      "",
+      "الإجراءات المقترحة",
+      "1. مراجعة بنود الطلبات عالية المخاطر حسب المهنة والجنسية والجنس.",
+      "2. إغلاق فجوات التأشيرات والتفويض قبل زيادة حجم التوريد من المكاتب.",
+      "3. متابعة المكاتب ذات الأداء الضعيف أو التحديثات المتأخرة للمرشحين.",
+      "4. نقل المرشحين المجتازين طبيًا والجاهزين للتأشيرة إلى مرحلة التذاكر والوصول.",
+      "5. استخدام هذا التقرير في الاجتماع التنفيذي الأسبوعي وتحديد مالك لكل عائق.",
+    ].join("\n");
+  }
+
+  if (isReportBilingual(language)) {
+    return [
+      `${reportName}`,
+      `تاريخ التوليد / Generated: ${data.generated_at}`,
+      `النطاق / Scope: ${getLocalizedProject(data.project, language)} | Language: Bilingual | Output: ${data.output_format}`,
+      `Confidential / سري: ${reportStudioForm.confidential ? "Yes / نعم" : "No / لا"}`,
+      "",
+      "الملخص التنفيذي / Executive Summary",
+      `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والحشد. Current recruitment progress is ${executiveDashboard.recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} recruitment gap(s) and ${data.forecast.totalRemainingJoining} joining gap(s).`,
+      data.forecast.forecastMessage,
+      "",
+      "لوحة المؤشرات / KPI Dashboard",
+      ...data.kpis.map((item) => `- ${localizeReportText(item.metric, language)}: ${item.value}`),
+      "",
+      "أعلى المخاطر / Top Risks",
+      ...(topRisks.length ? topRisks.map((row) => `- ${row.request_no} / Line ${row.line_no} / ${row.profession}: ${localizeReportText(row.bottleneck, language)}, progress ${row.progress}%, risk ${row.riskScore}.`) : ["- لا توجد بنود عالية المخاطر حاليًا / No high-risk request lines detected."]),
+      "",
+      "الإجراءات المقترحة / Recommended Actions",
+      "1. مراجعة بنود الطلبات عالية المخاطر / Review high-risk request lines.",
+      "2. إغلاق فجوات التأشيرات والتفويض / Close visa and authorization gaps.",
+      "3. متابعة المكاتب ذات الأداء الضعيف / Push weak or delayed agencies.",
+      "4. تسريع التذاكر والوصول / Move ready candidates to ticketing and arrival.",
+      "5. تحديد مالك لكل عائق / Assign an owner for each bottleneck.",
+    ].join("\n");
+  }
 
   return [
     `${data.report_name}`,
@@ -8006,7 +8196,6 @@ function buildAIReportStudioNarrative() {
     "5. Use this report in the weekly executive meeting and assign owners for each bottleneck.",
   ].join("\n");
 }
-
 function previewAIReportStudio() {
   const narrative = buildAIReportStudioNarrative();
   setReportStudioResult(narrative);
@@ -8028,12 +8217,14 @@ function downloadReportStudioFile(fileName, content, mimeType = "text/plain;char
 function buildReportStudioHtmlDocument(mode = "document") {
   const data = buildAIReportStudioDataset();
   const narrative = buildAIReportStudioNarrative();
-  const title = data.report_name || "VisaFlow AI Report";
-  const rows = data.kpis.map((item) => `<tr><td>${item.metric}</td><td><b>${item.value}</b></td></tr>`).join("");
+  const language = data.language;
+  const isArabic = isReportArabic(language);
+  const title = getLocalizedReportName(data, language) || "VisaFlow AI Report";
+  const rows = data.kpis.map((item) => `<tr><td>${localizeReportText(item.metric, language)}</td><td><b>${item.value}</b></td></tr>`).join("");
   const slideMode = mode === "presentation";
 
   return `<!doctype html>
-<html>
+<html dir="${isArabic ? "rtl" : "ltr"}" lang="${isArabic ? "ar" : "en"}">
 <head>
 <meta charset="utf-8" />
 <title>${title}</title>
@@ -8046,11 +8237,11 @@ body{font-family:Arial,Tahoma,sans-serif;margin:0;background:#f8fafc;color:#0f17
   <div class="cover">
     <div class="badge">VisaFlow KSA · AI Report Studio</div>
     <h1>${title}</h1>
-    <p>${data.category} · ${data.project} · ${data.language}</p>
+    <p>${getLocalizedCategory(data.category, language)} · ${getLocalizedProject(data.project, language)} · ${data.language}</p>
   </div>
-  <h2>KPI Dashboard</h2>
+  <h2>${localizeReportText("KPI Dashboard", language)}</h2>
   <table>${rows}</table>
-  <h2>AI Executive Report</h2>
+  <h2>${isArabic ? "التقرير التنفيذي الذكي" : "AI Executive Report"}</h2>
   <pre>${narrative.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
   <div class="footer">Generated by VisaFlow KSA AI Report Studio on ${data.generated_at}. ${reportStudioForm.confidential ? "Confidential" : ""}</div>
 </div>
@@ -8079,28 +8270,35 @@ function trimSlideText(value, maxLength = 90) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
-function addReportSlideTitle(slide, title, subtitle = "") {
+function addReportSlideTitle(slide, title, subtitle = "", language = reportStudioForm.language) {
+  const isArabic = isReportArabic(language);
   slide.addText(title, {
-    x: 0.45,
+    x: isArabic ? 4.8 : 0.45,
     y: 0.32,
     w: 7.9,
     h: 0.36,
-    fontFace: "Aptos Display",
+    fontFace: getReportHeadFont(language),
     fontSize: 22,
     bold: true,
     color: "0F172A",
+    align: getReportTextAlign(language),
+    rtl: isArabic,
     margin: 0,
+    fit: "shrink",
   });
   if (subtitle) {
     slide.addText(subtitle, {
-      x: 0.48,
+      x: isArabic ? 2.95 : 0.48,
       y: 0.73,
       w: 9.7,
       h: 0.22,
-      fontFace: "Aptos",
+      fontFace: getReportFont(language),
       fontSize: 8.5,
       color: "64748B",
+      align: getReportTextAlign(language),
+      rtl: isArabic,
       margin: 0,
+      fit: "shrink",
     });
   }
   slide.addShape("line", {
@@ -8251,28 +8449,129 @@ function addReportProgressBar(slide, x, y, w, h, value, maxValue, color = "2563E
   }
 }
 
+function escapeSvgText(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function svgToDataUri(svg) {
+  const encoded = typeof window !== "undefined" && window.btoa
+    ? window.btoa(unescape(encodeURIComponent(svg)))
+    : btoa(unescape(encodeURIComponent(svg)));
+  return `data:image/svg+xml;base64,${encoded}`;
+}
+
+function addSvgChart(slide, svg, x, y, w, h) {
+  slide.addImage({ data: svgToDataUri(svg), x, y, w, h });
+}
+
+function buildDonutSvg({ title, value, subtitle, color = "#2563eb", language = "English" }) {
+  const pct = Math.max(0, Math.min(Number(value || 0), 100));
+  const dash = `${pct} ${100 - pct}`;
+  const dir = isReportArabic(language) ? "rtl" : "ltr";
+  const font = isReportArabic(language) ? "Arial" : "Aptos, Arial";
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" width="460" height="320" viewBox="0 0 460 320" direction="${dir}">
+    <defs>
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/></filter>
+    </defs>
+    <rect x="8" y="8" width="444" height="304" rx="28" fill="#ffffff" filter="url(#shadow)"/>
+    <text x="230" y="48" text-anchor="middle" font-family="${font}" font-size="22" font-weight="700" fill="#0f172a">${escapeSvgText(title)}</text>
+    <circle cx="230" cy="158" r="76" fill="none" stroke="#e2e8f0" stroke-width="24"/>
+    <circle cx="230" cy="158" r="76" fill="none" stroke="${color}" stroke-width="24" stroke-linecap="round" pathLength="100" stroke-dasharray="${dash}" transform="rotate(-90 230 158)"/>
+    <text x="230" y="150" text-anchor="middle" font-family="${font}" font-size="34" font-weight="800" fill="#0f172a">${Math.round(pct)}%</text>
+    <text x="230" y="181" text-anchor="middle" font-family="${font}" font-size="15" fill="#64748b">${escapeSvgText(subtitle || "")}</text>
+    <rect x="154" y="250" width="152" height="10" rx="5" fill="#e2e8f0"/>
+    <rect x="154" y="250" width="${Math.max(8, 152 * pct / 100)}" height="10" rx="5" fill="${color}"/>
+  </svg>`;
+}
+
+function buildHorizontalBarChartSvg({ title, rows = [], color = "#2563eb", language = "English", suffix = "" }) {
+  const dir = isReportArabic(language) ? "rtl" : "ltr";
+  const font = isReportArabic(language) ? "Arial" : "Aptos, Arial";
+  const safeRows = rows.slice(0, 7);
+  const max = Math.max(...safeRows.map((item) => Number(item.value || 0)), 1);
+  const rowSvg = safeRows.map((item, index) => {
+    const y = 78 + index * 42;
+    const value = Number(item.value || 0);
+    const pct = Math.max(0.02, Math.min(value / max, 1));
+    const barW = 300 * pct;
+    const labelX = isReportArabic(language) ? 414 : 46;
+    const valueX = isReportArabic(language) ? 46 : 414;
+    const anchorLabel = isReportArabic(language) ? "end" : "start";
+    const anchorValue = isReportArabic(language) ? "start" : "end";
+    return `
+      <text x="${labelX}" y="${y}" text-anchor="${anchorLabel}" font-family="${font}" font-size="14" font-weight="700" fill="#334155">${escapeSvgText(item.label)}</text>
+      <text x="${valueX}" y="${y}" text-anchor="${anchorValue}" font-family="${font}" font-size="13" font-weight="800" fill="${item.color || color}">${escapeSvgText(`${value}${suffix}`)}</text>
+      <rect x="46" y="${y + 12}" width="368" height="12" rx="6" fill="#e2e8f0"/>
+      <rect x="46" y="${y + 12}" width="${Math.max(8, barW + 68)}" height="12" rx="6" fill="${item.color || color}"/>
+    `;
+  }).join("");
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" width="460" height="390" viewBox="0 0 460 390" direction="${dir}">
+    <defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.10"/></filter></defs>
+    <rect x="8" y="8" width="444" height="374" rx="28" fill="#ffffff" filter="url(#shadow)"/>
+    <text x="230" y="45" text-anchor="middle" font-family="${font}" font-size="22" font-weight="800" fill="#0f172a">${escapeSvgText(title)}</text>
+    ${rowSvg}
+  </svg>`;
+}
+
+function buildRiskDistributionSvg({ high, medium, low, language = "English" }) {
+  const total = Math.max(Number(high || 0) + Number(medium || 0) + Number(low || 0), 1);
+  const highPct = Math.round((Number(high || 0) / total) * 100);
+  const mediumPct = Math.round((Number(medium || 0) / total) * 100);
+  const lowPct = Math.max(0, 100 - highPct - mediumPct);
+  return buildHorizontalBarChartSvg({
+    title: localizeReportText("Risk & Gaps", language),
+    language,
+    suffix: "%",
+    rows: [
+      { label: localizeReportText("High Risk", language), value: highPct, color: "#e11d48" },
+      { label: localizeReportText("Medium Risk", language), value: mediumPct, color: "#f59e0b" },
+      { label: localizeReportText("Safe Lines", language), value: lowPct, color: "#22c55e" },
+    ],
+  });
+}
+
 async function buildReportStudioPptx(fileName) {
   const data = buildAIReportStudioDataset();
+  const language = data.language;
+  const isArabic = isReportArabic(language);
   const pptx = new pptxgen();
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "VisaFlow KSA";
   pptx.company = "VisaFlow KSA";
   pptx.subject = data.template || data.report_name || "AI Report Studio";
-  pptx.title = data.report_name || "VisaFlow AI Report";
-  pptx.lang = data.language === "Arabic" ? "ar-SA" : "en-US";
+  pptx.title = getLocalizedReportName(data, language) || "VisaFlow AI Report";
+  pptx.lang = isArabic ? "ar-SA" : "en-US";
   pptx.theme = {
-    headFontFace: "Aptos Display",
-    bodyFontFace: "Aptos",
-    lang: data.language === "Arabic" ? "ar-SA" : "en-US",
+    headFontFace: getReportHeadFont(language),
+    bodyFontFace: getReportFont(language),
+    lang: isArabic ? "ar-SA" : "en-US",
   };
 
   const required = getReportNumber(getReportKpiValue(data, "Required Manpower", 0));
   const candidatesTotal = getReportNumber(getReportKpiValue(data, "Active Candidates", 0));
   const joinedTotal = getReportNumber(getReportKpiValue(data, "Joined", 0));
+  const recruitmentProgress = getReportNumber(getReportKpiValue(data, "Recruitment Progress", executiveDashboard.recruitmentProgress));
+  const candidateCoverage = required ? Math.round((candidatesTotal / required) * 100) : recruitmentProgress;
+  const joiningProgress = required ? Math.round((joinedTotal / required) * 100) : 0;
+  const saudizationRate = getReportNumber(getReportKpiValue(data, "Saudization Rate", executiveDashboard.saudizationRate));
+  const highRiskCount = data.request_health.filter((row) => row.riskLevel === "High").length;
+  const mediumRiskCount = data.request_health.filter((row) => row.riskLevel === "Medium").length;
+  const safeRiskCount = Math.max(data.request_health.length - highRiskCount - mediumRiskCount, 0);
   const topRisks = data.request_health.filter((row) => row.riskLevel === "High").slice(0, 5);
   const riskRows = (topRisks.length ? topRisks : data.request_health.slice(0, 5));
-  const topAgencies = data.agencies.slice(0, 6);
+  const topAgencies = data.agencies.slice(0, 7);
+  const funnelRows = (executiveDashboard.recruitmentFunnel || []).filter((item) => item.value !== undefined).slice(0, 7);
   const colors = ["2563EB", "14B8A6", "F97316", "A855F7", "06B6D4", "22C55E", "E11D48"];
+  const reportName = getLocalizedReportName(data, language);
+  const scopeText = isArabic
+    ? `${getLocalizedCategory(data.category, language)} · ${getLocalizedProject(data.project, language)} · العربية`
+    : `${getLocalizedCategory(data.category, language)} · ${getLocalizedProject(data.project, language)} · ${data.language}`;
 
   let slide = pptx.addSlide();
   slide.background = { color: "020617" };
@@ -8280,61 +8579,68 @@ async function buildReportStudioPptx(fileName) {
   slide.addShape("rect", { x: 7.9, y: 0, w: 5.5, h: 7.5, fill: { color: "0F766E", transparency: 10 }, line: { color: "0F766E", transparency: 100 } });
   slide.addShape("rect", { x: 10.4, y: 0, w: 3, h: 7.5, fill: { color: "7C3AED", transparency: 18 }, line: { color: "7C3AED", transparency: 100 } });
   slide.addText("VisaFlow KSA · AI Report Studio", {
-    x: 0.7,
+    x: isArabic ? 7.2 : 0.7,
     y: 0.62,
     w: 4.7,
     h: 0.25,
-    fontFace: "Aptos",
+    fontFace: getReportFont(language),
     fontSize: 11,
     bold: true,
     color: "67E8F9",
+    align: getReportTextAlign(language),
+    rtl: isArabic,
     margin: 0,
   });
-  slide.addText(data.report_name || "VisaFlow AI Report", {
-    x: 0.68,
-    y: 1.52,
-    w: 7.2,
-    h: 0.96,
-    fontFace: "Aptos Display",
-    fontSize: 38,
+  slide.addText(reportName, {
+    x: isArabic ? 4.35 : 0.68,
+    y: 1.48,
+    w: 7.6,
+    h: 1.0,
+    fontFace: getReportHeadFont(language),
+    fontSize: isArabic ? 30 : 38,
     bold: true,
     color: "FFFFFF",
+    align: getReportTextAlign(language),
+    rtl: isArabic,
     margin: 0,
     fit: "shrink",
   });
-  slide.addText(`${data.category} · ${data.project} · ${data.language}`, {
-    x: 0.72,
+  slide.addText(scopeText, {
+    x: isArabic ? 5.15 : 0.72,
     y: 2.56,
     w: 6.8,
     h: 0.28,
-    fontFace: "Aptos",
+    fontFace: getReportFont(language),
     fontSize: 13,
     color: "CBD5E1",
+    align: getReportTextAlign(language),
+    rtl: isArabic,
     margin: 0,
   });
-  slide.addShape("roundRect", { x: 0.72, y: 3.25, w: 2.05, h: 0.38, rectRadius: 0.07, fill: { color: "FFFFFF", transparency: 86 }, line: { color: "FFFFFF", transparency: 82 } });
-  slide.addText(reportStudioForm.confidential ? "CONFIDENTIAL" : "EXECUTIVE COPY", {
-    x: 0.88,
+  slide.addShape("roundRect", { x: isArabic ? 9.9 : 0.72, y: 3.25, w: 2.05, h: 0.38, rectRadius: 0.07, fill: { color: "FFFFFF", transparency: 86 }, line: { color: "FFFFFF", transparency: 82 } });
+  slide.addText(reportStudioForm.confidential ? localizeReportText("Confidential", language).toUpperCase() : localizeReportText("Executive Copy", language).toUpperCase(), {
+    x: isArabic ? 10.08 : 0.88,
     y: 3.35,
     w: 1.7,
     h: 0.14,
-    fontFace: "Aptos",
+    fontFace: getReportFont(language),
     fontSize: 7.5,
     bold: true,
     color: "FFFFFF",
     align: "center",
+    rtl: isArabic,
     margin: 0,
   });
-  addReportMetricCard(slide, 8.2, 1.05, 3.75, 1.05, "Recruitment Progress", getReportKpiValue(data, "Recruitment Progress"), "22C55E", `${candidatesTotal} active of ${required} required`);
-  addReportMetricCard(slide, 8.2, 2.35, 1.75, 1.05, "Visa Gap", getReportKpiValue(data, "Visa Gap"), "2563EB");
-  addReportMetricCard(slide, 10.2, 2.35, 1.75, 1.05, "High Risk", getReportKpiValue(data, "High Risk Lines"), "E11D48");
-  addReportMetricCard(slide, 8.2, 3.65, 1.75, 1.05, "Joined", joinedTotal, "14B8A6");
-  addReportMetricCard(slide, 10.2, 3.65, 1.75, 1.05, "Budget Variance", getReportKpiValue(data, "Budget Variance"), "F97316");
-  slide.addText(`Generated ${data.generated_at}`, { x: 0.74, y: 6.87, w: 5.4, h: 0.2, fontFace: "Aptos", fontSize: 8, color: "94A3B8", margin: 0 });
+  addReportMetricCard(slide, 8.2, 1.05, 3.75, 1.05, localizeReportText("Recruitment Progress", language), `${recruitmentProgress}%`, "22C55E", isArabic ? `${candidatesTotal} نشط من أصل ${required} مطلوب` : `${candidatesTotal} active of ${required} required`);
+  addReportMetricCard(slide, 8.2, 2.35, 1.75, 1.05, localizeReportText("Visa Gap", language), getReportKpiValue(data, "Visa Gap"), "2563EB");
+  addReportMetricCard(slide, 10.2, 2.35, 1.75, 1.05, localizeReportText("High Risk", language), getReportKpiValue(data, "High Risk Lines"), "E11D48");
+  addReportMetricCard(slide, 8.2, 3.65, 1.75, 1.05, localizeReportText("Joined", language), joinedTotal, "14B8A6");
+  addReportMetricCard(slide, 10.2, 3.65, 1.75, 1.05, localizeReportText("Budget Variance", language), getReportKpiValue(data, "Budget Variance"), "F97316");
+  slide.addText(`${localizeReportText("Generated", language)} ${data.generated_at}`, { x: isArabic ? 6.1 : 0.74, y: 6.87, w: 5.85, h: 0.2, fontFace: getReportFont(language), fontSize: 8, color: "94A3B8", align: getReportTextAlign(language), rtl: isArabic, margin: 0 });
 
   slide = pptx.addSlide();
   slide.background = { color: "F8FAFC" };
-  addReportSlideTitle(slide, "KPI Dashboard", "Live recruitment, visa, authorization and mobilization indicators.");
+  addReportSlideTitle(slide, localizeReportText("KPI Dashboard", language), reportPhrase("Live recruitment, visa, authorization and mobilization indicators.", "مؤشرات مباشرة للتوظيف والتأشيرات والتفويض والحشد.", language), language);
   const kpiCards = [
     ["Required Manpower", getReportKpiValue(data, "Required Manpower"), "2563EB", "Demand volume"],
     ["Active Candidates", getReportKpiValue(data, "Active Candidates"), "14B8A6", "Submitted / active"],
@@ -8346,102 +8652,135 @@ async function buildReportStudioPptx(fileName) {
   kpiCards.forEach((card, index) => {
     const col = index % 3;
     const row = Math.floor(index / 3);
-    addReportMetricCard(slide, 0.65 + col * 4.12, 1.35 + row * 1.25, 3.75, 0.95, card[0], card[1], card[2], card[3]);
+    addReportMetricCard(slide, 0.65 + col * 4.12, 1.35 + row * 1.25, 3.75, 0.95, localizeReportText(card[0], language), card[1], card[2], localizeReportText(card[3], language));
   });
-  slide.addText("Executive Summary", { x: 0.7, y: 4.1, w: 2.8, h: 0.25, fontFace: "Aptos Display", fontSize: 16, bold: true, color: "0F172A", margin: 0 });
-  slide.addText(`VisaFlow analyzed live recruitment, visa, authorization, candidate, mobilization and agency data. Current recruitment progress is ${executiveDashboard.recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} remaining recruitment gap(s) and ${data.forecast.totalRemainingJoining} remaining joining gap(s).`, {
+  slide.addText(localizeReportText("Executive Summary", language), { x: isArabic ? 3.65 : 0.7, y: 4.1, w: 2.8, h: 0.25, fontFace: getReportHeadFont(language), fontSize: 16, bold: true, color: "0F172A", align: getReportTextAlign(language), rtl: isArabic, margin: 0 });
+  slide.addText(isArabic
+    ? `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والمرشحين والحشد والمكاتب. نسبة تقدم التوظيف الحالية ${recruitmentProgress}%، مع وجود ${data.forecast.totalRemainingRecruitment} فجوة توظيف و ${data.forecast.totalRemainingJoining} فجوة مباشرة.`
+    : `VisaFlow analyzed live recruitment, visa, authorization, candidate, mobilization and agency data. Current recruitment progress is ${recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} remaining recruitment gap(s) and ${data.forecast.totalRemainingJoining} remaining joining gap(s).`, {
     x: 0.7,
     y: 4.48,
     w: 5.75,
     h: 1.15,
-    fontFace: "Aptos",
-    fontSize: 12,
+    fontFace: getReportFont(language),
+    fontSize: isArabic ? 11 : 12,
     color: "334155",
+    align: getReportTextAlign(language),
+    rtl: isArabic,
     fit: "shrink",
     valign: "mid",
     margin: 0.05,
   });
   slide.addShape("roundRect", { x: 7.0, y: 4.05, w: 5.45, h: 1.45, rectRadius: 0.08, fill: { color: "ECFEFF" }, line: { color: "A5F3FC" } });
-  slide.addText("AI Forecast", { x: 7.25, y: 4.25, w: 2.2, h: 0.25, fontFace: "Aptos Display", fontSize: 14, bold: true, color: "0E7490", margin: 0 });
-  slide.addText(data.forecast.forecastMessage || "Pipeline is stable if current pace continues.", { x: 7.25, y: 4.62, w: 4.85, h: 0.55, fontFace: "Aptos", fontSize: 11, color: "155E75", fit: "shrink", margin: 0.03 });
+  slide.addText(localizeReportText("AI Forecast", language), { x: isArabic ? 9.9 : 7.25, y: 4.25, w: 2.2, h: 0.25, fontFace: getReportHeadFont(language), fontSize: 14, bold: true, color: "0E7490", align: getReportTextAlign(language), rtl: isArabic, margin: 0 });
+  slide.addText(isArabic && data.forecast.highRiskRequests > 0 ? "بنود عالية المخاطر قد تؤثر على الحشد ما لم يتم التصعيد والمتابعة." : data.forecast.forecastMessage || "Pipeline is stable if current pace continues.", { x: 7.25, y: 4.62, w: 4.85, h: 0.55, fontFace: getReportFont(language), fontSize: 11, color: "155E75", align: getReportTextAlign(language), rtl: isArabic, fit: "shrink", margin: 0.03 });
   addReportFooter(slide, data, 2);
 
   slide = pptx.addSlide();
   slide.background = { color: "F8FAFC" };
-  addReportSlideTitle(slide, "Recruitment Funnel", "From required manpower to joined employees.");
-  const funnelRows = (executiveDashboard.recruitmentFunnel || []).filter((item) => item.value !== undefined);
-  const maxFunnel = Math.max(...funnelRows.map((item) => Number(item.value || 0)), required, 1);
-  funnelRows.slice(0, 7).forEach((item, index) => {
-    const y = 1.42 + index * 0.72;
-    const color = colors[index % colors.length];
-    slide.addText(item.stage, { x: 0.72, y: y - 0.02, w: 2.55, h: 0.18, fontFace: "Aptos", fontSize: 9, bold: true, color: "334155", margin: 0, fit: "shrink" });
-    addReportProgressBar(slide, 3.15, y, 7.35, 0.18, item.value, maxFunnel, color);
-    slide.addText(String(item.value || 0), { x: 10.8, y: y - 0.03, w: 1.0, h: 0.2, fontFace: "Aptos", fontSize: 9, bold: true, color, align: "right", margin: 0 });
-  });
-  slide.addShape("roundRect", { x: 0.72, y: 6.42, w: 11.7, h: 0.42, rectRadius: 0.06, fill: { color: "EEF2FF" }, line: { color: "C7D2FE" } });
-  slide.addText(`Main action: ${data.forecast.forecastMessage}`, { x: 0.92, y: 6.54, w: 11.25, h: 0.14, fontFace: "Aptos", fontSize: 8.5, color: "3730A3", margin: 0, fit: "shrink" });
+  addReportSlideTitle(slide, localizeReportText("Charts & Performance", language), reportPhrase("Visual performance charts generated from live VisaFlow data.", "رسوم بيانية للأداء مبنية على بيانات VisaFlow المباشرة.", language), language);
+  addSvgChart(slide, buildDonutSvg({ title: localizeReportText("Recruitment Progress", language), value: recruitmentProgress, subtitle: isArabic ? "تغطية التوظيف" : "Recruitment coverage", color: "#2563eb", language }), 0.6, 1.25, 3.45, 2.4);
+  addSvgChart(slide, buildDonutSvg({ title: localizeReportText("Joined", language), value: joiningProgress, subtitle: isArabic ? "نسبة المباشرة" : "Joining progress", color: "#14b8a6", language }), 4.95, 1.25, 3.45, 2.4);
+  addSvgChart(slide, buildDonutSvg({ title: localizeReportText("Saudization Rate", language), value: saudizationRate, subtitle: isArabic ? "نسبة السعودة" : "Saudization", color: "#a855f7", language }), 9.25, 1.25, 3.45, 2.4);
+  addSvgChart(slide, buildRiskDistributionSvg({ high: highRiskCount, medium: mediumRiskCount, low: safeRiskCount, language }), 0.6, 4.0, 5.4, 2.8);
+  addSvgChart(slide, buildHorizontalBarChartSvg({
+    title: localizeReportText("Agency Insights", language),
+    language,
+    rows: topAgencies.slice(0, 5).map((agency) => ({ label: agency.agency, value: agency.score || 0, color: agency.risk === "High" ? "#e11d48" : agency.risk === "Medium" ? "#f59e0b" : "#22c55e" })),
+  }), 7.05, 4.0, 5.4, 2.8);
   addReportFooter(slide, data, 3);
 
   slide = pptx.addSlide();
   slide.background = { color: "F8FAFC" };
-  addReportSlideTitle(slide, "Risk & Gaps", "High-risk request lines and operational bottlenecks.");
-  addReportMetricCard(slide, 0.72, 1.28, 2.65, 0.92, "High Risk Lines", getReportKpiValue(data, "High Risk Lines"), "E11D48");
-  addReportMetricCard(slide, 3.62, 1.28, 2.65, 0.92, "Visa Gap", getReportKpiValue(data, "Visa Gap"), "F97316");
-  addReportMetricCard(slide, 6.52, 1.28, 2.65, 0.92, "Auth Gap", getReportKpiValue(data, "Authorization Gap"), "A855F7");
-  addReportMetricCard(slide, 9.42, 1.28, 2.65, 0.92, "Remaining Join", data.forecast.totalRemainingJoining, "06B6D4");
-  slide.addText("Top Request-Line Risks", { x: 0.72, y: 2.62, w: 4, h: 0.24, fontFace: "Aptos Display", fontSize: 15, bold: true, color: "0F172A", margin: 0 });
-  riskRows.slice(0, 5).forEach((row, index) => {
-    const y = 3.04 + index * 0.58;
-    const accent = row.riskLevel === "High" ? "E11D48" : row.riskLevel === "Medium" ? "F59E0B" : "22C55E";
-    slide.addShape("roundRect", { x: 0.72, y, w: 11.65, h: 0.42, rectRadius: 0.05, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
-    slide.addShape("rect", { x: 0.72, y, w: 0.08, h: 0.42, fill: { color: accent }, line: { color: accent } });
-    slide.addText(`${row.request_no} · Line ${row.line_no} · ${trimSlideText(row.profession, 48)}`, { x: 0.9, y: y + 0.11, w: 5.4, h: 0.15, fontFace: "Aptos", fontSize: 7.8, bold: true, color: "0F172A", margin: 0, fit: "shrink" });
-    slide.addText(trimSlideText(row.bottleneck, 32), { x: 6.4, y: y + 0.11, w: 2.35, h: 0.15, fontFace: "Aptos", fontSize: 7.6, color: "475569", margin: 0, fit: "shrink" });
-    addReportProgressBar(slide, 8.9, y + 0.14, 2.2, 0.1, row.progress || 0, 100, accent);
-    slide.addText(`${row.progress || 0}% / ${row.riskScore || 0}`, { x: 11.2, y: y + 0.1, w: 0.95, h: 0.15, fontFace: "Aptos", fontSize: 7.5, color: accent, bold: true, align: "right", margin: 0 });
-  });
+  addReportSlideTitle(slide, localizeReportText("Recruitment Funnel", language), reportPhrase("From required manpower to joined employees with percentage bars.", "من العدد المطلوب إلى المباشرة مع نسب الأداء.", language), language);
+  const maxFunnel = Math.max(...funnelRows.map((item) => Number(item.value || 0)), required, 1);
+  const funnelSvgRows = funnelRows.map((item, index) => ({
+    label: localizeReportText(item.stage, language),
+    value: Number(item.value || 0),
+    color: `#${colors[index % colors.length]}`,
+  }));
+  addSvgChart(slide, buildHorizontalBarChartSvg({ title: localizeReportText("Recruitment Funnel", language), rows: funnelSvgRows, language }), 0.75, 1.24, 5.9, 4.95);
+  const percentRows = funnelRows.map((item, index) => ({
+    label: localizeReportText(item.stage, language),
+    value: required ? Math.round((Number(item.value || 0) / required) * 100) : 0,
+    color: `#${colors[index % colors.length]}`,
+  }));
+  addSvgChart(slide, buildHorizontalBarChartSvg({ title: isArabic ? "نسب مراحل التوظيف" : "Stage Percentages", rows: percentRows, language, suffix: "%" }), 6.8, 1.24, 5.9, 4.95);
+  slide.addShape("roundRect", { x: 0.75, y: 6.52, w: 11.9, h: 0.42, rectRadius: 0.06, fill: { color: "EEF2FF" }, line: { color: "C7D2FE" } });
+  slide.addText(`${localizeReportText("Main action", language)}: ${isArabic && data.forecast.highRiskRequests > 0 ? "تصعيد البنود عالية المخاطر وتحديد مسؤول لكل عائق." : data.forecast.forecastMessage}`, { x: 0.95, y: 6.64, w: 11.45, h: 0.14, fontFace: getReportFont(language), fontSize: 8.5, color: "3730A3", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
   addReportFooter(slide, data, 4);
 
   slide = pptx.addSlide();
   slide.background = { color: "F8FAFC" };
-  addReportSlideTitle(slide, "Agency Insights", "Agency scores, candidate submissions and joining performance.");
-  if (topAgencies.length) {
-    const maxScore = 100;
-    topAgencies.forEach((agency, index) => {
-      const y = 1.34 + index * 0.78;
-      const accent = agency.risk === "High" ? "E11D48" : agency.risk === "Medium" ? "F59E0B" : "22C55E";
-      slide.addShape("roundRect", { x: 0.72, y, w: 11.6, h: 0.55, rectRadius: 0.06, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
-      slide.addText(trimSlideText(agency.agency, 38), { x: 0.95, y: y + 0.11, w: 2.7, h: 0.16, fontFace: "Aptos", fontSize: 9, bold: true, color: "0F172A", margin: 0, fit: "shrink" });
-      addReportProgressBar(slide, 3.85, y + 0.2, 4.5, 0.12, agency.score || 0, maxScore, accent);
-      slide.addText(`Score ${agency.score || 0} · ${agency.risk || "Low"}`, { x: 8.55, y: y + 0.1, w: 1.55, h: 0.16, fontFace: "Aptos", fontSize: 8, bold: true, color: accent, margin: 0, fit: "shrink" });
-      slide.addText(`Candidates ${agency.candidates || 0} · Joined ${agency.joined || 0}`, { x: 10.28, y: y + 0.1, w: 1.8, h: 0.16, fontFace: "Aptos", fontSize: 7.5, color: "475569", align: "right", margin: 0, fit: "shrink" });
-    });
-  } else {
-    slide.addText("No agency data available yet.", { x: 0.72, y: 1.7, w: 6, h: 0.3, fontFace: "Aptos", fontSize: 15, color: "64748B", margin: 0 });
-  }
-  slide.addShape("roundRect", { x: 0.72, y: 6.25, w: 11.6, h: 0.48, rectRadius: 0.06, fill: { color: "FFF7ED" }, line: { color: "FED7AA" } });
-  slide.addText("Recommendation: push agencies with stale candidate updates or weak submission performance before increasing new allocations.", { x: 0.94, y: 6.4, w: 11.05, h: 0.14, fontFace: "Aptos", fontSize: 8.2, color: "9A3412", margin: 0, fit: "shrink" });
+  addReportSlideTitle(slide, localizeReportText("Risk & Gaps", language), reportPhrase("High-risk request lines and operational bottlenecks.", "بنود الطلبات عالية المخاطر والعوائق التشغيلية.", language), language);
+  addReportMetricCard(slide, 0.72, 1.28, 2.65, 0.92, localizeReportText("High Risk Lines", language), getReportKpiValue(data, "High Risk Lines"), "E11D48");
+  addReportMetricCard(slide, 3.62, 1.28, 2.65, 0.92, localizeReportText("Visa Gap", language), getReportKpiValue(data, "Visa Gap"), "F97316");
+  addReportMetricCard(slide, 6.52, 1.28, 2.65, 0.92, localizeReportText("Authorization Gap", language), getReportKpiValue(data, "Authorization Gap"), "A855F7");
+  addReportMetricCard(slide, 9.42, 1.28, 2.65, 0.92, localizeReportText("Joining Gap", language), data.forecast.totalRemainingJoining, "06B6D4");
+  slide.addText(localizeReportText("Top Request-Line Risks", language), { x: isArabic ? 7.95 : 0.72, y: 2.62, w: 4, h: 0.24, fontFace: getReportHeadFont(language), fontSize: 15, bold: true, color: "0F172A", align: getReportTextAlign(language), rtl: isArabic, margin: 0 });
+  riskRows.slice(0, 5).forEach((row, index) => {
+    const y = 3.04 + index * 0.58;
+    const accent = row.riskLevel === "High" ? "E11D48" : row.riskLevel === "Medium" ? "F59E0B" : "22C55E";
+    slide.addShape("roundRect", { x: 0.72, y, w: 11.65, h: 0.42, rectRadius: 0.05, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
+    slide.addShape("rect", { x: isArabic ? 12.29 : 0.72, y, w: 0.08, h: 0.42, fill: { color: accent }, line: { color: accent } });
+    slide.addText(`${row.request_no} · ${isArabic ? "البند" : "Line"} ${row.line_no} · ${trimSlideText(row.profession, 48)}`, { x: isArabic ? 6.55 : 0.9, y: y + 0.11, w: 5.4, h: 0.15, fontFace: getReportFont(language), fontSize: 7.8, bold: true, color: "0F172A", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+    slide.addText(trimSlideText(localizeReportText(row.bottleneck, language), 32), { x: isArabic ? 3.58 : 6.4, y: y + 0.11, w: 2.35, h: 0.15, fontFace: getReportFont(language), fontSize: 7.6, color: "475569", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+    addReportProgressBar(slide, 1.85, y + 0.14, 2.2, 0.1, row.progress || 0, 100, accent);
+    slide.addText(`${row.progress || 0}% / ${row.riskScore || 0}`, { x: 0.95, y: y + 0.1, w: 0.95, h: 0.15, fontFace: getReportFont(language), fontSize: 7.5, color: accent, bold: true, align: "right", margin: 0 });
+  });
   addReportFooter(slide, data, 5);
 
   slide = pptx.addSlide();
   slide.background = { color: "F8FAFC" };
-  addReportSlideTitle(slide, "Recommended Actions", "Suggested executive decisions for the weekly meeting.");
-  const actions = [
-    "Review high-risk request lines by profession, nationality and gender.",
-    "Close visa allocation and authorization gaps before escalating sourcing volume.",
-    "Push agencies with stale candidate updates or weak submission performance.",
-    "Move medically passed and visa-ready candidates to ticketing and arrival.",
-    "Assign one accountable owner for each bottleneck and review progress weekly.",
-  ];
+  addReportSlideTitle(slide, localizeReportText("Agency Insights", language), reportPhrase("Agency scores, candidate submissions and joining performance.", "نقاط المكاتب والترشيحات ونسبة المباشرة.", language), language);
+  if (topAgencies.length) {
+    addSvgChart(slide, buildHorizontalBarChartSvg({
+      title: isArabic ? "ترتيب أداء المكاتب" : "Agency Performance Ranking",
+      language,
+      rows: topAgencies.map((agency) => ({ label: agency.agency, value: agency.score || 0, color: agency.risk === "High" ? "#e11d48" : agency.risk === "Medium" ? "#f59e0b" : "#22c55e" })),
+    }), 0.72, 1.2, 5.95, 5.25);
+    topAgencies.slice(0, 6).forEach((agency, index) => {
+      const y = 1.34 + index * 0.78;
+      const accent = agency.risk === "High" ? "E11D48" : agency.risk === "Medium" ? "F59E0B" : "22C55E";
+      slide.addShape("roundRect", { x: 7.0, y, w: 5.4, h: 0.55, rectRadius: 0.06, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
+      slide.addText(trimSlideText(agency.agency, 30), { x: isArabic ? 9.1 : 7.22, y: y + 0.11, w: 2.7, h: 0.16, fontFace: getReportFont(language), fontSize: 9, bold: true, color: "0F172A", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+      addReportProgressBar(slide, 7.32, y + 0.34, 3.2, 0.11, agency.score || 0, 100, accent);
+      slide.addText(`${localizeReportText("Score", language)} ${agency.score || 0} · ${localizeReportText(agency.risk || "Low", language)}`, { x: 10.62, y: y + 0.28, w: 1.45, h: 0.16, fontFace: getReportFont(language), fontSize: 7.5, bold: true, color: accent, align: "right", margin: 0, fit: "shrink" });
+    });
+  } else {
+    slide.addText(localizeReportText("No agency data available yet.", language), { x: isArabic ? 6.3 : 0.72, y: 1.7, w: 6, h: 0.3, fontFace: getReportFont(language), fontSize: 15, color: "64748B", align: getReportTextAlign(language), rtl: isArabic, margin: 0 });
+  }
+  slide.addShape("roundRect", { x: 0.72, y: 6.55, w: 11.6, h: 0.34, rectRadius: 0.06, fill: { color: "FFF7ED" }, line: { color: "FED7AA" } });
+  slide.addText(isArabic ? "التوصية: متابعة المكاتب ذات التحديثات المتأخرة أو الأداء الضعيف قبل زيادة التخصيصات الجديدة." : "Recommendation: push agencies with stale candidate updates or weak submission performance before increasing new allocations.", { x: 0.94, y: 6.65, w: 11.05, h: 0.12, fontFace: getReportFont(language), fontSize: 8.2, color: "9A3412", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+  addReportFooter(slide, data, 6);
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, localizeReportText("Recommended Actions", language), reportPhrase("Suggested executive decisions for the weekly meeting.", "قرارات تنفيذية مقترحة للاجتماع الأسبوعي.", language), language);
+  const actions = isArabic
+    ? [
+        "مراجعة بنود الطلبات عالية المخاطر حسب المهنة والجنسية والجنس.",
+        "إغلاق فجوات التأشيرات والتفويض قبل زيادة حجم التوريد.",
+        "متابعة المكاتب ذات التحديثات المتأخرة أو الأداء الضعيف.",
+        "تسريع المرشحين الجاهزين إلى مرحلة التذاكر والوصول.",
+        "تحديد مالك مسؤول لكل عائق ومراجعته أسبوعيًا.",
+      ]
+    : [
+        "Review high-risk request lines by profession, nationality and gender.",
+        "Close visa allocation and authorization gaps before escalating sourcing volume.",
+        "Push agencies with stale candidate updates or weak submission performance.",
+        "Move medically passed and visa-ready candidates to ticketing and arrival.",
+        "Assign one accountable owner for each bottleneck and review progress weekly.",
+      ];
   actions.forEach((action, index) => {
     const y = 1.45 + index * 0.86;
-    slide.addShape("ellipse", { x: 0.78, y, w: 0.42, h: 0.42, fill: { color: colors[index % colors.length] }, line: { color: colors[index % colors.length] } });
-    slide.addText(String(index + 1), { x: 0.9, y: y + 0.12, w: 0.18, h: 0.12, fontFace: "Aptos", fontSize: 8, bold: true, color: "FFFFFF", align: "center", margin: 0 });
-    slide.addText(action, { x: 1.45, y: y + 0.08, w: 10.2, h: 0.26, fontFace: "Aptos", fontSize: 13, color: "0F172A", margin: 0, fit: "shrink" });
+    slide.addShape("ellipse", { x: isArabic ? 11.75 : 0.78, y, w: 0.42, h: 0.42, fill: { color: colors[index % colors.length] }, line: { color: colors[index % colors.length] } });
+    slide.addText(String(index + 1), { x: isArabic ? 11.87 : 0.9, y: y + 0.12, w: 0.18, h: 0.12, fontFace: getReportFont(language), fontSize: 8, bold: true, color: "FFFFFF", align: "center", margin: 0 });
+    slide.addText(action, { x: isArabic ? 1.45 : 1.45, y: y + 0.08, w: 10.2, h: 0.26, fontFace: getReportFont(language), fontSize: 13, color: "0F172A", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
   });
   slide.addShape("roundRect", { x: 0.78, y: 6.25, w: 11.5, h: 0.52, rectRadius: 0.08, fill: { color: "ECFDF5" }, line: { color: "A7F3D0" } });
-  slide.addText("This presentation was generated directly as a PowerPoint .pptx file from VisaFlow live data.", { x: 1.0, y: 6.42, w: 11.0, h: 0.14, fontFace: "Aptos", fontSize: 8.5, color: "047857", margin: 0, fit: "shrink" });
-  addReportFooter(slide, data, 6);
+  slide.addText(isArabic ? "تم توليد هذا العرض مباشرة كملف PowerPoint حقيقي بصيغة .pptx من بيانات VisaFlow المباشرة." : "This presentation was generated directly as a PowerPoint .pptx file from VisaFlow live data.", { x: 1.0, y: 6.42, w: 11.0, h: 0.14, fontFace: getReportFont(language), fontSize: 8.5, color: "047857", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+  addReportFooter(slide, data, 7);
 
   await pptx.writeFile({ fileName });
 }
