@@ -414,6 +414,16 @@ arrival_date: "",
   notes: "",
 };
 
+const emptyOfficeBulkUpdate = {
+  status: "",
+  medical_status: "",
+  medical_date: "",
+  ticket_no: "",
+  flight_date: "",
+  arrival_date: "",
+  notes: "",
+};
+
 const emptyInterview = {
   candidate_name: "",
   profession: "",
@@ -1729,6 +1739,9 @@ async function saveSelectedAllocations() {
   const [agencyEditingId, setAgencyEditingId] = useState(null);
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
+  const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
+  const [officeBulkForm, setOfficeBulkForm] = useState(emptyOfficeBulkUpdate);
+  const [officeBulkLoading, setOfficeBulkLoading] = useState(false);
   const [interviewForm, setInterviewForm] = useState(emptyInterview);
   const [interviewEditingId, setInterviewEditingId] = useState(null);
 const [allocationEditingId, setAllocationEditingId] = useState(null);
@@ -3764,6 +3777,175 @@ async function deleteAgreement(id) {
   function resetCandidateForm() {
     setCandidateForm(emptyCandidate);
     setCandidateEditingId(null);
+  }
+
+  function getOfficeVisibleCandidates() {
+    return candidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
+  }
+
+  function toggleOfficeCandidateSelection(candidateId) {
+    const id = String(candidateId || "");
+    if (!id) return;
+    setOfficeSelectedCandidateIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  }
+
+  function toggleAllOfficeCandidates() {
+    const visibleIds = getOfficeVisibleCandidates().map((item) => String(item.id));
+    if (visibleIds.length === 0) return;
+    const allSelected = visibleIds.every((id) => officeSelectedCandidateIds.includes(id));
+    setOfficeSelectedCandidateIds(allSelected ? [] : visibleIds);
+  }
+
+  function resetOfficeBulkForm() {
+    setOfficeBulkForm(emptyOfficeBulkUpdate);
+  }
+
+  async function bulkUpdateOfficeCandidates() {
+    if (!canManageOfficePortal) return alert("You do not have permission to update office candidates.");
+
+    const selectedIds = officeSelectedCandidateIds.map((id) => String(id));
+    const selectedCandidates = candidates.filter((item) => selectedIds.includes(String(item.id)));
+    if (selectedCandidates.length === 0) return alert("Please select at least one candidate.");
+
+    const hasChanges = [
+      officeBulkForm.status,
+      officeBulkForm.medical_status,
+      officeBulkForm.medical_date,
+      officeBulkForm.ticket_no,
+      officeBulkForm.flight_date,
+      officeBulkForm.arrival_date,
+      officeBulkForm.notes,
+    ].some((value) => String(value || "").trim());
+
+    if (!hasChanges) return alert("Please enter at least one bulk update field.");
+
+    if (!window.confirm(`Apply this update to ${selectedCandidates.length} selected candidates?`)) return;
+
+    setOfficeBulkLoading(true);
+    const now = new Date().toISOString();
+    const bulkNote = String(officeBulkForm.notes || "").trim();
+    const noteStamp = new Date().toLocaleDateString("en-GB");
+
+    try {
+      for (const item of selectedCandidates) {
+        let history = [];
+        try {
+          history = item.status_history ? JSON.parse(item.status_history) : [];
+        } catch {
+          history = [];
+        }
+
+        const nextTicketNo = officeBulkForm.ticket_no || item.ticket_no || "";
+        const nextFlightDate = officeBulkForm.flight_date || item.flight_date || null;
+        const nextArrivalDate = officeBulkForm.arrival_date || item.arrival_date || null;
+
+        let nextMedicalStatus = officeBulkForm.medical_status || item.medical_status || "Pending";
+        let nextStatus = officeBulkForm.status || item.status || "New";
+
+        if (!officeBulkForm.status) {
+          if (nextArrivalDate) {
+            nextStatus = "Arrived KSA";
+          } else if (nextFlightDate) {
+            nextStatus = "Departure";
+          } else if (nextTicketNo) {
+            nextStatus = "Ticket Booked";
+          } else if (nextMedicalStatus === "Passed") {
+            nextStatus = "Medical Passed";
+          } else if (nextMedicalStatus === "Failed") {
+            nextStatus = "Medical Failed";
+          }
+        }
+
+        if (nextStatus === "Medical Passed") nextMedicalStatus = "Passed";
+        if (nextStatus === "Medical Failed") nextMedicalStatus = "Failed";
+
+        if (String(item.status || "") !== String(nextStatus || "")) {
+          history.push({
+            stage: nextStatus || "New",
+            date: now,
+            bulk_update: true,
+          });
+        }
+
+        const currentNotes = String(item.notes || "").trim();
+        const nextNotes = bulkNote
+          ? [currentNotes, `[${noteStamp}] ${bulkNote}`].filter(Boolean).join("\n")
+          : currentNotes;
+
+        const payload = {
+          status: nextStatus,
+          medical_status: nextMedicalStatus,
+          medical_date: officeBulkForm.medical_date || item.medical_date || null,
+          ticket_no: nextTicketNo,
+          flight_date: nextFlightDate,
+          arrival_date: nextArrivalDate,
+          notes: nextNotes,
+          status_history: JSON.stringify(history),
+          updated_at: now,
+        };
+
+        const { error } = await supabase
+          .from("candidates")
+          .update(payload)
+          .eq("id", item.id)
+          .eq("company_id", currentCompanyId);
+
+        if (error) throw error;
+      }
+
+      await supabase.from("notification_events").insert([withCompany({
+        user_id: null,
+        agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
+        type: "OFFICE_BULK_CANDIDATE_UPDATE",
+        title: "Office Bulk Candidate Update",
+        message: `${selectedCandidates.length} candidates updated in Office Portal`,
+        priority: "Medium",
+        status: "Unread",
+        related_table: "candidates",
+        related_id: selectedIds.join(","),
+        data: {
+          selected_count: selectedCandidates.length,
+          status: officeBulkForm.status || "",
+          medical_status: officeBulkForm.medical_status || "",
+        },
+      })]);
+
+      const touchedRequestNos = [...new Set(selectedCandidates.map((item) => item.request_no).filter(Boolean))];
+      for (const requestNo of touchedRequestNos) {
+        const requestRow = requests.find((request) => String(request.request_no || "") === String(requestNo || ""));
+        const isSaudiFlow = isSaudiRequest(requestRow);
+        const completedStatuses = isSaudiFlow ? ["Joined"] : ["Arrived KSA", "Joined"];
+        const { count } = await supabase
+          .from("candidates")
+          .select("*", { count: "exact", head: true })
+          .eq("request_no", requestNo)
+          .eq("company_id", currentCompanyId)
+          .in("status", completedStatuses);
+
+        const requiredQty = Number(requestRow?.quantity || 0);
+        if (requiredQty > 0) {
+          await supabase
+            .from("requests")
+            .update({
+              status: Number(count || 0) >= requiredQty ? "Completed" : "Under Recruitment",
+              updated_at: now,
+            })
+            .eq("request_no", requestNo)
+            .eq("company_id", currentCompanyId);
+        }
+      }
+
+      setOfficeSelectedCandidateIds([]);
+      resetOfficeBulkForm();
+      await loadAll();
+      alert(`Bulk update completed for ${selectedCandidates.length} candidates.`);
+    } catch (error) {
+      alert(error.message || "Bulk update failed.");
+    } finally {
+      setOfficeBulkLoading(false);
+    }
   }
 
   function editCandidate(item) {
@@ -13169,15 +13351,15 @@ Save Authorization
 {activePage === "Office Portal" && (
   <>
     <div className="dashboard-grid">
-      <Stat title="Office Candidates" value={candidates.length} />
+      <Stat title="Office Candidates" value={getOfficeVisibleCandidates().length} />
       <Stat
         title="Medical / Visa Process"
-        value={candidates.filter((x) => ["Visa Process", "Arrived"].includes(x.status)).length}
+        value={getOfficeVisibleCandidates().filter((x) => ["Medical Scheduled", "Medical Passed", "Training", "Training Completed", "Embassy Submitted", "Visa Stamped", "Ticket Booked", "Departure", "Arrived", "Arrived KSA"].includes(x.status)).length}
         className="warning"
       />
       <Stat
         title="Joined"
-        value={candidates.filter((x) => x.status === "Joined").length}
+        value={getOfficeVisibleCandidates().filter((x) => x.status === "Joined").length}
         className="passed"
       />
     </div>
@@ -13386,10 +13568,84 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </FormCard>
     )}
 
-    <TableCard title="Office Candidates Tracking">
+    {canManageOfficePortal && (
+      <FormCard title={`Bulk Candidate Update (${officeSelectedCandidateIds.length} selected)`}>
+        <p style={{ marginTop: 0, color: "#64748b", fontSize: "13px" }}>
+          Select candidates from the table, then apply one update to all selected candidates. Blank fields will not overwrite existing data.
+        </p>
+        <div className="form-grid">
+          <Select
+            value={officeBulkForm.status}
+            onChange={(v) => updateForm(setOfficeBulkForm, "status", v)}
+            placeholder="Bulk Stage / Status"
+            options={["", ...OFFICE_STATUSES]}
+          />
+          <Select
+            value={officeBulkForm.medical_status}
+            onChange={(v) => updateForm(setOfficeBulkForm, "medical_status", v)}
+            placeholder="Bulk Medical Status"
+            options={["", "Pending", "Passed", "Failed"]}
+          />
+          <Input
+            placeholder="Bulk Medical Date"
+            type="date"
+            value={officeBulkForm.medical_date}
+            onChange={(v) => updateForm(setOfficeBulkForm, "medical_date", v)}
+          />
+          <Input
+            placeholder="Bulk Ticket No / Reference"
+            value={officeBulkForm.ticket_no}
+            onChange={(v) => updateForm(setOfficeBulkForm, "ticket_no", v)}
+          />
+          <Input
+            placeholder="Bulk Flight Date"
+            type="date"
+            value={officeBulkForm.flight_date}
+            onChange={(v) => updateForm(setOfficeBulkForm, "flight_date", v)}
+          />
+          <Input
+            placeholder="Bulk Arrival Date"
+            type="date"
+            value={officeBulkForm.arrival_date}
+            onChange={(v) => updateForm(setOfficeBulkForm, "arrival_date", v)}
+          />
+        </div>
+
+        <textarea
+          rows="3"
+          placeholder="Bulk Remarks / Update Note"
+          value={officeBulkForm.notes}
+          onChange={(e) => updateForm(setOfficeBulkForm, "notes", e.target.value)}
+        />
+
+        <div className="actions-line">
+          <button
+            className="save-btn"
+            onClick={bulkUpdateOfficeCandidates}
+            disabled={officeBulkLoading || officeSelectedCandidateIds.length === 0}
+          >
+            {officeBulkLoading ? "Updating..." : `Apply Bulk Update (${officeSelectedCandidateIds.length})`}
+          </button>
+          <button className="light-btn" onClick={resetOfficeBulkForm}>Clear Bulk Fields</button>
+          <button className="light-btn" onClick={() => setOfficeSelectedCandidateIds([])}>Clear Selection</button>
+        </div>
+      </FormCard>
+    )}
+
+    <TableCard title="Office Candidates Tracking - Select Multiple for Bulk Update">
       <table>
         <thead>
           <tr>
+            {canManageOfficePortal && (
+              <th>
+                <input
+                  type="checkbox"
+                  checked={getOfficeVisibleCandidates().length > 0 && getOfficeVisibleCandidates().every((item) => officeSelectedCandidateIds.includes(String(item.id)))}
+                  onChange={toggleAllOfficeCandidates}
+                  title="Select all visible candidates"
+                />
+              </th>
+            )}
             <th>Request No</th>
             <th>Name</th>
             <th>Passport</th>
@@ -13404,10 +13660,18 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </tr>
         </thead>
         <tbody>
-          {candidates
-  .filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed")
+          {getOfficeVisibleCandidates()
   .map((item) => (
             <tr key={item.id}>
+              {canManageOfficePortal && (
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={officeSelectedCandidateIds.includes(String(item.id))}
+                    onChange={() => toggleOfficeCandidateSelection(item.id)}
+                  />
+                </td>
+              )}
               <td>{item.request_no || "-"}</td>
               <td>{item.candidate_name || "-"}</td>
               <td>{item.passport_no || "-"}</td>
