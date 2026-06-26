@@ -7,6 +7,7 @@ import "./style.css";
 const PAGES = [
   "Executive Dashboard",
   "AI Commander",
+  "AI Report Studio",
   "Dashboard",
   "Requests",
   "Saudi Hiring",
@@ -46,7 +47,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Command Center",
     icon: "🏠",
-    pages: ["Executive Dashboard", "AI Commander", "Dashboard"],
+    pages: ["Executive Dashboard", "AI Commander", "AI Report Studio", "Dashboard"],
   },
   {
     title: "Recruitment",
@@ -620,6 +621,32 @@ async function triggerExternalNotification(type, data = {}) {
   }
 }
 
+
+const REPORT_STUDIO_TEMPLATES = [
+  { id: "ceo_monthly", icon: "👔", title: "CEO Executive Report", category: "Executive", description: "High-level summary, KPIs, risks and executive actions." },
+  { id: "board_presentation", icon: "📊", title: "Executive Board Presentation", category: "Executive", description: "Board-ready presentation structure with highlights and decisions." },
+  { id: "weekly_recruitment", icon: "👥", title: "Weekly Recruitment Report", category: "Recruitment", description: "Pipeline, candidate gaps, interviews and recruiter follow-up." },
+  { id: "mobilization_status", icon: "✈️", title: "Visa & Mobilization Report", category: "Operations", description: "Visa allocation, authorizations, travel, arrivals and joining." },
+  { id: "agency_evaluation", icon: "🏢", title: "Agency Performance Report", category: "Agencies", description: "Agency ranking, SLA risk, submissions and recommendations." },
+  { id: "finance_summary", icon: "💰", title: "Budget & Finance Summary", category: "Finance", description: "Cost, budget variance and financial visibility from current records." },
+  { id: "project_progress", icon: "📋", title: "Project Progress Report", category: "Operations", description: "Project-level progress, bottlenecks and delivery status." },
+  { id: "client_progress", icon: "📣", title: "Client Progress Report", category: "Executive", description: "Clean client-facing bilingual progress summary." },
+];
+
+const REPORT_STUDIO_OUTPUTS = ["PowerPoint", "Word", "PDF", "Excel"];
+const REPORT_STUDIO_LANGUAGES = ["Arabic", "English", "Bilingual"];
+const REPORT_STUDIO_SECTIONS = [
+  "Executive Summary",
+  "KPI Dashboard",
+  "Charts",
+  "Tables",
+  "AI Insights",
+  "Risks",
+  "Recommendations",
+  "Action Plan",
+  "Appendices",
+];
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [loading, setLoading] = useState(false);
@@ -788,6 +815,32 @@ const [offerSubject, setOfferSubject] = useState("");
 const [offerBody, setOfferBody] = useState("");
 const [offerLoading, setOfferLoading] = useState(false);
 const [offerMessage, setOfferMessage] = useState("");
+const [reportStudioForm, setReportStudioForm] = useState({
+  reportName: "CEO Executive Report",
+  templateId: "ceo_monthly",
+  category: "Executive",
+  project: "All",
+  dateFrom: "",
+  dateTo: "",
+  language: "Bilingual",
+  outputFormat: "PowerPoint",
+  includeSections: [
+    "Executive Summary",
+    "KPI Dashboard",
+    "Tables",
+    "AI Insights",
+    "Risks",
+    "Recommendations",
+    "Action Plan",
+  ],
+  confidential: true,
+  companyLogo: true,
+  visaFlowLogo: true,
+  aiRecommendations: true,
+  comparePreviousPeriod: false,
+});
+const [reportStudioResult, setReportStudioResult] = useState("");
+const [reportStudioLastRun, setReportStudioLastRun] = useState("");
 
 const [platformClients, setPlatformClients] = useState([]);
 const [subscriptionInvoices, setSubscriptionInvoices] = useState([]);
@@ -898,6 +951,7 @@ const ROLE_PAGES = {
   CEO: [
     "Executive Dashboard",
     "AI Commander",
+    "AI Report Studio",
     "Dashboard",
     "Recruitment Performance",
     "Agency Ranking",
@@ -910,6 +964,7 @@ const ROLE_PAGES = {
   "Operations Manager": [
     "Executive Dashboard",
     "AI Commander",
+    "AI Report Studio",
     "Dashboard",
     "Requests",
     "RequestDetails",
@@ -939,6 +994,7 @@ const ROLE_PAGES = {
   "Recruitment Manager": [
     "Executive Dashboard",
     "AI Commander",
+    "AI Report Studio",
     "Dashboard",
     "Requests",
     "Saudi Hiring",
@@ -7827,6 +7883,211 @@ async function deleteSystemBackup(id) {
   await loadSystemBackups();
 }
 
+
+function updateReportStudioForm(field, value) {
+  setReportStudioForm((prev) => ({ ...prev, [field]: value }));
+}
+
+function toggleReportStudioSection(section) {
+  setReportStudioForm((prev) => {
+    const current = prev.includeSections || [];
+    return {
+      ...prev,
+      includeSections: current.includes(section)
+        ? current.filter((item) => item !== section)
+        : [...current, section],
+    };
+  });
+}
+
+function selectReportStudioTemplate(template) {
+  setReportStudioForm((prev) => ({
+    ...prev,
+    templateId: template.id,
+    reportName: template.title,
+    category: template.category,
+  }));
+}
+
+function getReportStudioProjectOptions() {
+  return Array.from(new Set([
+    "All",
+    ...requests.map((item) => item.project_name || item.project).filter(Boolean),
+    ...candidates.map((item) => item.project).filter(Boolean),
+    ...mobilizationRequestRows.map((item) => item.project_name).filter(Boolean),
+  ]));
+}
+
+function filterReportStudioRowsByProject(rows, fieldCandidates = ["project", "project_name"]) {
+  if (!reportStudioForm.project || reportStudioForm.project === "All") return rows;
+  return rows.filter((row) =>
+    fieldCandidates.some((field) => normalize(row[field]) === normalize(reportStudioForm.project))
+  );
+}
+
+function buildAIReportStudioDataset() {
+  const requestHealth = filterReportStudioRowsByProject(buildRequestHealthRows(), ["project"]);
+  const mobilizationRows = filterReportStudioRowsByProject(mobilizationRequestRows, ["project_name"]);
+  const agencyRows = buildAgencyScorecard();
+  const forecast = buildRecruitmentForecast();
+  const totalRequired = requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0);
+  const totalCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0);
+  const totalJoined = requestHealth.reduce((sum, row) => sum + Number(row.joined || 0), 0);
+  const totalVisaGap = requestHealth.reduce((sum, row) => sum + Number(row.visaGap || 0), 0);
+  const totalAuthorizationGap = requestHealth.reduce((sum, row) => sum + Number(row.authorizationGap || 0), 0);
+  const highRiskLines = requestHealth.filter((row) => row.riskLevel === "High").length;
+  const totalCost = mobilizationRows.reduce((sum, row) => sum + Number(row.totalCost || 0), 0);
+  const totalBudget = mobilizationRows.reduce((sum, row) => sum + Number(row.budget || 0), 0);
+
+  return {
+    generated_at: new Date().toLocaleString(),
+    report_name: reportStudioForm.reportName,
+    template: REPORT_STUDIO_TEMPLATES.find((item) => item.id === reportStudioForm.templateId)?.title || reportStudioForm.reportName,
+    category: reportStudioForm.category,
+    project: reportStudioForm.project || "All",
+    language: reportStudioForm.language,
+    output_format: reportStudioForm.outputFormat,
+    kpis: [
+      { metric: "Required Manpower", value: totalRequired || executiveDashboard.totalRequired },
+      { metric: "Active Candidates", value: totalCandidates || executiveDashboard.activeCandidates },
+      { metric: "Joined", value: totalJoined || executiveDashboard.joined },
+      { metric: "Recruitment Progress", value: `${executiveDashboard.recruitmentProgress}%` },
+      { metric: "Visa Gap", value: totalVisaGap },
+      { metric: "Authorization Gap", value: totalAuthorizationGap },
+      { metric: "High Risk Lines", value: highRiskLines },
+      { metric: "Saudization Rate", value: `${executiveDashboard.saudizationRate}%` },
+      { metric: "Estimated Cost", value: `${Number(totalCost || stats.totalMobilizationCost || 0).toLocaleString()} SAR` },
+      { metric: "Budget Variance", value: `${Number((totalBudget || stats.totalRequestBudget || 0) - (totalCost || stats.totalMobilizationCost || 0)).toLocaleString()} SAR` },
+    ],
+    request_health: requestHealth,
+    mobilization: mobilizationRows,
+    agencies: agencyRows,
+    forecast,
+  };
+}
+
+function buildAIReportStudioNarrative() {
+  const data = buildAIReportStudioDataset();
+  const topRisks = data.request_health.filter((row) => row.riskLevel === "High").slice(0, 5);
+  const topAgencies = data.agencies.slice(0, 5);
+  const weakAgencies = data.agencies.filter((agency) => agency.risk !== "Low").slice(0, 5);
+
+  return [
+    `${data.report_name}`,
+    `Generated: ${data.generated_at}`,
+    `Scope: ${data.project} | Language: ${data.language} | Output: ${data.output_format}`,
+    `Confidential: ${reportStudioForm.confidential ? "Yes" : "No"}`,
+    "",
+    "Executive Summary",
+    `VisaFlow analyzed live recruitment, visa, authorization, candidate, mobilization and agency data. Current recruitment progress is ${executiveDashboard.recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} remaining recruitment gap(s) and ${data.forecast.totalRemainingJoining} remaining joining gap(s).`,
+    data.forecast.forecastMessage,
+    "",
+    "KPI Dashboard",
+    ...data.kpis.map((item) => `- ${item.metric}: ${item.value}`),
+    "",
+    "Top Risks",
+    ...(topRisks.length ? topRisks.map((row) => `- ${row.request_no} / Line ${row.line_no} / ${row.profession}: ${row.bottleneck}, progress ${row.progress}%, risk ${row.riskScore}.`) : ["- No high-risk request lines detected."]),
+    "",
+    "Agency Insights",
+    ...(topAgencies.length ? topAgencies.map((agency) => `- ${agency.agency}: Score ${agency.score}, Risk ${agency.risk}, Candidates ${agency.candidates}, Joined ${agency.joined}.`) : ["- No agency data available yet."]),
+    "",
+    "Agencies Requiring Follow-up",
+    ...(weakAgencies.length ? weakAgencies.map((agency) => `- ${agency.agency}: risk ${agency.risk}, fail rate ${agency.failRate}%, score ${agency.score}.`) : ["- No agency follow-up risk detected."]),
+    "",
+    "Recommended Actions",
+    "1. Review high-risk request lines by profession, nationality and gender.",
+    "2. Close visa allocation and authorization gaps before escalating sourcing volume.",
+    "3. Push agencies with stale candidate updates or weak submission performance.",
+    "4. Move medically passed and visa-ready candidates to ticketing and arrival.",
+    "5. Use this report in the weekly executive meeting and assign owners for each bottleneck.",
+  ].join("\n");
+}
+
+function previewAIReportStudio() {
+  const narrative = buildAIReportStudioNarrative();
+  setReportStudioResult(narrative);
+  setReportStudioLastRun(new Date().toLocaleString());
+}
+
+function downloadReportStudioFile(fileName, content, mimeType = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function buildReportStudioHtmlDocument(mode = "document") {
+  const data = buildAIReportStudioDataset();
+  const narrative = buildAIReportStudioNarrative();
+  const title = data.report_name || "VisaFlow AI Report";
+  const rows = data.kpis.map((item) => `<tr><td>${item.metric}</td><td><b>${item.value}</b></td></tr>`).join("");
+  const slideMode = mode === "presentation";
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>${title}</title>
+<style>
+body{font-family:Arial,Tahoma,sans-serif;margin:0;background:#f8fafc;color:#0f172a;line-height:1.6}.page{max-width:${slideMode ? "1100px" : "900px"};margin:30px auto;background:white;border-radius:22px;padding:36px;box-shadow:0 20px 70px rgba(15,23,42,.12)}.cover{background:linear-gradient(135deg,#020617,#0f766e);color:white;border-radius:24px;padding:42px;margin-bottom:24px}.badge{display:inline-block;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.14);margin-bottom:14px}h1{margin:0;font-size:${slideMode ? "44px" : "34px"}}h2{margin-top:28px;color:#0f766e}table{width:100%;border-collapse:collapse;margin:18px 0}td,th{border:1px solid #e2e8f0;padding:10px;text-align:left}pre{white-space:pre-wrap;font-family:Arial,Tahoma,sans-serif;background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:20px}.footer{margin-top:28px;color:#64748b;font-size:12px}@media print{body{background:white}.page{box-shadow:none;margin:0;border-radius:0}.cover{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="cover">
+    <div class="badge">VisaFlow KSA · AI Report Studio</div>
+    <h1>${title}</h1>
+    <p>${data.category} · ${data.project} · ${data.language}</p>
+  </div>
+  <h2>KPI Dashboard</h2>
+  <table>${rows}</table>
+  <h2>AI Executive Report</h2>
+  <pre>${narrative.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
+  <div class="footer">Generated by VisaFlow KSA AI Report Studio on ${data.generated_at}. ${reportStudioForm.confidential ? "Confidential" : ""}</div>
+</div>
+</body>
+</html>`;
+}
+
+function exportAIReportStudio() {
+  const data = buildAIReportStudioDataset();
+  const safeName = String(reportStudioForm.reportName || "VisaFlow_AI_Report").replace(/[^a-z0-9-_]+/gi, "_");
+  const format = reportStudioForm.outputFormat;
+  setReportStudioResult(buildAIReportStudioNarrative());
+  setReportStudioLastRun(new Date().toLocaleString());
+
+  if (format === "Excel") {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.kpis), "KPIs");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.request_health.slice(0, 200)), "Request Lines");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.agencies.slice(0, 200)), "Agencies");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.mobilization.slice(0, 200)), "Mobilization");
+    XLSX.writeFile(workbook, `${safeName}.xlsx`);
+    return;
+  }
+
+  if (format === "Word") {
+    return downloadReportStudioFile(`${safeName}.doc`, buildReportStudioHtmlDocument("document"), "application/msword;charset=utf-8");
+  }
+
+  if (format === "PowerPoint") {
+    return downloadReportStudioFile(`${safeName}_presentation.html`, buildReportStudioHtmlDocument("presentation"), "text/html;charset=utf-8");
+  }
+
+  if (format === "PDF") {
+    downloadReportStudioFile(`${safeName}_print_to_pdf.html`, buildReportStudioHtmlDocument("document"), "text/html;charset=utf-8");
+    alert("PDF-ready file generated. Open it in the browser and choose Print > Save as PDF.");
+    return;
+  }
+
+  return downloadReportStudioFile(`${safeName}.txt`, buildAIReportStudioNarrative());
+}
+
 function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
   if (activePage === "Requests") return exportRowsToExcel(requests, "VisaFlow_Requests", "Requests");
@@ -7849,6 +8110,7 @@ function exportCurrentPage() {
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
   if (activePage === "Notifications") return exportRowsToExcel(notifications, "VisaFlow_Notifications", "Notifications");
   if (activePage === "Reports") return exportRowsToExcel(reports.requestLifecycle, "VisaFlow_Recruitment_Pipeline", "Pipeline");
+  if (activePage === "AI Report Studio") return exportAIReportStudio();
   if (activePage === "Platform Dashboard") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Clients", "Platform Clients");
   if (activePage === "Companies Management") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Companies", "Companies");
   if (activePage === "Subscription Invoices") return exportRowsToExcel(subscriptionInvoices, "VisaFlow_Subscription_Invoices", "Invoices");
@@ -8836,6 +9098,124 @@ if (!currentUser) {
                 </table>
               </TableCard>
             </div>
+          </>
+        )}
+
+
+        {activePage === "AI Report Studio" && (
+          <>
+            <TableCard title="📊 AI Report Studio - Executive Documents & Presentations">
+              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: "18px", alignItems: "stretch" }}>
+                <div style={{ borderRadius: "28px", padding: "30px", background: "linear-gradient(135deg, #020617 0%, #1d4ed8 55%, #0f766e 100%)", color: "white", position: "relative", overflow: "hidden" }}>
+                  <div style={{ position: "absolute", right: "26px", bottom: "12px", fontSize: "130px", opacity: 0.14 }}>📊</div>
+                  <div style={{ position: "relative", zIndex: 1 }}>
+                    <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", padding: "9px 14px", borderRadius: "999px", background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.18)", marginBottom: "18px" }}>
+                      <span>✨</span>
+                      <b>PowerPoint · Word · PDF · Excel</b>
+                    </div>
+                    <h2 style={{ margin: "0 0 12px", fontSize: "38px", letterSpacing: "-0.05em", lineHeight: 1.08 }}>
+                      Generate CEO-ready reports from live VisaFlow data.
+                    </h2>
+                    <p style={{ maxWidth: "780px", opacity: 0.92, lineHeight: 1.8, fontSize: "16px" }}>
+                      اختر القالب، الفترة، اللغة، ونوع الملف. AI Report Studio يجمع بيانات الطلبات، المرشحين، التأشيرات، المكاتب، الحشد والتكاليف ثم يجهز تقرير تنفيذي قابل للتصدير.
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px", marginTop: "24px" }}>
+                      {REPORT_STUDIO_OUTPUTS.map((format) => (
+                        <button
+                          key={format}
+                          type="button"
+                          onClick={() => updateReportStudioForm("outputFormat", format)}
+                          style={{ padding: "14px", borderRadius: "18px", border: reportStudioForm.outputFormat === format ? "2px solid white" : "1px solid rgba(255,255,255,0.25)", background: reportStudioForm.outputFormat === format ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.10)", color: "white", cursor: "pointer", fontWeight: 900 }}
+                        >
+                          {format === "PowerPoint" ? "📊" : format === "Word" ? "📄" : format === "PDF" ? "📕" : "📈"} {format}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "12px" }}>
+                  <Stat title="Report Templates" value={REPORT_STUDIO_TEMPLATES.length} className="passed" />
+                  <Stat title="Request Lines" value={buildRequestHealthRows().length} className="passed" />
+                  <Stat title="High Risk Lines" value={buildRequestHealthRows().filter((row) => row.riskLevel === "High").length} className={executiveAlertClass(buildRequestHealthRows().filter((row) => row.riskLevel === "High").length)} />
+                  <Stat title="Agency Risk" value={buildAgencyScorecard().filter((agency) => agency.risk !== "Low").length} className={executiveAlertClass(buildAgencyScorecard().filter((agency) => agency.risk !== "Low").length)} />
+                </div>
+              </div>
+            </TableCard>
+
+            <TableCard title="1) Select Report Template">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
+                {REPORT_STUDIO_TEMPLATES.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => selectReportStudioTemplate(template)}
+                    style={{ textAlign: "left", borderRadius: "20px", padding: "18px", border: reportStudioForm.templateId === template.id ? "2px solid #2563eb" : "1px solid #e2e8f0", background: reportStudioForm.templateId === template.id ? "#eff6ff" : "white", cursor: "pointer" }}
+                  >
+                    <div style={{ fontSize: "30px", marginBottom: "10px" }}>{template.icon}</div>
+                    <h3 style={{ margin: "0 0 8px", color: "#0f172a" }}>{template.title}</h3>
+                    <p style={{ margin: 0, color: "#64748b", lineHeight: 1.6 }}>{template.description}</p>
+                    <div style={{ marginTop: "12px" }}><Badge value={template.category} /></div>
+                  </button>
+                ))}
+              </div>
+            </TableCard>
+
+            <div className="grid">
+              <TableCard title="2) Report Details">
+                <div className="form-grid">
+                  <input value={reportStudioForm.reportName} onChange={(e) => updateReportStudioForm("reportName", e.target.value)} placeholder="Report Name" />
+                  <select value={reportStudioForm.project} onChange={(e) => updateReportStudioForm("project", e.target.value)}>
+                    {getReportStudioProjectOptions().map((project) => <option key={project}>{project}</option>)}
+                  </select>
+                  <input type="date" value={reportStudioForm.dateFrom} onChange={(e) => updateReportStudioForm("dateFrom", e.target.value)} />
+                  <input type="date" value={reportStudioForm.dateTo} onChange={(e) => updateReportStudioForm("dateTo", e.target.value)} />
+                  <select value={reportStudioForm.language} onChange={(e) => updateReportStudioForm("language", e.target.value)}>
+                    {REPORT_STUDIO_LANGUAGES.map((language) => <option key={language}>{language}</option>)}
+                  </select>
+                  <select value={reportStudioForm.outputFormat} onChange={(e) => updateReportStudioForm("outputFormat", e.target.value)}>
+                    {REPORT_STUDIO_OUTPUTS.map((format) => <option key={format}>{format}</option>)}
+                  </select>
+                </div>
+              </TableCard>
+
+              <TableCard title="3) Include Sections">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
+                  {REPORT_STUDIO_SECTIONS.map((section) => (
+                    <label key={section} style={{ display: "flex", gap: "8px", alignItems: "center", padding: "12px", borderRadius: "14px", background: "#f8fafc", border: "1px solid #e2e8f0", cursor: "pointer" }}>
+                      <input type="checkbox" checked={(reportStudioForm.includeSections || []).includes(section)} onChange={() => toggleReportStudioSection(section)} />
+                      <span>{section}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px", marginTop: "14px" }}>
+                  <label><input type="checkbox" checked={reportStudioForm.confidential} onChange={(e) => updateReportStudioForm("confidential", e.target.checked)} /> Confidential Watermark</label>
+                  <label><input type="checkbox" checked={reportStudioForm.companyLogo} onChange={(e) => updateReportStudioForm("companyLogo", e.target.checked)} /> Company Logo</label>
+                  <label><input type="checkbox" checked={reportStudioForm.visaFlowLogo} onChange={(e) => updateReportStudioForm("visaFlowLogo", e.target.checked)} /> VisaFlow Logo</label>
+                  <label><input type="checkbox" checked={reportStudioForm.aiRecommendations} onChange={(e) => updateReportStudioForm("aiRecommendations", e.target.checked)} /> AI Recommendations</label>
+                </div>
+              </TableCard>
+            </div>
+
+            <TableCard title="4) Generate Report">
+              <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                <button className="save-btn" onClick={previewAIReportStudio}>Preview AI Report</button>
+                <button className="new-btn" onClick={exportAIReportStudio}>Generate {reportStudioForm.outputFormat}</button>
+                <button className="light-btn" onClick={() => updateReportStudioForm("outputFormat", "PowerPoint")}>Board Presentation</button>
+                <button className="light-btn" onClick={() => updateReportStudioForm("outputFormat", "Excel")}>Excel Dashboard</button>
+              </div>
+
+              <div style={{ marginTop: "16px", padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
+                <b>Current Selection:</b> {reportStudioForm.reportName} · {reportStudioForm.project} · {reportStudioForm.language} · {reportStudioForm.outputFormat}
+              </div>
+
+              <div style={{ marginTop: "16px", minHeight: "260px", borderRadius: "20px", padding: "22px", background: "#0f172a", color: "#e2e8f0", whiteSpace: "pre-wrap", lineHeight: 1.75, fontSize: "14px" }}>
+                {reportStudioResult || "Click Preview AI Report to see the executive narrative before generating the file."}
+              </div>
+
+              {reportStudioLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last generated: {reportStudioLastRun}</p>}
+            </TableCard>
           </>
         )}
 
