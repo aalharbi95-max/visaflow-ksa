@@ -27,6 +27,7 @@ const PAGES = [
   "Agency Agreements",
   "Agency Ranking",
   "Agency Performance",
+  "Penalty Register",
   "Recruitment Performance",
   "Company Management",
   "Users Management",
@@ -69,7 +70,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Agencies",
     icon: "🏢",
-    pages: ["Office Portal", "Agencies", "Agency Agreements", "Agency Ranking", "Agency Performance"],
+    pages: ["Office Portal", "Agencies", "Agency Agreements", "Agency Ranking", "Agency Performance", "Penalty Register"],
   },
   {
     title: "Performance & Reports",
@@ -674,6 +675,7 @@ const [agencies, setAgencies] = useState([]);
 const [agencyAgreements, setAgencyAgreements] = useState([]);
 const [agencyScores, setAgencyScores] = useState([]);
 const [agencyScoreHistory, setAgencyScoreHistory] = useState([]);
+const [agencyPenalties, setAgencyPenalties] = useState([]);
 const [agreementEditingId, setAgreementEditingId] = useState(null);
 
 const emptyAgreement = {
@@ -988,6 +990,7 @@ const ROLE_PAGES = {
     "Recruitment Performance",
     "Agency Ranking",
     "Agency Performance",
+    "Penalty Register",
     "Reports",
     "Notifications",
   ],
@@ -1046,6 +1049,7 @@ const ROLE_PAGES = {
     "Agency Agreements",
     "Agency Ranking",
     "Agency Performance",
+    "Penalty Register",
     "Recruitment Performance",
     "Notifications",
     "Reports",
@@ -1120,6 +1124,7 @@ const canManageUsers =
 const canManagePermissions = currentRole === "Admin";
 const canManageAgencies = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
+const canApprovePenalties = ["Admin", "Recruitment Manager", "CEO"].includes(currentRole);
 const canViewAgenciesOnly = ["CEO", "Operations Manager"].includes(currentRole);
 
 const canCreateRequest = ["Admin", "Operations Manager", "Project Manager", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
@@ -1749,6 +1754,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadAgencyAgreements(),
       loadAgencyScores(),
       loadAgencyScoreHistory(),
+      loadAgencyPenalties(),
        loadCountries(),
   loadProfessions(),
       loadCandidates(),
@@ -1779,6 +1785,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     visa_authorizations: "agency",
     agency_agreements: "agency_name",
     agency_scores: "agency_name",
+    agency_penalties: "agency_name",
   };
   const agencyBlockedTables = [
     "requests",
@@ -1824,6 +1831,9 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     } else if (agencyNameFields[table]) {
       if (!currentUser?.agency_name) { setter([]); return; }
       query = query.eq(agencyNameFields[table], currentUser.agency_name);
+      if (table === "agency_penalties") {
+        query = query.neq("status", "Pending Review");
+      }
     } else if (table === "agency_score_history") {
       if (!currentUser?.agency_id) { setter([]); return; }
       query = query.eq("agency_id", currentUser.agency_id);
@@ -1851,6 +1861,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
   const loadAgencyScoreHistory = () => loadTable("agency_score_history", setAgencyScoreHistory);
+  const loadAgencyPenalties = () => loadTable("agency_penalties", setAgencyPenalties);
   const loadCountries = () => loadTable("countries", setCountries);
   const loadUsers = async () => {
     if (canManagePlatform) {
@@ -3592,8 +3603,15 @@ function refreshAgreementTerms() {
 
 function generateAgreementNo() {
   const year = new Date().getFullYear();
-  const nextNumber = String(agencyAgreements.length + 1).padStart(4, "0");
-  return `AGR-${year}-${nextNumber}`;
+  const prefix = `AGR-${year}-`;
+  const maxNumber = agencyAgreements.reduce((max, item) => {
+    const agreementNo = String(item.agreement_no || "");
+    if (!agreementNo.startsWith(prefix)) return max;
+    const numberPart = Number(agreementNo.replace(prefix, ""));
+    return Number.isFinite(numberPart) ? Math.max(max, numberPart) : max;
+  }, 0);
+  const nextNumber = String(maxNumber + 1).padStart(4, "0");
+  return `${prefix}${nextNumber}`;
 }
 
 function resetAgreementForm() {
@@ -5608,6 +5626,261 @@ function getCandidateSlaDelay(candidate, agencyName = candidate?.agency) {
     policy,
     isDelayed: delayDays > 0,
   };
+}
+
+
+function generatePenaltyNo(indexOffset = 0) {
+  const year = new Date().getFullYear();
+  const prefix = `PEN-${year}-`;
+  const maxNumber = agencyPenalties.reduce((max, item) => {
+    const penaltyNo = String(item.penalty_no || "");
+    if (!penaltyNo.startsWith(prefix)) return max;
+    const numberPart = Number(penaltyNo.replace(prefix, ""));
+    return Number.isFinite(numberPart) ? Math.max(max, numberPart) : max;
+  }, 0);
+  return `${prefix}${String(maxNumber + 1 + indexOffset).padStart(4, "0")}`;
+}
+
+function calculatePenaltyRegisterRows() {
+  return candidates
+    .map((candidate) => {
+      const agencyName = candidate.agency || "Unassigned Agency";
+      const sla = getCandidateSlaDelay(candidate, agencyName);
+      const policy = sla.policy || getAgencyAgreementPolicy(agencyName);
+      const agreement = policy.agreement || null;
+      const calculatedAmount = Number(sla.penaltyExposure || 0);
+      if (!sla.isDelayed || calculatedAmount <= 0) return null;
+
+      const request = requests.find((item) => String(item.request_no || "") === String(candidate.request_no || ""));
+      const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
+
+      return {
+        company_id: currentCompanyId,
+        penalty_no: "",
+        agreement_id: agreement?.id || null,
+        agreement_no: policy.agreement_no || "Default Policy",
+        agency_id: agency?.id || null,
+        agency_name: agencyName,
+        candidate_id: String(candidate.id || ""),
+        candidate_name: candidate.candidate_name || "-",
+        request_no: candidate.request_no || "-",
+        profession: candidate.profession || request?.profession || "-",
+        project: candidate.project || request?.project_name || request?.project || "-",
+        status: "Pending Review",
+        sla_days: Number(policy.sla_days || 60),
+        actual_days: Number(sla.cycleDays || 0),
+        delay_days: Number(sla.delayDays || 0),
+        grace_days: Number(policy.delay_penalty_after_days || 0),
+        penalty_days: Number(sla.penaltyDays || 0),
+        penalty_type: policy.delay_penalty_type || "Fixed Amount",
+        penalty_rate: Number(policy.delay_penalty_amount || 0),
+        calculated_amount: calculatedAmount,
+        approved_amount: null,
+        decision_notes: "",
+        agency_justification: "",
+        source: "live",
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0));
+}
+
+function getPenaltyRegisterDisplayRows() {
+  const savedRows = (agencyPenalties || []).map((item) => ({ ...item, source: "saved" }));
+  const savedKeys = new Set(savedRows.map((item) => `${String(item.candidate_id || "")}-${String(item.agreement_no || "")}`));
+  const liveRows = calculatePenaltyRegisterRows()
+    .filter((item) => !savedKeys.has(`${String(item.candidate_id || "")}-${String(item.agreement_no || "")}`))
+    .map((item) => ({ ...item, status: "Calculated - Not Saved", source: "live" }));
+  return [...savedRows, ...liveRows].sort((a, b) => {
+    const statusWeight = { "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Waived: 6 };
+    return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) || Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0);
+  });
+}
+
+async function generatePenaltyRegister() {
+  if (!canApprovePenalties) return alert("You do not have permission to generate penalty records.");
+  const liveRows = calculatePenaltyRegisterRows();
+  if (!liveRows.length) return alert("No calculated penalties found based on the active agreements.");
+
+  let inserted = 0;
+  let updated = 0;
+  for (const [index, row] of liveRows.entries()) {
+    const existing = agencyPenalties.find((item) =>
+      String(item.candidate_id || "") === String(row.candidate_id || "") &&
+      String(item.agreement_no || "") === String(row.agreement_no || "")
+    );
+
+    const payload = {
+      ...row,
+      penalty_no: existing?.penalty_no || generatePenaltyNo(index),
+      candidate_id: String(row.candidate_id || ""),
+      status: existing?.status || "Pending Review",
+      approved_amount: existing?.approved_amount ?? null,
+      decision_notes: existing?.decision_notes || "",
+      updated_at: new Date().toISOString(),
+    };
+    delete payload.source;
+
+    if (existing?.id) {
+      if (["Approved", "Reduced", "Waived"].includes(existing.status)) continue;
+      const { error } = await supabase
+        .from("agency_penalties")
+        .update(payload)
+        .eq("id", existing.id)
+        .eq("company_id", currentCompanyId);
+      if (error) return alert(error.message);
+      updated += 1;
+    } else {
+      const { error } = await supabase.from("agency_penalties").insert([withCompany({ ...payload, created_at: new Date().toISOString() })]);
+      if (error) return alert(error.message);
+      inserted += 1;
+    }
+  }
+
+  await loadAgencyPenalties();
+  alert(`Penalty register updated. Inserted: ${inserted}, Updated: ${updated}`);
+}
+
+async function sendPenaltyToAgency(item, amountOverride = null, noteOverride = "") {
+  if (!canApprovePenalties) return alert("You do not have permission to send penalties to agency.");
+  if (!item?.id) return alert("Please generate the penalty register first.");
+  const amount = amountOverride === null ? Number(item.approved_amount ?? item.calculated_amount ?? 0) : Number(amountOverride || 0);
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("agency_penalties")
+    .update({
+      status: "Sent to Agency",
+      approved_amount: amount,
+      decision_notes: noteOverride || item.decision_notes || "Penalty issued to agency for justification window.",
+      decision_by: currentUser?.name || currentUser?.email || "Company User",
+      decision_role: currentRole,
+      decision_at: now,
+      sent_to_agency_at: now,
+      updated_at: now,
+    })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+  if (error) return alert(error.message);
+  await loadAgencyPenalties();
+}
+
+async function reduceAndSendPenalty(item) {
+  const currentAmount = Number(item.approved_amount ?? item.calculated_amount ?? 0);
+  const newAmountText = window.prompt("Enter reduced penalty amount SAR", String(currentAmount));
+  if (newAmountText === null) return;
+  const newAmount = Number(newAmountText);
+  if (!Number.isFinite(newAmount) || newAmount < 0) return alert("Invalid amount.");
+  const note = window.prompt("Reason for reduction", item.decision_notes || "") || "Reduced by management before sending to agency.";
+  await sendPenaltyToAgency(item, newAmount, note);
+}
+
+async function waivePenalty(item, defaultNote = "") {
+  if (!canApprovePenalties) return alert("You do not have permission to waive penalties.");
+  if (!item?.id) return alert("Please generate the penalty register first.");
+  const note = window.prompt("Reason for waiving this penalty", defaultNote || item.decision_notes || "") || defaultNote || "Waived by management.";
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("agency_penalties")
+    .update({
+      status: "Waived",
+      approved_amount: 0,
+      decision_notes: note,
+      final_decision: "Waived",
+      final_decision_by: currentUser?.name || currentUser?.email || "Company User",
+      final_decision_role: currentRole,
+      final_decision_at: now,
+      updated_at: now,
+    })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+  if (error) return alert(error.message);
+  await loadAgencyPenalties();
+}
+
+async function submitPenaltyJustification(item) {
+  if (currentRole !== "Agency") return alert("Only agency users can submit justifications.");
+  if (!item?.id) return;
+  const justification = window.prompt("Write the agency justification / اكتب مبررات المكتب", item.agency_justification || "");
+  if (!justification) return;
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("agency_penalties")
+    .update({
+      status: "Justification Submitted",
+      agency_justification: justification,
+      agency_justification_by: currentUser?.name || currentUser?.email || "Agency User",
+      agency_justification_email: currentUser?.email || "",
+      agency_justification_at: now,
+      updated_at: now,
+    })
+    .eq("id", item.id);
+  if (error) return alert(error.message);
+  await loadAgencyPenalties();
+  alert("Justification submitted to company for review.");
+}
+
+async function approveFinalPenalty(item, defaultNote = "") {
+  if (!canApprovePenalties) return alert("You do not have permission to approve penalties.");
+  if (!item?.id) return alert("Please generate the penalty register first.");
+  const note = window.prompt("Final approval / rejection note", defaultNote || item.decision_notes || "") || defaultNote || "Penalty approved by management.";
+  const now = new Date().toISOString();
+  const finalAmount = Number(item.approved_amount ?? item.calculated_amount ?? 0);
+  const { error } = await supabase
+    .from("agency_penalties")
+    .update({
+      status: "Approved",
+      approved_amount: finalAmount,
+      decision_notes: note,
+      final_decision: "Approved",
+      final_decision_by: currentUser?.name || currentUser?.email || "Company User",
+      final_decision_role: currentRole,
+      final_decision_at: now,
+      updated_at: now,
+    })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+  if (error) return alert(error.message);
+  await loadAgencyPenalties();
+}
+
+async function reduceFinalPenalty(item) {
+  if (!canApprovePenalties) return alert("You do not have permission to reduce penalties.");
+  if (!item?.id) return alert("Please generate the penalty register first.");
+  const currentAmount = Number(item.approved_amount ?? item.calculated_amount ?? 0);
+  const newAmountText = window.prompt("Enter final reduced penalty amount SAR", String(currentAmount));
+  if (newAmountText === null) return;
+  const newAmount = Number(newAmountText);
+  if (!Number.isFinite(newAmount) || newAmount < 0) return alert("Invalid amount.");
+  const note = window.prompt("Reason for final reduction", item.decision_notes || "") || "Reduced by management after review.";
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("agency_penalties")
+    .update({
+      status: "Reduced",
+      approved_amount: newAmount,
+      decision_notes: note,
+      final_decision: "Reduced",
+      final_decision_by: currentUser?.name || currentUser?.email || "Company User",
+      final_decision_role: currentRole,
+      final_decision_at: now,
+      updated_at: now,
+    })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+  if (error) return alert(error.message);
+  await loadAgencyPenalties();
+}
+
+async function deletePenaltyRecord(item) {
+  if (!canApprovePenalties) return alert("You do not have permission to delete penalty records.");
+  if (!item?.id || !window.confirm("Delete this penalty record?")) return;
+  const { error } = await supabase
+    .from("agency_penalties")
+    .delete()
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+  if (error) return alert(error.message);
+  await loadAgencyPenalties();
 }
 
 function getCandidateSlaStagnation(candidate) {
@@ -9681,6 +9954,7 @@ function exportCurrentPage() {
   if (activePage === "Visa Allocation") return exportRowsToExcel(visaAllocations, "VisaFlow_Visa_Allocations", "Allocations");
   if (activePage === "Agencies") return exportRowsToExcel(agencies, "VisaFlow_Agencies", "Agencies");
   if (activePage === "Agency Agreements") return exportRowsToExcel(agencyAgreements, "VisaFlow_Agency_Agreements", "Agreements");
+  if (activePage === "Penalty Register") return exportRowsToExcel(getPenaltyRegisterDisplayRows(), "VisaFlow_Penalty_Register", "Penalties");
   if (activePage === "Agency Ranking") return exportRowsToExcel(agencyScores, "VisaFlow_Agency_Ranking", "Agency Scores");
   if (activePage === "Agency Performance") return exportRowsToExcel(calculateAgencyPerformanceRows(), "VisaFlow_Agency_Performance", "Agency Performance");
   if (activePage === "Recruitment Performance") return exportRowsToExcel(calculateRecruitmentPerformanceRows(), "VisaFlow_Recruitment_Performance", "Recruitment Performance");
@@ -12925,6 +13199,58 @@ Save Authorization
       />
     </div>
 
+
+    {currentRole === "Agency" && agencyPenalties.filter((item) => item.status !== "Pending Review").length > 0 && (
+      <TableCard title="Agency Penalties / الغرامات المطلوبة">
+        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Penalty No</th>
+                <th>Agreement</th>
+                <th>Candidate</th>
+                <th>Request No</th>
+                <th>Delay</th>
+                <th>Calculated</th>
+                <th>Required Amount</th>
+                <th>Status</th>
+                <th>Justification</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agencyPenalties
+                .filter((item) => item.status !== "Pending Review")
+                .map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.penalty_no || "-"}</td>
+                    <td>{item.agreement_no || "-"}</td>
+                    <td>{item.candidate_name || "-"}</td>
+                    <td>{item.request_no || "-"}</td>
+                    <td>{item.delay_days || 0} days</td>
+                    <td>{Number(item.calculated_amount || 0).toLocaleString()} SAR</td>
+                    <td><b>{Number(item.approved_amount ?? item.calculated_amount ?? 0).toLocaleString()} SAR</b></td>
+                    <td><Badge value={item.status || "-"} /></td>
+                    <td>{item.agency_justification || item.decision_notes || "-"}</td>
+                    <td className="table-actions">
+                      {item.status === "Sent to Agency" ? (
+                        <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Justification</button>
+                      ) : item.status === "Justification Submitted" ? (
+                        <span>Under company review</span>
+                      ) : ["Approved", "Reduced"].includes(item.status) ? (
+                        <span>Finalized</span>
+                      ) : item.status === "Waived" ? (
+                        <span>Waived</span>
+                      ) : "-"}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </TableCard>
+    )}
+
     {currentRole === "Agency" && agencyAgreements.length > 0 && (
       <TableCard title="Agency Agreements / Electronic Signature">
         <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
@@ -13576,7 +13902,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     {canManageAgencyAgreements && (
       <FormCard title={agreementEditingId ? "Edit Agency Agreement Policy" : "Create Agency Agreement Policy"}>
         <div className="form-grid">
-          <Input placeholder="Agreement No" value={agreementForm.agreement_no} onChange={(v) => updateForm(setAgreementForm, "agreement_no", v)} />
+          <Input placeholder="Agreement No (Auto-generated)" value={agreementEditingId ? agreementForm.agreement_no : (agreementForm.agreement_no || "Auto-generated on save")} readOnly onChange={() => {}} />
           <Select placeholder="Agency" value={agreementForm.agency_name} onChange={(v) => updateForm(setAgreementForm, "agency_name", v)} options={agencies.map((a) => a.name).filter(Boolean)} />
           <Select placeholder="Agreement Template" value={agreementForm.template_type} onChange={applyAgreementTemplate} options={AGREEMENT_TEMPLATE_TYPES} />
           <Input placeholder="Policy Name" value={agreementForm.policy_name} onChange={(v) => updateForm(setAgreementForm, "policy_name", v)} />
@@ -13660,6 +13986,101 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   {canManageAgencyAgreements && <button onClick={() => editAgreement(item)}>Edit</button>}
                   {canManageAgencyAgreements && item.status !== "Pending Signature" && item.status !== "Active" && <button onClick={() => sendExistingAgreementToAgency(item)}>Send</button>}
                   {canManageAgencyAgreements && <button className="danger" onClick={() => deleteAgreement(item.id)}>Delete</button>}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </TableCard>
+  </>
+)}
+
+
+{activePage === "Penalty Register" && canApprovePenalties && (
+  <>
+    <div className="dashboard-grid">
+      <Stat title="Calculated Penalties" value={getPenaltyRegisterDisplayRows().filter((x) => x.source === "live" || x.status === "Pending Review").length} className="warning" />
+      <Stat title="Sent to Agency" value={agencyPenalties.filter((x) => x.status === "Sent to Agency").length} />
+      <Stat title="Justifications" value={agencyPenalties.filter((x) => x.status === "Justification Submitted").length} className="warning" />
+      <Stat title="Approved" value={`${Number(agencyPenalties.filter((x) => ["Approved", "Reduced"].includes(x.status)).reduce((sum, x) => sum + Number(x.approved_amount || 0), 0)).toLocaleString()} SAR`} className="danger" />
+      <Stat title="Waived" value={`${Number(agencyPenalties.filter((x) => x.status === "Waived").reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
+    </div>
+
+    <TableCard title="Penalty Register / Approval Workflow">
+      <div className="actions-line" style={{ marginBottom: "14px" }}>
+        <button className="save-btn" onClick={generatePenaltyRegister}>Generate / Refresh Calculated Penalties</button>
+        <button className="light-btn" onClick={loadAll}>Refresh Data</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Penalty No</th>
+            <th>Agency</th>
+            <th>Agreement</th>
+            <th>Candidate</th>
+            <th>Request No</th>
+            <th>Project</th>
+            <th>SLA</th>
+            <th>Actual</th>
+            <th>Delay</th>
+            <th>Grace</th>
+            <th>Penalty Days</th>
+            <th>Calculated</th>
+            <th>Approved / Required</th>
+            <th>Status</th>
+            <th>Agency Justification</th>
+            <th>Decision Notes</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {getPenaltyRegisterDisplayRows().length === 0 ? (
+            <tr><td colSpan="17">No penalties calculated yet. Generate the register after agreements and candidate timelines are updated.</td></tr>
+          ) : (
+            getPenaltyRegisterDisplayRows().map((item) => (
+              <tr key={`${item.source}-${item.id || item.candidate_id}-${item.agreement_no}`}>
+                <td>{item.penalty_no || "Auto"}</td>
+                <td>{item.agency_name || "-"}</td>
+                <td>{item.agreement_no || "-"}</td>
+                <td>{item.candidate_name || "-"}</td>
+                <td>{item.request_no || "-"}</td>
+                <td>{item.project || "-"}</td>
+                <td>{item.sla_days || 60} days</td>
+                <td>{item.actual_days || 0} days</td>
+                <td>{item.delay_days || 0} days</td>
+                <td>{item.grace_days || 0} days</td>
+                <td>{item.penalty_days || 0}</td>
+                <td>{Number(item.calculated_amount || 0).toLocaleString()} SAR</td>
+                <td><b>{Number(item.approved_amount ?? item.calculated_amount ?? 0).toLocaleString()} SAR</b></td>
+                <td><Badge value={item.status || "Pending Review"} /></td>
+                <td>{item.agency_justification || "-"}</td>
+                <td>{item.decision_notes || "-"}</td>
+                <td className="table-actions">
+                  {item.source === "live" ? (
+                    <span>Generate first</span>
+                  ) : item.status === "Pending Review" ? (
+                    <>
+                      <button className="save-btn" onClick={() => sendPenaltyToAgency(item)}>Send to Agency</button>
+                      <button onClick={() => reduceAndSendPenalty(item)}>Reduce & Send</button>
+                      <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
+                    </>
+                  ) : item.status === "Sent to Agency" ? (
+                    <>
+                      <button className="save-btn" onClick={() => approveFinalPenalty(item, "No accepted justification received. Final penalty approved.")}>Approve Final</button>
+                      <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
+                      <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
+                    </>
+                  ) : item.status === "Justification Submitted" ? (
+                    <>
+                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification accepted by company.")}>Accept Justification</button>
+                      <button className="danger" onClick={() => approveFinalPenalty(item, "Agency justification rejected by company. Penalty approved.")}>Reject & Approve</button>
+                      <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
+                    </>
+                  ) : ["Approved", "Reduced", "Waived"].includes(item.status) ? (
+                    <span>Final</span>
+                  ) : "-"}
+                  {item.source !== "live" && <button className="danger" onClick={() => deletePenaltyRecord(item)}>Delete</button>}
                 </td>
               </tr>
             ))
