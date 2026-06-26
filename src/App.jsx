@@ -785,8 +785,20 @@ const [currentUser, setCurrentUser] = useState(() => {
     return null;
   }
 });
+const [agencyClientAccess, setAgencyClientAccess] = useState([]);
+const [agencyWorkspaceLoading, setAgencyWorkspaceLoading] = useState(false);
+const [activeAgencyCompanyId, setActiveAgencyCompanyId] = useState(() =>
+  sessionStorage.getItem("visaflow_agency_company_id") || ""
+);
+const [activeAgencyCompanyName, setActiveAgencyCompanyName] = useState(() =>
+  sessionStorage.getItem("visaflow_agency_company_name") || ""
+);
 const DEFAULT_COMPANY_ID = "bed19b89-b71c-4bd3-ac64-f5f1fa734a18";
-const currentCompanyId = currentUser?.company_id || DEFAULT_COMPANY_ID;
+const rawCurrentRole = String(currentUser?.role || "").trim();
+const isCurrentAgencyUser = rawCurrentRole.toLowerCase() === "agency";
+const currentCompanyId = isCurrentAgencyUser
+  ? (activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "")
+  : (currentUser?.company_id || DEFAULT_COMPANY_ID);
 
 function withCompany(payload = {}) {
   return {
@@ -1108,6 +1120,127 @@ const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager
 const canManageEmployees = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageMarketplace = ["Admin", "Recruitment Manager", "Operations Manager"].includes(currentRole);
 const canExport = hasAction("export") || ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager", "Visa Team", "Viewer"].includes(currentRole);
+
+const getUniqueAgencyWorkspaces = (rows = []) => {
+  const map = new Map();
+
+  rows.forEach((row) => {
+    const companyId = row.company_id || row.operational_company_id;
+    if (!companyId) return;
+
+    const key = String(companyId);
+    if (!map.has(key)) {
+      map.set(key, {
+        ...row,
+        company_id: companyId,
+        company_name: row.company_name || row.client_name || row.company || row.name || `Client ${map.size + 1}`,
+      });
+    }
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.company_name || "").localeCompare(String(b.company_name || ""))
+  );
+};
+
+async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
+  const effectiveUser = user || currentUser;
+
+  if (!effectiveUser || normalizeUserRole(effectiveUser.role) !== "Agency") {
+    setAgencyClientAccess([]);
+    return [];
+  }
+
+  setAgencyWorkspaceLoading(true);
+
+  const searches = [
+    ["user_id", effectiveUser.id],
+    ["user_email", effectiveUser.email],
+    ["agency_id", effectiveUser.agency_id],
+    ["agency_name", effectiveUser.agency_name],
+  ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "");
+
+  let allRows = [];
+
+  try {
+    for (const [field, value] of searches) {
+      const { data, error } = await supabase
+        .from("agency_client_access")
+        .select("*")
+        .eq("status", "Active")
+        .eq(field, value)
+        .range(0, 500);
+
+      if (error) {
+        console.warn("agency_client_access:", error.message);
+        continue;
+      }
+
+      allRows = [...allRows, ...(data || [])];
+    }
+  } catch (error) {
+    console.warn("agency_client_access load failed", error?.message || error);
+  } finally {
+    setAgencyWorkspaceLoading(false);
+  }
+
+  const workspaces = getUniqueAgencyWorkspaces(allRows);
+  setAgencyClientAccess(workspaces);
+
+  if (workspaces.length > 0 && autoSelect) {
+    const currentId = activeAgencyCompanyId || effectiveUser.active_company_id || effectiveUser.company_id || "";
+    const selected = workspaces.find((item) => String(item.company_id) === String(currentId)) || workspaces[0];
+    switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
+  }
+
+  return workspaces;
+}
+
+function switchAgencyWorkspace(workspace, options = {}) {
+  if (!workspace?.company_id) return;
+
+  const companyId = String(workspace.company_id || "");
+  const companyName = workspace.company_name || "Client Workspace";
+
+  sessionStorage.setItem("visaflow_agency_company_id", companyId);
+  sessionStorage.setItem("visaflow_agency_company_name", companyName);
+  setActiveAgencyCompanyId(companyId);
+  setActiveAgencyCompanyName(companyName);
+
+  setCurrentUser((prev) => {
+    const base = prev || options.user || currentUser || {};
+    const updated = {
+      ...base,
+      active_company_id: companyId,
+      active_company_name: companyName,
+    };
+
+    const storage = localStorage.getItem("visaflow_user") ? localStorage : sessionStorage;
+    storage.setItem("visaflow_user", JSON.stringify(updated));
+    return updated;
+  });
+
+  if (!options.silent) {
+    setSearch("");
+    setFilterStatus("All");
+    setActivePage("Office Portal");
+  }
+}
+
+function handleAgencyWorkspaceChange(companyId) {
+  const workspace = agencyClientAccess.find((item) => String(item.company_id) === String(companyId));
+  if (workspace) switchAgencyWorkspace(workspace);
+}
+
+function getActiveAgencyWorkspaceName() {
+  return (
+    agencyClientAccess.find((item) => String(item.company_id) === String(currentCompanyId))?.company_name ||
+    activeAgencyCompanyName ||
+    currentUser?.active_company_name ||
+    currentUser?.company_name ||
+    "Client Workspace"
+  );
+}
 
 const [authForm,setAuthForm] = useState({
 
@@ -1648,6 +1781,11 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     "collections",
   ];
 
+  if (currentRole === "Agency" && !currentCompanyId && !globalTables.includes(table)) {
+    setter([]);
+    return;
+  }
+
   if (currentRole === "Agency" && agencyBlockedTables.includes(table)) {
     setter([]);
     return;
@@ -1896,8 +2034,15 @@ setProfessions(allProfessions);
     await loadNotifications();
   }
 useEffect(() => {
-  if (currentUser) loadAll();
-}, [currentUser]);
+  if (!currentUser) return;
+
+  if (currentRole === "Agency") {
+    loadAgencyClientAccess(currentUser, true);
+    if (!currentCompanyId) return;
+  }
+
+  loadAll();
+}, [currentUser?.id, currentCompanyId]);
 
 useEffect(() => {
   if (!visiblePages.includes(activePage)) {
@@ -5000,6 +5145,28 @@ async function handleLogin() {
       subscription_status: companyData?.subscription_status || "",
     };
 
+    if (loggedUser.role === "Agency") {
+      const workspaces = await loadAgencyClientAccess(loggedUser, false);
+      const storedCompanyId = sessionStorage.getItem("visaflow_agency_company_id") || "";
+      const selectedWorkspace =
+        workspaces.find((item) => String(item.company_id) === String(storedCompanyId)) ||
+        workspaces.find((item) => String(item.company_id) === String(loggedUser.company_id || "")) ||
+        workspaces[0] ||
+        null;
+
+      if (selectedWorkspace) {
+        loggedUser.active_company_id = selectedWorkspace.company_id;
+        loggedUser.active_company_name = selectedWorkspace.company_name || "Client Workspace";
+        sessionStorage.setItem("visaflow_agency_company_id", String(selectedWorkspace.company_id));
+        sessionStorage.setItem("visaflow_agency_company_name", loggedUser.active_company_name);
+        setActiveAgencyCompanyId(String(selectedWorkspace.company_id));
+        setActiveAgencyCompanyName(loggedUser.active_company_name);
+      } else if (!loggedUser.company_id) {
+        alert("No active client workspace is assigned to this agency user. Please contact the platform administrator.");
+        return;
+      }
+    }
+
     const storage = rememberMe ? localStorage : sessionStorage;
     localStorage.removeItem("visaflow_user");
     sessionStorage.removeItem("visaflow_user");
@@ -5014,6 +5181,11 @@ async function handleLogin() {
 function handleLogout() {
   localStorage.removeItem("visaflow_user");
   sessionStorage.removeItem("visaflow_user");
+  sessionStorage.removeItem("visaflow_agency_company_id");
+  sessionStorage.removeItem("visaflow_agency_company_name");
+  setAgencyClientAccess([]);
+  setActiveAgencyCompanyId("");
+  setActiveAgencyCompanyName("");
   setCurrentUser(null);
   setLoginForm({ email: "", password: "" });
   setActivePage("Dashboard");
@@ -9420,6 +9592,52 @@ if (!currentUser) {
   );
 }
 
+  if (currentRole === "Agency" && !currentCompanyId) {
+    return (
+      <main className="vf-login-shell">
+        <section className="vf-login-right" style={{ width: "100%" }}>
+          <div className="vf-login-card" style={{ maxWidth: "680px" }}>
+            <div className="vf-login-logo">
+              <div className="vf-symbol vf-symbol-small" aria-hidden="true">
+                <span className="vf-globe" />
+                <span className="vf-plane">✈</span>
+                <span className="vf-vmark">V</span>
+              </div>
+            </div>
+            <h2>Choose Client Workspace</h2>
+            <p className="vf-login-subtitle">Select the company workspace you want to manage for {currentUser?.agency_name || "your agency"}.</p>
+
+            {agencyWorkspaceLoading ? (
+              <div className="vf-reset-message">Loading client workspaces...</div>
+            ) : agencyClientAccess.length === 0 ? (
+              <div className="vf-reset-message">No active client workspace is assigned to this agency user.</div>
+            ) : (
+              <div className="dashboard-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                {agencyClientAccess.map((workspace) => (
+                  <button
+                    key={workspace.id || workspace.company_id}
+                    type="button"
+                    className="stat-card"
+                    style={{ textAlign: "left", cursor: "pointer" }}
+                    onClick={() => switchAgencyWorkspace(workspace)}
+                  >
+                    <h3>{workspace.company_name || "Client Workspace"}</h3>
+                    <strong>{workspace.role || "Coordinator"}</strong>
+                    <p>{workspace.agency_name || currentUser?.agency_name || "Agency Portal"}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button type="button" className="light-btn" onClick={handleLogout} style={{ marginTop: "18px" }}>
+              Logout
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <div className="layout">
       <input ref={candidateExcelInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleExcelUpload} />
@@ -9437,7 +9655,30 @@ if (!currentUser) {
         <div className="user-box">
           <strong>{currentUser.name}</strong>
           <span>{currentUser.role}</span>
+          {currentRole === "Agency" && (
+            <span style={{ marginTop: "6px", color: "#bfdbfe", fontSize: "12px" }}>
+              Client: {getActiveAgencyWorkspaceName()}
+            </span>
+          )}
         </div>
+        {currentRole === "Agency" && agencyClientAccess.length > 1 && (
+          <div style={{ padding: "0 12px 10px" }}>
+            <label style={{ display: "block", color: "rgba(255,255,255,0.7)", fontSize: "11px", fontWeight: 900, marginBottom: "6px" }}>
+              SWITCH CLIENT
+            </label>
+            <select
+              value={currentCompanyId}
+              onChange={(e) => handleAgencyWorkspaceChange(e.target.value)}
+              style={{ width: "100%", borderRadius: "12px", padding: "8px", border: "1px solid rgba(255,255,255,0.18)", background: "#0f2a5c", color: "#fff", fontWeight: 800 }}
+            >
+              {agencyClientAccess.map((workspace) => (
+                <option key={workspace.id || workspace.company_id} value={workspace.company_id}>
+                  {workspace.company_name || "Client Workspace"}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <button
   className="save-btn"
   style={{ marginTop: "10px", width: "100%" }}
@@ -9513,6 +9754,11 @@ if (!currentUser) {
           </div>
           {activePage !== "Executive Dashboard" && (
             <div className="actions-line">
+              {currentRole === "Agency" && (
+                <span className="badge passed" title="Current client workspace">
+                  🏢 {getActiveAgencyWorkspaceName()}
+                </span>
+              )}
               {activePage === "Candidates" && canManageCandidates && <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Excel</button>}
               {activePage === "Employees" && canManageEmployees && <button className="new-btn" onClick={downloadEmployeesTemplate}>Download Template</button>}
               {activePage === "Employees" && canManageEmployees && <button className="new-btn" onClick={startEmployeesExcelUpload}>Import Employees</button>}
