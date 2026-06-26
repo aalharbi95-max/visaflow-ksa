@@ -844,10 +844,12 @@ const [resetMessage, setResetMessage] = useState("");
 const [resetLoading, setResetLoading] = useState(false);
 const [loginLanguage, setLoginLanguage] = useState("EN");
 const [showLoginPassword, setShowLoginPassword] = useState(false);
-const [aiQuestion, setAiQuestion] = useState("What are the most important recruitment risks today?");
+const [aiQuestion, setAiQuestion] = useState("اعطني ملخص تنفيذي عن أهم مخاطر التوظيف اليوم");
 const [aiAnswer, setAiAnswer] = useState("");
 const [aiLoading, setAiLoading] = useState(false);
 const [aiLastRun, setAiLastRun] = useState("");
+const [aiCommanderMode, setAiCommanderMode] = useState("Executive Brief");
+const [aiCommanderLanguage, setAiCommanderLanguage] = useState("Arabic");
 const [aiAgentLoading, setAiAgentLoading] = useState(false);
 const [aiAgentLastRun, setAiAgentLastRun] = useState("");
 const [aiAgentLog, setAiAgentLog] = useState("");
@@ -6991,6 +6993,178 @@ function buildLockedVIEReport(question = "") {
   ].filter(Boolean).join("\n");
 }
 
+
+function buildAICommanderDecisionContext() {
+  const requestHealth = buildRequestHealthRows();
+  const agencyScorecard = buildAgencyScorecard();
+  const forecast = buildRecruitmentForecast();
+  const highRiskLines = requestHealth
+    .filter((row) => row.riskLevel === "High")
+    .sort((a, b) => Number(b.riskScore || 0) - Number(a.riskScore || 0));
+  const visaGapLines = requestHealth.filter((row) => !row.isSaudi && Number(row.visaGap || 0) > 0);
+  const authorizationGapLines = requestHealth.filter((row) => !row.isSaudi && Number(row.authorizationGap || 0) > 0);
+  const candidateGapLines = requestHealth.filter((row) => Number(row.candidateGap || 0) > 0);
+  const agencyRiskRows = agencyScorecard.filter((row) => row.risk !== "Low");
+  const riskScore =
+    reports.lateItems.length +
+    visaGapLines.length +
+    authorizationGapLines.length +
+    highRiskLines.length +
+    agencyRiskRows.length;
+
+  return {
+    requestHealth,
+    agencyScorecard,
+    forecast,
+    highRiskLines,
+    visaGapLines,
+    authorizationGapLines,
+    candidateGapLines,
+    agencyRiskRows,
+    riskScore,
+  };
+}
+
+function buildLocalAICommanderAnswer(question = "", mode = aiCommanderMode, language = aiCommanderLanguage) {
+  const context = buildAICommanderDecisionContext();
+  const topRiskLines = context.highRiskLines.slice(0, 5);
+  const topAgencies = context.agencyScorecard.slice(0, 4);
+  const weakAgencies = [...context.agencyScorecard].filter((agency) => agency.risk !== "Low").slice(-4).reverse();
+  const isArabic = language !== "English";
+  const sourceNote = isArabic
+    ? "مصدر الأرقام: محرك VisaFlow VIE حسب request_lines، وليس من ملخص الطلب العام."
+    : "Source: VisaFlow VIE request-line engine, not request header summaries.";
+
+  if (!isArabic) {
+    return [
+      `VisaFlow AI Commander - ${mode}`,
+      sourceNote,
+      "",
+      "Executive Summary",
+      `- AI Risk Score: ${context.riskScore}`,
+      `- Open Requests: ${executiveDashboard.openRequests}`,
+      `- Recruitment Progress: ${executiveDashboard.recruitmentProgress}%`,
+      `- Remaining Recruitment Gap: ${context.forecast.totalRemainingRecruitment}`,
+      `- Remaining Joining Gap: ${context.forecast.totalRemainingJoining}`,
+      `- Expected Arrivals Next 30 Days: ${context.forecast.arrivingNext30}`,
+      "",
+      "Top Risks",
+      ...(topRiskLines.length ? topRiskLines.map((line, index) => `${index + 1}. ${line.request_no} / Line ${line.line_no} / ${line.profession}: ${line.bottleneck}. Action: ${line.recommendation}`) : ["No high-risk request lines detected."]),
+      "",
+      "Agency View",
+      ...(topAgencies.length ? topAgencies.map((agency) => `- ${agency.agency}: Score ${agency.score}, Success ${agency.successRate}%, Risk ${agency.risk}`) : ["No agency performance data yet."]),
+      "",
+      "Recommended Decisions",
+      "1. Resolve request lines with visa and authorization gaps before adding more candidates.",
+      "2. Push agencies on candidate gaps by request line, profession, nationality, and gender.",
+      "3. Convert ready candidates from medical/visa stages into ticketing and arrival.",
+      "4. Review weak agencies before allocating new demand.",
+    ].join("\n");
+  }
+
+  const forecastLine = context.forecast?.forecastMessage || "لا توجد توقعات كافية حاليًا.";
+  const riskLabel = context.riskScore >= 10 ? "مرتفع" : context.riskScore >= 4 ? "متوسط" : "منخفض";
+
+  const modeIntro = {
+    "Executive Brief": "ملخص تنفيذي مختصر يركز على القرار الإداري.",
+    "Risk Analysis": "تحليل مخاطر يوضح أين تتعطل الطلبات ولماذا.",
+    "Agency Follow-up": "توجيهات متابعة للمكاتب بناءً على الأداء والفجوات.",
+    "Forecast": "توقعات للفجوات والوصول خلال الفترة القادمة.",
+    "CEO Decision Memo": "مذكرة قرار جاهزة للرئيس التنفيذي أو مدير التوظيف.",
+  }[mode] || "تحليل تشغيلي مباشر.";
+
+  return [
+    `🧠 VisaFlow AI Commander - ${mode}`,
+    sourceNote,
+    question ? `سؤال المستخدم: ${question}` : "",
+    "",
+    "📌 الملخص التنفيذي",
+    `- ${modeIntro}`,
+    `- مستوى المخاطر الحالي: ${riskLabel} / AI Risk Score: ${context.riskScore}`,
+    `- الطلبات المفتوحة: ${executiveDashboard.openRequests}`,
+    `- تقدم التوظيف: ${executiveDashboard.recruitmentProgress}%` ,
+    `- فجوة التوظيف المتبقية: ${context.forecast.totalRemainingRecruitment}`,
+    `- فجوة المباشرة المتبقية: ${context.forecast.totalRemainingJoining}`,
+    `- المتوقع وصولهم خلال 30 يوم: ${context.forecast.arrivingNext30}`,
+    "",
+    "📊 مؤشرات القرار",
+    `- بنود طلبات عالية المخاطر: ${context.highRiskLines.length}`,
+    `- بنود فيها نقص تأشيرات: ${context.visaGapLines.length}`,
+    `- بنود فيها فجوة تفويض: ${context.authorizationGapLines.length}`,
+    `- بنود فيها نقص مرشحين: ${context.candidateGapLines.length}`,
+    `- مكاتب تحتاج متابعة: ${context.agencyRiskRows.length}`,
+    "",
+    "🚨 أعلى المخاطر حسب البند التشغيلي",
+    ...(topRiskLines.length
+      ? topRiskLines.map((line, index) => `${index + 1}. ${line.request_no} / Line ${line.line_no} / ${line.profession} / ${line.nationality}: ${line.bottleneck}. الإجراء المقترح: ${line.recommendation}`)
+      : ["لا توجد بنود عالية المخاطر حاليًا."]),
+    "",
+    "🏢 أداء المكاتب",
+    ...(topAgencies.length
+      ? topAgencies.map((agency) => `- ${agency.agency}: التقييم ${agency.score} / النجاح ${agency.successRate}% / المخاطر ${agency.risk}`)
+      : ["لا توجد بيانات كافية لتقييم المكاتب حاليًا."]),
+    weakAgencies.length ? `- مكاتب تحتاج تدخل: ${weakAgencies.map((agency) => agency.agency).join(", ")}` : "",
+    "",
+    "🔮 التوقع",
+    `- ${forecastLine}`,
+    "",
+    "✅ قرارات مقترحة",
+    "1. معالجة بنود الطلب ذات نقص التأشيرات أو التفويض قبل زيادة الترشيحات.",
+    "2. متابعة كل مكتب حسب البند: المهنة + الجنسية + الجنس + الكمية، وليس حسب رقم الطلب فقط.",
+    "3. نقل المرشحين الجاهزين من مراحل الفحص/التأشيرة إلى التذاكر والوصول بسرعة.",
+    "4. عدم تخصيص كميات جديدة للمكاتب ذات المخاطر العالية قبل تحديث المعاملات المتأخرة.",
+    "5. عرض هذا الملخص في تقرير الإدارة أو AI Report Studio عند الحاجة.",
+  ].filter(Boolean).join("\n");
+}
+
+function renderAICommanderAnswer() {
+  if (!aiAnswer) {
+    return (
+      <div style={{ textAlign: "center", padding: "38px 18px", color: "#64748b" }}>
+        <div style={{ fontSize: "44px", marginBottom: "10px" }}>🧠</div>
+        <h3 style={{ margin: "0 0 8px", color: "#0f172a" }}>جاهز للتحليل التنفيذي</h3>
+        <p style={{ margin: 0, lineHeight: 1.7 }}>
+          اختر نوع التحليل، ثم اكتب السؤال أو استخدم أحد الأوامر الجاهزة. سيعتمد AI Commander على بيانات VisaFlow التشغيلية الحية.
+        </p>
+      </div>
+    );
+  }
+
+  const lines = String(aiAnswer).split("\n");
+  return (
+    <div style={{ display: "grid", gap: "10px" }}>
+      {lines.map((line, index) => {
+        const text = line.trim();
+        if (!text) return <div key={index} style={{ height: "4px" }} />;
+        const isTitle = /^[📌📊🚨🏢🔮✅🧠]/.test(text) || text.startsWith("Executive") || text.startsWith("Top Risks") || text.startsWith("Agency View") || text.startsWith("Recommended");
+        const isBullet = text.startsWith("-") || /^\d+\./.test(text);
+        if (isTitle) {
+          return (
+            <div key={index} style={{ marginTop: index ? "8px" : 0, padding: "12px 14px", borderRadius: "14px", background: "#eef2ff", color: "#1e1b4b", fontWeight: 900 }}>
+              {text}
+            </div>
+          );
+        }
+        return (
+          <div
+            key={index}
+            style={{
+              padding: isBullet ? "10px 14px" : "8px 2px",
+              borderRadius: "12px",
+              background: isBullet ? "#ffffff" : "transparent",
+              border: isBullet ? "1px solid #e2e8f0" : "none",
+              color: "#0f172a",
+              lineHeight: 1.75,
+            }}
+          >
+            {text}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function getAICommanderIntent(question = "") {
   const q = String(question || "").trim().toLowerCase();
 
@@ -7076,21 +7250,23 @@ function getAICommanderIntent(question = "") {
 }
 
 async function runAICommander(question = aiQuestion) {
+  const finalQuestion = String(question || "").trim();
   setAiLoading(true);
   setAiAnswer("");
 
   const apiKey = import.meta.env?.VITE_OPENAI_API_KEY;
-  const intent = getAICommanderIntent(question);
+  const intent = getAICommanderIntent(finalQuestion);
 
   try {
     if (!apiKey) {
       if (intent === "operational") {
-        setAiAnswer(
-          buildLockedVIEReport(question) +
-            "\n\n---\nOpenAI is not connected. Add VITE_OPENAI_API_KEY to enable executive analysis."
-        );
+        setAiAnswer(buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
       } else {
-        setAiAnswer("OpenAI is not connected. Add VITE_OPENAI_API_KEY to use general AI chat.");
+        setAiAnswer(
+          aiCommanderLanguage === "English"
+            ? "OpenAI is not connected. I can still provide operational summaries from VisaFlow data when you ask about requests, risks, agencies, visas, candidates, or forecasts."
+            : "OpenAI غير مربوط حاليًا. أقدر أعطيك ملخصات تشغيلية من بيانات VisaFlow إذا سألت عن الطلبات، المخاطر، المكاتب، التأشيرات، المرشحين، أو التوقعات."
+        );
       }
       setAiLastRun(new Date().toLocaleString());
       return;
@@ -7105,17 +7281,17 @@ async function runAICommander(question = aiQuestion) {
         },
         body: JSON.stringify({
           model: "gpt-4.1-mini",
-          temperature: 0.4,
-          max_output_tokens: 1400,
+          temperature: 0.35,
+          max_output_tokens: 1200,
           input: [
             {
               role: "system",
               content:
-                "You are VisaFlow KSA AI Assistant. Answer the user's question directly. Do not generate recruitment operational reports unless the user explicitly asks for a report, dashboard, request analysis, visa, candidates, agencies, mobilization, risks, or forecast. For greetings, reply briefly and naturally. For HR writing such as job descriptions, emails, translations, and letters, provide the requested text only.",
+                "You are VisaFlow KSA AI Assistant. Answer naturally and directly. Do not generate locked recruitment reports unless the user explicitly asks about recruitment operations, requests, visas, candidates, agencies, mobilization, KPI, penalties, risks, or forecast. Use Arabic if the user writes Arabic.",
             },
             {
               role: "user",
-              content: String(question || ""),
+              content: finalQuestion || "مرحبا",
             },
           ],
         }),
@@ -7137,8 +7313,9 @@ async function runAICommander(question = aiQuestion) {
       return;
     }
 
-    const lockedReport = buildLockedVIEReport(question);
+    const lockedReport = buildLockedVIEReport(finalQuestion);
     const snapshot = buildAICommanderSnapshot();
+    const localDecisionContext = buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage);
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -7148,21 +7325,24 @@ async function runAICommander(question = aiQuestion) {
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        temperature: 0.1,
-        max_output_tokens: 1200,
+        temperature: 0.12,
+        max_output_tokens: 1800,
         input: [
           {
             role: "system",
             content:
-              "You are VisaFlow KSA AI Commander, an executive recruitment operations advisor. You MUST use only the Locked VIE Facts and operational_request_lines provided by VisaFlow. Do not use request header profession, quantity, nationality, or gender. Do not recalculate totals. Do not combine multiple request lines under the first profession. Keep the Locked VIE Facts unchanged in meaning, then provide a concise Executive Analysis with risks, root causes, forecast, agency follow-up, and recommended actions.",
+              "You are VisaFlow KSA AI Commander, an executive recruitment operations advisor. Use only the locked VisaFlow VIE facts and operational_request_lines. Do not use request header profession, quantity, nationality, or gender. Do not recalculate totals. Do not combine multiple request lines under the first profession. Provide a polished executive response with clear sections, not a raw data dump. Keep the answer actionable and management-ready.",
           },
           {
             role: "user",
             content:
-              `User question: ${question || "Executive recruitment status"}\n\n` +
+              `User question: ${finalQuestion || "Executive recruitment status"}\n` +
+              `Commander mode: ${aiCommanderMode}\n` +
+              `Language: ${aiCommanderLanguage}\n\n` +
               `LOCKED VIE FACTS - DO NOT ALTER OR RECALCULATE:\n${lockedReport}\n\n` +
               `STRICT OPERATIONAL SNAPSHOT JSON:\n${JSON.stringify(snapshot, null, 2)}\n\n` +
-              "Write the answer in Arabic business style. Start with a short note that the numbers are based on request lines. Never say REQ-2026-0003 is 60 plumbers if the locked facts show multiple lines.",
+              `LOCAL COMMANDER DECISION CONTEXT:\n${localDecisionContext}\n\n` +
+              "Write the answer in Arabic business style unless Language is English. Start with a short source note that numbers are based on request lines. Use headings with emojis. Include: executive summary, decision KPIs, top risks, agency follow-up, forecast, and recommended decisions. Do not show the full locked report unless the user explicitly asks for raw request-line breakdown.",
           },
         ],
       }),
@@ -7179,17 +7359,13 @@ async function runAICommander(question = aiQuestion) {
         ?.join("\n") ||
       "";
 
-    setAiAnswer(
-      lockedReport +
-        "\n\n---\n🤖 AI Executive Analysis\n" +
-        (aiText || "AI did not return analysis. Locked VIE report is shown above.")
-    );
+    setAiAnswer(aiText || localDecisionContext);
     setAiLastRun(new Date().toLocaleString());
   } catch (error) {
     if (intent === "operational") {
       setAiAnswer(
-        buildLockedVIEReport(question) +
-          `\n\n---\nAI Executive Analysis failed: ${error.message}\nShowing locked VisaFlow VIE report only.`
+        buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage) +
+          `\n\n⚠️ ملاحظة تقنية: تعذر الاتصال بخدمة الذكاء الاصطناعي الخارجية (${error.message}). تم عرض تحليل VisaFlow المحلي بدلًا من ذلك.`
       );
     } else {
       setAiAnswer(`AI request failed: ${error.message}`);
@@ -7198,7 +7374,6 @@ async function runAICommander(question = aiQuestion) {
     setAiLoading(false);
   }
 }
-
 
 function getAIAgentAgencyTasks() {
   const today = new Date();
@@ -10975,59 +11150,108 @@ if (!currentUser) {
               {aiAgentLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last AI Agent run: {aiAgentLastRun}</p>}
             </TableCard>
 
-            <TableCard title="💬 Ask VisaFlow AI Commander">
-              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "12px", marginBottom: "12px" }}>
-                <input
-                  value={aiQuestion}
-                  onChange={(e) => setAiQuestion(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && runAICommander()}
-                  placeholder="Ask about delayed requests, visa shortages, agency performance, project risk, Saudization, forecast..."
-                  style={{ height: "50px", borderRadius: "14px", border: "1px solid #cbd5e1", padding: "0 14px", fontSize: "15px" }}
-                />
-                <button className="save-btn" onClick={() => runAICommander()} disabled={aiLoading}>
-                  {aiLoading ? "Analyzing..." : "Run AI Analysis"}
-                </button>
-              </div>
+            <TableCard title="🧠 AI Commander Console - Command Center">
+              <div style={{ display: "grid", gridTemplateColumns: "0.95fr 1.05fr", gap: "18px", alignItems: "stretch" }}>
+                <div style={{ display: "grid", gap: "14px" }}>
+                  <div style={{ padding: "18px", borderRadius: "22px", background: "linear-gradient(135deg, #0f172a, #1e3a8a)", color: "white", boxShadow: "0 18px 45px rgba(15,23,42,0.16)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                      <div>
+                        <p style={{ margin: "0 0 6px", opacity: 0.78, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", fontSize: "11px" }}>Live Executive Assistant</p>
+                        <h3 style={{ margin: 0, fontSize: "24px", letterSpacing: "-0.03em" }}>اسأل النظام كأنك تسأل مدير عمليات ذكي</h3>
+                      </div>
+                      <div style={{ padding: "10px 12px", borderRadius: "16px", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.16)", fontWeight: 900 }}>
+                        {aiLoading ? "Analyzing" : "Ready"}
+                      </div>
+                    </div>
+                    <p style={{ margin: "14px 0 0", lineHeight: 1.7, opacity: 0.9 }}>
+                      يعطيك ملخص تنفيذي، مخاطر، قرارات مقترحة، متابعة مكاتب، وتوقعات مبنية على بيانات VisaFlow الحية بدون خلط بين بنود الطلب.
+                    </p>
+                  </div>
 
-              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "14px" }}>
-                {[
-                  "Give me a CEO executive summary.",
-                  "Which requests are at highest risk and why?",
-                  "Rank agencies and show who needs follow-up.",
-                  "Show visa shortages and recommended actions.",
-                  "Forecast recruitment and joining gaps for the next 30 days.",
-                  "Analyze Saudization and local hiring progress."
-                ].map((prompt) => (
-                  <button
-                    key={prompt}
-                    className="light-btn"
-                    onClick={() => {
-                      setAiQuestion(prompt);
-                      runAICommander(prompt);
-                    }}
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    <label style={{ display: "grid", gap: "6px", fontWeight: 800, color: "#334155" }}>
+                      Analysis Mode
+                      <select value={aiCommanderMode} onChange={(e) => setAiCommanderMode(e.target.value)}>
+                        <option>Executive Brief</option>
+                        <option>Risk Analysis</option>
+                        <option>Agency Follow-up</option>
+                        <option>Forecast</option>
+                        <option>CEO Decision Memo</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "grid", gap: "6px", fontWeight: 800, color: "#334155" }}>
+                      Language
+                      <select value={aiCommanderLanguage} onChange={(e) => setAiCommanderLanguage(e.target.value)}>
+                        <option>Arabic</option>
+                        <option>English</option>
+                      </select>
+                    </label>
+                  </div>
 
-              <div
-                style={{
-                  minHeight: "260px",
-                  borderRadius: "20px",
-                  padding: "22px",
-                  background: "#f8fafc",
-                  border: "1px solid #e2e8f0",
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.75,
-                  color: "#0f172a",
-                  fontSize: "15px",
-                }}
-              >
-                {aiAnswer || "Click Run AI Analysis to generate a CEO-ready executive brief from your live VisaFlow data."}
-              </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "10px" }}>
+                    <textarea
+                      value={aiQuestion}
+                      onChange={(e) => setAiQuestion(e.target.value)}
+                      placeholder="مثال: اعطني ملخص تنفيذي عن الطلبات المتأخرة، أو من أسوأ مكتب يحتاج متابعة؟"
+                      rows={4}
+                      style={{ borderRadius: "16px", border: "1px solid #cbd5e1", padding: "14px", fontSize: "15px", resize: "vertical", lineHeight: 1.6 }}
+                    />
+                    <div style={{ display: "grid", gap: "8px", alignContent: "start" }}>
+                      <button className="save-btn" onClick={() => runAICommander()} disabled={aiLoading} style={{ minWidth: "150px" }}>
+                        {aiLoading ? "Analyzing..." : "Run Commander"}
+                      </button>
+                      <button className="light-btn" onClick={() => setAiAnswer(buildLocalAICommanderAnswer(aiQuestion, aiCommanderMode, aiCommanderLanguage))} disabled={aiLoading}>
+                        Local Brief
+                      </button>
+                      <button className="light-btn" onClick={() => navigator.clipboard?.writeText(aiAnswer || "")} disabled={!aiAnswer}>
+                        Copy
+                      </button>
+                    </div>
+                  </div>
 
-              {aiLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last AI run: {aiLastRun}</p>}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px" }}>
+                    {[
+                      ["📌", "ملخص CEO", "اعطني ملخص تنفيذي للرئيس التنفيذي عن وضع التوظيف والمخاطر والقرارات المطلوبة."],
+                      ["🚨", "أعلى المخاطر", "ما هي أعلى 5 مخاطر تشغيلية حسب request lines؟ وما الإجراء المطلوب لكل خطر؟"],
+                      ["🏢", "متابعة المكاتب", "رتب المكاتب حسب الأداء وحدد من يحتاج متابعة عاجلة وما سبب الضعف."],
+                      ["🔮", "توقعات 30 يوم", "توقع فجوة التوظيف والوصول خلال 30 يوم واعطني قرارات مقترحة."],
+                    ].map(([icon, title, prompt]) => (
+                      <button
+                        key={title}
+                        className="light-btn"
+                        style={{ textAlign: "left", padding: "14px", borderRadius: "16px", height: "auto", display: "grid", gap: "6px" }}
+                        onClick={() => {
+                          setAiQuestion(prompt);
+                          runAICommander(prompt);
+                        }}
+                      >
+                        <b>{icon} {title}</b>
+                        <small style={{ color: "#64748b", lineHeight: 1.5 }}>{prompt}</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ borderRadius: "22px", border: "1px solid #e2e8f0", background: "#f8fafc", overflow: "hidden", minHeight: "520px", display: "grid", gridTemplateRows: "auto 1fr auto" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", padding: "16px 18px", background: "white", borderBottom: "1px solid #e2e8f0" }}>
+                    <div>
+                      <b style={{ color: "#0f172a" }}>Commander Response</b>
+                      <div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>Structured response, not raw report dump</div>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <span className="badge passed">VIE Lines</span>
+                      <span className="badge warning">Live KPI</span>
+                      <span className="badge active">{aiCommanderMode}</span>
+                    </div>
+                  </div>
+                  <div style={{ padding: "18px", overflow: "auto", maxHeight: "620px" }}>
+                    {renderAICommanderAnswer()}
+                  </div>
+                  <div style={{ padding: "12px 18px", background: "white", borderTop: "1px solid #e2e8f0", color: "#64748b", fontSize: "12px" }}>
+                    {aiLastRun ? `Last AI run: ${aiLastRun}` : "No run yet"}
+                  </div>
+                </div>
+              </div>
             </TableCard>
 
             <div className="grid">
