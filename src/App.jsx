@@ -915,6 +915,7 @@ function isPlatformRole(role) {
 
 const PLATFORM_PAGES = [
   "Platform Dashboard",
+  "AI Report Studio",
   "Companies Management",
   "Platform Users",
   "Subscription Invoices",
@@ -925,6 +926,7 @@ const PLATFORM_PAGES = [
 
 const PLATFORM_ACCOUNT_PAGES = [
   "Platform Dashboard",
+  "AI Report Studio",
   "Companies Management",
   "Platform Users",
   "Subscription Invoices",
