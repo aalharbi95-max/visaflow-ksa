@@ -8091,6 +8091,315 @@ function exportAIReportStudio() {
   return downloadReportStudioFile(`${safeName}.txt`, buildAIReportStudioNarrative());
 }
 
+const VIZ_COLORS = ["#2563eb", "#14b8a6", "#f97316", "#a855f7", "#06b6d4", "#22c55e", "#e11d48", "#f59e0b"];
+
+function formatCompactNumber(value, suffix = "") {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return `0${suffix}`;
+  if (Math.abs(number) >= 1000000) return `${(number / 1000000).toFixed(1)}M${suffix}`;
+  if (Math.abs(number) >= 1000) return `${(number / 1000).toFixed(1)}K${suffix}`;
+  return `${number.toLocaleString()}${suffix}`;
+}
+
+function getPercentValue(value, total) {
+  const safeValue = Number(value || 0);
+  const safeTotal = Number(total || 0);
+  if (!safeTotal) return 0;
+  return Math.max(0, Math.min(Math.round((safeValue / safeTotal) * 100), 100));
+}
+
+function VisualKpi({ icon, title, value, subtitle, color = "#2563eb", progress = null }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: "24px",
+        padding: "20px",
+        background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94))",
+        border: "1px solid rgba(226,232,240,0.95)",
+        boxShadow: "0 18px 45px rgba(15,23,42,0.08)",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: "-60px auto auto -50px",
+          width: "140px",
+          height: "140px",
+          borderRadius: "999px",
+          background: color,
+          opacity: 0.12,
+          filter: "blur(3px)",
+        }}
+      />
+      <div style={{ position: "relative", display: "flex", justifyContent: "space-between", gap: "14px", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ color: "#64748b", fontSize: "12px", fontWeight: 900, textTransform: "uppercase", letterSpacing: ".08em" }}>{title}</div>
+          <div style={{ color: "#0f172a", fontSize: "30px", fontWeight: 950, letterSpacing: "-0.04em", marginTop: "8px" }}>{value}</div>
+          {subtitle && <div style={{ color: "#64748b", fontSize: "13px", marginTop: "6px", lineHeight: 1.5 }}>{subtitle}</div>}
+        </div>
+        <div
+          style={{
+            width: "46px",
+            height: "46px",
+            borderRadius: "16px",
+            display: "grid",
+            placeItems: "center",
+            color: "white",
+            fontSize: "21px",
+            background: `linear-gradient(135deg, ${color}, #0f172a)`,
+            boxShadow: `0 14px 28px ${color}35`,
+            flexShrink: 0,
+          }}
+        >
+          {icon}
+        </div>
+      </div>
+      {progress !== null && (
+        <div style={{ marginTop: "16px" }}>
+          <div style={{ height: "8px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+            <div style={{ width: `${Math.max(0, Math.min(Number(progress || 0), 100))}%`, height: "100%", borderRadius: "999px", background: `linear-gradient(90deg, ${color}, #38bdf8)` }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniBarChart({ rows = [], valueSuffix = "", maxItems = 8 }) {
+  const cleanRows = rows.slice(0, maxItems).filter(Boolean);
+  const maxValue = Math.max(...cleanRows.map((row) => Number(row.value || 0)), 1);
+
+  return (
+    <div style={{ display: "grid", gap: "13px" }}>
+      {cleanRows.length === 0 ? (
+        <div style={{ padding: "20px", borderRadius: "18px", background: "#f8fafc", color: "#64748b", textAlign: "center" }}>No data available</div>
+      ) : (
+        cleanRows.map((row, index) => {
+          const color = row.color || VIZ_COLORS[index % VIZ_COLORS.length];
+          const percent = Math.max(6, Math.round((Number(row.value || 0) / maxValue) * 100));
+          return (
+            <div key={`${row.label}-${index}`}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", marginBottom: "7px", color: "#334155", fontSize: "13px", fontWeight: 800 }}>
+                <span>{row.label}</span>
+                <span style={{ color }}>{formatCompactNumber(row.value, valueSuffix)}</span>
+              </div>
+              <div style={{ height: "12px", borderRadius: "999px", background: "#eef2ff", overflow: "hidden" }}>
+                <div style={{ width: `${percent}%`, height: "100%", borderRadius: "999px", background: `linear-gradient(90deg, ${color}, #67e8f9)` }} />
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function DonutMetric({ title, value, total, label, color = "#2563eb", icon = "●" }) {
+  const percent = total === 100 ? Math.max(0, Math.min(Number(value || 0), 100)) : getPercentValue(value, total);
+  return (
+    <div
+      style={{
+        borderRadius: "24px",
+        padding: "22px",
+        background: "white",
+        border: "1px solid #e2e8f0",
+        boxShadow: "0 18px 45px rgba(15,23,42,0.07)",
+        display: "grid",
+        gridTemplateColumns: "112px 1fr",
+        gap: "18px",
+        alignItems: "center",
+      }}
+    >
+      <div
+        style={{
+          width: "112px",
+          height: "112px",
+          borderRadius: "999px",
+          background: `conic-gradient(${color} ${percent * 3.6}deg, #e2e8f0 0deg)`,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        <div style={{ width: "78px", height: "78px", borderRadius: "999px", background: "white", display: "grid", placeItems: "center", textAlign: "center", boxShadow: "inset 0 0 0 1px #e2e8f0" }}>
+          <strong style={{ color: "#0f172a", fontSize: "22px" }}>{percent}%</strong>
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: "26px" }}>{icon}</div>
+        <h3 style={{ margin: "6px 0 6px", color: "#0f172a" }}>{title}</h3>
+        <p style={{ margin: 0, color: "#64748b", lineHeight: 1.6 }}>{label || `${formatCompactNumber(value)} of ${formatCompactNumber(total)}`}</p>
+      </div>
+    </div>
+  );
+}
+
+function VisualPanel({ title, subtitle, children, accent = "#2563eb" }) {
+  return (
+    <section
+      style={{
+        borderRadius: "28px",
+        padding: "24px",
+        background: "rgba(255,255,255,0.96)",
+        border: "1px solid #e2e8f0",
+        boxShadow: "0 22px 65px rgba(15,23,42,0.08)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "16px", alignItems: "flex-start", marginBottom: "18px" }}>
+        <div>
+          <h2 style={{ margin: 0, color: "#0f172a", fontSize: "20px" }}>{title}</h2>
+          {subtitle && <p style={{ margin: "7px 0 0", color: "#64748b", lineHeight: 1.6 }}>{subtitle}</p>}
+        </div>
+        <span style={{ width: "44px", height: "8px", borderRadius: "999px", background: `linear-gradient(90deg, ${accent}, #67e8f9)` }} />
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function FeaturePill({ icon, title, text, color = "#2563eb" }) {
+  return (
+    <div style={{ borderRadius: "22px", padding: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+      <div style={{ width: "42px", height: "42px", borderRadius: "15px", display: "grid", placeItems: "center", color: "white", background: `linear-gradient(135deg, ${color}, #0f172a)`, marginBottom: "12px" }}>{icon}</div>
+      <h3 style={{ margin: "0 0 7px", color: "#0f172a" }}>{title}</h3>
+      <p style={{ margin: 0, color: "#64748b", lineHeight: 1.6 }}>{text}</p>
+    </div>
+  );
+}
+
+function getPlatformIntelligenceModel() {
+  const clients = (platformClients && platformClients.length ? platformClients : companies) || [];
+  const statusIsActive = (item) => ["active", "trial"].includes(normalize(item.subscription_status || item.status || "Active"));
+  const activeClients = clients.filter(statusIsActive);
+  const monthlyRevenue = clients.reduce((sum, client) => sum + Number(client.monthly_amount || client.mrr || 0), 0);
+  const platformUserCount = users.filter((user) => isPlatformRole(user.role)).length;
+  const clientUserCount = users.filter((user) => !isPlatformRole(user.role)).length;
+  const openTickets = supportTickets.filter((ticket) => !["resolved", "closed", "done"].includes(normalize(ticket.status || "Open")));
+  const highPriorityTickets = openTickets.filter((ticket) => ["high", "urgent", "critical"].includes(normalize(ticket.priority || "")));
+  const today = new Date();
+
+  const paidInvoices = subscriptionInvoices.filter((invoice) => normalize(invoice.status) === "paid");
+  const overdueInvoices = subscriptionInvoices.filter((invoice) => {
+    const status = normalize(invoice.status || "Unpaid");
+    if (status === "overdue") return true;
+    if (["paid", "cancelled", "void"].includes(status)) return false;
+    if (!invoice.due_date) return false;
+    return new Date(invoice.due_date) < today;
+  });
+  const unpaidInvoices = subscriptionInvoices.filter((invoice) => ["unpaid", "pending"].includes(normalize(invoice.status || "Unpaid")));
+  const invoiceAmount = subscriptionInvoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+  const collectedAmount = paidInvoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+
+  const successfulBackups = systemBackups.filter((backup) => ["success", "completed", "done"].includes(normalize(backup.status || "Completed")));
+  const backupHealth = systemBackups.length ? Math.round((successfulBackups.length / systemBackups.length) * 100) : 100;
+
+  const planRows = Object.values(
+    clients.reduce((acc, client) => {
+      const plan = client.subscription_plan || client.plan || "Standard";
+      if (!acc[plan]) acc[plan] = { label: plan, value: 0 };
+      acc[plan].value += 1;
+      return acc;
+    }, {})
+  );
+
+  const topClients = [...clients]
+    .sort((a, b) => Number(b.monthly_amount || b.users_count || 0) - Number(a.monthly_amount || a.users_count || 0))
+    .slice(0, 7)
+    .map((client, index) => ({
+      label: client.company_name || client.name || `Company ${index + 1}`,
+      value: Number(client.monthly_amount || client.users_count || 0),
+      color: VIZ_COLORS[index % VIZ_COLORS.length],
+    }));
+
+  const supportRows = [
+    { label: "Open Tickets", value: openTickets.length, color: "#f97316" },
+    { label: "High Priority", value: highPriorityTickets.length, color: "#e11d48" },
+    { label: "Resolved", value: supportTickets.filter((ticket) => ["resolved", "closed", "done"].includes(normalize(ticket.status))).length, color: "#22c55e" },
+  ];
+
+  const invoiceRows = [
+    { label: "Paid", value: paidInvoices.length, color: "#22c55e" },
+    { label: "Unpaid", value: unpaidInvoices.length, color: "#f59e0b" },
+    { label: "Overdue", value: overdueInvoices.length, color: "#e11d48" },
+  ];
+
+  return {
+    clients,
+    totalClients: clients.length,
+    activeClients: activeClients.length,
+    monthlyRevenue,
+    platformUserCount,
+    clientUserCount,
+    openTickets: openTickets.length,
+    highPriorityTickets: highPriorityTickets.length,
+    paidInvoices: paidInvoices.length,
+    overdueInvoices: overdueInvoices.length,
+    invoiceAmount,
+    collectedAmount,
+    backupHealth,
+    planRows,
+    topClients,
+    supportRows,
+    invoiceRows,
+  };
+}
+
+function getReportStudioVisualModel() {
+  const data = buildAIReportStudioDataset();
+  const requestHealth = data.request_health || [];
+  const totalRequired = requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0) || executiveDashboard.totalRequired;
+  const totalCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0) || executiveDashboard.activeCandidates;
+  const totalJoined = requestHealth.reduce((sum, row) => sum + Number(row.joined || 0), 0) || executiveDashboard.joined;
+  const visaGap = requestHealth.reduce((sum, row) => sum + Number(row.visaGap || 0), 0);
+  const authorizationGap = requestHealth.reduce((sum, row) => sum + Number(row.authorizationGap || 0), 0);
+  const highRiskLines = requestHealth.filter((row) => row.riskLevel === "High").length;
+  const mediumRiskLines = requestHealth.filter((row) => row.riskLevel === "Medium").length;
+  const safeLines = Math.max(requestHealth.length - highRiskLines - mediumRiskLines, 0);
+
+  const funnelRows = [
+    { label: "Required", value: totalRequired, color: "#2563eb" },
+    { label: "Candidates", value: totalCandidates, color: "#14b8a6" },
+    { label: "Interview Passed", value: executiveDashboard.interviewPassed, color: "#a855f7" },
+    { label: "Medical Passed", value: executiveDashboard.medicalPassed, color: "#06b6d4" },
+    { label: "Tickets Issued", value: executiveDashboard.ticketsIssued, color: "#f97316" },
+    { label: "Arrived", value: executiveDashboard.arrived, color: "#22c55e" },
+    { label: "Joined", value: totalJoined, color: "#0f766e" },
+  ];
+
+  const riskRows = [
+    { label: "Safe Lines", value: safeLines, color: "#22c55e" },
+    { label: "Medium Risk", value: mediumRiskLines, color: "#f59e0b" },
+    { label: "High Risk", value: highRiskLines, color: "#e11d48" },
+    { label: "Visa Gap", value: visaGap, color: "#8b5cf6" },
+    { label: "Authorization Gap", value: authorizationGap, color: "#f97316" },
+  ];
+
+  const categoryRows = Object.values(
+    REPORT_STUDIO_TEMPLATES.reduce((acc, template) => {
+      if (!acc[template.category]) acc[template.category] = { label: template.category, value: 0 };
+      acc[template.category].value += 1;
+      return acc;
+    }, {})
+  ).map((row, index) => ({ ...row, color: VIZ_COLORS[index % VIZ_COLORS.length] }));
+
+  return {
+    data,
+    totalRequired,
+    totalCandidates,
+    totalJoined,
+    progress: getPercentValue(totalCandidates, totalRequired),
+    joiningProgress: getPercentValue(totalJoined, totalRequired),
+    visaGap,
+    authorizationGap,
+    highRiskLines,
+    funnelRows,
+    riskRows,
+    categoryRows,
+  };
+}
+
+
 function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
   if (activePage === "Requests") return exportRowsToExcel(requests, "VisaFlow_Requests", "Requests");
@@ -9105,216 +9414,350 @@ if (!currentUser) {
         )}
 
 
-        {activePage === "Platform Intelligence" && (
-          <>
-            <TableCard title="📊 Platform Intelligence - SaaS Overview">
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "14px" }}>
-                <Stat title="Total Companies" value={platformClients.length || companies.length} className="passed" />
-                <Stat title="Active Companies" value={(platformClients.length ? platformClients : companies).filter((item) => String(item.subscription_status || item.status || "Active").toLowerCase() === "active").length} className="passed" />
-                <Stat title="Subscription Invoices" value={subscriptionInvoices.length} className="warning" />
-                <Stat title="Open Support Tickets" value={supportTickets.filter((item) => String(item.status || "Open") !== "Resolved").length} className={executiveAlertClass(supportTickets.filter((item) => String(item.status || "Open") !== "Resolved").length)} />
-                <Stat title="System Backups" value={systemBackups.length} className="passed" />
-                <Stat title="Platform Users" value={users.filter((user) => isPlatformRole(user.role)).length} className="passed" />
+        {activePage === "Platform Intelligence" && (() => {
+          const pi = getPlatformIntelligenceModel();
+          return (
+            <>
+              <section
+                style={{
+                  position: "relative",
+                  overflow: "hidden",
+                  borderRadius: "34px",
+                  padding: "34px",
+                  background: "radial-gradient(circle at top left, rgba(20,184,166,0.35), transparent 32%), radial-gradient(circle at bottom right, rgba(168,85,247,0.30), transparent 34%), linear-gradient(135deg, #020617 0%, #172554 48%, #0f766e 100%)",
+                  color: "white",
+                  boxShadow: "0 30px 90px rgba(15,23,42,0.28)",
+                  marginBottom: "22px",
+                }}
+              >
+                <div style={{ position: "absolute", right: "28px", bottom: "-24px", fontSize: "180px", opacity: 0.12 }}>🛰️</div>
+                <div style={{ position: "relative", zIndex: 1, display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: "28px", alignItems: "center" }}>
+                  <div>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: "9px", padding: "10px 15px", borderRadius: "999px", background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.18)", marginBottom: "18px" }}>
+                      <span>👑</span>
+                      <strong>VisaFlow SaaS Control Center</strong>
+                    </div>
+                    <h1 style={{ margin: "0 0 14px", fontSize: "44px", lineHeight: 1.05, letterSpacing: "-0.06em" }}>
+                      Platform Intelligence
+                    </h1>
+                    <p style={{ maxWidth: "760px", margin: 0, opacity: 0.92, lineHeight: 1.8, fontSize: "16px" }}>
+                      شاشة تنفيذية لمالك المنصة تعرض صحة الاشتراكات، الإيرادات، الدعم، النسخ الاحتياطية، واستخدام الشركات بشكل بصري جذاب يليق بعرض VisaFlow كمنتج SaaS عالمي.
+                    </p>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                    <div style={{ borderRadius: "24px", padding: "18px", background: "rgba(255,255,255,0.13)", border: "1px solid rgba(255,255,255,0.20)", backdropFilter: "blur(14px)" }}>
+                      <div style={{ opacity: 0.75, fontSize: "12px", fontWeight: 900, textTransform: "uppercase" }}>Monthly Revenue</div>
+                      <strong style={{ display: "block", fontSize: "30px", marginTop: "8px" }}>{formatCompactNumber(pi.monthlyRevenue, " SAR")}</strong>
+                    </div>
+                    <div style={{ borderRadius: "24px", padding: "18px", background: "rgba(255,255,255,0.13)", border: "1px solid rgba(255,255,255,0.20)", backdropFilter: "blur(14px)" }}>
+                      <div style={{ opacity: 0.75, fontSize: "12px", fontWeight: 900, textTransform: "uppercase" }}>Backup Health</div>
+                      <strong style={{ display: "block", fontSize: "30px", marginTop: "8px" }}>{pi.backupHealth}%</strong>
+                    </div>
+                    <div style={{ gridColumn: "1 / -1", borderRadius: "24px", padding: "18px", background: "rgba(255,255,255,0.13)", border: "1px solid rgba(255,255,255,0.20)", backdropFilter: "blur(14px)" }}>
+                      <MiniBarChart rows={[
+                        { label: "Active Companies", value: pi.activeClients, color: "#22c55e" },
+                        { label: "Open Support", value: pi.openTickets, color: "#f97316" },
+                        { label: "Overdue Invoices", value: pi.overdueInvoices, color: "#e11d48" },
+                      ]} />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "20px" }}>
+                <VisualKpi icon="🏢" title="Total Companies" value={pi.totalClients} subtitle={`${pi.activeClients} active subscription(s)`} color="#2563eb" progress={getPercentValue(pi.activeClients, pi.totalClients || 1)} />
+                <VisualKpi icon="💰" title="MRR" value={formatCompactNumber(pi.monthlyRevenue, " SAR")} subtitle={`${formatCompactNumber(pi.collectedAmount, " SAR")} collected invoices`} color="#14b8a6" progress={getPercentValue(pi.collectedAmount, pi.invoiceAmount || 1)} />
+                <VisualKpi icon="🎫" title="Support Load" value={pi.openTickets} subtitle={`${pi.highPriorityTickets} high priority ticket(s)`} color="#f97316" progress={Math.min(pi.openTickets * 10, 100)} />
+                <VisualKpi icon="💾" title="System Backups" value={`${pi.backupHealth}%`} subtitle={`${systemBackups.length} backup record(s)`} color="#a855f7" progress={pi.backupHealth} />
+                <VisualKpi icon="👥" title="Platform Users" value={pi.platformUserCount} subtitle={`${pi.clientUserCount} client user(s)`} color="#06b6d4" progress={Math.min(pi.platformUserCount * 20, 100)} />
               </div>
-            </TableCard>
 
-            <div className="grid">
-              <TableCard title="🏢 Company Subscription Health">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Company</th>
-                      <th>Status</th>
-                      <th>Users</th>
-                      <th>End Date</th>
-                      <th>MRR</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(platformClients || []).length === 0 ? (
-                      <tr><td colSpan="5">No platform clients found</td></tr>
-                    ) : (
-                      platformClients.slice(0, 10).map((client) => (
-                        <tr key={client.id || client.company_name}>
-                          <td>{client.company_name || client.name || "-"}</td>
-                          <td><Badge value={client.subscription_status || client.status || "Active"} /></td>
-                          <td>{client.users_count || 0}</td>
-                          <td>{client.end_date || client.subscription_end || "-"}</td>
-                          <td>{Number(client.monthly_amount || 0).toLocaleString()} SAR</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </TableCard>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)", gap: "18px", marginBottom: "18px" }}>
+                <VisualPanel title="🏆 Top Companies by Value / Usage" subtitle="يعطي انطباعًا إداريًا قويًا عن الشركات الأكثر استخدامًا أو الأعلى قيمة." accent="#2563eb">
+                  <MiniBarChart rows={pi.topClients.length ? pi.topClients : [{ label: "No companies yet", value: 0, color: "#94a3b8" }]} valueSuffix={pi.monthlyRevenue ? " SAR" : ""} />
+                </VisualPanel>
 
-              <TableCard title="🎫 Central Support & Platform Alerts">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Ticket</th>
-                      <th>Client</th>
-                      <th>Priority</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(supportTickets || []).length === 0 ? (
-                      <tr><td colSpan="4">No support tickets</td></tr>
-                    ) : (
-                      supportTickets.slice(0, 10).map((ticket) => {
-                        const client = platformClients.find((item) => String(item.id || "") === String(ticket.client_id || ""));
-                        return (
-                          <tr key={ticket.id || ticket.ticket_no}>
-                            <td>{ticket.ticket_no || ticket.title || "-"}</td>
-                            <td>{client?.company_name || "-"}</td>
-                            <td><Badge value={ticket.priority || "Medium"} /></td>
-                            <td><Badge value={ticket.status || "Open"} /></td>
+                <div style={{ display: "grid", gap: "18px" }}>
+                  <DonutMetric title="Subscription Health" value={pi.activeClients} total={pi.totalClients || 1} icon="✅" color="#22c55e" label={`${pi.activeClients} active of ${pi.totalClients || 0} company account(s)`} />
+                  <DonutMetric title="Invoice Collection" value={pi.collectedAmount} total={pi.invoiceAmount || 1} icon="💳" color="#14b8a6" label={`${formatCompactNumber(pi.collectedAmount, " SAR")} collected from ${formatCompactNumber(pi.invoiceAmount, " SAR")}`} />
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(310px, 1fr))", gap: "18px", marginBottom: "18px" }}>
+                <VisualPanel title="📦 Plans Mix" subtitle="توزيع الباقات يعطي وضوحًا لتوجه المبيعات." accent="#a855f7">
+                  <MiniBarChart rows={pi.planRows.length ? pi.planRows : [{ label: "Standard", value: pi.totalClients, color: "#a855f7" }]} />
+                </VisualPanel>
+
+                <VisualPanel title="🧾 Invoice Pulse" subtitle="حالة الفواتير بشكل سريع وواضح." accent="#f97316">
+                  <MiniBarChart rows={pi.invoiceRows} />
+                </VisualPanel>
+
+                <VisualPanel title="🎧 Support Pulse" subtitle="مؤشر الدعم المركزي والتنبيهات." accent="#e11d48">
+                  <MiniBarChart rows={pi.supportRows} />
+                </VisualPanel>
+              </div>
+
+              <div className="grid">
+                <TableCard title="🏢 Company Subscription Health">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Company</th>
+                        <th>Status</th>
+                        <th>Users</th>
+                        <th>End Date</th>
+                        <th>MRR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(platformClients || []).length === 0 ? (
+                        <tr><td colSpan="5">No platform clients found</td></tr>
+                      ) : (
+                        platformClients.slice(0, 10).map((client) => (
+                          <tr key={client.id || client.company_name}>
+                            <td>{client.company_name || client.name || "-"}</td>
+                            <td><Badge value={client.subscription_status || client.status || "Active"} /></td>
+                            <td>{client.users_count || 0}</td>
+                            <td>{client.end_date || client.subscription_end || "-"}</td>
+                            <td>{Number(client.monthly_amount || 0).toLocaleString()} SAR</td>
                           </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </TableCard>
-            </div>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </TableCard>
 
-            <TableCard title="🤖 Platform Intelligence Notes">
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" }}>
-                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                  <h3 style={{ marginTop: 0 }}>Platform Only</h3>
-                  <p style={{ color: "#64748b", lineHeight: 1.7 }}>This screen is for SaaS administration only. It does not show operational recruitment data for client companies.</p>
-                </div>
-                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                  <h3 style={{ marginTop: 0 }}>AI Report Studio</h3>
-                  <p style={{ color: "#64748b", lineHeight: 1.7 }}>AI Report Studio remains available inside company accounts for CEO, Admin, Operations Manager and Recruitment Manager roles.</p>
-                </div>
-                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                  <h3 style={{ marginTop: 0 }}>Security Direction</h3>
-                  <p style={{ color: "#64748b", lineHeight: 1.7 }}>Platform Owner manages subscriptions, support, users and system health without entering company operational reports.</p>
-                </div>
+                <TableCard title="🎫 Central Support & Platform Alerts">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Ticket</th>
+                        <th>Client</th>
+                        <th>Priority</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(supportTickets || []).length === 0 ? (
+                        <tr><td colSpan="4">No support tickets</td></tr>
+                      ) : (
+                        supportTickets.slice(0, 10).map((ticket) => {
+                          const client = platformClients.find((item) => String(item.id || "") === String(ticket.client_id || ""));
+                          return (
+                            <tr key={ticket.id || ticket.ticket_no}>
+                              <td>{ticket.ticket_no || ticket.title || "-"}</td>
+                              <td>{client?.company_name || "-"}</td>
+                              <td><Badge value={ticket.priority || "Medium"} /></td>
+                              <td><Badge value={ticket.status || "Open"} /></td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </TableCard>
               </div>
-            </TableCard>
-          </>
-        )}
+
+              <VisualPanel title="🤖 Platform Intelligence Notes" subtitle="هذه البطاقات توضح فلسفة فصل إدارة المنصة عن بيانات الشركات التشغيلية." accent="#0f766e">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
+                  <FeaturePill icon="👑" title="Platform Only" text="هذه الشاشة للمالك العام فقط، وتعرض مؤشرات SaaS ولا تدخل في تفاصيل عمليات الشركات." color="#2563eb" />
+                  <FeaturePill icon="📊" title="Company Reports Separated" text="AI Report Studio يبقى داخل حساب الشركة لإنتاج تقارير تنفيذية من بياناتها فقط." color="#14b8a6" />
+                  <FeaturePill icon="🛡️" title="Governance Ready" text="التصميم يدعم الفصل بين الاشتراكات، الدعم، النسخ الاحتياطية، والمستخدمين." color="#a855f7" />
+                </div>
+              </VisualPanel>
+            </>
+          );
+        })()}
 
 
-        {activePage === "AI Report Studio" && (
-          <>
-            <TableCard title="📊 AI Report Studio - Executive Documents & Presentations">
-              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: "18px", alignItems: "stretch" }}>
-                <div style={{ borderRadius: "28px", padding: "30px", background: "linear-gradient(135deg, #020617 0%, #1d4ed8 55%, #0f766e 100%)", color: "white", position: "relative", overflow: "hidden" }}>
-                  <div style={{ position: "absolute", right: "26px", bottom: "12px", fontSize: "130px", opacity: 0.14 }}>📊</div>
-                  <div style={{ position: "relative", zIndex: 1 }}>
-                    <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", padding: "9px 14px", borderRadius: "999px", background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.18)", marginBottom: "18px" }}>
+        {activePage === "AI Report Studio" && (() => {
+          const reportViz = getReportStudioVisualModel();
+          return (
+            <>
+              <section
+                style={{
+                  position: "relative",
+                  overflow: "hidden",
+                  borderRadius: "34px",
+                  padding: "34px",
+                  background: "radial-gradient(circle at top right, rgba(249,115,22,0.30), transparent 34%), radial-gradient(circle at bottom left, rgba(20,184,166,0.32), transparent 35%), linear-gradient(135deg, #020617 0%, #1d4ed8 52%, #7c3aed 100%)",
+                  color: "white",
+                  boxShadow: "0 30px 90px rgba(30,64,175,0.25)",
+                  marginBottom: "22px",
+                }}
+              >
+                <div style={{ position: "absolute", right: "32px", bottom: "-20px", fontSize: "178px", opacity: 0.12 }}>📊</div>
+                <div style={{ position: "relative", zIndex: 1, display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: "28px", alignItems: "center" }}>
+                  <div>
+                    <div style={{ display: "inline-flex", gap: "9px", alignItems: "center", padding: "10px 15px", borderRadius: "999px", background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.18)", marginBottom: "18px" }}>
                       <span>✨</span>
                       <b>PowerPoint · Word · PDF · Excel</b>
                     </div>
-                    <h2 style={{ margin: "0 0 12px", fontSize: "38px", letterSpacing: "-0.05em", lineHeight: 1.08 }}>
-                      Generate CEO-ready reports from live VisaFlow data.
-                    </h2>
-                    <p style={{ maxWidth: "780px", opacity: 0.92, lineHeight: 1.8, fontSize: "16px" }}>
-                      اختر القالب، الفترة، اللغة، ونوع الملف. AI Report Studio يجمع بيانات الطلبات، المرشحين، التأشيرات، المكاتب، الحشد والتكاليف ثم يجهز تقرير تنفيذي قابل للتصدير.
+                    <h1 style={{ margin: "0 0 14px", fontSize: "44px", lineHeight: 1.05, letterSpacing: "-0.06em" }}>
+                      AI Report Studio
+                    </h1>
+                    <p style={{ maxWidth: "820px", margin: 0, opacity: 0.92, lineHeight: 1.8, fontSize: "16px" }}>
+                      اختر القالب، اللغة، الفترة ونوع الملف. الشاشة الآن تعطي تجربة Executive Report Studio برسوم بيانية حيّة وبطاقات ملونة قبل توليد التقرير.
                     </p>
+
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px", marginTop: "24px" }}>
                       {REPORT_STUDIO_OUTPUTS.map((format) => (
                         <button
                           key={format}
                           type="button"
                           onClick={() => updateReportStudioForm("outputFormat", format)}
-                          style={{ padding: "14px", borderRadius: "18px", border: reportStudioForm.outputFormat === format ? "2px solid white" : "1px solid rgba(255,255,255,0.25)", background: reportStudioForm.outputFormat === format ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.10)", color: "white", cursor: "pointer", fontWeight: 900 }}
+                          style={{
+                            padding: "14px",
+                            borderRadius: "18px",
+                            border: reportStudioForm.outputFormat === format ? "2px solid white" : "1px solid rgba(255,255,255,0.25)",
+                            background: reportStudioForm.outputFormat === format ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.10)",
+                            color: "white",
+                            cursor: "pointer",
+                            fontWeight: 900,
+                            boxShadow: reportStudioForm.outputFormat === format ? "0 14px 34px rgba(255,255,255,0.16)" : "none",
+                          }}
                         >
                           {format === "PowerPoint" ? "📊" : format === "Word" ? "📄" : format === "PDF" ? "📕" : "📈"} {format}
                         </button>
                       ))}
                     </div>
                   </div>
-                </div>
 
-                <div style={{ display: "grid", gap: "12px" }}>
-                  <Stat title="Report Templates" value={REPORT_STUDIO_TEMPLATES.length} className="passed" />
-                  <Stat title="Request Lines" value={buildRequestHealthRows().length} className="passed" />
-                  <Stat title="High Risk Lines" value={buildRequestHealthRows().filter((row) => row.riskLevel === "High").length} className={executiveAlertClass(buildRequestHealthRows().filter((row) => row.riskLevel === "High").length)} />
-                  <Stat title="Agency Risk" value={buildAgencyScorecard().filter((agency) => agency.risk !== "Low").length} className={executiveAlertClass(buildAgencyScorecard().filter((agency) => agency.risk !== "Low").length)} />
+                  <div style={{ display: "grid", gap: "14px" }}>
+                    <DonutMetric title="Recruitment Progress" value={reportViz.progress} total={100} icon="🚀" color="#22c55e" label={`${formatCompactNumber(reportViz.totalCandidates)} active candidate(s) from ${formatCompactNumber(reportViz.totalRequired)} required`} />
+                    <div style={{ borderRadius: "24px", padding: "18px", background: "rgba(255,255,255,0.13)", border: "1px solid rgba(255,255,255,0.20)", backdropFilter: "blur(14px)" }}>
+                      <MiniBarChart rows={reportViz.riskRows} />
+                    </div>
+                  </div>
                 </div>
+              </section>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "20px" }}>
+                <VisualKpi icon="📚" title="Report Templates" value={REPORT_STUDIO_TEMPLATES.length} subtitle="Executive, Operations, Agencies, Finance" color="#2563eb" progress={100} />
+                <VisualKpi icon="📋" title="Request Lines" value={buildRequestHealthRows().length} subtitle={`${formatCompactNumber(reportViz.totalRequired)} required manpower`} color="#14b8a6" progress={reportViz.progress} />
+                <VisualKpi icon="⚠️" title="High Risk Lines" value={reportViz.highRiskLines} subtitle="Lines requiring management action" color="#e11d48" progress={Math.min(reportViz.highRiskLines * 12, 100)} />
+                <VisualKpi icon="🛂" title="Visa / Auth Gaps" value={reportViz.visaGap + reportViz.authorizationGap} subtitle={`Visa ${reportViz.visaGap} · Auth ${reportViz.authorizationGap}`} color="#f97316" progress={Math.min((reportViz.visaGap + reportViz.authorizationGap) * 8, 100)} />
+                <VisualKpi icon="✅" title="Joined" value={reportViz.totalJoined} subtitle={`${reportViz.joiningProgress}% joining progress`} color="#22c55e" progress={reportViz.joiningProgress} />
               </div>
-            </TableCard>
 
-            <TableCard title="1) Select Report Template">
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
-                {REPORT_STUDIO_TEMPLATES.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => selectReportStudioTemplate(template)}
-                    style={{ textAlign: "left", borderRadius: "20px", padding: "18px", border: reportStudioForm.templateId === template.id ? "2px solid #2563eb" : "1px solid #e2e8f0", background: reportStudioForm.templateId === template.id ? "#eff6ff" : "white", cursor: "pointer" }}
-                  >
-                    <div style={{ fontSize: "30px", marginBottom: "10px" }}>{template.icon}</div>
-                    <h3 style={{ margin: "0 0 8px", color: "#0f172a" }}>{template.title}</h3>
-                    <p style={{ margin: 0, color: "#64748b", lineHeight: 1.6 }}>{template.description}</p>
-                    <div style={{ marginTop: "12px" }}><Badge value={template.category} /></div>
-                  </button>
-                ))}
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)", gap: "18px", marginBottom: "18px" }}>
+                <VisualPanel title="📈 Recruitment Funnel" subtitle="الرسم يوضح رحلة التقرير من الاحتياج إلى الانضمام." accent="#2563eb">
+                  <MiniBarChart rows={reportViz.funnelRows} />
+                </VisualPanel>
+
+                <VisualPanel title="🎨 Template Categories" subtitle="توزيع قوالب التقارير المتاحة." accent="#a855f7">
+                  <MiniBarChart rows={reportViz.categoryRows} />
+                </VisualPanel>
               </div>
-            </TableCard>
 
-            <div className="grid">
-              <TableCard title="2) Report Details">
-                <div className="form-grid">
-                  <input value={reportStudioForm.reportName} onChange={(e) => updateReportStudioForm("reportName", e.target.value)} placeholder="Report Name" />
-                  <select value={reportStudioForm.project} onChange={(e) => updateReportStudioForm("project", e.target.value)}>
-                    {getReportStudioProjectOptions().map((project) => <option key={project}>{project}</option>)}
-                  </select>
-                  <input type="date" value={reportStudioForm.dateFrom} onChange={(e) => updateReportStudioForm("dateFrom", e.target.value)} />
-                  <input type="date" value={reportStudioForm.dateTo} onChange={(e) => updateReportStudioForm("dateTo", e.target.value)} />
-                  <select value={reportStudioForm.language} onChange={(e) => updateReportStudioForm("language", e.target.value)}>
-                    {REPORT_STUDIO_LANGUAGES.map((language) => <option key={language}>{language}</option>)}
-                  </select>
-                  <select value={reportStudioForm.outputFormat} onChange={(e) => updateReportStudioForm("outputFormat", e.target.value)}>
-                    {REPORT_STUDIO_OUTPUTS.map((format) => <option key={format}>{format}</option>)}
-                  </select>
-                </div>
-              </TableCard>
-
-              <TableCard title="3) Include Sections">
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
-                  {REPORT_STUDIO_SECTIONS.map((section) => (
-                    <label key={section} style={{ display: "flex", gap: "8px", alignItems: "center", padding: "12px", borderRadius: "14px", background: "#f8fafc", border: "1px solid #e2e8f0", cursor: "pointer" }}>
-                      <input type="checkbox" checked={(reportStudioForm.includeSections || []).includes(section)} onChange={() => toggleReportStudioSection(section)} />
-                      <span>{section}</span>
-                    </label>
-                  ))}
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px", marginTop: "14px" }}>
-                  <label><input type="checkbox" checked={reportStudioForm.confidential} onChange={(e) => updateReportStudioForm("confidential", e.target.checked)} /> Confidential Watermark</label>
-                  <label><input type="checkbox" checked={reportStudioForm.companyLogo} onChange={(e) => updateReportStudioForm("companyLogo", e.target.checked)} /> Company Logo</label>
-                  <label><input type="checkbox" checked={reportStudioForm.visaFlowLogo} onChange={(e) => updateReportStudioForm("visaFlowLogo", e.target.checked)} /> VisaFlow Logo</label>
-                  <label><input type="checkbox" checked={reportStudioForm.aiRecommendations} onChange={(e) => updateReportStudioForm("aiRecommendations", e.target.checked)} /> AI Recommendations</label>
+              <TableCard title="1) Select Report Template">
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
+                  {REPORT_STUDIO_TEMPLATES.map((template, index) => {
+                    const color = VIZ_COLORS[index % VIZ_COLORS.length];
+                    const selected = reportStudioForm.templateId === template.id;
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => selectReportStudioTemplate(template)}
+                        style={{
+                          textAlign: "left",
+                          borderRadius: "24px",
+                          padding: "19px",
+                          border: selected ? `2px solid ${color}` : "1px solid #e2e8f0",
+                          background: selected ? `linear-gradient(180deg, ${color}12, white)` : "white",
+                          cursor: "pointer",
+                          boxShadow: selected ? `0 18px 45px ${color}26` : "0 12px 28px rgba(15,23,42,0.05)",
+                          position: "relative",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div style={{ position: "absolute", right: "-18px", top: "-18px", width: "86px", height: "86px", borderRadius: "999px", background: color, opacity: 0.10 }} />
+                        <div style={{ width: "48px", height: "48px", borderRadius: "17px", display: "grid", placeItems: "center", background: `linear-gradient(135deg, ${color}, #0f172a)`, color: "white", fontSize: "24px", marginBottom: "12px" }}>{template.icon}</div>
+                        <h3 style={{ margin: "0 0 8px", color: "#0f172a" }}>{template.title}</h3>
+                        <p style={{ margin: 0, color: "#64748b", lineHeight: 1.6 }}>{template.description}</p>
+                        <div style={{ marginTop: "12px" }}><Badge value={template.category} /></div>
+                      </button>
+                    );
+                  })}
                 </div>
               </TableCard>
-            </div>
 
-            <TableCard title="4) Generate Report">
-              <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
-                <button className="save-btn" onClick={previewAIReportStudio}>Preview AI Report</button>
-                <button className="new-btn" onClick={exportAIReportStudio}>Generate {reportStudioForm.outputFormat}</button>
-                <button className="light-btn" onClick={() => updateReportStudioForm("outputFormat", "PowerPoint")}>Board Presentation</button>
-                <button className="light-btn" onClick={() => updateReportStudioForm("outputFormat", "Excel")}>Excel Dashboard</button>
+              <div className="grid">
+                <TableCard title="2) Report Details">
+                  <div className="form-grid">
+                    <input value={reportStudioForm.reportName} onChange={(e) => updateReportStudioForm("reportName", e.target.value)} placeholder="Report Name" />
+                    <select value={reportStudioForm.project} onChange={(e) => updateReportStudioForm("project", e.target.value)}>
+                      {getReportStudioProjectOptions().map((project) => <option key={project}>{project}</option>)}
+                    </select>
+                    <input type="date" value={reportStudioForm.dateFrom} onChange={(e) => updateReportStudioForm("dateFrom", e.target.value)} />
+                    <input type="date" value={reportStudioForm.dateTo} onChange={(e) => updateReportStudioForm("dateTo", e.target.value)} />
+                    <select value={reportStudioForm.language} onChange={(e) => updateReportStudioForm("language", e.target.value)}>
+                      {REPORT_STUDIO_LANGUAGES.map((language) => <option key={language}>{language}</option>)}
+                    </select>
+                    <select value={reportStudioForm.outputFormat} onChange={(e) => updateReportStudioForm("outputFormat", e.target.value)}>
+                      {REPORT_STUDIO_OUTPUTS.map((format) => <option key={format}>{format}</option>)}
+                    </select>
+                  </div>
+                </TableCard>
+
+                <TableCard title="3) Include Sections">
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
+                    {REPORT_STUDIO_SECTIONS.map((section) => {
+                      const selected = (reportStudioForm.includeSections || []).includes(section);
+                      return (
+                        <label
+                          key={section}
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            alignItems: "center",
+                            padding: "12px",
+                            borderRadius: "16px",
+                            background: selected ? "#eff6ff" : "#f8fafc",
+                            border: selected ? "1px solid #2563eb" : "1px solid #e2e8f0",
+                            cursor: "pointer",
+                            fontWeight: selected ? 800 : 500,
+                          }}
+                        >
+                          <input type="checkbox" checked={selected} onChange={() => toggleReportStudioSection(section)} />
+                          <span>{section}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px", marginTop: "14px" }}>
+                    <label><input type="checkbox" checked={reportStudioForm.confidential} onChange={(e) => updateReportStudioForm("confidential", e.target.checked)} /> Confidential Watermark</label>
+                    <label><input type="checkbox" checked={reportStudioForm.companyLogo} onChange={(e) => updateReportStudioForm("companyLogo", e.target.checked)} /> Company Logo</label>
+                    <label><input type="checkbox" checked={reportStudioForm.visaFlowLogo} onChange={(e) => updateReportStudioForm("visaFlowLogo", e.target.checked)} /> VisaFlow Logo</label>
+                    <label><input type="checkbox" checked={reportStudioForm.aiRecommendations} onChange={(e) => updateReportStudioForm("aiRecommendations", e.target.checked)} /> AI Recommendations</label>
+                  </div>
+                </TableCard>
               </div>
 
-              <div style={{ marginTop: "16px", padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
-                <b>Current Selection:</b> {reportStudioForm.reportName} · {reportStudioForm.project} · {reportStudioForm.language} · {reportStudioForm.outputFormat}
-              </div>
+              <TableCard title="4) Generate Report">
+                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                  <button className="save-btn" onClick={previewAIReportStudio}>Preview AI Report</button>
+                  <button className="new-btn" onClick={exportAIReportStudio}>Generate {reportStudioForm.outputFormat}</button>
+                  <button className="light-btn" onClick={() => updateReportStudioForm("outputFormat", "PowerPoint")}>Board Presentation</button>
+                  <button className="light-btn" onClick={() => updateReportStudioForm("outputFormat", "Excel")}>Excel Dashboard</button>
+                </div>
 
-              <div style={{ marginTop: "16px", minHeight: "260px", borderRadius: "20px", padding: "22px", background: "#0f172a", color: "#e2e8f0", whiteSpace: "pre-wrap", lineHeight: 1.75, fontSize: "14px" }}>
-                {reportStudioResult || "Click Preview AI Report to see the executive narrative before generating the file."}
-              </div>
+                <div style={{ marginTop: "16px", padding: "18px", borderRadius: "20px", background: "linear-gradient(135deg, #f8fafc, #eef2ff)", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
+                  <b>Current Selection:</b> {reportStudioForm.reportName} · {reportStudioForm.project} · {reportStudioForm.language} · {reportStudioForm.outputFormat}
+                </div>
 
-              {reportStudioLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last generated: {reportStudioLastRun}</p>}
-            </TableCard>
-          </>
-        )}
+                <div style={{ marginTop: "16px", minHeight: "260px", borderRadius: "24px", padding: "24px", background: "linear-gradient(135deg, #020617, #0f172a)", color: "#e2e8f0", whiteSpace: "pre-wrap", lineHeight: 1.75, fontSize: "14px", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }}>
+                  {reportStudioResult || "Click Preview AI Report to see the executive narrative before generating the file."}
+                </div>
+
+                {reportStudioLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last generated: {reportStudioLastRun}</p>}
+              </TableCard>
+            </>
+          );
+        })()}
 
         {activePage === "Dashboard" && (
           <>
