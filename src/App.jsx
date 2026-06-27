@@ -448,6 +448,54 @@ const CANDIDATE_INTELLIGENCE_LEVELS = ["None", "Basic", "Technical", "Profession
 const COMPANY_DECISION_OPTIONS = ["Pending Company Review", "Shortlisted", "Interview", "Rejected", "On Hold", "Accepted"];
 const LANGUAGE_LEVEL_OPTIONS = ["Not Specified", "Basic", "Intermediate", "Good", "Very Good", "Excellent", "Native"];
 
+const CANDIDATE_UPLOAD_HEADERS = [
+  "Request No",
+  "Candidate Name",
+  "Profession",
+  "Nationality",
+  "Gender",
+  "Agency",
+  "Passport No",
+  "Mobile",
+  "Email",
+  "Status",
+  "Medical Status",
+  "Medical Date",
+  "Ticket No",
+  "Flight Date",
+  "Arrival Date",
+  "Notes",
+  "Qualification",
+  "Major",
+  "Specialization",
+  "Institution Name",
+  "Institution Country",
+  "Graduation Year",
+  "Years Experience",
+  "Last Job Title",
+  "Last Employer",
+  "Last Project Type",
+  "Project Experience",
+  "Technical Skills",
+  "Tools & Equipment",
+  "Software Skills",
+  "Certifications",
+  "Licenses",
+  "English Level",
+  "Arabic Level",
+  "Gulf Experience",
+  "Saudi Experience",
+];
+
+const CANDIDATE_UPLOAD_REQUIRED_HEADERS = [
+  "Request No",
+  "Candidate Name",
+  "Profession",
+  "Nationality",
+  "Gender",
+  "Passport No",
+];
+
 const emptyOfficeBulkUpdate = {
   status: "",
   medical_status: "",
@@ -1301,6 +1349,8 @@ const canDeleteRequest = currentRole === "Admin";
 const canManageVisas = ["Admin", "Visa Team"].includes(currentRole);
 const canManageCandidates = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageOfficePortal = ["Admin", "Agency"].includes(currentRole);
+const canViewCandidateIntelligence = currentRole !== "Agency" && ["Admin", "Recruitment Manager", "Recruitment Officer", "CEO"].includes(currentRole);
+const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePortal;
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
@@ -5615,6 +5665,237 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     loadRequests();
   }
 
+  function getCandidateTemplateSampleRows() {
+    return [
+      CANDIDATE_UPLOAD_HEADERS.reduce((acc, header) => ({ ...acc, [header]: "" }), {}),
+    ];
+  }
+
+  function getCandidateTemplateInstructions() {
+    return [
+      {
+        "Field": "Request No",
+        "Required": "Yes",
+        "Notes": "Use the exact request number assigned by the company, for example REQ-2026-0001.",
+      },
+      {
+        "Field": "Candidate Name",
+        "Required": "Yes",
+        "Notes": "Enter the candidate full name as shown in passport or official document.",
+      },
+      {
+        "Field": "Profession / Nationality / Gender",
+        "Required": "Yes",
+        "Notes": "Must match the company request line. This prevents uploading candidates to the wrong requirement.",
+      },
+      {
+        "Field": "Passport No",
+        "Required": "Recommended",
+        "Notes": "Used to prevent duplicate candidates.",
+      },
+      {
+        "Field": "Candidate Intelligence Fields",
+        "Required": "For technical/professional roles only",
+        "Notes": "Fill qualification, institution, experience, skills and certificates. AI score is calculated by the company side only and is not shown to the agency.",
+      },
+      {
+        "Field": "AI Score / Recommendation",
+        "Required": "No",
+        "Notes": "Do not add AI score or final decision in this template. These are company-only outputs inside VisaFlow.",
+      },
+    ];
+  }
+
+  function downloadCandidateUploadTemplate() {
+    const workbook = XLSX.utils.book_new();
+
+    const instructionsSheet = XLSX.utils.json_to_sheet(getCandidateTemplateInstructions());
+    instructionsSheet["!cols"] = [
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 95 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, instructionsSheet, "Instructions");
+
+    const uploadSheet = XLSX.utils.json_to_sheet(getCandidateTemplateSampleRows(), { header: CANDIDATE_UPLOAD_HEADERS });
+    uploadSheet["!cols"] = CANDIDATE_UPLOAD_HEADERS.map((header) => ({
+      wch: Math.max(16, Math.min(32, header.length + 6)),
+    }));
+    XLSX.utils.book_append_sheet(workbook, uploadSheet, "Candidates Upload");
+
+    const dropdownRows = [];
+    const maxRows = Math.max(
+      REQUEST_STATUSES.length,
+      CANDIDATE_STATUSES.length,
+      MEDICAL_STATUSES.length,
+      GENDERS.length,
+      LANGUAGE_LEVEL_OPTIONS.length,
+      countries.length,
+      professions.length,
+      agencies.length,
+      requests.length,
+      1
+    );
+
+    for (let index = 0; index < maxRows; index += 1) {
+      dropdownRows.push({
+        "Approved Request No": requests.filter((request) => ["Approved by Recruitment", "Approved"].includes(request.approval_status)).map((request) => request.request_no).filter(Boolean)[index] || "",
+        "Profession": professions.map((profession) => getProfessionLabel(profession)).filter(Boolean)[index] || "",
+        "Nationality": countries.map((country) => country.nationality || country.name).filter(Boolean)[index] || "",
+        "Gender": GENDERS[index] || "",
+        "Candidate Status": CANDIDATE_STATUSES[index] || "",
+        "Medical Status": ["Pending", "Passed", "Failed", "Fit", "Unfit", "Re-Medical"][index] || "",
+        "English / Arabic Level": LANGUAGE_LEVEL_OPTIONS[index] || "",
+        "Yes / No": ["Yes", "No"][index] || "",
+        "Agency": agencies.map((agency) => agency.name).filter(Boolean)[index] || "",
+      });
+    }
+
+    const listsSheet = XLSX.utils.json_to_sheet(dropdownRows);
+    listsSheet["!cols"] = [
+      { wch: 24 },
+      { wch: 34 },
+      { wch: 26 },
+      { wch: 12 },
+      { wch: 24 },
+      { wch: 20 },
+      { wch: 22 },
+      { wch: 12 },
+      { wch: 28 },
+    ];
+    XLSX.utils.book_append_sheet(workbook, listsSheet, "Dropdown Lists");
+
+    XLSX.writeFile(workbook, "VisaFlow_Candidate_Upload_Template.xlsx");
+  }
+
+  function findInstitutionByNameAndCountry(institutionName, institutionCountry = "") {
+    const name = normalizeMatchText(institutionName);
+    const country = normalizeMatchText(institutionCountry);
+    if (!name) return null;
+
+    return educationInstitutions.find((institution) => {
+      const institutionNameMatch = normalizeMatchText(institution.institution_name);
+      const institutionCountryMatch = normalizeMatchText(institution.country);
+      const nameMatches = institutionNameMatch === name || institutionNameMatch.includes(name) || name.includes(institutionNameMatch);
+      const countryMatches = !country || !institutionCountryMatch || institutionCountryMatch === country || institutionCountryMatch.includes(country) || country.includes(institutionCountryMatch);
+      return nameMatches && countryMatches;
+    }) || null;
+  }
+
+  function parseExcelBooleanValue(value) {
+    const text = normalizeMatchText(value);
+    return ["yes", "y", "true", "1", "نعم", "اي", "ايوه"].includes(text);
+  }
+
+  function buildCandidateTechnicalFormFromExcel(row) {
+    const institutionName = getRowValue(row, ["Institution Name", "University", "College", "Institute", "اسم الجامعة", "اسم المعهد", "الجامعة", "المعهد"]);
+    const institutionCountry = getRowValue(row, ["Institution Country", "Education Country", "Country of Institution", "دولة الجامعة", "دولة المعهد"]);
+    const institution = findInstitutionByNameAndCountry(institutionName, institutionCountry);
+
+    return {
+      ...emptyCandidateTechnicalProfile,
+      qualification: getRowValue(row, ["Qualification", "Degree", "Education", "المؤهل"]),
+      major: getRowValue(row, ["Major", "Specialization", "تخصص", "التخصص"]),
+      specialization: getRowValue(row, ["Specialization", "Specialization Details", "تفاصيل التخصص"]),
+      institution_id: institution?.id || "",
+      institution_name: institution?.institution_name || institutionName,
+      institution_country: institution?.country || institutionCountry,
+      institution_type: institution?.institution_type || getRowValue(row, ["Institution Type", "نوع المنشأة"]),
+      graduation_year: getRowValue(row, ["Graduation Year", "Year", "سنة التخرج"]),
+      years_experience: getRowValue(row, ["Years Experience", "Experience Years", "سنوات الخبرة"]),
+      last_job_title: getRowValue(row, ["Last Job Title", "Job Title", "آخر مسمى وظيفي"]),
+      last_employer: getRowValue(row, ["Last Employer", "Previous Employer", "آخر جهة عمل"]),
+      last_project_type: getRowValue(row, ["Last Project Type", "Project Type", "نوع آخر مشروع"]),
+      project_experience: getRowValue(row, ["Project Experience", "Major Projects", "خبرة المشاريع"]),
+      technical_skills: getRowValue(row, ["Technical Skills", "Skills", "المهارات الفنية"]),
+      tools_and_equipment: getRowValue(row, ["Tools & Equipment", "Equipment Experience", "الأدوات والمعدات"]),
+      software_skills: getRowValue(row, ["Software Skills", "Software Tools", "البرامج"]),
+      certifications: getRowValue(row, ["Certifications", "Certificates", "الشهادات"]),
+      licenses: getRowValue(row, ["Licenses", "License Name", "الرخص"]),
+      english_level: getRowValue(row, ["English Level", "مستوى الإنجليزية"]) || "Not Specified",
+      arabic_level: getRowValue(row, ["Arabic Level", "مستوى العربية"]) || "Not Specified",
+      gulf_experience: parseExcelBooleanValue(getRowValue(row, ["Gulf Experience", "GCC Experience", "خبرة خليجية"])),
+      saudi_experience: parseExcelBooleanValue(getRowValue(row, ["Saudi Experience", "KSA Experience", "خبرة سعودية"])),
+      final_company_decision: "Pending Company Review",
+      decision_notes: "",
+    };
+  }
+
+  function hasCandidateTechnicalExcelData(profileForm) {
+    return [
+      profileForm.qualification,
+      profileForm.major,
+      profileForm.specialization,
+      profileForm.institution_name,
+      profileForm.institution_country,
+      profileForm.graduation_year,
+      profileForm.years_experience,
+      profileForm.last_job_title,
+      profileForm.last_employer,
+      profileForm.last_project_type,
+      profileForm.project_experience,
+      profileForm.technical_skills,
+      profileForm.tools_and_equipment,
+      profileForm.software_skills,
+      profileForm.certifications,
+      profileForm.licenses,
+    ].some((value) => String(value || "").trim()) || Boolean(profileForm.gulf_experience) || Boolean(profileForm.saudi_experience);
+  }
+
+  function buildCandidateTechnicalProfilePayload(candidate, technicalMeta) {
+    if (!candidate?.id || !technicalMeta?.intelligence?.enabled) return null;
+
+    const profileForm = technicalMeta.profileForm || emptyCandidateTechnicalProfile;
+    const scores = technicalMeta.scores || buildCandidateTechnicalScores(profileForm, technicalMeta.intelligence);
+    const selectedInstitution = getInstitutionById(profileForm.institution_id);
+
+    return withCompany({
+      candidate_id: candidate.id,
+      profession: candidate.profession || technicalMeta.profession || "",
+      profile_level: technicalMeta.intelligence.level || "Technical",
+      profile_type: technicalMeta.intelligence.profile || "Technical Profile",
+      qualification: profileForm.qualification || "",
+      major: profileForm.major || "",
+      specialization: profileForm.specialization || "",
+      institution_id: profileForm.institution_id || null,
+      institution_name: selectedInstitution?.institution_name || profileForm.institution_name || "",
+      institution_country: selectedInstitution?.country || profileForm.institution_country || "",
+      institution_type: selectedInstitution?.institution_type || profileForm.institution_type || "",
+      graduation_year: profileForm.graduation_year ? Number(profileForm.graduation_year) : null,
+      years_experience: Number(profileForm.years_experience || 0),
+      last_job_title: profileForm.last_job_title || "",
+      last_employer: profileForm.last_employer || "",
+      last_project_type: profileForm.last_project_type || "",
+      project_experience: profileForm.project_experience || "",
+      technical_skills: profileForm.technical_skills || "",
+      tools_and_equipment: profileForm.tools_and_equipment || "",
+      software_skills: profileForm.software_skills || "",
+      certifications: profileForm.certifications || "",
+      licenses: profileForm.licenses || "",
+      english_level: profileForm.english_level || "Not Specified",
+      arabic_level: profileForm.arabic_level || "Not Specified",
+      gulf_experience: Boolean(profileForm.gulf_experience),
+      saudi_experience: Boolean(profileForm.saudi_experience),
+      education_score: scores.education_score,
+      experience_score: scores.experience_score,
+      skills_score: scores.skills_score,
+      certification_score: scores.certification_score,
+      language_score: scores.language_score,
+      data_completeness_score: scores.data_completeness_score,
+      final_ai_score: scores.final_ai_score,
+      interview_priority: scores.interview_priority,
+      ai_recommendation: scores.ai_recommendation,
+      ai_reasoning: scores.ai_reasoning,
+      profile_completed: scores.profile_completed,
+      missing_fields: scores.missing_fields.join(", "),
+      final_company_decision: "Pending Company Review",
+      decision_by: null,
+      decision_at: null,
+      decision_notes: "",
+      updated_at: new Date().toISOString(),
+    });
+  }
+
   function startExcelUploadFromRequest(item) {
     setExcelRequestNo(item.request_no || "");
     setTimeout(() => requestExcelInputRef.current?.click(), 0);
@@ -5633,7 +5914,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   try {
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data, { cellDates: true });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const uploadSheetName = workbook.SheetNames.find((name) => normalize(name) === "candidates upload") || workbook.SheetNames[0];
+    const sheet = workbook.Sheets[uploadSheetName];
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
     if (!rows.length) return alert("Excel file is empty.");
@@ -5703,6 +5985,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     const importLineUsage = {};
     const payloads = [];
+    const candidateTechnicalImportMeta = [];
     const errors = [];
     const filePassports = new Set();
 
@@ -5815,6 +6098,14 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
       importLineUsage[lineKey] = usedInFile + 1;
 
+      const technicalFormFromExcel = buildCandidateTechnicalFormFromExcel(row);
+      const professionIntelligence = getCandidateProfessionIntelligence(matchedLine.profession || rowProfession);
+      const hasTechnicalData = hasCandidateTechnicalExcelData(technicalFormFromExcel);
+      const shouldCreateTechnicalProfile = Boolean(professionIntelligence.enabled && hasTechnicalData);
+      const technicalScores = shouldCreateTechnicalProfile
+        ? buildCandidateTechnicalScores(technicalFormFromExcel, professionIntelligence)
+        : null;
+
       payloads.push(
         withCompany({
           candidate_name: candidateName,
@@ -5836,8 +6127,26 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           flight_date: flightDate,
           arrival_date: arrivalDate,
           contract_status: contractStatus,
+          technical_profile_required: Boolean(professionIntelligence.enabled),
+          technical_profile_completed: technicalScores?.profile_completed || false,
+          ai_score: technicalScores?.final_ai_score || 0,
+          ai_priority: technicalScores?.interview_priority || (professionIntelligence.enabled ? "Pending Review" : ""),
+          ai_recommendation: technicalScores?.ai_recommendation || "",
+          ai_reasoning: technicalScores?.ai_reasoning || "",
+          final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
         })
+      );
+
+      candidateTechnicalImportMeta.push(
+        shouldCreateTechnicalProfile
+          ? {
+              profession: matchedLine.profession || rowProfession || "",
+              intelligence: professionIntelligence,
+              profileForm: technicalFormFromExcel,
+              scores: technicalScores,
+            }
+          : null
       );
     }
 
@@ -5848,8 +6157,26 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       );
     }
 
-    const { error: insertError } = await supabase.from("candidates").insert(payloads);
+    const { data: insertedCandidates, error: insertError } = await supabase
+      .from("candidates")
+      .insert(payloads)
+      .select("id, candidate_name, passport_no, profession, request_no");
     if (insertError) return alert(insertError.message);
+
+    const technicalProfilePayloads = (insertedCandidates || [])
+      .map((candidate, index) => buildCandidateTechnicalProfilePayload(candidate, candidateTechnicalImportMeta[index]))
+      .filter(Boolean);
+
+    if (technicalProfilePayloads.length > 0) {
+      const { error: profileImportError } = await supabase
+        .from("candidate_technical_profiles")
+        .insert(technicalProfilePayloads);
+
+      if (profileImportError) {
+        console.warn("candidate_technical_profiles import failed", profileImportError.message);
+        alert(`Candidates uploaded, but Candidate Intelligence profiles failed: ${profileImportError.message}`);
+      }
+    }
 
     const totalActiveAfterUpload = existingActiveCandidates.length + payloads.filter(
       (candidate) => !blockedStatuses.includes(candidate.status)
@@ -5869,13 +6196,20 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       .eq("company_id", currentCompanyId);
 
     await loadCandidates();
+    await loadCandidateTechnicalProfiles();
     await loadRequests();
-    setActivePage("Candidates");
+    setActivePage(currentRole === "Agency" ? "Office Portal" : "Candidates");
 
     alert(
-      `Uploaded: ${payloads.length} candidate(s)\n\n` +
-        `Skipped / Errors: ${errors.length}\n\n` +
-        (errors.length ? `First errors:\n${errors.slice(0, 10).join("\n")}` : "")
+      `Uploaded: ${payloads.length} candidate(s)
+` +
+        `Candidate Intelligence profiles: ${technicalProfilePayloads.length}
+` +
+        `Skipped / Errors: ${errors.length}` +
+        (errors.length ? `
+
+First errors:
+${errors.slice(0, 10).join("\n")}` : "")
     );
   } catch (error) {
     alert(`Excel upload failed: ${error.message}`);
@@ -13005,7 +13339,8 @@ if (!currentUser) {
                   🏢 {getActiveAgencyWorkspaceName()}
                 </span>
               )}
-              {activePage === "Candidates" && canManageCandidates && <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Excel</button>}
+              {["Candidates", "Office Portal"].includes(activePage) && canUseCandidateUploadTemplate && <button className="new-btn" onClick={downloadCandidateUploadTemplate}>Download Candidate Template</button>}
+              {["Candidates", "Office Portal"].includes(activePage) && canUseCandidateUploadTemplate && <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Candidate Excel</button>}
               {activePage === "Employees" && canManageEmployees && <button className="new-btn" onClick={downloadEmployeesTemplate}>Download Template</button>}
               {activePage === "Employees" && canManageEmployees && <button className="new-btn" onClick={startEmployeesExcelUpload}>Import Employees</button>}
               <button className="new-btn" onClick={() => setActivePage("Notifications")}>🔔 {unreadNotificationsCount}</button>
@@ -15647,6 +15982,7 @@ Save Authorization
 <>
             <div className="toolbar">
               <input placeholder="Search candidates" value={search} onChange={(e) => setSearch(e.target.value)} />
+              {canManageCandidates && <button className="light-btn" onClick={downloadCandidateUploadTemplate}>Download Template</button>}
               {canManageCandidates && <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Excel</button>}
             </div>
             {canManageCandidates && (
@@ -15764,7 +16100,7 @@ Save Authorization
 />
               </div>
 
-              {selectedCandidateIntelligence.enabled && (
+              {canViewCandidateIntelligence && selectedCandidateIntelligence.enabled && (
                 <div style={{ marginTop: "14px", padding: "16px", border: "1px solid #dbeafe", borderRadius: "16px", background: "#f8fbff" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
                     <div>
@@ -15866,9 +16202,9 @@ Save Authorization
 <th>Ticket No</th>
 <th>Flight Date</th>
 <th>Arrival Date</th>
-<th>AI Score</th>
-<th>AI Priority</th>
-<th>Company Decision</th>
+{canViewCandidateIntelligence && <th>AI Score</th>}
+{canViewCandidateIntelligence && <th>AI Priority</th>}
+{canViewCandidateIntelligence && <th>Company Decision</th>}
 <th>Total Cost</th>
 <th>Contract</th>
 <th>Source</th>
@@ -15896,9 +16232,9 @@ Save Authorization
 <td>{item.ticket_no}</td>
 <td>{item.flight_date}</td>
 <td>{item.arrival_date}</td>
-<td>{item.technical_profile_required ? `${Number(item.ai_score || 0)}%` : "-"}</td>
-<td><Badge value={getCandidateIntelligenceBadge(item)} /></td>
-<td><Badge value={item.final_company_decision || "Pending Company Review"} /></td>
+{canViewCandidateIntelligence && <td>{item.technical_profile_required ? `${Number(item.ai_score || 0)}%` : "-"}</td>}
+{canViewCandidateIntelligence && <td><Badge value={getCandidateIntelligenceBadge(item)} /></td>}
+{canViewCandidateIntelligence && <td><Badge value={item.final_company_decision || "Pending Company Review"} /></td>}
 <td>{getCandidateTotalCost(item).toLocaleString()}</td>
 <td><Badge value={item.contract_status || "Pending"} /></td>
 <td>{item.source || "-"}</td>
@@ -16408,6 +16744,14 @@ Save Authorization
           </table>
         </div>
       </TableCard>
+    )}
+
+    {canManageOfficePortal && (
+      <div className="actions-line" style={{ margin: "0 0 14px" }}>
+        <button className="new-btn" onClick={downloadCandidateUploadTemplate}>Download Candidate Template</button>
+        <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Candidate Excel</button>
+        <span className="badge" title="AI results are company-only">AI results are hidden from agency users</span>
+      </div>
     )}
 
     {canManageOfficePortal && (
