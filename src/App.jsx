@@ -1351,6 +1351,7 @@ const canManageCandidates = ["Admin", "Recruitment Manager", "Recruitment Office
 const canManageOfficePortal = ["Admin", "Agency"].includes(currentRole);
 const canViewCandidateIntelligence = Boolean(currentUser) && currentRole !== "Agency" && !isCurrentPlatformUser;
 const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePortal;
+const canViewEmailAdministration = currentRole !== "Agency";
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
@@ -2596,7 +2597,10 @@ async function loadNotifications() {
   return rows;
 }
   async function loadEmailLogs() {
-    if (!currentCompanyId) return setEmailLogs([]);
+    if (!currentCompanyId || currentRole === "Agency") {
+      setEmailLogs([]);
+      return [];
+    }
 
     try {
       const { data, error } = await supabase
@@ -2620,7 +2624,10 @@ async function loadNotifications() {
   }
 
   async function loadEmailTemplates() {
-    if (!currentCompanyId) return setEmailTemplates([]);
+    if (!currentCompanyId || currentRole === "Agency") {
+      setEmailTemplates([]);
+      return [];
+    }
 
     try {
       const { data, error } = await supabase
@@ -13655,17 +13662,24 @@ if (!currentUser) {
             <div className="dashboard-grid">
               <Stat title="Total Notifications" value={notifications.length} />
               <Stat title="Unread" value={unreadNotificationsCount} className={unreadNotificationsCount ? "warning" : "passed"} />
-              <Stat title="Emails Sent" value={emailLogStats.sent} className="passed" />
-              <Stat title="Email Failures" value={emailLogStats.failed} className={emailLogStats.failed ? "danger" : "passed"} />
-              <Stat title="Active Templates" value={emailTemplates.filter((item) => item.is_active !== false).length} />
-              <Stat title="Skipped Emails" value={emailLogStats.skipped} className={emailLogStats.skipped ? "warning" : "passed"} />
+              {canViewEmailAdministration && <Stat title="Emails Sent" value={emailLogStats.sent} className="passed" />}
+              {canViewEmailAdministration && <Stat title="Email Failures" value={emailLogStats.failed} className={emailLogStats.failed ? "danger" : "passed"} />}
+              {canViewEmailAdministration && <Stat title="Active Templates" value={emailTemplates.filter((item) => item.is_active !== false).length} />}
+              {canViewEmailAdministration && <Stat title="Skipped Emails" value={emailLogStats.skipped} className={emailLogStats.skipped ? "warning" : "passed"} />}
             </div>
 
             <TableCard title="Notification Center">
               <div className="actions-line" style={{ marginBottom: "14px" }}>
-                <button className="new-btn" onClick={async () => { const rows = await loadNotifications(); await loadEmailLogs(); await loadEmailTemplates(); alert(`Notification Center refreshed. Notifications loaded: ${rows?.length || 0}`); }}>Refresh Center</button>
+                <button className="new-btn" onClick={async () => {
+                  const rows = await loadNotifications();
+                  if (canViewEmailAdministration) {
+                    await loadEmailLogs();
+                    await loadEmailTemplates();
+                  }
+                  alert(`Notification Center refreshed. Notifications loaded: ${rows?.length || 0}`);
+                }}>Refresh Center</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
-                <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>
+                {canViewEmailAdministration && <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>}
               </div>
 
               <div className="form-grid" style={{ marginBottom: "14px" }}>
@@ -13722,7 +13736,7 @@ if (!currentUser) {
               </div>
             </TableCard>
 
-            <TableCard title="Email Logs">
+            {canViewEmailAdministration && <TableCard title="Email Logs">
               <div className="actions-line" style={{ marginBottom: "14px" }}>
                 <button className="light-btn" onClick={loadEmailLogs}>Reload Email Logs</button>
               </div>
@@ -13758,9 +13772,9 @@ if (!currentUser) {
                   </tbody>
                 </table>
               </div>
-            </TableCard>
+            </TableCard>}
 
-            <FormCard title={emailTemplateEditingId ? "Edit Email Template" : "Email Templates"}>
+            {canViewEmailAdministration && <FormCard title={emailTemplateEditingId ? "Edit Email Template" : "Email Templates"}>
               <div className="actions-line" style={{ marginBottom: "14px" }}>
                 <button className="new-btn" onClick={seedDefaultEmailTemplates}>Seed Default Templates</button>
                 <button className="light-btn" onClick={resetEmailTemplateForm}>New Template</button>
@@ -13795,9 +13809,9 @@ if (!currentUser) {
                 <button className="save-btn" onClick={saveEmailTemplate}>{emailTemplateEditingId ? "Update Template" : "Save Template"}</button>
                 {emailTemplateEditingId && <button className="light-btn" onClick={resetEmailTemplateForm}>Cancel</button>}
               </div>
-            </FormCard>
+            </FormCard>}
 
-            <TableCard title="Saved Email Templates">
+            {canViewEmailAdministration && <TableCard title="Saved Email Templates">
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -13834,7 +13848,7 @@ if (!currentUser) {
                   </tbody>
                 </table>
               </div>
-            </TableCard>
+            </TableCard>}
           </>
         )}
 
