@@ -892,6 +892,7 @@ const [aiCommanderLanguage, setAiCommanderLanguage] = useState("Arabic");
 const [aiAgentLoading, setAiAgentLoading] = useState(false);
 const [aiAgentLastRun, setAiAgentLastRun] = useState("");
 const [aiAgentLog, setAiAgentLog] = useState("");
+const aiAgentAutoRunRef = useRef("");
 const [offerModalOpen, setOfferModalOpen] = useState(false);
 const [offerCandidate, setOfferCandidate] = useState(null);
 const [offerSubject, setOfferSubject] = useState("");
@@ -2457,6 +2458,38 @@ useEffect(() => {
 
   loadAll();
 }, [currentUser?.id, currentCompanyId]);
+
+useEffect(() => {
+  if (!currentUser || !currentCompanyId || isCurrentAgencyUser) return;
+  if (!requests.length || !agencies.length) return;
+
+  const signature = [
+    currentCompanyId,
+    requests.length,
+    candidates.length,
+    agencies.length,
+    agencyScores.length,
+    agencyAgreements.length,
+  ].join(":");
+
+  if (aiAgentAutoRunRef.current === signature) return;
+  aiAgentAutoRunRef.current = signature;
+
+  const timer = window.setTimeout(() => {
+    runAIAgentAutoManagerApprovals({ limit: 5 });
+  }, 1200);
+
+  return () => window.clearTimeout(timer);
+}, [
+  currentUser?.id,
+  currentCompanyId,
+  isCurrentAgencyUser,
+  requests.length,
+  candidates.length,
+  agencies.length,
+  agencyScores.length,
+  agencyAgreements.length,
+]);
 
 useEffect(() => {
   if (!visiblePages.includes(activePage)) {
@@ -8510,11 +8543,82 @@ async function createAIAgentManagerBriefNotification() {
   alert("AI Agent daily brief created for Recruitment Manager.");
 }
 
-async function createAIAgentAssignmentApproval(item) {
-  if (!item?.bestAgency) return alert("No recommended agency found for this request.");
+function getRecruitmentManagerEmails() {
+  const roleMatches = ["recruitment manager", "recruitment_manager", "manager recruitment", "مدير التوظيف"];
+  const managerEmails = (users || [])
+    .filter((user) => String(user?.company_id || currentCompanyId) === String(currentCompanyId))
+    .filter((user) => user?.is_active !== false)
+    .filter((user) => {
+      const role = normalize(user?.role || user?.position || user?.job_title || "");
+      return roleMatches.some((item) => role.includes(normalize(item)));
+    })
+    .map((user) => user.email || user.user_email || user.work_email)
+    .filter(Boolean);
 
+  const uniqueEmails = Array.from(new Set(managerEmails.map((email) => String(email).trim()).filter(Boolean)));
+  return uniqueEmails.join(", ") || getCompanyEmailRecipient("notifications");
+}
+
+function buildAIAgentAssignmentApprovalContent(item) {
   const title = `Manager Approval Required - ${item.request_no}`;
-  const message = `AI Agent recommends assigning ${item.request_no} to ${item.bestAgency.agency}.\n\nReason: ${item.bestAgency.fitReasons.join("; ")}\n\nSuggested action: approve and notify agency to submit first candidate batch within 72 hours.`;
+  const reason = item.bestAgency?.fitReasons?.length ? item.bestAgency.fitReasons.join("; ") : "Best current fit based on agency performance and available request data.";
+  const message = `AI Agent recommends assigning ${item.request_no} to ${item.bestAgency.agency}.
+
+Reason: ${reason}
+
+Suggested action: approve and notify agency to submit first candidate batch within 72 hours.`;
+  const subject = `[VisaFlow AI Agent] Approval Required - ${item.request_no}`;
+  const emailLines = [
+    `AI Recruitment Agent detected a request that needs agency assignment approval.`,
+    `Request No: ${item.request_no}`,
+    `Project: ${item.project || "-"}`,
+    `Profession: ${item.profession || "-"}`,
+    `Nationality: ${item.nationality || "-"}`,
+    `Gender: ${item.gender || "-"}`,
+    `Required Quantity: ${item.requiredQty || 0}`,
+    `Remaining Quantity: ${item.remaining || 0}`,
+    `Recommended Agency: ${item.bestAgency.agency}`,
+    `Fit Score: ${item.bestAgency.fitScore || 0}%`,
+    `Reason: ${reason}`,
+    `Suggested Action: Approve assignment and request first candidate batch within 72 hours.`,
+  ];
+
+  return { title, message, subject, emailLines };
+}
+
+async function hasAIAgentAssignmentApproval(item) {
+  if (!currentCompanyId || !item?.request_no) return false;
+
+  const { data, error } = await supabase
+    .from("notification_events")
+    .select("id")
+    .eq("company_id", currentCompanyId)
+    .eq("type", "AI_AGENT_ASSIGNMENT_APPROVAL")
+    .eq("related_id", item.request_no)
+    .limit(1);
+
+  if (error) {
+    console.warn("AI Agent duplicate check failed", error.message);
+    return false;
+  }
+
+  return (data || []).length > 0;
+}
+
+async function prepareAIAgentAssignmentApproval(item, options = {}) {
+  const { silent = false, preventDuplicate = false, auto = false } = options;
+
+  if (!item?.bestAgency) {
+    if (!silent) alert("No recommended agency found for this request.");
+    return { ok: false, reason: "No recommended agency" };
+  }
+
+  if (preventDuplicate && await hasAIAgentAssignmentApproval(item)) {
+    return { ok: true, skipped: true, reason: "Already prepared" };
+  }
+
+  const content = buildAIAgentAssignmentApprovalContent(item);
+  const managerEmail = getRecruitmentManagerEmails();
 
   await triggerExternalNotification("AI_AGENT_ASSIGNMENT_APPROVAL", {
     company_id: currentCompanyId,
@@ -8522,18 +8626,48 @@ async function createAIAgentAssignmentApproval(item) {
     agency_id: item.bestAgency.id || null,
     agency_name: item.bestAgency.agency,
     agency_email: item.bestAgency.email || "",
-    title,
-    message,
+    manager_email: managerEmail,
+    title: content.title,
+    message: content.message,
+    subject: content.subject,
     priority: item.priority || "Medium",
     related_table: "requests",
     related_id: item.request_no,
-    source: "AI Agent / Request Assignment Recommendations",
-    delivery_channel: "Manager Approval Inbox",
+    source: auto ? "AI Agent Auto Mode / Request Assignment" : "AI Agent / Request Assignment Recommendations",
+    delivery_channel: "Manager Approval Inbox + Email",
     recommendation: item,
+    auto_generated: auto,
   });
 
-  await loadNotifications();
-  alert("Manager approval notification prepared.");
+  try {
+    await dispatchVisaFlowEmail({
+      type: auto ? "AI_AGENT_AUTO_MANAGER_APPROVAL" : "AI_AGENT_MANAGER_APPROVAL",
+      to: managerEmail,
+      subject: content.subject,
+      text: content.emailLines.join("\n"),
+      html: buildEmailCardHtml(content.subject, content.emailLines, "This approval was prepared automatically by VisaFlow AI Recruitment Agent."),
+      payload: {
+        request_no: item.request_no,
+        recommended_agency: item.bestAgency.agency,
+        fit_score: item.bestAgency.fitScore || 0,
+        auto_generated: auto,
+      },
+    });
+  } catch (error) {
+    console.warn("AI Agent manager email failed", error?.message || error);
+  }
+
+  if (!silent) {
+    await loadNotifications();
+    await loadEmailLogs();
+    alert(auto ? "AI Agent sent approval notification to Recruitment Manager automatically." : "Manager approval notification sent.");
+  }
+
+  return { ok: true, skipped: false };
+}
+
+async function createAIAgentAssignmentApproval(item) {
+  await prepareAIAgentAssignmentApproval(item, { silent: false, preventDuplicate: false, auto: false });
 }
 
 async function notifyAgencyFromAIAgentRecommendation(item) {
@@ -8561,6 +8695,48 @@ async function notifyAgencyFromAIAgentRecommendation(item) {
 
   await loadNotifications();
   alert("Agency assignment notification prepared.");
+}
+
+async function runAIAgentAutoManagerApprovals({ limit = 5 } = {}) {
+  if (!currentCompanyId || isCurrentAgencyUser) return;
+  if (!canManageAgencyAgreements && !canManageCandidates && !canManageUsers && !canManagePlatform) return;
+  if (!requests.length || !agencies.length) return;
+
+  const recommendations = getAIAgentRequestAssignmentRecommendations()
+    .filter((item) => item?.bestAgency)
+    .slice(0, limit);
+
+  if (!recommendations.length) return;
+
+  setAiAgentLoading(true);
+  try {
+    let created = 0;
+    let skipped = 0;
+
+    for (const item of recommendations) {
+      const result = await prepareAIAgentAssignmentApproval(item, {
+        silent: true,
+        preventDuplicate: true,
+        auto: true,
+      });
+
+      if (result?.skipped) skipped += 1;
+      else if (result?.ok) created += 1;
+    }
+
+    if (created > 0) {
+      const summary = `AI Agent Auto Mode sent ${created} manager approval notification(s). ${skipped ? `${skipped} duplicate item(s) skipped.` : ""}`;
+      setAiAgentLog(summary);
+      setAiAgentLastRun(new Date().toLocaleString());
+      await loadNotifications();
+      await loadEmailLogs();
+    }
+  } catch (error) {
+    console.warn("AI Agent Auto Mode failed", error?.message || error);
+    setAiAgentLog(`AI Agent Auto Mode failed: ${error.message}`);
+  } finally {
+    setAiAgentLoading(false);
+  }
 }
 
 async function runAIAgentAgencyFollowUp() {
@@ -12169,7 +12345,7 @@ if (!currentUser) {
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "22px" }}>
                       <button className="save-btn" onClick={createAIAgentManagerBriefNotification}>Create Manager Daily Brief</button>
                       <button className="new-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading}>
-                        {aiAgentLoading ? "AI Agent Working..." : "Run Agency Follow-up"}
+                        {aiAgentLoading ? "AI Agent Working..." : "Run Manual Follow-up"}
                       </button>
                       <button className="new-btn" onClick={() => setActivePage("Notifications")}>Open Notification Center</button>
                     </div>
@@ -12231,7 +12407,7 @@ if (!currentUser) {
                           </td>
                           <td>
                             <div style={{ display: "grid", gap: "8px" }}>
-                              <button className="new-btn" onClick={() => createAIAgentAssignmentApproval(item)}>Send to Manager</button>
+                              <button className="new-btn" onClick={() => createAIAgentAssignmentApproval(item)}>Manual Resend to Manager</button>
                               <button className="save-btn" onClick={() => notifyAgencyFromAIAgentRecommendation(item)}>Approve & Notify Agency</button>
                             </div>
                           </td>
