@@ -30,6 +30,7 @@ const PAGES = [
   "Penalty Register",
   "Recruitment Performance",
   "Company Management",
+  "Email Settings",
   "Users Management",
   "Permissions",
   "Master Data",
@@ -93,7 +94,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Administration",
     icon: "⚙️",
-    pages: ["Notifications", "Company Management", "Users Management", "Permissions", "Master Data"],
+    pages: ["Notifications", "Company Management", "Email Settings", "Users Management", "Permissions", "Master Data"],
   },
 ];
 
@@ -756,6 +757,28 @@ const [companyForm, setCompanyForm] = useState({
   max_users: 5,
   notes: "",
 });
+
+const emptyCompanyEmailSettings = {
+  mode: "platform",
+  provider: "SMTP",
+  smtp_host: "",
+  smtp_port: "465",
+  smtp_secure: "true",
+  smtp_username: "",
+  smtp_password: "",
+  from_name: "",
+  from_email: "",
+  reply_to: "",
+  agreements_email: "",
+  notifications_email: "",
+  support_email: "",
+  test_email: "",
+  is_active: true,
+};
+const [companyEmailSettings, setCompanyEmailSettings] = useState(null);
+const [emailSettingsForm, setEmailSettingsForm] = useState(emptyCompanyEmailSettings);
+const [emailSettingsLoading, setEmailSettingsLoading] = useState(false);
+const [emailSettingsMessage, setEmailSettingsMessage] = useState("");
 const [userEditingId, setUserEditingId] = useState(null);
 const [userForm, setUserForm] = useState({
   name: "",
@@ -1776,6 +1799,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadInterviews(),
       loadUsers(),
       loadCompanies(),
+      loadCompanyEmailSettings(),
       loadAuditLogs(),
       loadMobilizations(),
       loadEmployees(),
@@ -1914,6 +1938,38 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
 
     setCompanies(data || []);
   };
+
+  async function loadCompanyEmailSettings() {
+    if (!currentCompanyId || currentRole === "Agency") {
+      setCompanyEmailSettings(null);
+      setEmailSettingsForm(emptyCompanyEmailSettings);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("company_email_settings")
+      .select("id, company_id, mode, provider, smtp_host, smtp_port, smtp_secure, smtp_username, from_name, from_email, reply_to, agreements_email, notifications_email, support_email, is_active, is_verified, last_test_at, last_test_status, last_error, updated_at")
+      .eq("company_id", currentCompanyId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("company_email_settings:", error.message);
+      setCompanyEmailSettings(null);
+      setEmailSettingsForm(emptyCompanyEmailSettings);
+      return;
+    }
+
+    setCompanyEmailSettings(data || null);
+    setEmailSettingsForm({
+      ...emptyCompanyEmailSettings,
+      ...(data || {}),
+      smtp_password: "",
+      smtp_port: data?.smtp_port ? String(data.smtp_port) : "465",
+      smtp_secure: data?.smtp_secure === false ? "false" : "true",
+      test_email: currentUser?.email || "",
+    });
+  }
+
 const loadProfessions = async () => {
   const { data: part1, error: error1 } = await supabase
     .from("professions")
@@ -3325,6 +3381,203 @@ function editCompany(company) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function getCompanyEmailRecipient(kind = "notifications") {
+  const settings = companyEmailSettings || {};
+  if (kind === "agreements") return settings.agreements_email || settings.notifications_email || settings.support_email || "agreements@visaflowksa.com";
+  if (kind === "support") return settings.support_email || settings.notifications_email || "support@visaflowksa.com";
+  return settings.notifications_email || settings.support_email || "notifications@visaflowksa.com";
+}
+
+function getAgencyEmailByName(agencyName) {
+  const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
+  return agency?.email || "";
+}
+
+function buildEmailCardHtml(title, lines = [], actionText = "") {
+  const safeTitle = String(title || "VisaFlow Notification");
+  const bodyRows = lines
+    .filter((line) => line !== undefined && line !== null && String(line).trim() !== "")
+    .map((line) => `<p style="margin:0 0 10px;line-height:1.7;">${String(line).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</p>`)
+    .join("");
+
+  return `
+  <div style="margin:0;padding:24px;background:#f4f7fb;font-family:Arial,Tahoma,sans-serif;color:#0f172a;">
+    <div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;">
+      <div style="background:#061b49;color:#ffffff;padding:22px 26px;">
+        <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.75;">VisaFlow KSA</div>
+        <h1 style="margin:8px 0 0;font-size:22px;line-height:1.3;">${safeTitle}</h1>
+      </div>
+      <div style="padding:24px 26px;font-size:15px;line-height:1.7;">
+        ${bodyRows || `<p>${safeTitle}</p>`}
+        ${actionText ? `<div style="margin-top:18px;padding:14px 16px;background:#eef6ff;border-radius:12px;border:1px solid #bfdbfe;">${actionText}</div>` : ""}
+      </div>
+      <div style="padding:14px 26px;background:#f8fafc;color:#64748b;font-size:12px;">This message was generated by VisaFlow KSA.</div>
+    </div>
+  </div>`;
+}
+
+async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, replyTo, payload = {} }) {
+  const recipients = Array.isArray(to) ? to.filter(Boolean) : String(to || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean);
+  if (!recipients.length) {
+    console.warn("Email skipped because recipient is missing", { type, subject, payload });
+    return { ok: false, skipped: true, reason: "Recipient email is missing" };
+  }
+
+  const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
+    body: {
+      type,
+      company_id: currentCompanyId,
+      to: recipients,
+      cc,
+      bcc,
+      subject,
+      text,
+      html,
+      replyTo,
+      payload: {
+        ...payload,
+        company_id: currentCompanyId,
+        triggered_by: currentUser?.email || currentUser?.name || "VisaFlow User",
+        triggered_at: new Date().toISOString(),
+      },
+    },
+  });
+
+  if (error) throw new Error(error.message || "Email dispatcher failed");
+  if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
+  return data || { ok: true };
+}
+
+async function saveCompanyEmailSettings({ silent = false } = {}) {
+  if (!canManageUsers) return alert("You do not have permission to manage email settings.");
+
+  const useCompanyEmail = emailSettingsForm.mode === "company";
+  if (useCompanyEmail) {
+    if (!emailSettingsForm.smtp_host || !emailSettingsForm.smtp_username || !emailSettingsForm.from_email) {
+      return alert("SMTP host, SMTP username and From Email are required when company email is enabled.");
+    }
+    if (!emailSettingsForm.id && !emailSettingsForm.smtp_password) {
+      return alert("SMTP password is required for the first setup.");
+    }
+  }
+
+  setEmailSettingsLoading(true);
+  setEmailSettingsMessage("");
+
+  try {
+    const payload = {
+      company_id: currentCompanyId,
+      mode: emailSettingsForm.mode || "platform",
+      provider: emailSettingsForm.provider || "SMTP",
+      smtp_host: emailSettingsForm.smtp_host || "",
+      smtp_port: Number(emailSettingsForm.smtp_port || 465),
+      smtp_secure: emailSettingsForm.smtp_secure === true || emailSettingsForm.smtp_secure === "true",
+      smtp_username: emailSettingsForm.smtp_username || "",
+      from_name: emailSettingsForm.from_name || companies[0]?.name || "Company Recruitment",
+      from_email: emailSettingsForm.from_email || "",
+      reply_to: emailSettingsForm.reply_to || emailSettingsForm.support_email || "",
+      agreements_email: emailSettingsForm.agreements_email || emailSettingsForm.reply_to || "",
+      notifications_email: emailSettingsForm.notifications_email || emailSettingsForm.reply_to || "",
+      support_email: emailSettingsForm.support_email || emailSettingsForm.reply_to || "",
+      is_active: Boolean(emailSettingsForm.is_active),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (emailSettingsForm.smtp_password) {
+      payload.smtp_password = emailSettingsForm.smtp_password;
+      payload.is_verified = false;
+      payload.last_test_status = "Password Updated - Test Required";
+    }
+
+    const result = emailSettingsForm.id
+      ? await supabase
+          .from("company_email_settings")
+          .update(payload)
+          .eq("id", emailSettingsForm.id)
+          .eq("company_id", currentCompanyId)
+          .select()
+          .single()
+      : await supabase
+          .from("company_email_settings")
+          .insert([{ ...payload, created_at: new Date().toISOString() }])
+          .select()
+          .single();
+
+    if (result.error) throw result.error;
+
+    setCompanyEmailSettings(result.data || null);
+    setEmailSettingsForm((prev) => ({
+      ...prev,
+      ...(result.data || {}),
+      smtp_password: "",
+      smtp_port: result.data?.smtp_port ? String(result.data.smtp_port) : prev.smtp_port,
+      smtp_secure: result.data?.smtp_secure === false ? "false" : "true",
+      test_email: prev.test_email,
+    }));
+
+    if (!silent) setEmailSettingsMessage("Email settings saved successfully.");
+    await loadCompanyEmailSettings();
+    return result.data;
+  } catch (error) {
+    if (!silent) setEmailSettingsMessage(`Email settings save failed: ${error.message}`);
+    throw error;
+  } finally {
+    setEmailSettingsLoading(false);
+  }
+}
+
+async function testCompanyEmailSettings() {
+  if (!canManageUsers) return alert("You do not have permission to test email settings.");
+  const testEmail = String(emailSettingsForm.test_email || currentUser?.email || "").trim();
+  if (!testEmail) return alert("Please enter a test recipient email.");
+
+  setEmailSettingsLoading(true);
+  setEmailSettingsMessage("Saving settings and sending test email...");
+
+  try {
+    await saveCompanyEmailSettings({ silent: true });
+    const subject = "VisaFlow Email Settings Test";
+    const text = `This is a test email from VisaFlow for company ${companies[0]?.name || currentCompanyId}. If you received this message, your company email settings are working.`;
+    const response = await dispatchVisaFlowEmail({
+      type: "COMPANY_EMAIL_TEST",
+      to: testEmail,
+      subject,
+      text,
+      html: buildEmailCardHtml(subject, [text], "This test verifies company SMTP settings."),
+      payload: { test_email: testEmail },
+    });
+
+    await supabase
+      .from("company_email_settings")
+      .update({
+        is_verified: true,
+        last_test_at: new Date().toISOString(),
+        last_test_status: "Success",
+        last_error: "",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("company_id", currentCompanyId);
+
+    await loadCompanyEmailSettings();
+    setEmailSettingsMessage(`Test email sent successfully${response?.messageId ? ` (${response.messageId})` : ""}.`);
+  } catch (error) {
+    await supabase
+      .from("company_email_settings")
+      .update({
+        is_verified: false,
+        last_test_at: new Date().toISOString(),
+        last_test_status: "Failed",
+        last_error: error.message || "Test failed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("company_id", currentCompanyId);
+    await loadCompanyEmailSettings();
+    setEmailSettingsMessage(`Test email failed: ${error.message}`);
+  } finally {
+    setEmailSettingsLoading(false);
+  }
+}
+
 async function saveCompany() {
   if (!canManageUsers) return alert("You do not have permission to manage company settings.");
   if (!companyEditingId) return alert("Please select a company to update.");
@@ -3647,6 +3900,137 @@ function editAgreement(item) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+async function sendAgreementSentEmail(agreement) {
+  const toEmail = getAgencyEmailByName(agreement?.agency_name);
+  if (!toEmail) return { ok: false, skipped: true, reason: "Agency email is missing" };
+  const subject = `VisaFlow Agreement Requires Acceptance - ${agreement?.agreement_no || "Agreement"}`;
+  const text = `Dear ${agreement?.agency_name || "Agency"},
+
+A recruitment agency agreement has been sent to your Office Portal for review and electronic acceptance.
+
+Agreement No: ${agreement?.agreement_no || "-"}
+SLA Days: ${agreement?.sla_days || "-"}
+
+Please login to VisaFlow Office Portal to review and accept the agreement.
+
+VisaFlow KSA`;
+  return dispatchVisaFlowEmail({
+    type: "AGENCY_AGREEMENT_SENT",
+    to: toEmail,
+    replyTo: getCompanyEmailRecipient("agreements"),
+    subject,
+    text,
+    html: buildEmailCardHtml(subject, [
+      `Dear ${agreement?.agency_name || "Agency"},`,
+      "A recruitment agency agreement has been sent to your Office Portal for review and electronic acceptance.",
+      `Agreement No: ${agreement?.agreement_no || "-"}`,
+      `SLA Days: ${agreement?.sla_days || "-"}`,
+      "Please login to VisaFlow Office Portal to review and accept the agreement.",
+    ]),
+    payload: { agreement_no: agreement?.agreement_no, agency_name: agreement?.agency_name },
+  });
+}
+
+async function sendAgreementAcceptedEmail(agreement, signer = "Agency User") {
+  const subject = `Agency Agreement Accepted - ${agreement?.agreement_no || "Agreement"}`;
+  const text = `${agreement?.agency_name || "Agency"} accepted agreement ${agreement?.agreement_no || "-"} electronically. Accepted by: ${signer}.`;
+  return dispatchVisaFlowEmail({
+    type: "AGENCY_AGREEMENT_ACCEPTED",
+    to: getCompanyEmailRecipient("agreements"),
+    subject,
+    text,
+    html: buildEmailCardHtml(subject, [
+      `${agreement?.agency_name || "Agency"} accepted the agreement electronically.`,
+      `Agreement No: ${agreement?.agreement_no || "-"}`,
+      `Accepted by: ${signer}`,
+    ]),
+    payload: { agreement_no: agreement?.agreement_no, agency_name: agreement?.agency_name, signer },
+  });
+}
+
+async function sendPenaltyNoticeEmail(penalty) {
+  const toEmail = getAgencyEmailByName(penalty?.agency_name);
+  if (!toEmail) return { ok: false, skipped: true, reason: "Agency email is missing" };
+  const amount = Number(penalty?.approved_amount ?? penalty?.calculated_amount ?? 0).toLocaleString();
+  const subject = `VisaFlow Penalty Notice - ${penalty?.penalty_no || "Penalty"}`;
+  const text = `Dear ${penalty?.agency_name || "Agency"},
+
+A labor SLA delay penalty has been issued for your review and justification.
+
+Penalty No: ${penalty?.penalty_no || "-"}
+Candidate: ${penalty?.candidate_name || "-"}
+Request No: ${penalty?.request_no || "-"}
+Amount: ${amount} SAR
+
+Please login to Office Portal and submit justification if applicable.`;
+  return dispatchVisaFlowEmail({
+    type: "AGENCY_PENALTY_SENT",
+    to: toEmail,
+    replyTo: getCompanyEmailRecipient("notifications"),
+    subject,
+    text,
+    html: buildEmailCardHtml(subject, [
+      `Dear ${penalty?.agency_name || "Agency"},`,
+      "A labor SLA delay penalty has been issued for your review and justification.",
+      `Penalty No: ${penalty?.penalty_no || "-"}`,
+      `Candidate: ${penalty?.candidate_name || "-"}`,
+      `Request No: ${penalty?.request_no || "-"}`,
+      `Amount: ${amount} SAR`,
+      "Please login to Office Portal and submit justification if applicable.",
+    ]),
+    payload: { penalty_no: penalty?.penalty_no, agency_name: penalty?.agency_name, amount },
+  });
+}
+
+async function sendPenaltyJustificationEmail(penalty, justification) {
+  const subject = `Penalty Justification Submitted - ${penalty?.penalty_no || "Penalty"}`;
+  const text = `${penalty?.agency_name || "Agency"} submitted justification for penalty ${penalty?.penalty_no || "-"}.
+
+Justification:
+${justification}`;
+  return dispatchVisaFlowEmail({
+    type: "AGENCY_PENALTY_JUSTIFICATION_SUBMITTED",
+    to: getCompanyEmailRecipient("notifications"),
+    subject,
+    text,
+    html: buildEmailCardHtml(subject, [
+      `${penalty?.agency_name || "Agency"} submitted a justification for review.`,
+      `Penalty No: ${penalty?.penalty_no || "-"}`,
+      `Candidate: ${penalty?.candidate_name || "-"}`,
+      `Justification: ${justification}`,
+    ]),
+    payload: { penalty_no: penalty?.penalty_no, agency_name: penalty?.agency_name },
+  });
+}
+
+async function sendPenaltyDecisionEmail(penalty, decision, amount, note = "") {
+  const toEmail = getAgencyEmailByName(penalty?.agency_name);
+  if (!toEmail) return { ok: false, skipped: true, reason: "Agency email is missing" };
+  const subject = `Penalty Decision - ${penalty?.penalty_no || "Penalty"} - ${decision}`;
+  const text = `Dear ${penalty?.agency_name || "Agency"},
+
+The company has issued a final decision for penalty ${penalty?.penalty_no || "-"}.
+
+Decision: ${decision}
+Final Amount: ${Number(amount || 0).toLocaleString()} SAR
+Notes: ${note || "-"}`;
+  return dispatchVisaFlowEmail({
+    type: "AGENCY_PENALTY_DECISION",
+    to: toEmail,
+    replyTo: getCompanyEmailRecipient("notifications"),
+    subject,
+    text,
+    html: buildEmailCardHtml(subject, [
+      `Dear ${penalty?.agency_name || "Agency"},`,
+      `The company has issued a final decision for penalty ${penalty?.penalty_no || "-"}.`,
+      `Decision: ${decision}`,
+      `Final Amount: ${Number(amount || 0).toLocaleString()} SAR`,
+      `Notes: ${note || "-"}`,
+    ]),
+    payload: { penalty_no: penalty?.penalty_no, decision, amount },
+  });
+}
+
 async function saveAgreement(statusOverride = "") {
   if (!canManageAgencyAgreements) return alert("You do not have permission to manage agency agreements.");
   if (!agreementForm.agency_name) return alert("Agency name is required.");
@@ -3695,6 +4079,12 @@ async function saveAgreement(statusOverride = "") {
       related_id: String(agreementEditingId || ""),
       agency_name: payload.agency_name,
     });
+
+    try {
+      await sendAgreementSentEmail(payload);
+    } catch (emailError) {
+      console.warn("Agreement email failed", emailError?.message || emailError);
+    }
   }
 
   alert(nextStatus === "Pending Signature" ? "Agreement sent to agency portal" : agreementEditingId ? "Agreement updated successfully" : "Agreement saved successfully");
@@ -3721,6 +4111,16 @@ async function sendExistingAgreementToAgency(item) {
     .eq("company_id", currentCompanyId);
 
   if (error) return alert(error.message);
+  try {
+    await sendAgreementSentEmail({
+      ...item,
+      status: "Pending Signature",
+      sent_to_agency_at: now,
+      terms: item.terms || buildAgreementTermsFromPolicy(item),
+    });
+  } catch (emailError) {
+    console.warn("Agreement email failed", emailError?.message || emailError);
+  }
   await loadAgencyAgreements();
   alert("Agreement sent to agency portal");
 }
@@ -3757,6 +4157,12 @@ async function acceptAgreementByAgency(item) {
     related_id: String(item.id || ""),
     agency_name: item.agency_name,
   });
+
+  try {
+    await sendAgreementAcceptedEmail(item, agencySigner);
+  } catch (emailError) {
+    console.warn("Agreement acceptance email failed", emailError?.message || emailError);
+  }
 
   await loadAgencyAgreements();
   alert("Agreement accepted and activated successfully");
@@ -5927,6 +6333,16 @@ async function sendPenaltyToAgency(item, amountOverride = null, noteOverride = "
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
+  try {
+    await sendPenaltyNoticeEmail({
+      ...item,
+      status: "Sent to Agency",
+      approved_amount: amount,
+      decision_notes: noteOverride || item.decision_notes || "Penalty issued to agency for justification window.",
+    });
+  } catch (emailError) {
+    console.warn("Penalty notice email failed", emailError?.message || emailError);
+  }
   await loadAgencyPenalties();
 }
 
@@ -5960,6 +6376,11 @@ async function waivePenalty(item, defaultNote = "") {
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
+  try {
+    await sendPenaltyDecisionEmail(item, "Waived", 0, note);
+  } catch (emailError) {
+    console.warn("Penalty decision email failed", emailError?.message || emailError);
+  }
   await loadAgencyPenalties();
 }
 
@@ -5981,6 +6402,11 @@ async function submitPenaltyJustification(item) {
     })
     .eq("id", item.id);
   if (error) return alert(error.message);
+  try {
+    await sendPenaltyJustificationEmail(item, justification);
+  } catch (emailError) {
+    console.warn("Penalty justification email failed", emailError?.message || emailError);
+  }
   await loadAgencyPenalties();
   alert("Justification submitted to company for review.");
 }
@@ -6006,6 +6432,11 @@ async function approveFinalPenalty(item, defaultNote = "") {
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
+  try {
+    await sendPenaltyDecisionEmail(item, "Approved", finalAmount, note);
+  } catch (emailError) {
+    console.warn("Penalty approval email failed", emailError?.message || emailError);
+  }
   await loadAgencyPenalties();
 }
 
@@ -6034,6 +6465,11 @@ async function reduceFinalPenalty(item) {
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
+  try {
+    await sendPenaltyDecisionEmail(item, "Reduced", newAmount, note);
+  } catch (emailError) {
+    console.warn("Penalty reduction email failed", emailError?.message || emailError);
+  }
   await loadAgencyPenalties();
 }
 
@@ -7734,47 +8170,18 @@ async function sendOfferEmail() {
   };
 
   try {
-    const offerWebhookUrl = import.meta.env?.VITE_OFFER_EMAIL_WEBHOOK_URL;
-    console.log("OFFER WEBHOOK URL =", offerWebhookUrl);
-console.log("OFFER PAYLOAD =", payload);
-    const resendApiKey = import.meta.env?.VITE_RESEND_API_KEY;
-    const fromEmail = import.meta.env?.VITE_RESEND_FROM_EMAIL || "VisaFlow KSA <onboarding@resend.dev>";
+    const emailResult = await dispatchVisaFlowEmail({
+      type: "JOB_OFFER_EMAIL",
+      to: offerCandidate.email,
+      subject: offerSubject,
+      text: offerBody,
+      html: buildEmailCardHtml(offerSubject, offerBody.split("\n").filter(Boolean)),
+      replyTo: getCompanyEmailRecipient("support"),
+      payload,
+    });
 
-    let deliveryStatus = "QUEUED";
-    let providerMessage = "Offer email request has been saved.";
-
-    if (offerWebhookUrl) {
-      const response = await fetch(offerWebhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) throw new Error(`Email webhook failed: ${response.status}`);
-      deliveryStatus = "SENT_TO_WEBHOOK";
-      providerMessage = "Offer email sent to email automation webhook.";
-    } else if (resendApiKey) {
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${resendApiKey}`,
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [offerCandidate.email],
-          subject: offerSubject,
-          text: offerBody,
-        }),
-      });
-
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data?.message || data?.error?.message || "Resend email failed");
-      deliveryStatus = "SENT";
-      providerMessage = `Offer email sent successfully${data?.id ? ` (${data.id})` : ""}.`;
-    } else {
-      providerMessage = "Offer email prepared and logged. Add VITE_OFFER_EMAIL_WEBHOOK_URL or VITE_RESEND_API_KEY to send automatically.";
-    }
+    const deliveryStatus = "SENT";
+    const providerMessage = `Offer email sent successfully${emailResult?.messageId ? ` (${emailResult.messageId})` : ""}.`;
 
     await triggerExternalNotification("JOB_OFFER_EMAIL", {
       ...payload,
@@ -14822,6 +15229,96 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </TableCard>
   </>
 )}
+{activePage === "Email Settings" && canManageUsers && (
+  <>
+    <div className="dashboard-grid">
+      <Stat title="Email Mode" value={(companyEmailSettings?.mode || "platform") === "company" ? "Company Email" : "VisaFlow Default"} />
+      <Stat title="Verified" value={companyEmailSettings?.is_verified ? "Yes" : "No"} className={companyEmailSettings?.is_verified ? "passed" : "warning"} />
+      <Stat title="From Email" value={companyEmailSettings?.from_email || "admin@visaflowksa.com"} />
+      <Stat title="Last Test" value={companyEmailSettings?.last_test_status || "Not Tested"} />
+    </div>
+
+    <FormCard title="Company Email Settings">
+      <p className="muted-text">
+        Choose whether this company sends operational emails using the VisaFlow default mailbox or its own SMTP email.
+        Company SMTP settings are used only after a successful test. If not active or verified, VisaFlow falls back to the platform email.
+      </p>
+
+      <div className="form-grid">
+        <Select
+          placeholder="Email Sending Mode"
+          value={emailSettingsForm.mode || "platform"}
+          options={["platform", "company"]}
+          onChange={(v) => setEmailSettingsForm((p) => ({ ...p, mode: v }))}
+        />
+        <Select
+          placeholder="Provider"
+          value={emailSettingsForm.provider || "SMTP"}
+          options={["SMTP", "Namecheap Private Email", "Google Workspace", "Microsoft 365", "Zoho Mail", "Other"]}
+          onChange={(v) => setEmailSettingsForm((p) => ({ ...p, provider: v }))}
+        />
+        <Input placeholder="From Name" value={emailSettingsForm.from_name || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, from_name: v }))} />
+        <Input placeholder="From Email" value={emailSettingsForm.from_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, from_email: v }))} />
+        <Input placeholder="Reply-To Email" value={emailSettingsForm.reply_to || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, reply_to: v }))} />
+        <Input placeholder="Support Email" value={emailSettingsForm.support_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, support_email: v }))} />
+        <Input placeholder="Agreements Email" value={emailSettingsForm.agreements_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, agreements_email: v }))} />
+        <Input placeholder="Notifications Email" value={emailSettingsForm.notifications_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, notifications_email: v }))} />
+      </div>
+
+      <div className="section-title">SMTP Configuration</div>
+      <div className="form-grid">
+        <Input placeholder="SMTP Host" value={emailSettingsForm.smtp_host || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_host: v }))} />
+        <Input type="number" placeholder="SMTP Port" value={emailSettingsForm.smtp_port || "465"} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_port: v }))} />
+        <Select placeholder="Secure Connection" value={String(emailSettingsForm.smtp_secure ?? "true")} options={["true", "false"]} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_secure: v }))} />
+        <Input placeholder="SMTP Username" value={emailSettingsForm.smtp_username || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_username: v }))} />
+        <Input type="password" placeholder={emailSettingsForm.id ? "SMTP Password / App Password (leave blank to keep current)" : "SMTP Password / App Password"} value={emailSettingsForm.smtp_password || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_password: v }))} />
+        <Input placeholder="Test Recipient Email" value={emailSettingsForm.test_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, test_email: v }))} />
+      </div>
+
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={Boolean(emailSettingsForm.is_active)}
+          onChange={(e) => setEmailSettingsForm((p) => ({ ...p, is_active: e.target.checked }))}
+        />
+        Enable this email configuration
+      </label>
+
+      {emailSettingsMessage && <p className="muted-text">{emailSettingsMessage}</p>}
+
+      <div className="actions-line">
+        <button className="save-btn" disabled={emailSettingsLoading} onClick={() => saveCompanyEmailSettings()}>
+          {emailSettingsLoading ? "Saving..." : "Save Email Settings"}
+        </button>
+        <button className="light-btn" disabled={emailSettingsLoading} onClick={testCompanyEmailSettings}>
+          Send Test Email
+        </button>
+        <button className="light-btn" onClick={() => loadCompanyEmailSettings()}>Reload</button>
+      </div>
+    </FormCard>
+
+    <TableCard title="Email Routing Rules">
+      <table>
+        <thead>
+          <tr>
+            <th>Event</th>
+            <th>Recipient</th>
+            <th>Sender</th>
+            <th>Fallback</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Agreement sent to agency</td><td>Agency email from Agencies page</td><td>Company email if verified</td><td>VisaFlow default email</td></tr>
+          <tr><td>Agency accepts agreement</td><td>Company Agreements Email</td><td>Company email if verified</td><td>agreements@visaflowksa.com</td></tr>
+          <tr><td>Penalty sent to agency</td><td>Agency email from Agencies page</td><td>Company email if verified</td><td>VisaFlow default email</td></tr>
+          <tr><td>Agency submits justification</td><td>Company Notifications Email</td><td>Company email if verified</td><td>notifications@visaflowksa.com</td></tr>
+          <tr><td>Job offer email</td><td>Candidate email</td><td>Company email if verified</td><td>VisaFlow default email</td></tr>
+        </tbody>
+      </table>
+    </TableCard>
+  </>
+)}
+
 {activePage === "Permissions" && canManagePermissions && (
   <>
     <TableCard title="Role Permissions Matrix">
@@ -16766,7 +17263,7 @@ onClick={() => setActiveReport("lateSla")}>
 
                 <div className="actions-line" style={{ marginTop: "18px", justifyContent: "space-between" }}>
                   <div style={{ color: "#64748b", lineHeight: 1.6 }}>
-                    <b>Note:</b> For real sending, add <code>VITE_OFFER_EMAIL_WEBHOOK_URL</code> or <code>VITE_RESEND_API_KEY</code> in .env.
+                    <b>Note:</b> Offer emails are sent through the secure multi-tenant email dispatcher. If company email is not verified, VisaFlow default email is used.
                   </div>
                   <div style={{ display: "flex", gap: "10px" }}>
                     <button className="light-btn" onClick={() => openOfferEmail(offerCandidate)} disabled={offerLoading}>
