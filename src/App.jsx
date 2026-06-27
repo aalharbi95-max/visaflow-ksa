@@ -5896,6 +5896,105 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     });
   }
 
+  async function inferCandidateUploadRequestNo(rows = []) {
+    const explicitCandidateRequestNo = String(candidateForm.request_no || "").trim();
+    if (explicitCandidateRequestNo) return explicitCandidateRequestNo;
+
+    const usefulRows = (rows || [])
+      .filter((row) => getRowValue(row, ["Name", "Candidate Name", "candidate_name", "اسم المرشح"]))
+      .slice(0, 30);
+
+    if (!usefulRows.length) return "";
+
+    const agencyName = currentRole === "Agency"
+      ? (currentUser?.agency_name || candidateForm.agency || "")
+      : (candidateForm.agency || currentUser?.agency_name || "");
+
+    const requestNosFromAuthorizations = new Set();
+
+    usefulRows.forEach((row) => {
+      const rowProfession = getRowValue(row, ["Profession", "Job", "Position", "profession", "المهنة"]);
+      const rowNationality = getRowValue(row, ["Nationality", "nationality", "الجنسية"]);
+      const rowGender = getRowValue(row, ["Gender", "gender", "الجنس"]);
+
+      const matches = visaAuthorizations.filter((auth) => {
+        if (!auth?.request_no || auth.status === "Cancelled") return false;
+        if (agencyName && auth.agency && normalize(auth.agency) !== normalize(agencyName)) return false;
+        return (
+          isCompatibleText(rowProfession, auth.profession) &&
+          (!rowNationality || !auth.nationality || normalize(rowNationality) === normalize(auth.nationality)) &&
+          (!rowGender || !auth.gender || normalize(rowGender) === normalize(auth.gender))
+        );
+      });
+
+      matches.forEach((auth) => requestNosFromAuthorizations.add(String(auth.request_no || "")));
+    });
+
+    const cleanAuthRequestNos = Array.from(requestNosFromAuthorizations).filter(Boolean);
+    if (cleanAuthRequestNos.length === 1) return cleanAuthRequestNos[0];
+
+    try {
+      const { data: approvedRequests, error: requestLookupError } = await supabase
+        .from("requests")
+        .select("id, request_no, approval_status, status, profession, nationality, gender")
+        .eq("company_id", currentCompanyId)
+        .in("approval_status", ["Approved by Recruitment", "Approved"])
+        .range(0, 5000);
+
+      if (requestLookupError) {
+        console.warn("candidate upload request lookup failed", requestLookupError.message);
+        return "";
+      }
+
+      const approvedRequestNos = new Set((approvedRequests || []).map((item) => String(item.request_no || "")).filter(Boolean));
+      if (!approvedRequestNos.size) return "";
+
+      const { data: requestLineRows, error: lineLookupError } = await supabase
+        .from("request_lines")
+        .select("id, request_no, profession, nationality, gender, quantity")
+        .eq("company_id", currentCompanyId)
+        .in("request_no", Array.from(approvedRequestNos))
+        .range(0, 5000);
+
+      if (lineLookupError) {
+        console.warn("candidate upload request line lookup failed", lineLookupError.message);
+        return "";
+      }
+
+      const candidateRequestNos = new Set();
+      const fallbackLines = (requestLineRows && requestLineRows.length > 0)
+        ? requestLineRows
+        : (approvedRequests || []).map((request) => ({
+            request_no: request.request_no,
+            profession: request.profession,
+            nationality: request.nationality,
+            gender: request.gender,
+          }));
+
+      usefulRows.forEach((row) => {
+        const rowProfession = getRowValue(row, ["Profession", "Job", "Position", "profession", "المهنة"]);
+        const rowNationality = getRowValue(row, ["Nationality", "nationality", "الجنسية"]);
+        const rowGender = getRowValue(row, ["Gender", "gender", "الجنس"]);
+
+        const matches = fallbackLines.filter((line) =>
+          approvedRequestNos.has(String(line.request_no || "")) &&
+          isCompatibleText(rowProfession, line.profession) &&
+          (!rowNationality || !line.nationality || normalize(rowNationality) === normalize(line.nationality)) &&
+          (!rowGender || !line.gender || normalize(rowGender) === normalize(line.gender))
+        );
+
+        matches.forEach((line) => candidateRequestNos.add(String(line.request_no || "")));
+      });
+
+      const cleanRequestNos = Array.from(candidateRequestNos).filter(Boolean);
+      if (cleanRequestNos.length === 1) return cleanRequestNos[0];
+    } catch (error) {
+      console.warn("candidate upload auto request inference failed", error?.message || error);
+    }
+
+    return "";
+  }
+
   function startExcelUploadFromRequest(item) {
     setExcelRequestNo(item.request_no || "");
     setTimeout(() => requestExcelInputRef.current?.click(), 0);
@@ -5921,10 +6020,14 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     if (!rows.length) return alert("Excel file is empty.");
 
     const requestNoFromExcel = getRowValue(rows[0], ["Request No", "RequestNo", "request_no", "رقم الطلب"]);
-    const requestNo = excelRequestNo ? excelRequestNo : requestNoFromExcel;
+    let requestNo = excelRequestNo || requestNoFromExcel || candidateForm.request_no || "";
 
     if (!requestNo) {
-      return alert("Request No is required. Please upload from the Request row or include Request No in Excel.");
+      requestNo = await inferCandidateUploadRequestNo(rows);
+    }
+
+    if (!requestNo) {
+      return alert("Unable to identify the assigned request automatically. Please upload from an assigned request/authorization card or select Request No once in the form. The office does not need to fill Request No inside Excel.");
     }
 
     const { data: requestData, error: requestError } = await supabase
