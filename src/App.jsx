@@ -12510,7 +12510,7 @@ if (!currentUser) {
 
             <TableCard title="Notification Center">
               <div className="actions-line" style={{ marginBottom: "14px" }}>
-                <button className="new-btn" onClick={() => { loadNotifications(); loadEmailLogs(); loadEmailTemplates(); }}>Refresh Center</button>
+                <button className="new-btn" onClick={async () => { await loadNotifications(); await loadEmailLogs(); await loadEmailTemplates(); alert("Notification Center refreshed"); }}>Refresh Center</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
                 <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>
               </div>
