@@ -5675,8 +5675,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     return [
       {
         "Field": "Request No",
-        "Required": "Yes",
-        "Notes": "Use the exact request number assigned by the company, for example REQ-2026-0001.",
+        "Required": currentRole === "Agency" ? "No" : "Yes",
+        "Notes": currentRole === "Agency"
+          ? "Office Portal upload can work without Request No. Candidates will be saved in Agency Talent Pool if no assigned request is selected."
+          : "Use the exact request number assigned by the company, for example REQ-2026-0001.",
       },
       {
         "Field": "Candidate Name",
@@ -6005,6 +6007,196 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     setTimeout(() => candidateExcelInputRef.current?.click(), 0);
   }
 
+  async function handleAgencyTalentPoolExcelUpload(rows = []) {
+    if (currentRole !== "Agency") {
+      return alert("Please select Request No before uploading candidate Excel.");
+    }
+
+    if (!currentCompanyId) {
+      return alert("Company workspace is missing. Please select the client workspace first.");
+    }
+
+    const agencyName = currentUser?.agency_name || candidateForm.agency || "";
+    if (!agencyName) {
+      return alert("Agency name is missing from the current user.");
+    }
+
+    const payloads = [];
+    const candidateTechnicalImportMeta = [];
+    const errors = [];
+    const filePassports = new Set();
+
+    for (const [index, row] of rows.entries()) {
+      const rowNo = index + 2;
+      const candidateName = getRowValue(row, ["Name", "Candidate Name", "candidate_name", "اسم المرشح"]);
+
+      if (!candidateName) {
+        errors.push(`Row ${rowNo}: Candidate name is missing`);
+        continue;
+      }
+
+      const rowProfession = getRowValue(row, ["Profession", "Job", "Position", "profession", "المهنة"]);
+      const rowNationality = getRowValue(row, ["Nationality", "nationality", "الجنسية"]) || "India";
+      const rowGender = getRowValue(row, ["Gender", "gender", "الجنس"]);
+
+      if (!rowProfession) {
+        errors.push(`Row ${rowNo} / ${candidateName}: Profession is missing.`);
+        continue;
+      }
+
+      const passportNo = getRowValue(row, ["Passport No", "Passport", "PassportNo", "passport_no", "رقم الجواز"]);
+
+      if (passportNo) {
+        if (filePassports.has(passportNo)) {
+          errors.push(`Row ${rowNo} / ${candidateName}: Duplicate passport inside file (${passportNo}).`);
+          continue;
+        }
+
+        const { data: duplicatePassport, error: duplicateError } = await supabase
+          .from("candidates")
+          .select("id")
+          .eq("passport_no", passportNo)
+          .eq("company_id", currentCompanyId)
+          .limit(1);
+
+        if (duplicateError) {
+          errors.push(`${candidateName}: Passport check failed (${duplicateError.message}).`);
+          continue;
+        }
+
+        if (duplicatePassport && duplicatePassport.length > 0) {
+          errors.push(`${candidateName}: Passport already exists (${passportNo}).`);
+          continue;
+        }
+
+        filePassports.add(passportNo);
+      }
+
+      const ticketNo = getRowValue(row, ["Ticket No", "Ticket", "ticket_no"]);
+      const flightDate = parseExcelDateValue(row["Flight Date"] || row["flight_date"] || row["تاريخ الرحلة"]);
+      const arrivalDate = parseExcelDateValue(row["Arrival Date"] || row["arrival_date"] || row["تاريخ الوصول"]);
+      const medicalDate = parseExcelDateValue(row["Medical Date"] || row["medical_date"] || row["تاريخ الفحص"]);
+      const rawMedicalStatus = getRowValue(row, ["Medical Status", "medical_status", "حالة الفحص"]);
+      const contractStatus = getRowValue(row, ["Contract Status", "contract_status", "حالة العقد"]) || "Pending";
+      const rawStatus = getRowValue(row, ["Status", "status", "الحالة"]) || "Candidate Submitted";
+
+      let autoStatus = rawStatus;
+      if (arrivalDate) autoStatus = "Arrived KSA";
+      else if (flightDate) autoStatus = "Departure";
+      else if (ticketNo) autoStatus = "Ticket Booked";
+      else if (rawMedicalStatus === "Passed" || rawMedicalStatus === "Fit") autoStatus = "Medical Passed";
+
+      const technicalFormFromExcel = buildCandidateTechnicalFormFromExcel(row);
+      const professionIntelligence = getCandidateProfessionIntelligence(rowProfession);
+      const hasTechnicalData = hasCandidateTechnicalExcelData(technicalFormFromExcel);
+      const shouldCreateTechnicalProfile = Boolean(professionIntelligence.enabled && hasTechnicalData);
+      const technicalScores = shouldCreateTechnicalProfile
+        ? buildCandidateTechnicalScores(technicalFormFromExcel, professionIntelligence)
+        : null;
+
+      payloads.push(
+        withCompany({
+          candidate_name: candidateName,
+          request_line_id: null,
+          profession: rowProfession,
+          nationality: rowNationality,
+          gender: rowGender,
+          project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || "Agency Talent Pool",
+          request_no: "",
+          agency: agencyName,
+          passport_no: passportNo,
+          mobile: getRowValue(row, ["Mobile", "Phone", "mobile", "الجوال"]),
+          email: getRowValue(row, ["Email", "email", "البريد"]),
+          notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
+          status: autoStatus,
+          medical_status: rawMedicalStatus || "Pending",
+          medical_date: medicalDate,
+          ticket_no: ticketNo,
+          flight_date: flightDate,
+          arrival_date: arrivalDate,
+          contract_status: contractStatus,
+          technical_profile_required: Boolean(professionIntelligence.enabled),
+          technical_profile_completed: technicalScores?.profile_completed || false,
+          ai_score: technicalScores?.final_ai_score || 0,
+          ai_priority: technicalScores?.interview_priority || (professionIntelligence.enabled ? "Pending Review" : ""),
+          ai_recommendation: technicalScores?.ai_recommendation || "",
+          ai_reasoning: technicalScores?.ai_reasoning || "",
+          final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
+          updated_at: new Date().toISOString(),
+        })
+      );
+
+      candidateTechnicalImportMeta.push(
+        shouldCreateTechnicalProfile
+          ? {
+              profession: rowProfession || "",
+              intelligence: professionIntelligence,
+              profileForm: technicalFormFromExcel,
+              scores: technicalScores,
+            }
+          : null
+      );
+    }
+
+    if (!payloads.length) {
+      return alert(
+        "No candidates uploaded.\n\n" +
+          (errors.length ? "Reasons:\n" + errors.slice(0, 15).join("\n") : "")
+      );
+    }
+
+    const { data: insertedCandidates, error: insertError } = await supabase
+      .from("candidates")
+      .insert(payloads)
+      .select("id, candidate_name, passport_no, profession, request_no");
+
+    if (insertError) return alert(insertError.message);
+
+    const technicalProfilePayloads = (insertedCandidates || [])
+      .map((candidate, index) => buildCandidateTechnicalProfilePayload(candidate, candidateTechnicalImportMeta[index]))
+      .filter(Boolean);
+
+    if (technicalProfilePayloads.length > 0) {
+      const { error: profileImportError } = await supabase
+        .from("candidate_technical_profiles")
+        .insert(technicalProfilePayloads);
+
+      if (profileImportError) {
+        console.warn("candidate_technical_profiles import failed", profileImportError.message);
+        alert(`Candidates uploaded, but Candidate Intelligence profiles failed: ${profileImportError.message}`);
+      }
+    }
+
+    await supabase.from("notification_events").insert([withCompany({
+      user_id: null,
+      agency_id: currentUser?.agency_id || null,
+      type: "AGENCY_TALENT_POOL_UPLOAD",
+      title: "Agency Talent Pool Upload",
+      message: `${payloads.length} candidate(s) uploaded by ${agencyName} without request assignment.`,
+      priority: "Medium",
+      status: "Unread",
+      related_table: "candidates",
+      related_id: "",
+      data: {
+        agency: agencyName,
+        upload_mode: "Agency Talent Pool",
+        uploaded_count: payloads.length,
+        intelligence_profiles: technicalProfilePayloads.length,
+      },
+    })]);
+
+    await loadCandidates();
+    await loadCandidateTechnicalProfiles();
+    setActivePage("Office Portal");
+
+    alert(
+      `Uploaded to Agency Talent Pool: ${payloads.length} candidate(s)\n` +
+        `Candidate Intelligence profiles: ${technicalProfilePayloads.length}\n` +
+        `Skipped / Errors: ${errors.length}` +
+        (errors.length ? `\n\nFirst errors:\n${errors.slice(0, 10).join("\n")}` : "")
+    );
+  }
+
   async function handleExcelUpload(event) {
   const file = event.target.files?.[0];
   event.target.value = "";
@@ -6026,8 +6218,12 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       requestNo = await inferCandidateUploadRequestNo(rows);
     }
 
+    if (!requestNo && currentRole === "Agency") {
+      return await handleAgencyTalentPoolExcelUpload(rows);
+    }
+
     if (!requestNo) {
-      return alert("Unable to identify the assigned request automatically. Please upload from an assigned request/authorization card or select Request No once in the form. The office does not need to fill Request No inside Excel.");
+      return alert("Please select Request No once before uploading, or upload from an assigned request/authorization card.");
     }
 
     const { data: requestData, error: requestError } = await supabase
