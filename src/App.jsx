@@ -726,6 +726,21 @@ const [marketplaceDeals, setMarketplaceDeals] = useState([]);
 const [marketplaceInvoices, setMarketplaceInvoices] = useState([]);
 const [marketplaceCollections, setMarketplaceCollections] = useState([]);
 const [notifications, setNotifications] = useState([]);
+const [emailLogs, setEmailLogs] = useState([]);
+const [emailTemplates, setEmailTemplates] = useState([]);
+const [notificationFilter, setNotificationFilter] = useState("All");
+const [notificationSearch, setNotificationSearch] = useState("");
+const [emailTemplateEditingId, setEmailTemplateEditingId] = useState(null);
+const emptyEmailTemplate = {
+  template_key: "",
+  template_name: "",
+  category: "Recruitment",
+  language: "Bilingual",
+  subject: "",
+  body: "",
+  is_active: true,
+};
+const [emailTemplateForm, setEmailTemplateForm] = useState(emptyEmailTemplate);
 const [notificationOpen, setNotificationOpen] = useState(false);
 const [marketplaceRequestEditingId, setMarketplaceRequestEditingId] = useState(null);
 
@@ -1809,6 +1824,8 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadMarketplaceInvoices(),
       loadMarketplaceCollections(),
       loadNotifications(),
+      loadEmailLogs(),
+      loadEmailTemplates(),
       loadPlatformClients(),
       loadSubscriptionInvoices(),
       loadSupportTickets(),
@@ -2067,6 +2084,272 @@ setProfessions(allProfessions);
     setNotifications(rows);
   }
 
+
+  async function loadEmailLogs() {
+    if (!currentCompanyId) return setEmailLogs([]);
+
+    try {
+      const { data, error } = await supabase
+        .from("email_logs")
+        .select("*")
+        .eq("company_id", currentCompanyId)
+        .order("created_at", { ascending: false })
+        .limit(100);
+
+      if (error) {
+        console.warn("email_logs:", error.message);
+        setEmailLogs([]);
+        return;
+      }
+
+      setEmailLogs(data || []);
+    } catch (error) {
+      console.warn("email_logs load failed", error?.message || error);
+      setEmailLogs([]);
+    }
+  }
+
+  async function loadEmailTemplates() {
+    if (!currentCompanyId) return setEmailTemplates([]);
+
+    try {
+      const { data, error } = await supabase
+        .from("email_templates")
+        .select("*")
+        .eq("company_id", currentCompanyId)
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      if (error) {
+        console.warn("email_templates:", error.message);
+        setEmailTemplates([]);
+        return;
+      }
+
+      setEmailTemplates(data || []);
+    } catch (error) {
+      console.warn("email_templates load failed", error?.message || error);
+      setEmailTemplates([]);
+    }
+  }
+
+  function getDefaultEmailTemplates() {
+    return [
+      {
+        template_key: "offer_email",
+        template_name: "Offer Email",
+        category: "Recruitment",
+        language: "Bilingual",
+        subject: "Job Offer - {{candidate_name}} / عرض وظيفي",
+        body: "Dear {{candidate_name}},\n\nWe are pleased to share your job offer for {{profession}} under request {{request_no}}.\n\nعزيزي/عزيزتي {{candidate_name}}،\nيسعدنا إرسال العرض الوظيفي الخاص بوظيفة {{profession}} للطلب رقم {{request_no}}.\n\nBest regards,\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "interview_invitation",
+        template_name: "Interview Invitation",
+        category: "Recruitment",
+        language: "Bilingual",
+        subject: "Interview Invitation - {{candidate_name}}",
+        body: "Dear {{candidate_name}},\n\nYou are invited for an interview for {{profession}}. Please confirm your availability.\n\nندعوكم لحضور مقابلة لوظيفة {{profession}}، نأمل تأكيد الموعد.\n\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "missing_documents",
+        template_name: "Missing Documents Reminder",
+        category: "Operations",
+        language: "Bilingual",
+        subject: "Missing Documents Reminder - {{candidate_name}}",
+        body: "Dear {{candidate_name}},\n\nPlease complete the missing documents to continue the recruitment process.\n\nنأمل استكمال المستندات الناقصة لاستكمال إجراءات التوظيف.\n\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "agency_update_reminder",
+        template_name: "Agency Update Reminder",
+        category: "Agency",
+        language: "Bilingual",
+        subject: "Candidate Update Required - {{agency_name}}",
+        body: "Dear {{agency_name}},\n\nPlease update candidate status for request {{request_no}} in VisaFlow Office Portal.\n\nنأمل تحديث حالة المرشحين للطلب رقم {{request_no}} من خلال بوابة المكتب.\n\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "authorization_delay",
+        template_name: "Authorization Delay Alert",
+        category: "Visa",
+        language: "Bilingual",
+        subject: "Authorization Delay Alert - {{authorization_no}}",
+        body: "Authorization {{authorization_no}} requires follow-up. Please review agency and candidate progress.\n\nيوجد تأخير في التفويض رقم {{authorization_no}}، نأمل المتابعة والمراجعة.\n\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "arrival_confirmation",
+        template_name: "Candidate Arrival Confirmation",
+        category: "Mobilization",
+        language: "Bilingual",
+        subject: "Arrival Confirmation - {{candidate_name}}",
+        body: "Candidate {{candidate_name}} has arrived in KSA for request {{request_no}}.\n\nتم تأكيد وصول المرشح {{candidate_name}} إلى المملكة للطلب رقم {{request_no}}.\n\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "subscription_expiry",
+        template_name: "Subscription Expiry Reminder",
+        category: "Platform",
+        language: "Bilingual",
+        subject: "VisaFlow Subscription Expiry Reminder",
+        body: "Your VisaFlow subscription is approaching expiry. Please renew to avoid service interruption.\n\nاشتراككم في VisaFlow قارب على الانتهاء، نأمل التجديد لتجنب توقف الخدمة.\n\nVisaFlow KSA",
+        is_active: true,
+      },
+      {
+        template_key: "support_ticket_reply",
+        template_name: "Support Ticket Reply",
+        category: "Support",
+        language: "Bilingual",
+        subject: "Support Ticket Update - {{ticket_no}}",
+        body: "Dear Customer,\n\nYour support ticket {{ticket_no}} has been updated.\n\nتم تحديث تذكرة الدعم رقم {{ticket_no}}.\n\nVisaFlow Support",
+        is_active: true,
+      },
+    ];
+  }
+
+  async function seedDefaultEmailTemplates() {
+    if (!canManageUsers && !canManagePlatform) return alert("You do not have permission to manage email templates.");
+
+    const rows = getDefaultEmailTemplates().map((template) =>
+      withCompany({
+        ...template,
+        updated_at: new Date().toISOString(),
+      })
+    );
+
+    const { error } = await supabase
+      .from("email_templates")
+      .upsert(rows, { onConflict: "company_id,template_key" });
+
+    if (error) return alert(error.message);
+    await loadEmailTemplates();
+    alert("Default email templates are ready.");
+  }
+
+  function editEmailTemplate(item) {
+    setEmailTemplateEditingId(item.id);
+    setEmailTemplateForm({
+      template_key: item.template_key || "",
+      template_name: item.template_name || "",
+      category: item.category || "Recruitment",
+      language: item.language || "Bilingual",
+      subject: item.subject || "",
+      body: item.body || "",
+      is_active: item.is_active !== false,
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function resetEmailTemplateForm() {
+    setEmailTemplateEditingId(null);
+    setEmailTemplateForm(emptyEmailTemplate);
+  }
+
+  async function saveEmailTemplate() {
+    if (!canManageUsers && !canManagePlatform) return alert("You do not have permission to manage email templates.");
+    if (!emailTemplateForm.template_key || !emailTemplateForm.template_name || !emailTemplateForm.subject) {
+      return alert("Template key, name and subject are required.");
+    }
+
+    const payload = {
+      template_key: emailTemplateForm.template_key,
+      template_name: emailTemplateForm.template_name,
+      category: emailTemplateForm.category || "Recruitment",
+      language: emailTemplateForm.language || "Bilingual",
+      subject: emailTemplateForm.subject || "",
+      body: emailTemplateForm.body || "",
+      is_active: emailTemplateForm.is_active !== false,
+      updated_at: new Date().toISOString(),
+    };
+
+    const result = emailTemplateEditingId
+      ? await supabase
+          .from("email_templates")
+          .update(payload)
+          .eq("id", emailTemplateEditingId)
+          .eq("company_id", currentCompanyId)
+      : await supabase.from("email_templates").insert([withCompany(payload)]);
+
+    if (result.error) return alert(result.error.message);
+
+    resetEmailTemplateForm();
+    await loadEmailTemplates();
+    alert(emailTemplateEditingId ? "Email template updated" : "Email template saved");
+  }
+
+  async function deleteEmailTemplate(id) {
+    if (!canManageUsers && !canManagePlatform) return alert("You do not have permission to delete email templates.");
+    if (!window.confirm("Delete this email template?")) return;
+
+    const { error } = await supabase
+      .from("email_templates")
+      .delete()
+      .eq("id", id)
+      .eq("company_id", currentCompanyId);
+
+    if (error) return alert(error.message);
+    await loadEmailTemplates();
+  }
+
+  function renderTemplatePreview(text = "") {
+    return String(text || "")
+      .replaceAll("{{candidate_name}}", "Sample Candidate")
+      .replaceAll("{{profession}}", "Cleaner")
+      .replaceAll("{{request_no}}", "REQ-2026-0001")
+      .replaceAll("{{agency_name}}", "Sample Agency")
+      .replaceAll("{{authorization_no}}", "AUTH-0001")
+      .replaceAll("{{ticket_no}}", "TKT-0001");
+  }
+
+  async function sendEmailTemplateTest(item) {
+    const testEmail = currentUser?.email || emailSettingsForm.test_email || getCompanyEmailRecipient("notifications");
+    if (!testEmail) return alert("No test email found. Add your user email or test recipient in Email Settings.");
+
+    try {
+      await dispatchVisaFlowEmail({
+        type: "EMAIL_TEMPLATE_TEST",
+        to: testEmail,
+        subject: renderTemplatePreview(item.subject || "VisaFlow Template Test"),
+        text: renderTemplatePreview(item.body || item.subject || "VisaFlow Template Test"),
+        html: buildEmailCardHtml(renderTemplatePreview(item.subject || "VisaFlow Template Test"), [renderTemplatePreview(item.body || "VisaFlow Template Test")]),
+        payload: {
+          template_key: item.template_key,
+          template_name: item.template_name,
+        },
+      });
+      await loadEmailLogs();
+      alert("Template test email sent.");
+    } catch (error) {
+      await loadEmailLogs();
+      alert(`Template test failed: ${error.message}`);
+    }
+  }
+
+  async function recordEmailLog(row = {}) {
+    try {
+      await supabase.from("email_logs").insert([
+        withCompany({
+          type: row.type || "EMAIL",
+          status: row.status || "Pending",
+          to_email: Array.isArray(row.to_email) ? row.to_email.join(", ") : row.to_email || "",
+          cc_email: row.cc_email || "",
+          bcc_email: row.bcc_email || "",
+          subject: row.subject || "",
+          provider: row.provider || companyEmailSettings?.provider || "VisaFlow Dispatcher",
+          message_id: row.message_id || "",
+          error_message: row.error_message || "",
+          payload: row.payload || {},
+          created_at: new Date().toISOString(),
+        }),
+      ]);
+    } catch (error) {
+      console.warn("email log insert failed", error?.message || error);
+    }
+  }
+
   function getNotificationTitle(item) {
     const payload = item?.data || {};
     return item?.title || payload.title || item?.type || item?.status || "Notification";
@@ -2089,6 +2372,29 @@ setProfessions(allProfessions);
   }
 
   const unreadNotificationsCount = notifications.filter((item) => getNotificationStatus(item) !== "Read").length;
+
+  const notificationTypes = useMemo(() => {
+    const types = notifications.map((item) => item.type || item.status || "Notification").filter(Boolean);
+    return ["All", ...Array.from(new Set(types))];
+  }, [notifications]);
+
+  const filteredNotificationRows = useMemo(() => {
+    const keyword = normalize(notificationSearch);
+    return notifications.filter((item) => {
+      const type = item.type || item.status || "Notification";
+      const matchesType = notificationFilter === "All" || type === notificationFilter;
+      const searchable = [type, getNotificationTitle(item), getNotificationMessage(item), item.priority, item.status]
+        .join(" ")
+        .toLowerCase();
+      return matchesType && (!keyword || searchable.includes(keyword));
+    });
+  }, [notifications, notificationFilter, notificationSearch]);
+
+  const emailLogStats = useMemo(() => ({
+    sent: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "sent").length,
+    failed: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "failed").length,
+    skipped: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "skipped").length,
+  }), [emailLogs]);
 
   async function markNotificationRead(id) {
     if (!id) return;
@@ -3418,34 +3724,72 @@ function buildEmailCardHtml(title, lines = [], actionText = "") {
 
 async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, replyTo, payload = {} }) {
   const recipients = Array.isArray(to) ? to.filter(Boolean) : String(to || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean);
+
   if (!recipients.length) {
+    await recordEmailLog({
+      type,
+      status: "Skipped",
+      to_email: "",
+      cc_email: cc || "",
+      bcc_email: bcc || "",
+      subject,
+      error_message: "Recipient email is missing",
+      payload,
+    });
     console.warn("Email skipped because recipient is missing", { type, subject, payload });
     return { ok: false, skipped: true, reason: "Recipient email is missing" };
   }
 
-  const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
-    body: {
-      type,
-      company_id: currentCompanyId,
-      to: recipients,
-      cc,
-      bcc,
-      subject,
-      text,
-      html,
-      replyTo,
-      payload: {
-        ...payload,
+  try {
+    const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
+      body: {
+        type,
         company_id: currentCompanyId,
-        triggered_by: currentUser?.email || currentUser?.name || "VisaFlow User",
-        triggered_at: new Date().toISOString(),
+        to: recipients,
+        cc,
+        bcc,
+        subject,
+        text,
+        html,
+        replyTo,
+        payload: {
+          ...payload,
+          company_id: currentCompanyId,
+          triggered_by: currentUser?.email || currentUser?.name || "VisaFlow User",
+          triggered_at: new Date().toISOString(),
+        },
       },
-    },
-  });
+    });
 
-  if (error) throw new Error(error.message || "Email dispatcher failed");
-  if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
-  return data || { ok: true };
+    if (error) throw new Error(error.message || "Email dispatcher failed");
+    if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
+
+    await recordEmailLog({
+      type,
+      status: "Sent",
+      to_email: recipients.join(", "),
+      cc_email: cc || "",
+      bcc_email: bcc || "",
+      subject,
+      provider: data?.provider || companyEmailSettings?.provider || "VisaFlow Dispatcher",
+      message_id: data?.messageId || data?.id || "",
+      payload,
+    });
+
+    return data || { ok: true };
+  } catch (error) {
+    await recordEmailLog({
+      type,
+      status: "Failed",
+      to_email: recipients.join(", "),
+      cc_email: cc || "",
+      bcc_email: bcc || "",
+      subject,
+      error_message: error.message || "Email dispatcher failed",
+      payload,
+    });
+    throw error;
+  }
 }
 
 async function saveCompanyEmailSettings({ silent = false } = {}) {
@@ -11217,10 +11561,25 @@ if (!currentUser) {
 
         {activePage === "Notifications" && (
           <>
+            <div className="dashboard-grid">
+              <Stat title="Total Notifications" value={notifications.length} />
+              <Stat title="Unread" value={unreadNotificationsCount} className={unreadNotificationsCount ? "warning" : "passed"} />
+              <Stat title="Emails Sent" value={emailLogStats.sent} className="passed" />
+              <Stat title="Email Failures" value={emailLogStats.failed} className={emailLogStats.failed ? "danger" : "passed"} />
+              <Stat title="Active Templates" value={emailTemplates.filter((item) => item.is_active !== false).length} />
+              <Stat title="Skipped Emails" value={emailLogStats.skipped} className={emailLogStats.skipped ? "warning" : "passed"} />
+            </div>
+
             <TableCard title="Notification Center">
               <div className="actions-line" style={{ marginBottom: "14px" }}>
-                <button className="new-btn" onClick={loadNotifications}>Refresh Notifications</button>
+                <button className="new-btn" onClick={() => { loadNotifications(); loadEmailLogs(); loadEmailTemplates(); }}>Refresh Center</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
+                <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>
+              </div>
+
+              <div className="form-grid" style={{ marginBottom: "14px" }}>
+                <Input placeholder="Search notifications" value={notificationSearch} onChange={setNotificationSearch} />
+                <Select placeholder="Notification Type" value={notificationFilter} options={notificationTypes} onChange={setNotificationFilter} />
               </div>
 
               <div className="table-wrap">
@@ -11237,14 +11596,14 @@ if (!currentUser) {
                     </tr>
                   </thead>
                   <tbody>
-                    {notifications.length === 0 ? (
+                    {filteredNotificationRows.length === 0 ? (
                       <tr>
                         <td colSpan="7" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
                           No notifications found.
                         </td>
                       </tr>
                     ) : (
-                      notifications.map((item) => (
+                      filteredNotificationRows.map((item) => (
                         <tr key={item.id}>
                           <td>
                             <span className={getNotificationStatus(item) === "Read" ? "badge passed" : "badge warning"}>
@@ -11267,6 +11626,120 @@ if (!currentUser) {
                         </tr>
                       ))
                     )}
+                  </tbody>
+                </table>
+              </div>
+            </TableCard>
+
+            <TableCard title="Email Logs">
+              <div className="actions-line" style={{ marginBottom: "14px" }}>
+                <button className="light-btn" onClick={loadEmailLogs}>Reload Email Logs</button>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Type</th>
+                      <th>To</th>
+                      <th>Subject</th>
+                      <th>Provider</th>
+                      <th>Message ID</th>
+                      <th>Error</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {emailLogs.length === 0 ? (
+                      <tr><td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No email logs found yet.</td></tr>
+                    ) : emailLogs.map((item) => (
+                      <tr key={item.id}>
+                        <td><Badge value={item.status || "-"} /></td>
+                        <td>{item.type || "-"}</td>
+                        <td>{item.to_email || item.to || "-"}</td>
+                        <td>{item.subject || "-"}</td>
+                        <td>{item.provider || "-"}</td>
+                        <td>{item.message_id || "-"}</td>
+                        <td style={{ maxWidth: "320px", whiteSpace: "normal" }}>{item.error_message || "-"}</td>
+                        <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TableCard>
+
+            <FormCard title={emailTemplateEditingId ? "Edit Email Template" : "Email Templates"}>
+              <div className="actions-line" style={{ marginBottom: "14px" }}>
+                <button className="new-btn" onClick={seedDefaultEmailTemplates}>Seed Default Templates</button>
+                <button className="light-btn" onClick={resetEmailTemplateForm}>New Template</button>
+              </div>
+
+              <div className="form-grid">
+                <Input placeholder="Template Key" value={emailTemplateForm.template_key} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, template_key: v }))} />
+                <Input placeholder="Template Name" value={emailTemplateForm.template_name} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, template_name: v }))} />
+                <Select placeholder="Category" value={emailTemplateForm.category} options={["Recruitment", "Operations", "Agency", "Visa", "Mobilization", "Platform", "Support"]} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, category: v }))} />
+                <Select placeholder="Language" value={emailTemplateForm.language} options={["Arabic", "English", "Bilingual"]} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, language: v }))} />
+                <Input placeholder="Subject" value={emailTemplateForm.subject} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, subject: v }))} />
+              </div>
+
+              <textarea
+                className="text-area"
+                style={{ width: "100%", minHeight: "140px", marginTop: "12px" }}
+                placeholder="Template body. You can use {{candidate_name}}, {{profession}}, {{request_no}}, {{agency_name}}, {{authorization_no}}, {{ticket_no}}"
+                value={emailTemplateForm.body}
+                onChange={(e) => setEmailTemplateForm((p) => ({ ...p, body: e.target.value }))}
+              />
+
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={emailTemplateForm.is_active !== false}
+                  onChange={(e) => setEmailTemplateForm((p) => ({ ...p, is_active: e.target.checked }))}
+                />
+                Active template
+              </label>
+
+              <div className="actions-line">
+                <button className="save-btn" onClick={saveEmailTemplate}>{emailTemplateEditingId ? "Update Template" : "Save Template"}</button>
+                {emailTemplateEditingId && <button className="light-btn" onClick={resetEmailTemplateForm}>Cancel</button>}
+              </div>
+            </FormCard>
+
+            <TableCard title="Saved Email Templates">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Key</th>
+                      <th>Name</th>
+                      <th>Category</th>
+                      <th>Language</th>
+                      <th>Subject</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {emailTemplates.length === 0 ? (
+                      <tr><td colSpan="7" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No templates found. Click Seed Default Templates.</td></tr>
+                    ) : emailTemplates.map((item) => (
+                      <tr key={item.id}>
+                        <td><Badge value={item.is_active === false ? "Inactive" : "Active"} /></td>
+                        <td>{item.template_key}</td>
+                        <td>{item.template_name}</td>
+                        <td>{item.category}</td>
+                        <td>{item.language}</td>
+                        <td>{item.subject}</td>
+                        <td>
+                          <div className="row-actions">
+                            <button className="light-btn" onClick={() => editEmailTemplate(item)}>Edit</button>
+                            <button className="light-btn" onClick={() => sendEmailTemplateTest(item)}>Test</button>
+                            <button className="danger-btn" onClick={() => deleteEmailTemplate(item.id)}>Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
