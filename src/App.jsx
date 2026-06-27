@@ -416,6 +416,38 @@ arrival_date: "",
   notes: "",
 };
 
+
+const emptyCandidateTechnicalProfile = {
+  qualification: "",
+  major: "",
+  specialization: "",
+  institution_id: "",
+  institution_name: "",
+  institution_country: "",
+  institution_type: "",
+  graduation_year: "",
+  years_experience: "",
+  last_job_title: "",
+  last_employer: "",
+  last_project_type: "",
+  project_experience: "",
+  technical_skills: "",
+  tools_and_equipment: "",
+  software_skills: "",
+  certifications: "",
+  licenses: "",
+  english_level: "Not Specified",
+  arabic_level: "Not Specified",
+  gulf_experience: false,
+  saudi_experience: false,
+  final_company_decision: "Pending Company Review",
+  decision_notes: "",
+};
+
+const CANDIDATE_INTELLIGENCE_LEVELS = ["None", "Basic", "Technical", "Professional", "Advanced"];
+const COMPANY_DECISION_OPTIONS = ["Pending Company Review", "Shortlisted", "Interview", "Rejected", "On Hold", "Accepted"];
+const LANGUAGE_LEVEL_OPTIONS = ["Not Specified", "Basic", "Intermediate", "Good", "Very Good", "Excellent", "Native"];
+
 const emptyOfficeBulkUpdate = {
   status: "",
   medical_status: "",
@@ -865,6 +897,9 @@ const [userForm, setUserForm] = useState({
   agency_name: "",
 });
 const [candidates, setCandidates] = useState([]);
+const [candidateTechnicalProfiles, setCandidateTechnicalProfiles] = useState([]);
+const [educationInstitutions, setEducationInstitutions] = useState([]);
+const [candidateTechnicalForm, setCandidateTechnicalForm] = useState(emptyCandidateTechnicalProfile);
 const [interviews, setInterviews] = useState([]);
 const [mobilizations, setMobilizations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
@@ -1875,6 +1910,221 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     setter((prev) => ({ ...prev, [field]: value }));
   }
 
+  function getProfessionLabel(profession = {}) {
+    return profession?.name_en ? `${profession.name_ar || ""} - ${profession.name_en}`.trim() : profession?.name_ar || profession?.name_en || "";
+  }
+
+  function findProfessionRecord(value) {
+    const target = normalizeMatchText(value);
+    if (!target) return null;
+
+    return professions.find((profession) => {
+      const label = normalizeMatchText(getProfessionLabel(profession));
+      const nameAr = normalizeMatchText(profession.name_ar);
+      const nameEn = normalizeMatchText(profession.name_en);
+      return (
+        label === target ||
+        nameAr === target ||
+        nameEn === target ||
+        (nameAr && target.includes(nameAr)) ||
+        (nameEn && target.includes(nameEn))
+      );
+    }) || null;
+  }
+
+  function getCandidateProfessionIntelligence(professionValue) {
+    const profession = findProfessionRecord(professionValue);
+    const level = profession?.candidate_intelligence_level || (profession?.technical_profile_required ? "Technical" : "None");
+    const enabled = profession?.technical_profile_required === true && level !== "None";
+
+    return {
+      profession,
+      enabled,
+      level: enabled ? level : "None",
+      category: profession?.profession_category || "General",
+      profile: profession?.candidate_intelligence_profile || "None",
+      notes: profession?.intelligence_notes || "",
+    };
+  }
+
+  const selectedCandidateIntelligence = getCandidateProfessionIntelligence(candidateForm.profession);
+
+  function getInstitutionById(id) {
+    if (!id) return null;
+    return educationInstitutions.find((item) => String(item.id || "") === String(id || "")) || null;
+  }
+
+  function getLanguageScore(level) {
+    const value = String(level || "Not Specified");
+    if (value === "Native") return 100;
+    if (value === "Excellent") return 95;
+    if (value === "Very Good") return 85;
+    if (value === "Good") return 75;
+    if (value === "Intermediate") return 60;
+    if (value === "Basic") return 40;
+    return 20;
+  }
+
+  function getExperienceScore(years, level) {
+    const value = Number(years || 0);
+
+    if (level === "Advanced") {
+      if (value >= 8) return 100;
+      if (value >= 5) return 85;
+      if (value >= 3) return 70;
+      if (value >= 1) return 45;
+      return 20;
+    }
+
+    if (level === "Professional") {
+      if (value >= 6) return 95;
+      if (value >= 4) return 85;
+      if (value >= 2) return 70;
+      if (value >= 1) return 50;
+      return 25;
+    }
+
+    if (level === "Technical") {
+      if (value >= 5) return 95;
+      if (value >= 3) return 85;
+      if (value >= 1) return 65;
+      return 30;
+    }
+
+    if (level === "Basic") {
+      if (value >= 3) return 85;
+      if (value >= 1) return 65;
+      return 35;
+    }
+
+    return 0;
+  }
+
+  function buildCandidateTechnicalScores(profileForm = candidateTechnicalForm, intelligence = selectedCandidateIntelligence) {
+    if (!intelligence?.enabled) {
+      return {
+        profile_completed: false,
+        missing_fields: [],
+        education_score: 0,
+        experience_score: 0,
+        skills_score: 0,
+        certification_score: 0,
+        language_score: 0,
+        data_completeness_score: 0,
+        final_ai_score: 0,
+        interview_priority: "Pending Review",
+        ai_recommendation: "",
+        ai_reasoning: "",
+      };
+    }
+
+    const level = intelligence.level || "Technical";
+    const institution = getInstitutionById(profileForm.institution_id);
+    const missingFields = [];
+
+    const requiredFields = level === "Basic"
+      ? [
+          ["qualification", "Qualification"],
+          ["years_experience", "Years Experience"],
+          ["last_job_title", "Last Job Title"],
+        ]
+      : [
+          ["qualification", "Qualification"],
+          ["major", "Major / Specialization"],
+          ["institution_id", "Education Institution"],
+          ["years_experience", "Years Experience"],
+          ["technical_skills", "Skills"],
+        ];
+
+    requiredFields.forEach(([field, label]) => {
+      if (!String(profileForm[field] || "").trim()) missingFields.push(label);
+    });
+
+    const baseInstitutionScore = institution
+      ? Math.round((Number(institution.reputation_score || 40) + Number(institution.technical_strength_score || 40)) / 2)
+      : 40;
+
+    const recognition = String(institution?.recognition_status || "Needs Review");
+    const educationScore = recognition === "Blacklisted"
+      ? 0
+      : Math.max(0, Math.min(100, baseInstitutionScore + (recognition === "Verified" ? 8 : recognition === "Recommended" ? 5 : 0)));
+
+    const experienceScore = getExperienceScore(profileForm.years_experience, level);
+
+    const skillsText = [
+      profileForm.technical_skills,
+      profileForm.tools_and_equipment,
+      profileForm.software_skills,
+      profileForm.project_experience,
+    ].join(" ");
+    const skillsParts = skillsText.split(/[,،\n]/).map((item) => item.trim()).filter(Boolean);
+    const skillsScore = Math.min(100, 35 + skillsParts.length * 10 + (profileForm.project_experience ? 15 : 0));
+
+    const certParts = String(profileForm.certifications || "").split(/[,،\n]/).map((item) => item.trim()).filter(Boolean);
+    const licenseParts = String(profileForm.licenses || "").split(/[,،\n]/).map((item) => item.trim()).filter(Boolean);
+    const certificationScore = Math.min(100, certParts.length * 18 + licenseParts.length * 20 + (profileForm.gulf_experience ? 10 : 0) + (profileForm.saudi_experience ? 10 : 0));
+
+    const languageScore = Math.round((getLanguageScore(profileForm.english_level) + getLanguageScore(profileForm.arabic_level)) / 2);
+    const dataCompletenessScore = Math.max(0, Math.round(((requiredFields.length - missingFields.length) / requiredFields.length) * 100));
+
+    const finalScore = Math.round((
+      experienceScore * 0.30 +
+      skillsScore * 0.25 +
+      educationScore * 0.15 +
+      certificationScore * 0.10 +
+      languageScore * 0.10 +
+      dataCompletenessScore * 0.10
+    ) * 100) / 100;
+
+    const interviewPriority =
+      finalScore >= 85 ? "Interview First" :
+      finalScore >= 70 ? "Shortlist" :
+      finalScore >= 55 ? "Review" :
+      "Low Priority";
+
+    const aiRecommendation =
+      interviewPriority === "Interview First" ? "Strong profile. Recommended for early interview review." :
+      interviewPriority === "Shortlist" ? "Good profile. Recommended for shortlist subject to company review." :
+      interviewPriority === "Review" ? "Partial fit. Needs recruiter or technical panel review." :
+      "Weak or incomplete profile. Review missing data before deciding.";
+
+    const aiReasoning = [
+      `Level: ${level}`,
+      `Education: ${educationScore}`,
+      `Experience: ${experienceScore}`,
+      `Skills: ${skillsScore}`,
+      `Certificates: ${certificationScore}`,
+      `Language: ${languageScore}`,
+      missingFields.length ? `Missing: ${missingFields.join(", ")}` : "Profile data is complete",
+      "Recommendation only — final decision belongs to the company.",
+    ].join(" | ");
+
+    return {
+      profile_completed: missingFields.length === 0,
+      missing_fields: missingFields,
+      education_score: educationScore,
+      experience_score: experienceScore,
+      skills_score: skillsScore,
+      certification_score: certificationScore,
+      language_score: languageScore,
+      data_completeness_score: dataCompletenessScore,
+      final_ai_score: finalScore,
+      interview_priority: interviewPriority,
+      ai_recommendation: aiRecommendation,
+      ai_reasoning: aiReasoning,
+    };
+  }
+
+  function getCandidateTechnicalProfile(candidateId) {
+    return candidateTechnicalProfiles.find((profile) => String(profile.candidate_id || "") === String(candidateId || "")) || null;
+  }
+
+  function getCandidateIntelligenceBadge(candidate) {
+    if (!candidate?.technical_profile_required) return "-";
+    return candidate.ai_priority || "Pending Review";
+  }
+
+
   async function loadAll() {
     setLoading(true);
     await Promise.all([
@@ -1891,7 +2141,9 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadAgencyPenalties(),
        loadCountries(),
   loadProfessions(),
+      loadEducationInstitutions(),
       loadCandidates(),
+      loadCandidateTechnicalProfiles(),
       loadInterviews(),
       loadUsers(),
       loadCompanies(),
@@ -2154,6 +2406,53 @@ const loadProfessions = async () => {
 console.log("professions total", allProfessions.length);
 setProfessions(allProfessions);
 };
+  async function loadEducationInstitutions() {
+    let query = supabase
+      .from("education_institutions")
+      .select("*")
+      .eq("is_active", true)
+      .order("country", { ascending: true })
+      .order("institution_name", { ascending: true })
+      .range(0, 5000);
+
+    if (currentCompanyId) {
+      query = query.or(`company_id.is.null,company_id.eq.${currentCompanyId}`);
+    } else {
+      query = query.is("company_id", null);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn("education_institutions:", error.message);
+      setEducationInstitutions([]);
+      return;
+    }
+
+    setEducationInstitutions(data || []);
+  }
+
+  async function loadCandidateTechnicalProfiles() {
+    if (!currentCompanyId || currentRole === "Agency") {
+      setCandidateTechnicalProfiles([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("candidate_technical_profiles")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("candidate_technical_profiles:", error.message);
+      setCandidateTechnicalProfiles([]);
+      return;
+    }
+
+    setCandidateTechnicalProfiles(data || []);
+  }
+
   const loadCandidates = () => loadTable("candidates", setCandidates);
   const loadInterviews = () => loadTable("interviews", setInterviews);
   const loadMobilizations = () => loadTable("mobilizations", setMobilizations);
@@ -4814,6 +5113,7 @@ async function deleteAgreement(id) {
 
   function resetCandidateForm() {
     setCandidateForm(emptyCandidate);
+    setCandidateTechnicalForm(emptyCandidateTechnicalProfile);
     setCandidateEditingId(null);
   }
 
@@ -5017,6 +5317,19 @@ arrival_date: item.arrival_date || "",
       status: item.status || "New",
       notes: item.notes || "",
     });
+
+    const technicalProfile = getCandidateTechnicalProfile(item.id);
+    setCandidateTechnicalForm({
+      ...emptyCandidateTechnicalProfile,
+      ...(technicalProfile || {}),
+      graduation_year: technicalProfile?.graduation_year || "",
+      years_experience: technicalProfile?.years_experience || "",
+      institution_id: technicalProfile?.institution_id || "",
+      gulf_experience: Boolean(technicalProfile?.gulf_experience),
+      saudi_experience: Boolean(technicalProfile?.saudi_experience),
+      final_company_decision: technicalProfile?.final_company_decision || item.final_company_decision || "Pending Company Review",
+      decision_notes: technicalProfile?.decision_notes || "",
+    });
    if (activePage !== "Office Portal") {
     setActivePage("Candidates");
   }
@@ -5101,6 +5414,10 @@ if (saudiCandidateFlow && candidateForm.joining_date) {
 }
 const shouldGenerateContract = ["Selected", "Interview Passed"].includes(autoStatus);
 
+const effectiveCandidateProfession = matchedCandidateLine?.profession || candidateForm.profession || "";
+const professionIntelligence = getCandidateProfessionIntelligence(effectiveCandidateProfession);
+const candidateScoreResult = buildCandidateTechnicalScores(candidateTechnicalForm, professionIntelligence);
+
 const payload = {
   ...candidateForm,
   request_line_id: matchedCandidateLine?.id || candidateForm.request_line_id || null,
@@ -5130,13 +5447,104 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
   contract_status: shouldGenerateContract ? (candidateForm.contract_status || "Sent") : (candidateForm.contract_status || "Pending"),
   contract_url: shouldGenerateContract ? (candidateForm.contract_url || generateContractUrl(candidateForm)) : (candidateForm.contract_url || ""),
   status_history: JSON.stringify(statusHistory),
+  technical_profile_required: professionIntelligence.enabled,
+  technical_profile_completed: professionIntelligence.enabled ? candidateScoreResult.profile_completed : false,
+  ai_score: professionIntelligence.enabled ? candidateScoreResult.final_ai_score : 0,
+  ai_priority: professionIntelligence.enabled ? candidateScoreResult.interview_priority : "Pending Review",
+  ai_recommendation: professionIntelligence.enabled ? candidateScoreResult.ai_recommendation : "",
+  ai_reasoning: professionIntelligence.enabled ? candidateScoreResult.ai_reasoning : "",
+  final_company_decision: professionIntelligence.enabled
+    ? (candidateTechnicalForm.final_company_decision || "Pending Company Review")
+    : "Pending Company Review",
   updated_at: new Date().toISOString(),
 };
     const result = candidateEditingId
-      ? await supabase.from("candidates").update(payload).eq("id", candidateEditingId)
-      : await supabase.from("candidates").insert([withCompany(payload)]);
+      ? await supabase
+          .from("candidates")
+          .update(payload)
+          .eq("id", candidateEditingId)
+          .eq("company_id", currentCompanyId)
+          .select("id")
+          .single()
+      : await supabase
+          .from("candidates")
+          .insert([withCompany(payload)])
+          .select("id")
+          .single();
 
     if (result.error) return alert(result.error.message);
+
+    const savedCandidateId = candidateEditingId || result.data?.id;
+
+    if (savedCandidateId) {
+      if (professionIntelligence.enabled) {
+        const selectedInstitution = getInstitutionById(candidateTechnicalForm.institution_id);
+        const requestLineId = matchedCandidateLine?.id && Number.isFinite(Number(matchedCandidateLine.id))
+          ? Number(matchedCandidateLine.id)
+          : null;
+
+        const technicalPayload = withCompany({
+          candidate_id: savedCandidateId,
+          request_no: candidateForm.request_no || "",
+          request_line_id: requestLineId,
+          qualification: candidateTechnicalForm.qualification || "",
+          major: candidateTechnicalForm.major || "",
+          specialization: candidateTechnicalForm.specialization || "",
+          institution_id: candidateTechnicalForm.institution_id || null,
+          institution_name: selectedInstitution?.institution_name || candidateTechnicalForm.institution_name || "",
+          institution_country: selectedInstitution?.country || candidateTechnicalForm.institution_country || "",
+          institution_type: selectedInstitution?.institution_type || candidateTechnicalForm.institution_type || "",
+          graduation_year: candidateTechnicalForm.graduation_year ? Number(candidateTechnicalForm.graduation_year) : null,
+          years_experience: Number(candidateTechnicalForm.years_experience || 0),
+          last_job_title: candidateTechnicalForm.last_job_title || "",
+          last_employer: candidateTechnicalForm.last_employer || "",
+          last_project_type: candidateTechnicalForm.last_project_type || "",
+          project_experience: candidateTechnicalForm.project_experience || "",
+          technical_skills: candidateTechnicalForm.technical_skills || "",
+          tools_and_equipment: candidateTechnicalForm.tools_and_equipment || "",
+          software_skills: candidateTechnicalForm.software_skills || "",
+          certifications: candidateTechnicalForm.certifications || "",
+          licenses: candidateTechnicalForm.licenses || "",
+          english_level: candidateTechnicalForm.english_level || "Not Specified",
+          arabic_level: candidateTechnicalForm.arabic_level || "Not Specified",
+          gulf_experience: Boolean(candidateTechnicalForm.gulf_experience),
+          saudi_experience: Boolean(candidateTechnicalForm.saudi_experience),
+          profile_completed: candidateScoreResult.profile_completed,
+          missing_fields: candidateScoreResult.missing_fields,
+          education_score: candidateScoreResult.education_score,
+          experience_score: candidateScoreResult.experience_score,
+          skills_score: candidateScoreResult.skills_score,
+          certification_score: candidateScoreResult.certification_score,
+          language_score: candidateScoreResult.language_score,
+          data_completeness_score: candidateScoreResult.data_completeness_score,
+          final_ai_score: candidateScoreResult.final_ai_score,
+          interview_priority: candidateScoreResult.interview_priority,
+          ai_recommendation: candidateScoreResult.ai_recommendation,
+          ai_reasoning: candidateScoreResult.ai_reasoning,
+          final_company_decision: candidateTechnicalForm.final_company_decision || "Pending Company Review",
+          decision_by: candidateTechnicalForm.final_company_decision && candidateTechnicalForm.final_company_decision !== "Pending Company Review"
+            ? currentUser?.name || currentUser?.email || ""
+            : null,
+          decision_at: candidateTechnicalForm.final_company_decision && candidateTechnicalForm.final_company_decision !== "Pending Company Review"
+            ? new Date().toISOString()
+            : null,
+          decision_notes: candidateTechnicalForm.decision_notes || "",
+          updated_at: new Date().toISOString(),
+        });
+
+        const profileResult = await supabase
+          .from("candidate_technical_profiles")
+          .upsert([technicalPayload], { onConflict: "candidate_id" });
+
+        if (profileResult.error) return alert(`Candidate Intelligence: ${profileResult.error.message}`);
+      } else if (candidateEditingId) {
+        await supabase
+          .from("candidate_technical_profiles")
+          .delete()
+          .eq("candidate_id", savedCandidateId)
+          .eq("company_id", currentCompanyId);
+      }
+    }
 
     await supabase.from("notification_events").insert([withCompany({
       user_id: null,
@@ -5147,7 +5555,7 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
       priority: "Medium",
       status: "Unread",
       related_table: "candidates",
-      related_id: String(candidateEditingId || result.data?.[0]?.id || ""),
+      related_id: String(savedCandidateId || ""),
       data: {
         candidate_name: candidateForm.candidate_name,
         request_no: candidateForm.request_no,
@@ -5194,6 +5602,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     alert(candidateEditingId ? "Candidate updated successfully" : "Candidate saved successfully");
     resetCandidateForm();
     loadCandidates();
+    loadCandidateTechnicalProfiles();
   }
 
   async function deleteCandidate(id) {
@@ -5202,6 +5611,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     const { error } = await supabase.from("candidates").delete().eq("id", id);
     if (error) return alert(error.message);
     loadCandidates();
+    loadCandidateTechnicalProfiles();
     loadRequests();
   }
 
@@ -15353,6 +15763,87 @@ Save Authorization
   onChange={(v) => updateForm(setCandidateForm, "arrival_date", v)}
 />
               </div>
+
+              {selectedCandidateIntelligence.enabled && (
+                <div style={{ marginTop: "14px", padding: "16px", border: "1px solid #dbeafe", borderRadius: "16px", background: "#f8fbff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
+                    <div>
+                      <h3 style={{ margin: 0 }}>Candidate Intelligence</h3>
+                      <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "13px" }}>
+                        Decision support only — final hiring, interview, acceptance or rejection decision belongs to the company.
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                      <Badge value={selectedCandidateIntelligence.level} />
+                      <Badge value={selectedCandidateIntelligence.profile} />
+                    </div>
+                  </div>
+
+                  <div className="form-grid">
+                    <Input placeholder="Qualification" value={candidateTechnicalForm.qualification} onChange={(v) => updateForm(setCandidateTechnicalForm, "qualification", v)} />
+                    <Input placeholder="Major / Specialization" value={candidateTechnicalForm.major} onChange={(v) => updateForm(setCandidateTechnicalForm, "major", v)} />
+                    <Input placeholder="Specialization Details" value={candidateTechnicalForm.specialization} onChange={(v) => updateForm(setCandidateTechnicalForm, "specialization", v)} />
+                    <Select
+                      value={candidateTechnicalForm.institution_id}
+                      onChange={(v) => {
+                        const institution = getInstitutionById(v);
+                        setCandidateTechnicalForm((prev) => ({
+                          ...prev,
+                          institution_id: v,
+                          institution_name: institution?.institution_name || "",
+                          institution_country: institution?.country || "",
+                          institution_type: institution?.institution_type || "",
+                        }));
+                      }}
+                      placeholder="Search university / institute..."
+                      searchable
+                      options={educationInstitutions.map((institution) => ({
+                        value: institution.id,
+                        label: `${institution.institution_name} - ${institution.country} (${institution.institution_type || "Institution"})`,
+                      }))}
+                    />
+                    <Input type="number" placeholder="Graduation Year" value={candidateTechnicalForm.graduation_year} onChange={(v) => updateForm(setCandidateTechnicalForm, "graduation_year", v)} />
+                    <Input type="number" placeholder="Years Experience" value={candidateTechnicalForm.years_experience} onChange={(v) => updateForm(setCandidateTechnicalForm, "years_experience", v)} />
+                    <Input placeholder="Last Job Title" value={candidateTechnicalForm.last_job_title} onChange={(v) => updateForm(setCandidateTechnicalForm, "last_job_title", v)} />
+                    <Input placeholder="Last Employer" value={candidateTechnicalForm.last_employer} onChange={(v) => updateForm(setCandidateTechnicalForm, "last_employer", v)} />
+                    <Input placeholder="Last Project Type" value={candidateTechnicalForm.last_project_type} onChange={(v) => updateForm(setCandidateTechnicalForm, "last_project_type", v)} />
+                    <Select value={candidateTechnicalForm.english_level} onChange={(v) => updateForm(setCandidateTechnicalForm, "english_level", v)} placeholder="English Level" options={LANGUAGE_LEVEL_OPTIONS} />
+                    <Select value={candidateTechnicalForm.arabic_level} onChange={(v) => updateForm(setCandidateTechnicalForm, "arabic_level", v)} placeholder="Arabic Level" options={LANGUAGE_LEVEL_OPTIONS} />
+                    <Select value={candidateTechnicalForm.final_company_decision} onChange={(v) => updateForm(setCandidateTechnicalForm, "final_company_decision", v)} placeholder="Final Company Decision" options={COMPANY_DECISION_OPTIONS} />
+                  </div>
+
+                  <div className="form-grid" style={{ marginTop: "10px" }}>
+                    <label style={{ display: "flex", gap: "8px", alignItems: "center", fontWeight: 800 }}>
+                      <input type="checkbox" checked={Boolean(candidateTechnicalForm.gulf_experience)} onChange={(e) => updateForm(setCandidateTechnicalForm, "gulf_experience", e.target.checked)} />
+                      Gulf Experience
+                    </label>
+                    <label style={{ display: "flex", gap: "8px", alignItems: "center", fontWeight: 800 }}>
+                      <input type="checkbox" checked={Boolean(candidateTechnicalForm.saudi_experience)} onChange={(e) => updateForm(setCandidateTechnicalForm, "saudi_experience", e.target.checked)} />
+                      Saudi Experience
+                    </label>
+                  </div>
+
+                  <textarea rows="2" placeholder="Technical Skills / المهارات الفنية" value={candidateTechnicalForm.technical_skills} onChange={(e) => updateForm(setCandidateTechnicalForm, "technical_skills", e.target.value)} />
+                  <textarea rows="2" placeholder="Tools & Equipment / المعدات والأدوات" value={candidateTechnicalForm.tools_and_equipment} onChange={(e) => updateForm(setCandidateTechnicalForm, "tools_and_equipment", e.target.value)} />
+                  <textarea rows="2" placeholder="Software Skills / البرامج والأنظمة" value={candidateTechnicalForm.software_skills} onChange={(e) => updateForm(setCandidateTechnicalForm, "software_skills", e.target.value)} />
+                  <textarea rows="2" placeholder="Certifications / الشهادات" value={candidateTechnicalForm.certifications} onChange={(e) => updateForm(setCandidateTechnicalForm, "certifications", e.target.value)} />
+                  <textarea rows="2" placeholder="Licenses / الرخص المهنية" value={candidateTechnicalForm.licenses} onChange={(e) => updateForm(setCandidateTechnicalForm, "licenses", e.target.value)} />
+                  <textarea rows="2" placeholder="Project Experience / خبرة المشاريع" value={candidateTechnicalForm.project_experience} onChange={(e) => updateForm(setCandidateTechnicalForm, "project_experience", e.target.value)} />
+                  <textarea rows="2" placeholder="Decision Notes / ملاحظات قرار الشركة" value={candidateTechnicalForm.decision_notes} onChange={(e) => updateForm(setCandidateTechnicalForm, "decision_notes", e.target.value)} />
+
+                  {(() => {
+                    const score = buildCandidateTechnicalScores(candidateTechnicalForm, selectedCandidateIntelligence);
+                    return (
+                      <div className="stats-grid" style={{ marginTop: "12px" }}>
+                        <div className="stat-card"><h3>AI Score</h3><strong>{score.final_ai_score}%</strong></div>
+                        <div className="stat-card"><h3>Priority</h3><strong>{score.interview_priority}</strong></div>
+                        <div className="stat-card"><h3>Profile Status</h3><strong>{score.profile_completed ? "Complete" : "Missing Data"}</strong><p>{score.missing_fields.join(", ") || "Ready for review"}</p></div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
               <textarea rows="3" placeholder="Notes" value={candidateForm.notes} onChange={(e) => updateForm(setCandidateForm, "notes", e.target.value)} />
               <div className="actions-line"><button className="save-btn" onClick={saveCandidate}>{candidateEditingId ? "Update Candidate" : "Save Candidate"}</button><button className="light-btn" onClick={resetCandidateForm}>Clear</button></div>
             </FormCard>
@@ -15375,6 +15866,9 @@ Save Authorization
 <th>Ticket No</th>
 <th>Flight Date</th>
 <th>Arrival Date</th>
+<th>AI Score</th>
+<th>AI Priority</th>
+<th>Company Decision</th>
 <th>Total Cost</th>
 <th>Contract</th>
 <th>Source</th>
@@ -15402,6 +15896,9 @@ Save Authorization
 <td>{item.ticket_no}</td>
 <td>{item.flight_date}</td>
 <td>{item.arrival_date}</td>
+<td>{item.technical_profile_required ? `${Number(item.ai_score || 0)}%` : "-"}</td>
+<td><Badge value={getCandidateIntelligenceBadge(item)} /></td>
+<td><Badge value={item.final_company_decision || "Pending Company Review"} /></td>
 <td>{getCandidateTotalCost(item).toLocaleString()}</td>
 <td><Badge value={item.contract_status || "Pending"} /></td>
 <td>{item.source || "-"}</td>
