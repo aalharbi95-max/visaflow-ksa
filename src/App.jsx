@@ -2090,77 +2090,6 @@ setProfessions(allProfessions);
 
   const unreadNotificationsCount = notifications.filter((item) => getNotificationStatus(item) !== "Read").length;
 
-  const effectiveEmailTemplates = useMemo(() => {
-    const templateMap = new Map();
-    EMAIL_TEMPLATE_DEFAULTS.forEach((template) => templateMap.set(template.template_key, { ...template, is_default: true }));
-    emailTemplates.forEach((template) => templateMap.set(template.template_key, { ...template, is_default: false }));
-    return Array.from(templateMap.values());
-  }, [emailTemplates]);
-
-  const notificationTypes = useMemo(() => {
-    const types = Array.from(new Set(notifications.map((item) => item.type || item.status || "Notification").filter(Boolean)));
-    return ["All", ...types.sort()];
-  }, [notifications]);
-
-  const filteredNotifications = useMemo(() => {
-    const keyword = normalize(notificationSearch);
-
-    return notifications.filter((item) => {
-      const type = item.type || item.status || "Notification";
-      const priority = item.priority || item.data?.priority || "Medium";
-      const status = getNotificationStatus(item);
-      const text = normalize([
-        type,
-        priority,
-        status,
-        getNotificationTitle(item),
-        getNotificationMessage(item),
-        item.related_table,
-        item.related_id,
-      ].join(" "));
-
-      const matchesFilter =
-        notificationFilter === "All" ||
-        notificationFilter === type ||
-        notificationFilter === status;
-
-      const matchesPriority = notificationPriorityFilter === "All" || notificationPriorityFilter === priority;
-      const matchesSearch = !keyword || text.includes(keyword);
-
-      return matchesFilter && matchesPriority && matchesSearch;
-    });
-  }, [notifications, notificationFilter, notificationPriorityFilter, notificationSearch]);
-
-  const notificationCenterStats = useMemo(() => {
-    const highPriority = notifications.filter((item) => (item.priority || item.data?.priority) === "High").length;
-    const failedEmails = emailLogs.filter((item) => getEmailLogStatus(item) === "Failed").length;
-    const sentEmails = emailLogs.filter((item) => getEmailLogStatus(item) === "Sent").length;
-
-    return {
-      total: notifications.length,
-      unread: unreadNotificationsCount,
-      highPriority,
-      sentEmails,
-      failedEmails,
-      activeTemplates: effectiveEmailTemplates.filter((item) => item.is_active !== false).length,
-    };
-  }, [notifications, unreadNotificationsCount, emailLogs, effectiveEmailTemplates]);
-
-  const notificationTypeBreakdown = useMemo(() => {
-    return Object.values(
-      notifications.reduce((acc, item) => {
-        const key = item.type || item.status || "Notification";
-        if (!acc[key]) acc[key] = { type: key, total: 0, unread: 0, high: 0 };
-        acc[key].total += 1;
-        if (getNotificationStatus(item) !== "Read") acc[key].unread += 1;
-        if ((item.priority || item.data?.priority) === "High") acc[key].high += 1;
-        return acc;
-      }, {})
-    ).sort((a, b) => b.total - a.total);
-  }, [notifications]);
-
-  const recentEmailLogs = useMemo(() => emailLogs.slice(0, 25), [emailLogs]);
-
   async function markNotificationRead(id) {
     if (!id) return;
     const { error } = await supabase
@@ -2189,7 +2118,6 @@ setProfessions(allProfessions);
     await loadNotifications();
   }
 
-
   async function deleteNotification(id) {
     if (!id) return;
     if (!window.confirm("Delete this notification?")) return;
@@ -2203,191 +2131,6 @@ setProfessions(allProfessions);
     if (error) return alert(error.message);
     await loadNotifications();
   }
-
-  async function loadEmailLogs() {
-    if (!currentCompanyId || currentRole === "Agency") {
-      setEmailLogs([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("email_logs")
-      .select("*")
-      .eq("company_id", currentCompanyId)
-      .order("created_at", { ascending: false })
-      .limit(200);
-
-    if (error) {
-      console.warn("email_logs:", error.message);
-      setEmailLogs([]);
-      return;
-    }
-
-    setEmailLogs(data || []);
-  }
-
-  async function loadEmailTemplates() {
-    if (!currentCompanyId || currentRole === "Agency") {
-      setEmailTemplates([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("email_templates")
-      .select("*")
-      .eq("company_id", currentCompanyId)
-      .order("category", { ascending: true })
-      .order("template_name", { ascending: true })
-      .limit(200);
-
-    if (error) {
-      console.warn("email_templates:", error.message);
-      setEmailTemplates([]);
-      return;
-    }
-
-    setEmailTemplates(data || []);
-  }
-
-  function resetEmailTemplateForm() {
-    setEmailTemplateForm(emptyEmailTemplate);
-    setEmailTemplateEditingId(null);
-    setEmailTemplateMessage("");
-  }
-
-  function editEmailTemplate(item) {
-    setEmailTemplateEditingId(item.id || null);
-    setEmailTemplateForm({
-      template_key: item.template_key || "",
-      template_name: item.template_name || "",
-      category: item.category || "Recruitment",
-      language: item.language || "Bilingual",
-      subject: item.subject || "",
-      body: item.body || "",
-      is_active: item.is_active !== false,
-    });
-    setEmailTemplateMessage("");
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  async function saveEmailTemplate() {
-    if (!canManageUsers) return alert("You do not have permission to manage email templates.");
-    if (!emailTemplateForm.template_key || !emailTemplateForm.template_name || !emailTemplateForm.subject) {
-      return alert("Template key, name and subject are required.");
-    }
-
-    const payload = {
-      template_key: String(emailTemplateForm.template_key || "").trim().toUpperCase().replace(/\s+/g, "_"),
-      template_name: emailTemplateForm.template_name || "",
-      category: emailTemplateForm.category || "Recruitment",
-      language: emailTemplateForm.language || "Bilingual",
-      subject: emailTemplateForm.subject || "",
-      body: emailTemplateForm.body || "",
-      is_active: Boolean(emailTemplateForm.is_active),
-      updated_at: new Date().toISOString(),
-    };
-
-    const result = emailTemplateEditingId
-      ? await supabase
-          .from("email_templates")
-          .update(payload)
-          .eq("id", emailTemplateEditingId)
-          .eq("company_id", currentCompanyId)
-      : await supabase
-          .from("email_templates")
-          .insert([withCompany({ ...payload, created_at: new Date().toISOString() })]);
-
-    if (result.error) return alert(result.error.message);
-
-    const successMessage = emailTemplateEditingId ? "Template updated successfully." : "Template saved successfully.";
-    resetEmailTemplateForm();
-    setEmailTemplateMessage(successMessage);
-    await loadEmailTemplates();
-  }
-
-  async function deleteEmailTemplate(id) {
-    if (!canManageUsers) return alert("You do not have permission to delete email templates.");
-    if (!id) return alert("Default templates cannot be deleted until they are saved to the database.");
-    if (!window.confirm("Delete this email template?")) return;
-
-    const { error } = await supabase
-      .from("email_templates")
-      .delete()
-      .eq("id", id)
-      .eq("company_id", currentCompanyId);
-
-    if (error) return alert(error.message);
-    await loadEmailTemplates();
-  }
-
-  async function seedDefaultEmailTemplates() {
-    if (!canManageUsers) return alert("You do not have permission to seed email templates.");
-    const existingKeys = new Set(emailTemplates.map((item) => String(item.template_key || "").toUpperCase()));
-    const payload = EMAIL_TEMPLATE_DEFAULTS
-      .filter((item) => !existingKeys.has(String(item.template_key || "").toUpperCase()))
-      .map((item) => withCompany({ ...item, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }));
-
-    if (!payload.length) return alert("Default email templates already exist.");
-
-    const { error } = await supabase.from("email_templates").insert(payload);
-    if (error) return alert(error.message);
-
-    await loadEmailTemplates();
-    alert(`Default email templates added: ${payload.length}`);
-  }
-
-  function renderEmailTemplateText(templateText = "", values = {}) {
-    return String(templateText || "").replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key) => {
-      const value = values[key] ?? values[String(key).toLowerCase()] ?? "";
-      return value === null || value === undefined ? "" : String(value);
-    });
-  }
-
-  function getEmailLogStatus(item) {
-    const status = String(item?.status || item?.delivery_status || "").toLowerCase();
-    if (["sent", "success", "delivered"].includes(status)) return "Sent";
-    if (["failed", "error", "bounced"].includes(status)) return "Failed";
-    if (["skipped"].includes(status)) return "Skipped";
-    return item?.status || "Pending";
-  }
-
-  async function sendTemplateTestEmail(template) {
-    const recipient = window.prompt("Enter test recipient email:", emailSettingsForm.test_email || currentUser?.email || "");
-    if (!recipient) return;
-
-    const sampleValues = {
-      candidate_name: "Sample Candidate",
-      profession: "Cleaner",
-      request_no: "REQ-2026-0001",
-      interview_date: new Date().toISOString().slice(0, 10),
-      agency_name: agencies[0]?.name || "Sample Agency",
-      authorization_no: "AUTH-0001",
-      company_name: companies[0]?.name || "Client Company",
-      subscription_end: companies[0]?.subscription_end || new Date().toISOString().slice(0, 10),
-      ticket_no: "TKT-0001",
-      status: "Open",
-    };
-
-    const subject = renderEmailTemplateText(template.subject, sampleValues);
-    const body = renderEmailTemplateText(template.body, sampleValues);
-
-    try {
-      await dispatchVisaFlowEmail({
-        type: `TEMPLATE_TEST_${template.template_key || "EMAIL"}`,
-        to: recipient,
-        subject,
-        text: body,
-        html: buildEmailCardHtml(subject, body.split("\n").filter(Boolean), "Template test generated from VisaFlow Notification Center."),
-        payload: { template_key: template.template_key || "", test: true },
-      });
-      await loadEmailLogs();
-      alert("Template test email sent successfully.");
-    } catch (error) {
-      await loadEmailLogs();
-      alert(`Template test email failed: ${error.message}`);
-    }
-  }
-
 useEffect(() => {
   if (!currentUser) return;
 
@@ -3673,88 +3416,36 @@ function buildEmailCardHtml(title, lines = [], actionText = "") {
   </div>`;
 }
 
-async function logEmailDispatch(row = {}) {
-  const payload = {
-    company_id: row.company_id || currentCompanyId || null,
-    type: row.type || "EMAIL",
-    status: row.status || "Pending",
-    to_email: Array.isArray(row.to_email) ? row.to_email.join(", ") : row.to_email || "",
-    cc_email: Array.isArray(row.cc_email) ? row.cc_email.join(", ") : row.cc_email || "",
-    bcc_email: Array.isArray(row.bcc_email) ? row.bcc_email.join(", ") : row.bcc_email || "",
-    subject: row.subject || "",
-    provider: row.provider || companyEmailSettings?.provider || "VisaFlow Dispatcher",
-    message_id: row.message_id || "",
-    error_message: row.error_message || "",
-    related_table: row.related_table || row.payload?.related_table || "",
-    related_id: row.related_id || row.payload?.related_id || "",
-    payload: row.payload || {},
-    created_at: new Date().toISOString(),
-  };
-
-  try {
-    await supabase.from("email_logs").insert([payload]);
-  } catch (error) {
-    console.warn("email_logs insert failed", error?.message || error);
-  }
-}
-
 async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, replyTo, payload = {} }) {
   const recipients = Array.isArray(to) ? to.filter(Boolean) : String(to || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean);
-
-  const logBase = {
-    company_id: currentCompanyId,
-    type: type || "EMAIL",
-    to_email: recipients,
-    cc_email: cc || "",
-    bcc_email: bcc || "",
-    subject: subject || "",
-    payload,
-  };
-
   if (!recipients.length) {
     console.warn("Email skipped because recipient is missing", { type, subject, payload });
-    await logEmailDispatch({ ...logBase, status: "Skipped", error_message: "Recipient email is missing" });
     return { ok: false, skipped: true, reason: "Recipient email is missing" };
   }
 
-  try {
-    const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
-      body: {
-        type,
+  const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
+    body: {
+      type,
+      company_id: currentCompanyId,
+      to: recipients,
+      cc,
+      bcc,
+      subject,
+      text,
+      html,
+      replyTo,
+      payload: {
+        ...payload,
         company_id: currentCompanyId,
-        to: recipients,
-        cc,
-        bcc,
-        subject,
-        text,
-        html,
-        replyTo,
-        payload: {
-          ...payload,
-          company_id: currentCompanyId,
-          triggered_by: currentUser?.email || currentUser?.name || "VisaFlow User",
-          triggered_at: new Date().toISOString(),
-        },
+        triggered_by: currentUser?.email || currentUser?.name || "VisaFlow User",
+        triggered_at: new Date().toISOString(),
       },
-    });
+    },
+  });
 
-    if (error) throw new Error(error.message || "Email dispatcher failed");
-    if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
-
-    await logEmailDispatch({
-      ...logBase,
-      status: "Sent",
-      provider: data?.provider || "VisaFlow Dispatcher",
-      message_id: data?.messageId || data?.id || "",
-    });
-
-    return data || { ok: true };
-  } catch (error) {
-    await logEmailDispatch({ ...logBase, status: "Failed", error_message: error.message || "Email dispatcher failed" });
-    throw error;
-  } finally {
-    if (activePage === "Notifications") loadEmailLogs();
-  }
+  if (error) throw new Error(error.message || "Email dispatcher failed");
+  if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
+  return data || { ok: true };
 }
 
 async function saveCompanyEmailSettings({ silent = false } = {}) {
@@ -11080,7 +10771,7 @@ function exportCurrentPage() {
   if (activePage === "Employees") return exportRowsToExcel(employees, "VisaFlow_Employees", "Employees");
   if (activePage === "Demobilization") return exportRowsToExcel(demobilizations, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
-  if (activePage === "Notifications") return exportRowsToExcel(filteredNotifications, "VisaFlow_Notifications", "Notifications");
+  if (activePage === "Notifications") return exportRowsToExcel(notifications, "VisaFlow_Notifications", "Notifications");
   if (activePage === "Reports") return exportRowsToExcel(reports.requestLifecycle, "VisaFlow_Recruitment_Pipeline", "Pipeline");
   if (activePage === "AI Report Studio") return exportAIReportStudio();
   if (activePage === "Platform Dashboard") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Clients", "Platform Clients");
@@ -11526,55 +11217,13 @@ if (!currentUser) {
 
         {activePage === "Notifications" && (
           <>
-            <div className="dashboard-grid">
-              <Stat title="Total Notifications" value={notificationCenterStats.total} />
-              <Stat title="Unread" value={notificationCenterStats.unread} className={notificationCenterStats.unread ? "warning" : "passed"} />
-              <Stat title="High Priority" value={notificationCenterStats.highPriority} className={notificationCenterStats.highPriority ? "danger" : "passed"} />
-              <Stat title="Emails Sent" value={notificationCenterStats.sentEmails} className="passed" />
-              <Stat title="Email Failures" value={notificationCenterStats.failedEmails} className={notificationCenterStats.failedEmails ? "danger" : "passed"} />
-              <Stat title="Active Templates" value={notificationCenterStats.activeTemplates} />
-            </div>
-
             <TableCard title="Notification Center">
-              <div className="actions-line" style={{ marginBottom: "14px", flexWrap: "wrap" }}>
-                <Input placeholder="Search notifications" value={notificationSearch} onChange={setNotificationSearch} />
-                <Select placeholder="Filter" value={notificationFilter} options={[...notificationTypes, "Unread", "Read"]} onChange={setNotificationFilter} />
-                <Select placeholder="Priority" value={notificationPriorityFilter} options={["All", "High", "Medium", "Low"]} onChange={setNotificationPriorityFilter} />
-                <button className="new-btn" onClick={() => { loadNotifications(); loadEmailLogs(); loadEmailTemplates(); }}>Refresh Center</button>
+              <div className="actions-line" style={{ marginBottom: "14px" }}>
+                <button className="new-btn" onClick={loadNotifications}>Refresh Notifications</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
               </div>
 
-              <div className="grid" style={{ alignItems: "stretch" }}>
-                <div style={{ padding: "18px", borderRadius: "22px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                  <h3 style={{ marginTop: 0 }}>Notification Intelligence</h3>
-                  <p className="muted-text">Live operational alerts grouped by type. Use this as the daily action queue for recruitment, visas, agencies and platform support.</p>
-                  <div style={{ display: "grid", gap: "10px" }}>
-                    {notificationTypeBreakdown.length === 0 ? (
-                      <span className="muted-text">No notification types yet.</span>
-                    ) : (
-                      notificationTypeBreakdown.slice(0, 6).map((row) => (
-                        <div key={row.type} style={{ display: "flex", justifyContent: "space-between", gap: "12px", padding: "10px 12px", borderRadius: "14px", background: "#fff", border: "1px solid #e5e7eb" }}>
-                          <b>{row.type}</b>
-                          <span>{row.total} total · {row.unread} unread · {row.high} high</span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                <div style={{ padding: "18px", borderRadius: "22px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                  <h3 style={{ marginTop: 0 }}>Automation Status</h3>
-                  <p className="muted-text">Email dispatcher activity is logged automatically after each send attempt. Failed or skipped messages appear here for follow-up.</p>
-                  <div style={{ display: "grid", gap: "10px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}><b>Dispatcher</b><span>{companyEmailSettings?.is_verified ? "Company Email Verified" : "VisaFlow Default / Not Verified"}</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}><b>Mode</b><span>{companyEmailSettings?.mode || "platform"}</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}><b>From</b><span>{companyEmailSettings?.from_email || "admin@visaflowksa.com"}</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}><b>Last Test</b><span>{companyEmailSettings?.last_test_status || "Not Tested"}</span></div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="table-wrap" style={{ marginTop: "18px" }}>
+              <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
@@ -11583,31 +11232,29 @@ if (!currentUser) {
                       <th>Type</th>
                       <th>Title</th>
                       <th>Message</th>
-                      <th>Related</th>
                       <th>Created</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredNotifications.length === 0 ? (
+                    {notifications.length === 0 ? (
                       <tr>
-                        <td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
+                        <td colSpan="7" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
                           No notifications found.
                         </td>
                       </tr>
                     ) : (
-                      filteredNotifications.map((item) => (
+                      notifications.map((item) => (
                         <tr key={item.id}>
                           <td>
                             <span className={getNotificationStatus(item) === "Read" ? "badge passed" : "badge warning"}>
                               {getNotificationStatus(item)}
                             </span>
                           </td>
-                          <td><Badge value={item.priority || item.data?.priority || "Medium"} /></td>
+                          <td>{item.priority || item.data?.priority || "Medium"}</td>
                           <td>{item.type || item.status || "Notification"}</td>
                           <td>{getNotificationTitle(item)}</td>
                           <td style={{ maxWidth: "520px", whiteSpace: "normal" }}>{getNotificationMessage(item)}</td>
-                          <td>{[item.related_table, item.related_id].filter(Boolean).join(" / ") || "-"}</td>
                           <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
                           <td>
                             <div className="row-actions">
@@ -11624,131 +11271,6 @@ if (!currentUser) {
                 </table>
               </div>
             </TableCard>
-
-            <TableCard title="Email Logs">
-              <div className="actions-line" style={{ marginBottom: "14px" }}>
-                <button className="new-btn" onClick={loadEmailLogs}>Refresh Email Logs</button>
-                <button className="light-btn" onClick={() => exportRowsToExcel(emailLogs, "VisaFlow_Email_Logs", "Email Logs")}>Export Email Logs</button>
-              </div>
-
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Type</th>
-                      <th>To</th>
-                      <th>Subject</th>
-                      <th>Provider</th>
-                      <th>Message ID</th>
-                      <th>Error</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentEmailLogs.length === 0 ? (
-                      <tr><td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No email logs yet. Logs will appear after the next email send attempt.</td></tr>
-                    ) : (
-                      recentEmailLogs.map((item) => {
-                        const status = getEmailLogStatus(item);
-                        return (
-                          <tr key={item.id || `${item.subject}-${item.created_at}`}>
-                            <td><span className={status === "Sent" ? "badge passed" : status === "Failed" ? "badge danger" : "badge warning"}>{status}</span></td>
-                            <td>{item.type || "EMAIL"}</td>
-                            <td style={{ maxWidth: "260px", whiteSpace: "normal" }}>{item.to_email || item.to || "-"}</td>
-                            <td style={{ maxWidth: "360px", whiteSpace: "normal" }}>{item.subject || "-"}</td>
-                            <td>{item.provider || "-"}</td>
-                            <td>{item.message_id || "-"}</td>
-                            <td style={{ maxWidth: "320px", whiteSpace: "normal", color: status === "Failed" ? "#b91c1c" : "#64748b" }}>{item.error_message || item.error || "-"}</td>
-                            <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </TableCard>
-
-            {canManageUsers && (
-              <>
-                <FormCard title={emailTemplateEditingId ? "Edit Email Template" : "Email Template Builder"}>
-                  <p className="muted-text">
-                    Templates support variables like {"{{candidate_name}}"}, {"{{request_no}}"}, {"{{agency_name}}"}, {"{{authorization_no}}"}, {"{{company_name}}"}.
-                  </p>
-
-                  <div className="form-grid">
-                    <Input placeholder="Template Key" value={emailTemplateForm.template_key || ""} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, template_key: v }))} />
-                    <Input placeholder="Template Name" value={emailTemplateForm.template_name || ""} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, template_name: v }))} />
-                    <Select placeholder="Category" value={emailTemplateForm.category || "Recruitment"} options={EMAIL_TEMPLATE_CATEGORIES} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, category: v }))} />
-                    <Select placeholder="Language" value={emailTemplateForm.language || "Bilingual"} options={EMAIL_TEMPLATE_LANGUAGES} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, language: v }))} />
-                    <Input placeholder="Subject" value={emailTemplateForm.subject || ""} onChange={(v) => setEmailTemplateForm((p) => ({ ...p, subject: v }))} />
-                  </div>
-
-                  <textarea
-                    value={emailTemplateForm.body || ""}
-                    onChange={(e) => setEmailTemplateForm((p) => ({ ...p, body: e.target.value }))}
-                    placeholder="Email body"
-                    rows={9}
-                    style={{ width: "100%", marginTop: "12px", borderRadius: "16px", border: "1px solid #e2e8f0", padding: "14px", fontFamily: "inherit", lineHeight: 1.7 }}
-                  />
-
-                  <label className="check-row">
-                    <input
-                      type="checkbox"
-                      checked={emailTemplateForm.is_active !== false}
-                      onChange={(e) => setEmailTemplateForm((p) => ({ ...p, is_active: e.target.checked }))}
-                    />
-                    Active template
-                  </label>
-
-                  {emailTemplateMessage && <p className="muted-text">{emailTemplateMessage}</p>}
-
-                  <div className="actions-line">
-                    <button className="save-btn" onClick={saveEmailTemplate}>{emailTemplateEditingId ? "Update Template" : "Save Template"}</button>
-                    <button className="light-btn" onClick={resetEmailTemplateForm}>Clear</button>
-                    <button className="light-btn" onClick={seedDefaultEmailTemplates}>Seed Default Templates</button>
-                  </div>
-                </FormCard>
-
-                <TableCard title="Email Templates Library">
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Template</th>
-                          <th>Category</th>
-                          <th>Language</th>
-                          <th>Subject</th>
-                          <th>Status</th>
-                          <th>Source</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {effectiveEmailTemplates.map((item) => (
-                          <tr key={item.id || item.template_key}>
-                            <td><b>{item.template_name}</b><br /><span className="muted-text">{item.template_key}</span></td>
-                            <td>{item.category || "-"}</td>
-                            <td>{item.language || "Bilingual"}</td>
-                            <td style={{ maxWidth: "360px", whiteSpace: "normal" }}>{item.subject}</td>
-                            <td><Badge value={item.is_active === false ? "Inactive" : "Active"} /></td>
-                            <td>{item.is_default ? "Default" : "Database"}</td>
-                            <td>
-                              <div className="row-actions">
-                                <button className="light-btn" onClick={() => editEmailTemplate(item)}>Edit</button>
-                                <button className="light-btn" onClick={() => sendTemplateTestEmail(item)}>Test</button>
-                                {!item.is_default && <button className="danger-btn" onClick={() => deleteEmailTemplate(item.id)}>Delete</button>}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </TableCard>
-              </>
-            )}
           </>
         )}
 
