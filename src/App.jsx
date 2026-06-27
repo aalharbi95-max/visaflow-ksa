@@ -1349,7 +1349,7 @@ const canDeleteRequest = currentRole === "Admin";
 const canManageVisas = ["Admin", "Visa Team"].includes(currentRole);
 const canManageCandidates = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageOfficePortal = ["Admin", "Agency"].includes(currentRole);
-const canViewCandidateIntelligence = currentRole !== "Agency" && ["Admin", "Recruitment Manager", "Recruitment Officer", "CEO"].includes(currentRole);
+const canViewCandidateIntelligence = Boolean(currentUser) && currentRole !== "Agency" && !isCurrentPlatformUser;
 const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePortal;
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
