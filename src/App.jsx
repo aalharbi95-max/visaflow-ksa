@@ -2157,45 +2157,57 @@ setProfessions(allProfessions);
   const loadSupportTickets = () => loadPlatformTable("support_tickets", setSupportTickets);
   const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
 
-  async function loadNotifications() {
-    if (!currentCompanyId) return setNotifications([]);
+async function loadNotifications() {
+  const companyId = currentCompanyId || DEFAULT_COMPANY_ID;
 
-    let query = supabase
-      .from("notification_events")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
-
-    if (currentCompanyId) {
-      query = query.eq("company_id", currentCompanyId);
-    }
-
-    if (currentRole === "Agency" && currentUser?.agency_id) {
-      query = query.eq("agency_id", currentUser.agency_id);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.warn("notification_events:", error.message);
-      setNotifications([]);
-      return;
-    }
-
-    let rows = data || [];
-
-    if (currentRole === "Agency") {
-      rows = rows.filter((item) => {
-        const payload = item.data || {};
-        return (
-          String(item.agency_id || "") === String(currentUser?.agency_id || "") ||
-          normalize(item.agency_name || payload.agency || payload.agency_name) === normalize(currentUser?.agency_name)
-        );
-      });
-    }
-
-    setNotifications(rows);
+  if (!companyId) {
+    console.warn("Notifications: companyId is missing", {
+      currentCompanyId,
+      DEFAULT_COMPANY_ID,
+      currentRole,
+      currentUser,
+    });
+    setNotifications([]);
+    return;
   }
+
+  const { data, error } = await supabase
+    .from("notification_events")
+    .select("id, company_id, user_id, agency_id, type, title, message, priority, status, delivery_status, related_table, related_id, read_at, created_at, data")
+    .eq("company_id", companyId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  console.log("NOTIFICATIONS DEBUG:", {
+    companyId,
+    currentCompanyId,
+    currentRole,
+    userCompanyId: currentUser?.company_id,
+    count: data?.length || 0,
+    error,
+    data,
+  });
+
+  if (error) {
+    alert(`Notifications error: ${error.message}`);
+    setNotifications([]);
+    return;
+  }
+
+  let rows = data || [];
+
+  if (currentRole === "Agency") {
+    rows = rows.filter((item) => {
+      const payload = item.data || {};
+      return (
+        String(item.agency_id || "") === String(currentUser?.agency_id || "") ||
+        normalize(item.agency_name || payload.agency || payload.agency_name) === normalize(currentUser?.agency_name)
+      );
+    });
+  }
+
+  setNotifications(rows);
+}
 
 
   async function loadEmailLogs() {
