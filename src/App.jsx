@@ -8,6 +8,7 @@ import "./style.css";
 const PAGES = [
   "Executive Dashboard",
   "AI Commander",
+  "AI Agent",
   "AI Report Studio",
   "Dashboard",
   "Requests",
@@ -51,7 +52,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Command Center",
     icon: "🏠",
-    pages: ["Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Report Studio", "Dashboard"],
+    pages: ["Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Agent", "AI Report Studio", "Dashboard"],
   },
   {
     title: "Recruitment",
@@ -1035,6 +1036,7 @@ const ROLE_PAGES = {
   CEO: [
     "Executive Dashboard",
     "AI Commander",
+    "AI Agent",
     "AI Report Studio",
     "Dashboard",
     "Recruitment Performance",
@@ -1049,6 +1051,7 @@ const ROLE_PAGES = {
   "Operations Manager": [
     "Executive Dashboard",
     "AI Commander",
+    "AI Agent",
     "AI Report Studio",
     "Dashboard",
     "Requests",
@@ -1079,6 +1082,7 @@ const ROLE_PAGES = {
   "Recruitment Manager": [
     "Executive Dashboard",
     "AI Commander",
+    "AI Agent",
     "AI Report Studio",
     "Dashboard",
     "Requests",
@@ -1108,6 +1112,7 @@ const ROLE_PAGES = {
   // Recruiter / Recruitment Officer: daily recruitment operation only.
   "Recruitment Officer": [
     "Dashboard",
+    "AI Agent",
     "Requests",
     "Saudi Hiring",
     "RequestDetails",
@@ -8359,6 +8364,205 @@ Recruitment Follow-up Assistant`;
   return { subject, body };
 }
 
+function getAIAgentAgencyFitScore(request, agencyRow) {
+  const agencyName = agencyRow.agency || agencyRow.name || "";
+  const requestProfession = request?.profession || getRequestLineSummary(request, "profession") || "";
+  const requestNationality = request?.nationality || getRequestLineSummary(request, "nationality") || "";
+  const requestQty = Number(request?.quantity || request?.qty || 0);
+  const scorecard = buildAgencyScorecard().find((row) => normalize(row.agency) === normalize(agencyName)) || {};
+  const policy = getAgencyAgreementPolicy(agencyName);
+  const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
+  const professionExperience = agencyCandidates.filter((candidate) => isCompatibleText(candidate.profession, requestProfession)).length;
+  const nationalityExperience = agencyCandidates.filter((candidate) => normalize(candidate.nationality) === normalize(requestNationality)).length;
+  const activeAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName) && authorization.status !== "Cancelled");
+  const openLoad = activeAuthorizations.reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
+
+  let score = 40;
+  score += Math.min(Number(scorecard.score || 0) * 0.30, 30);
+  if (policy.has_active_agreement) score += 12;
+  if (professionExperience > 0) score += Math.min(10, professionExperience * 2);
+  if (nationalityExperience > 0) score += Math.min(10, nationalityExperience * 2);
+  if (scorecard.risk === "Low") score += 8;
+  if (scorecard.risk === "High") score -= 18;
+  if (openLoad > 0 && requestQty > 0) score -= Math.min(12, Math.round(openLoad / Math.max(requestQty, 1)));
+  if (String(agencyRow.status || "Active") === "Inactive") score -= 30;
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  const reasons = [];
+  if (policy.has_active_agreement) reasons.push(`Active SLA agreement ${policy.agreement_no}`);
+  else reasons.push("No active SLA agreement found");
+  if (professionExperience > 0) reasons.push(`Handled ${professionExperience} similar profession candidate(s)`);
+  if (nationalityExperience > 0) reasons.push(`Handled ${nationalityExperience} candidate(s) from ${requestNationality || "same nationality"}`);
+  if (scorecard.score) reasons.push(`Agency score ${scorecard.score} / Risk ${scorecard.risk}`);
+  if (openLoad > 0) reasons.push(`Current open authorization load ${openLoad}`);
+
+  return {
+    score,
+    reasons,
+    scorecard,
+    policy,
+    professionExperience,
+    nationalityExperience,
+    openLoad,
+  };
+}
+
+function getAIAgentRequestAssignmentRecommendations() {
+  const openStatuses = ["Open", "Under Recruitment", "Interview Stage", "Visa Process"];
+  const activeAgencies = agencies.filter((agency) => String(agency.status || "Active") !== "Inactive");
+
+  return requests
+    .filter((request) => openStatuses.includes(request.status || "Open"))
+    .map((request) => {
+      const relatedCandidates = candidates.filter((candidate) => String(candidate.request_no || "") === String(request.request_no || "") && !["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "Joined"].includes(candidate.status));
+      const requiredQty = getRequestTotalQty(request);
+      const remaining = Math.max(requiredQty - relatedCandidates.length, 0);
+      if (remaining <= 0) return null;
+
+      const rankedAgencies = activeAgencies
+        .map((agency) => {
+          const fit = getAIAgentAgencyFitScore(request, { ...agency, agency: agency.name });
+          return {
+            ...agency,
+            agency: agency.name,
+            fitScore: fit.score,
+            fitReasons: fit.reasons,
+            risk: fit.scorecard.risk || "New",
+            agencyScore: fit.scorecard.score || 0,
+            hasAgreement: fit.policy.has_active_agreement,
+            agreementNo: fit.policy.agreement_no,
+            openLoad: fit.openLoad,
+          };
+        })
+        .sort((a, b) => Number(b.fitScore || 0) - Number(a.fitScore || 0));
+
+      const bestAgency = rankedAgencies[0] || null;
+      const createdAt = request.created_at ? new Date(request.created_at) : null;
+      const daysOpen = createdAt ? Math.max(0, Math.floor((new Date() - createdAt) / (1000 * 60 * 60 * 24))) : 0;
+      const priority = request.priority || (daysOpen >= 15 ? "High" : "Medium");
+
+      return {
+        request,
+        request_no: request.request_no || "-",
+        project: request.project_name || request.project || "-",
+        profession: request.profession || getRequestLineSummary(request, "profession") || "-",
+        nationality: request.nationality || getRequestLineSummary(request, "nationality") || "-",
+        gender: request.gender || getRequestLineSummary(request, "gender") || "-",
+        requiredQty,
+        currentCandidates: relatedCandidates.length,
+        remaining,
+        daysOpen,
+        priority,
+        bestAgency,
+        rankedAgencies: rankedAgencies.slice(0, 3),
+        recommendation: bestAgency
+          ? `Assign ${request.request_no || "request"} to ${bestAgency.agency}. Fit score ${bestAgency.fitScore}%. Ask for first batch within 72 hours.`
+          : "No active agency found. Add agency or activate agreement first.",
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.remaining || 0) - Number(a.remaining || 0));
+}
+
+function buildAIAgentManagerBrief() {
+  const assignmentRecommendations = getAIAgentRequestAssignmentRecommendations();
+  const followUpTasks = getAIAgentAgencyTasks();
+  const highPriorityFollowUps = followUpTasks.filter((task) => task.priority === "High");
+  const staleAlerts = getAgencySlaEscalationAlerts();
+  const riskyAgencies = buildAgencyScorecard().filter((row) => row.risk !== "Low");
+
+  return {
+    assignmentRecommendations,
+    followUpTasks,
+    highPriorityFollowUps,
+    staleAlerts,
+    riskyAgencies,
+    summary: [
+      `${assignmentRecommendations.length} request(s) need agency assignment recommendation.`,
+      `${followUpTasks.length} agency follow-up task(s) are open.`,
+      `${highPriorityFollowUps.length} high-priority follow-up(s) require manager attention.`,
+      `${staleAlerts.length} candidate update compliance alert(s).`,
+      `${riskyAgencies.length} agency risk item(s).`,
+    ].join("\n"),
+  };
+}
+
+async function createAIAgentManagerBriefNotification() {
+  const brief = buildAIAgentManagerBrief();
+  const title = "AI Agent Daily Recruitment Brief";
+  const message = `VisaFlow AI Agent daily brief:\n\n${brief.summary}\n\nTop recommendation: ${brief.assignmentRecommendations[0]?.recommendation || "No assignment recommendation currently."}`;
+
+  await triggerExternalNotification("AI_AGENT_DAILY_BRIEF", {
+    company_id: currentCompanyId,
+    user_id: currentUser?.id || null,
+    title,
+    message,
+    priority: brief.highPriorityFollowUps.length ? "High" : "Medium",
+    related_table: "requests",
+    related_id: brief.assignmentRecommendations[0]?.request_no || "",
+    source: "AI Agent",
+    delivery_channel: "Manager Notification",
+    brief,
+  });
+
+  await loadNotifications();
+  alert("AI Agent daily brief created for Recruitment Manager.");
+}
+
+async function createAIAgentAssignmentApproval(item) {
+  if (!item?.bestAgency) return alert("No recommended agency found for this request.");
+
+  const title = `Manager Approval Required - ${item.request_no}`;
+  const message = `AI Agent recommends assigning ${item.request_no} to ${item.bestAgency.agency}.\n\nReason: ${item.bestAgency.fitReasons.join("; ")}\n\nSuggested action: approve and notify agency to submit first candidate batch within 72 hours.`;
+
+  await triggerExternalNotification("AI_AGENT_ASSIGNMENT_APPROVAL", {
+    company_id: currentCompanyId,
+    user_id: currentUser?.id || null,
+    agency_id: item.bestAgency.id || null,
+    agency_name: item.bestAgency.agency,
+    agency_email: item.bestAgency.email || "",
+    title,
+    message,
+    priority: item.priority || "Medium",
+    related_table: "requests",
+    related_id: item.request_no,
+    source: "AI Agent / Request Assignment Recommendations",
+    delivery_channel: "Manager Approval Inbox",
+    recommendation: item,
+  });
+
+  await loadNotifications();
+  alert("Manager approval notification prepared.");
+}
+
+async function notifyAgencyFromAIAgentRecommendation(item) {
+  if (!item?.bestAgency) return alert("No recommended agency found for this request.");
+
+  const agencyEmail = item.bestAgency.email || "";
+  const subject = `[VisaFlow Assignment] ${item.request_no} - ${item.profession}`;
+  const body = `Dear ${item.bestAgency.agency} Team,\n\nVisaFlow AI Recruitment Agent has prepared a new request assignment for your review.\n\nRequest No: ${item.request_no}\nProject: ${item.project}\nProfession: ${item.profession}\nNationality: ${item.nationality}\nGender: ${item.gender}\nRequired Quantity: ${item.requiredQty}\nRemaining Quantity: ${item.remaining}\nPriority: ${item.priority}\n\nRequired Action:\nPlease confirm availability and submit the first candidate batch within 72 hours through the Office Portal.\n\nBest regards,\nVisaFlow AI Recruitment Agent`;
+
+  await triggerExternalNotification("AI_AGENT_AGENCY_ASSIGNMENT", {
+    company_id: currentCompanyId,
+    agency_id: item.bestAgency.id || null,
+    agency_name: item.bestAgency.agency,
+    agency_email: agencyEmail,
+    title: `Agency Assignment Prepared - ${item.request_no}`,
+    message: body,
+    subject,
+    priority: item.priority || "Medium",
+    related_table: "requests",
+    related_id: item.request_no,
+    source: "AI Agent / Agency Assignment",
+    delivery_channel: "Notification + Email Automation",
+    recommendation: item,
+  });
+
+  await loadNotifications();
+  alert("Agency assignment notification prepared.");
+}
+
 async function runAIAgentAgencyFollowUp() {
   if (!canManageAgencyAgreements && !canManageCandidates && !canManageVisas) {
     return alert("You do not have permission to run AI Agent follow-up.");
@@ -11944,6 +12148,169 @@ if (!currentUser) {
                     )}
                   </tbody>
                 </table>
+              </TableCard>
+            </div>
+          </>
+        )}
+
+        {activePage === "AI Agent" && (
+          <>
+            <TableCard title="🤖 AI Recruitment Agent - Agency Follow-up Employee">
+              <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: "18px", alignItems: "stretch" }}>
+                <div style={{ borderRadius: "28px", padding: "30px", background: "linear-gradient(135deg, #020617 0%, #0f2f68 50%, #0f766e 100%)", color: "white", position: "relative", overflow: "hidden", minHeight: "260px" }}>
+                  <div style={{ position: "absolute", right: "-80px", top: "-80px", width: "260px", height: "260px", borderRadius: "999px", background: "rgba(255,255,255,0.10)" }} />
+                  <div style={{ position: "absolute", right: "28px", bottom: "18px", opacity: 0.14, fontSize: "138px", lineHeight: 1 }}>👨‍💼</div>
+                  <div style={{ position: "relative", zIndex: 1 }}>
+                    <p style={{ margin: "0 0 8px", opacity: 0.78, fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase", fontSize: "12px" }}>AI Agent Employee</p>
+                    <h1 style={{ margin: 0, fontSize: "34px", letterSpacing: "-0.04em" }}>AI Recruitment Agent</h1>
+                    <p style={{ margin: "14px 0 0", maxWidth: "760px", lineHeight: 1.8, opacity: 0.92 }}>
+                      موظف ذكي داخل VisaFlow يعمل كـ Recruitment Operations Employee: يقترح المكتب المناسب بعد الطلب، يجهز موافقة مدير التوظيف، يتابع المكاتب، يرسل الإشعارات، ويصعد الحالات المتأخرة.
+                    </p>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "22px" }}>
+                      <button className="save-btn" onClick={createAIAgentManagerBriefNotification}>Create Manager Daily Brief</button>
+                      <button className="new-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading}>
+                        {aiAgentLoading ? "AI Agent Working..." : "Run Agency Follow-up"}
+                      </button>
+                      <button className="new-btn" onClick={() => setActivePage("Notifications")}>Open Notification Center</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "12px" }}>
+                  <Stat title="Assignment Recommendations" value={getAIAgentRequestAssignmentRecommendations().length} className={getAIAgentRequestAssignmentRecommendations().length ? "warning" : "passed"} />
+                  <Stat title="Open Follow-ups" value={getAIAgentAgencyTasks().length} className={getAIAgentAgencyTasks().length ? "warning" : "passed"} />
+                  <Stat title="High Priority" value={getAIAgentAgencyTasks().filter((task) => task.priority === "High").length} className={executiveAlertClass(getAIAgentAgencyTasks().filter((task) => task.priority === "High").length)} />
+                  <Stat title="Risk Agencies" value={buildAgencyScorecard().filter((row) => row.risk !== "Low").length} className={executiveAlertClass(buildAgencyScorecard().filter((row) => row.risk !== "Low").length)} />
+                </div>
+              </div>
+            </TableCard>
+
+            <div className="dashboard-grid">
+              <Stat title="SLA Candidate Delays" value={getAgencySlaEscalationAlerts().length} className={executiveAlertClass(getAgencySlaEscalationAlerts().length)} />
+              <Stat title="Auths Without Candidates" value={reports.authorizationsWithoutCandidates.length} className={executiveAlertClass(reports.authorizationsWithoutCandidates.length)} />
+              <Stat title="Emails / Notifications" value={notifications.filter((item) => String(item.type || "").startsWith("AI_AGENT")).length} className="passed" />
+              <Stat title="Active Agencies" value={agencies.filter((agency) => String(agency.status || "Active") !== "Inactive").length} className="passed" />
+            </div>
+
+            <TableCard title="🧭 Request Assignment Recommendations">
+              <div style={{ padding: "16px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", marginBottom: "14px", lineHeight: 1.7 }}>
+                <b>How it works:</b> بعد إنشاء الطلب، الموظف الذكي يقارن الطلب مع أداء المكاتب والاتفاقيات والتحديثات السابقة ثم يقترح أفضل مكتب. المدير يعتمد القرار قبل إرسال الطلب للمكتب.
+              </div>
+              <div className="mini-table-scroll" style={{ maxHeight: "420px", overflow: "auto" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Request</th>
+                      <th>Need</th>
+                      <th>Recommended Agency</th>
+                      <th>Reason</th>
+                      <th>Manager Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {getAIAgentRequestAssignmentRecommendations().length === 0 ? (
+                      <tr><td colSpan="5" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No open requests need agency assignment right now.</td></tr>
+                    ) : (
+                      getAIAgentRequestAssignmentRecommendations().slice(0, 12).map((item) => (
+                        <tr key={`ai-agent-rec-${item.request_no}`}>
+                          <td><b>{item.request_no}</b><br /><small>{item.project}</small><br /><Badge value={item.priority} /></td>
+                          <td>{item.profession}<br /><small>{item.nationality} / {item.gender}</small><br /><b>Remaining: {item.remaining}</b></td>
+                          <td>
+                            {item.bestAgency ? (
+                              <>
+                                <b>{item.bestAgency.agency}</b><br />
+                                <small>Fit Score: {item.bestAgency.fitScore}%</small><br />
+                                <Badge value={item.bestAgency.hasAgreement ? "Active Agreement" : "No Agreement"} />
+                              </>
+                            ) : "No agency"}
+                          </td>
+                          <td>
+                            {item.bestAgency?.fitReasons?.slice(0, 3).map((reason, index) => (
+                              <div key={`${item.request_no}-reason-${index}`}>• {reason}</div>
+                            ))}
+                          </td>
+                          <td>
+                            <div style={{ display: "grid", gap: "8px" }}>
+                              <button className="new-btn" onClick={() => createAIAgentAssignmentApproval(item)}>Send to Manager</button>
+                              <button className="save-btn" onClick={() => notifyAgencyFromAIAgentRecommendation(item)}>Approve & Notify Agency</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </TableCard>
+
+            <TableCard title="📬 Agency Follow-up Queue">
+              <div className="mini-table-scroll" style={{ maxHeight: "420px", overflow: "auto" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Priority</th>
+                      <th>Agency</th>
+                      <th>Follow-up Type</th>
+                      <th>Reference</th>
+                      <th>Required Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {getAIAgentAgencyTasks().length === 0 ? (
+                      <tr><td colSpan="5" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No AI Agent follow-up tasks. Agencies are within current follow-up rules.</td></tr>
+                    ) : (
+                      getAIAgentAgencyTasks().slice(0, 20).map((task, index) => (
+                        <tr key={`${task.type}-${task.agency}-${task.reference}-${index}`}>
+                          <td><Badge value={task.priority} /></td>
+                          <td><b>{task.agency}</b><br /><small>{task.agency_email || "No email saved"}</small></td>
+                          <td>{task.type}</td>
+                          <td>{task.reference}<br /><small>{task.request_no}</small></td>
+                          <td>{task.action_required}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {aiAgentLog && (
+                <div style={{ marginTop: "14px", padding: "18px", borderRadius: "18px", background: "#ecfeff", border: "1px solid #a5f3fc", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
+                  {aiAgentLog}
+                </div>
+              )}
+              {aiAgentLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last AI Agent run: {aiAgentLastRun}</p>}
+            </TableCard>
+
+            <div className="two-col">
+              <TableCard title="✅ Manager Approval Inbox">
+                <table>
+                  <thead>
+                    <tr><th>Item</th><th>Count</th><th>Action</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Request assignment recommendations waiting for manager review</td>
+                      <td>{getAIAgentRequestAssignmentRecommendations().length}</td>
+                      <td><button className="new-btn" onClick={createAIAgentManagerBriefNotification}>Create Brief</button></td>
+                    </tr>
+                    <tr>
+                      <td>High-priority agency follow-ups requiring escalation</td>
+                      <td>{getAIAgentAgencyTasks().filter((task) => task.priority === "High").length}</td>
+                      <td><button className="new-btn" onClick={runAIAgentAgencyFollowUp}>Prepare Follow-ups</button></td>
+                    </tr>
+                    <tr>
+                      <td>Agency performance risk items</td>
+                      <td>{buildAgencyScorecard().filter((row) => row.risk !== "Low").length}</td>
+                      <td><button className="new-btn" onClick={() => setActivePage("Agency Performance")}>Open Performance</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </TableCard>
+
+              <TableCard title="📌 AI Daily Brief">
+                <div style={{ padding: "18px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", whiteSpace: "pre-wrap", lineHeight: 1.8 }}>
+                  {buildAIAgentManagerBrief().summary}
+                  {getAIAgentRequestAssignmentRecommendations()[0]?.recommendation ? `\n\nTop recommendation:\n${getAIAgentRequestAssignmentRecommendations()[0].recommendation}` : ""}
+                </div>
               </TableCard>
             </div>
           </>
