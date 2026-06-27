@@ -1983,7 +1983,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       smtp_password: "",
       smtp_port: data?.smtp_port ? String(data.smtp_port) : "465",
       smtp_secure: data?.smtp_secure === false ? "false" : "true",
-      test_email: currentUser?.email || "",
+      test_email: localStorage.getItem("visaflow_last_test_email") || currentUser?.email || "",
     });
   }
 
@@ -2305,8 +2305,13 @@ setProfessions(allProfessions);
   }
 
   async function sendEmailTemplateTest(item) {
-    const testEmail = currentUser?.email || emailSettingsForm.test_email || getCompanyEmailRecipient("notifications");
-    if (!testEmail) return alert("No test email found. Add your user email or test recipient in Email Settings.");
+    const defaultEmail = localStorage.getItem("visaflow_last_test_email") || emailSettingsForm.test_email || currentUser?.email || getCompanyEmailRecipient("notifications");
+    const testEmail = String(window.prompt("Enter test recipient email:", defaultEmail || "") || "").trim();
+
+    if (!testEmail) return;
+
+    localStorage.setItem("visaflow_last_test_email", testEmail);
+    setEmailSettingsForm((prev) => ({ ...prev, test_email: testEmail }));
 
     try {
       await dispatchVisaFlowEmail({
@@ -3872,8 +3877,10 @@ async function saveCompanyEmailSettings({ silent = false } = {}) {
 
 async function testCompanyEmailSettings() {
   if (!canManageUsers) return alert("You do not have permission to test email settings.");
-  const testEmail = String(emailSettingsForm.test_email || currentUser?.email || "").trim();
+  const testEmail = String(emailSettingsForm.test_email || localStorage.getItem("visaflow_last_test_email") || currentUser?.email || "").trim();
   if (!testEmail) return alert("Please enter a test recipient email.");
+
+  localStorage.setItem("visaflow_last_test_email", testEmail);
 
   setEmailSettingsLoading(true);
   setEmailSettingsMessage("Saving settings and sending test email...");
