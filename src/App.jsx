@@ -2158,9 +2158,14 @@ setProfessions(allProfessions);
   const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
 
 async function loadNotifications() {
-  const companyId = currentCompanyId || DEFAULT_COMPANY_ID;
+  const companyIds = Array.from(new Set([
+    currentCompanyId,
+    currentUser?.company_id,
+    currentUser?.active_company_id,
+    DEFAULT_COMPANY_ID,
+  ].filter((value) => value && String(value).trim())));
 
-  if (!companyId) {
+  if (companyIds.length === 0) {
     console.warn("Notifications: companyId is missing", {
       currentCompanyId,
       DEFAULT_COMPANY_ID,
@@ -2168,21 +2173,29 @@ async function loadNotifications() {
       currentUser,
     });
     setNotifications([]);
-    return;
+    return [];
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("notification_events")
     .select("id, company_id, user_id, agency_id, type, title, message, priority, status, delivery_status, related_table, related_id, read_at, created_at, data")
-    .eq("company_id", companyId)
     .order("created_at", { ascending: false })
     .limit(100);
 
+  if (companyIds.length === 1) {
+    query = query.eq("company_id", companyIds[0]);
+  } else {
+    query = query.in("company_id", companyIds);
+  }
+
+  const { data, error } = await query;
+
   console.log("NOTIFICATIONS DEBUG:", {
-    companyId,
+    companyIds,
     currentCompanyId,
     currentRole,
     userCompanyId: currentUser?.company_id,
+    activeCompanyId: currentUser?.active_company_id,
     count: data?.length || 0,
     error,
     data,
@@ -2191,7 +2204,7 @@ async function loadNotifications() {
   if (error) {
     alert(`Notifications error: ${error.message}`);
     setNotifications([]);
-    return;
+    return [];
   }
 
   let rows = data || [];
@@ -2207,8 +2220,8 @@ async function loadNotifications() {
   }
 
   setNotifications(rows);
+  return rows;
 }
-
 
   async function loadEmailLogs() {
     if (!currentCompanyId) return setEmailLogs([]);
@@ -12510,7 +12523,7 @@ if (!currentUser) {
 
             <TableCard title="Notification Center">
               <div className="actions-line" style={{ marginBottom: "14px" }}>
-                <button className="new-btn" onClick={async () => { await loadNotifications(); await loadEmailLogs(); await loadEmailTemplates(); alert("Notification Center refreshed"); }}>Refresh Center</button>
+                <button className="new-btn" onClick={async () => { const rows = await loadNotifications(); await loadEmailLogs(); await loadEmailTemplates(); alert(`Notification Center refreshed. Notifications loaded: ${rows?.length || 0}`); }}>Refresh Center</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
                 <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>
               </div>
