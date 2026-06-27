@@ -6395,12 +6395,13 @@ async function createVisaFromRequest(item) {
   loadAll();
   setActivePage("Visa Allocation");
 }
-  function createCandidateFromRequest(item) {
+  function createCandidateFromRequest(item, selectedLine = null) {
   if (!canManageCandidates) return alert("You do not have permission to add candidates.");
   resetCandidateForm();
 
   const lines = getRequestLinesForRequest(item);
-  const firstLine = lines[0] || item;
+  const firstLine = selectedLine || lines[0] || item;
+  const isSaudiLine = isSaudiNationality(firstLine.nationality) || isSaudiRequest(item);
 
   setCandidateForm({
     ...emptyCandidate,
@@ -6408,10 +6409,16 @@ async function createVisaFromRequest(item) {
     profession: firstLine.profession || item.profession || "",
     nationality: firstLine.nationality || item.nationality || "",
     gender: firstLine.gender || item.gender || "",
-    project: item.project_name || "",
+    project: item.project_name || item.project || "",
     request_no: item.request_no || "",
-    source: isSaudiRequest(item) ? "Jadarat" : "",
+    source: isSaudiLine ? "Jadarat" : "",
     offer_status: "Pending",
+    ticket_no: isSaudiLine ? "" : emptyCandidate.ticket_no,
+    flight_date: isSaudiLine ? "" : emptyCandidate.flight_date,
+    arrival_date: isSaudiLine ? "" : emptyCandidate.arrival_date,
+    visa_fees: isSaudiLine ? 0 : emptyCandidate.visa_fees,
+    agency_commission: isSaudiLine ? 0 : emptyCandidate.agency_commission,
+    ticket_cost: isSaudiLine ? 0 : emptyCandidate.ticket_cost,
   });
 
   setActivePage("Candidates");
@@ -14392,14 +14399,75 @@ item.created_at
           </>
         )}
 
-        {activePage === "Saudi Hiring" && (
+        {activePage === "Saudi Hiring" && (() => {
+          const saudiHiringRows = requests.flatMap((request) => {
+            const lines = getRequestLinesForRequest(request);
+            const saudiLines = lines.filter((line) => isSaudiNationality(line.nationality));
+
+            if (saudiLines.length > 0) {
+              return saudiLines.map((line, index) => ({
+                key: `${request.id || request.request_no}-saudi-${line.id || index}`,
+                request,
+                line,
+                request_no: request.request_no || "",
+                project_name: request.project_name || request.project || "-",
+                profession: line.profession || request.profession || "-",
+                nationality: line.nationality || request.nationality || "Saudi Arabia",
+                gender: line.gender || request.gender || "-",
+                quantity: Number(line.quantity || 0),
+                status: request.status || "-",
+              }));
+            }
+
+            if (isSaudiRequest(request)) {
+              return [{
+                key: `${request.id || request.request_no}-saudi-header`,
+                request,
+                line: request,
+                request_no: request.request_no || "",
+                project_name: request.project_name || request.project || "-",
+                profession: request.profession || "-",
+                nationality: request.nationality || "Saudi Arabia",
+                gender: request.gender || "-",
+                quantity: Number(request.quantity || request.qty || 0),
+                status: request.status || "-",
+              }];
+            }
+
+            return [];
+          });
+
+          const activeSaudiCandidates = candidates.filter((candidate) => isSaudiCandidate(candidate, requests));
+          const saudiRequestCount = new Set(saudiHiringRows.map((row) => String(row.request_no || "")).filter(Boolean)).size;
+          const saudiRequired = saudiHiringRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+          const getSaudiLineCandidates = (row) =>
+            activeSaudiCandidates.filter((candidate) => {
+              if (String(candidate.request_no || "") !== String(row.request_no || "")) return false;
+              if (["Rejected", "Interview Failed", "Medical Failed", "Cancelled"].includes(candidate.status)) return false;
+
+              const hasExactLine =
+                candidate.request_line_id &&
+                row.line?.id &&
+                !String(row.line.id).includes("legacy") &&
+                String(candidate.request_line_id) === String(row.line.id);
+
+              if (hasExactLine) return true;
+
+              return (
+                isSaudiNationality(candidate.nationality) &&
+                isCompatibleText(candidate.profession, row.profession) &&
+                (!row.gender || !candidate.gender || normalize(candidate.gender) === normalize(row.gender))
+              );
+            });
+
+          return (
           <>
             <div className="dashboard-grid">
-              <Stat title="Saudi Requests" value={requests.filter(isSaudiRequest).length} className="passed" />
-              <Stat title="Saudi Required" value={requests.filter(isSaudiRequest).reduce((sum, r) => sum + Number(r.quantity || r.qty || 0), 0)} />
-              <Stat title="Saudi Candidates" value={candidates.filter((c) => isSaudiCandidate(c, requests)).length} className="passed" />
-              <Stat title="Offers Accepted" value={candidates.filter((c) => isSaudiCandidate(c, requests) && ["Accepted", "Joined"].includes(c.offer_status)).length} className="passed" />
-              <Stat title="Joined Saudis" value={candidates.filter((c) => isSaudiCandidate(c, requests) && (c.status === "Joined" || c.joining_date)).length} className="passed" />
+              <Stat title="Saudi Requests" value={saudiRequestCount} className="passed" />
+              <Stat title="Saudi Required" value={saudiRequired} />
+              <Stat title="Saudi Candidates" value={activeSaudiCandidates.length} className="passed" />
+              <Stat title="Offers Accepted" value={activeSaudiCandidates.filter((c) => ["Accepted", "Joined"].includes(c.offer_status)).length} className="passed" />
+              <Stat title="Joined Saudis" value={activeSaudiCandidates.filter((c) => c.status === "Joined" || c.joining_date).length} className="passed" />
             </div>
 
             <TableCard title="Saudi Hiring Requests">
@@ -14409,6 +14477,8 @@ item.created_at
                     <th>Request No</th>
                     <th>Project</th>
                     <th>Profession</th>
+                    <th>Nationality</th>
+                    <th>Gender</th>
                     <th>Qty</th>
                     <th>Candidates</th>
                     <th>Joined</th>
@@ -14417,24 +14487,42 @@ item.created_at
                   </tr>
                 </thead>
                 <tbody>
-                  {requests.filter(isSaudiRequest).map((item) => {
-                    const related = candidates.filter((c) => String(c.request_no || "") === String(item.request_no || "") && !["Rejected", "Interview Failed", "Medical Failed", "Cancelled"].includes(c.status));
-                    const joined = related.filter((c) => c.status === "Joined" || c.joining_date).length;
-                    return (
-                      <tr key={item.id}>
-                        <td><button className="link-btn" onClick={() => openRequestDetails(item)}>{item.request_no}</button></td>
-                        <td>{item.project_name || "-"}</td>
-                        <td>{item.profession || "-"}</td>
-                        <td>{item.quantity || 0}</td>
-                        <td>{related.length}</td>
-                        <td>{joined}</td>
-                        <td><Badge value={item.status || "-"} /></td>
-                        <td className="table-actions">
-                          {canManageCandidates && <button onClick={() => createCandidateFromRequest(item)}>Add Candidate</button>}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {saudiHiringRows.length === 0 ? (
+                    <tr>
+                      <td colSpan="10" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
+                        No Saudi hiring lines found.
+                      </td>
+                    </tr>
+                  ) : (
+                    saudiHiringRows.map((row) => {
+                      const related = getSaudiLineCandidates(row);
+                      const joined = related.filter((c) => c.status === "Joined" || c.joining_date).length;
+                      const canAddSaudiCandidate =
+                        canManageCandidates &&
+                        joined < Number(row.quantity || 0) &&
+                        row.request.status !== "Completed" &&
+                        (row.request.approval_status === "Approved by Recruitment" || row.request.approval_status === "Approved");
+
+                      return (
+                        <tr key={row.key}>
+                          <td><button className="link-btn" onClick={() => openRequestDetails(row.request)}>{row.request_no}</button></td>
+                          <td>{row.project_name}</td>
+                          <td>{row.profession}</td>
+                          <td>{row.nationality}</td>
+                          <td>{row.gender}</td>
+                          <td>{row.quantity || 0}</td>
+                          <td>{related.length}</td>
+                          <td>{joined}</td>
+                          <td><Badge value={row.status} /></td>
+                          <td className="table-actions">
+                            {canAddSaudiCandidate ? (
+                              <button onClick={() => createCandidateFromRequest(row.request, row.line)}>Add Candidate</button>
+                            ) : "-"}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </TableCard>
@@ -14454,23 +14542,32 @@ item.created_at
                   </tr>
                 </thead>
                 <tbody>
-                  {candidates.filter((c) => isSaudiCandidate(c, requests)).map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.request_no || "-"}</td>
-                      <td>{item.candidate_name || "-"}</td>
-                      <td>{item.profession || "-"}</td>
-                      <td>{item.source || "-"}</td>
-                      <td><Badge value={item.offer_status || "Pending"} /></td>
-                      <td>{item.joining_date || "-"}</td>
-                      <td><Badge value={item.status || "New"} /></td>
-                      <td className="table-actions">{canManageCandidates ? <button onClick={() => editCandidate(item)}>Edit</button> : "-"}</td>
+                  {activeSaudiCandidates.length === 0 ? (
+                    <tr>
+                      <td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
+                        No Saudi candidates found.
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    activeSaudiCandidates.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.request_no || "-"}</td>
+                        <td>{item.candidate_name || "-"}</td>
+                        <td>{item.profession || "-"}</td>
+                        <td>{item.source || "-"}</td>
+                        <td><Badge value={item.offer_status || "Pending"} /></td>
+                        <td>{item.joining_date || "-"}</td>
+                        <td><Badge value={item.status || "New"} /></td>
+                        <td className="table-actions">{canManageCandidates ? <button onClick={() => editCandidate(item)}>Edit</button> : "-"}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </TableCard>
           </>
-        )}
+          );
+        })()}
 
   {activePage === "Authorization" && (
 <TableCard
