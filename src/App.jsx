@@ -672,6 +672,53 @@ const AGREEMENT_TEMPLATE_TYPES = [
 const AGREEMENT_STATUSES = ["Draft", "Pending Signature", "Active", "Expired", "Terminated", "Rejected"];
 
 
+const DEFAULT_AI_AGENT_SETTINGS = {
+  is_active: true,
+  mode: "auto_notify_manager",
+  auto_manager_approval: true,
+  auto_followup_agencies: false,
+  allow_auto_agency_emails: false,
+  run_in_background: true,
+  client_auto_enabled: false,
+  manager_approval_email: "",
+  agency_reminder_after_days: 3,
+  escalation_after_days: 7,
+  daily_brief_enabled: true,
+  daily_brief_time: "08:00",
+  max_auto_actions_per_run: 5,
+  cooldown_minutes: 60,
+  max_actions_per_hour: 20,
+  max_retry_attempts: 3,
+};
+
+const AI_AGENT_MODE_OPTIONS = [
+  "off",
+  "suggest_only",
+  "auto_notify_manager",
+  "auto_followup_agencies",
+  "full_auto",
+];
+
+function normalizeAIAgentSettings(row = {}) {
+  return {
+    ...DEFAULT_AI_AGENT_SETTINGS,
+    ...(row || {}),
+    is_active: row?.is_active !== false,
+    auto_manager_approval: row?.auto_manager_approval !== false,
+    auto_followup_agencies: Boolean(row?.auto_followup_agencies),
+    allow_auto_agency_emails: Boolean(row?.allow_auto_agency_emails),
+    run_in_background: row?.run_in_background !== false,
+    client_auto_enabled: Boolean(row?.client_auto_enabled),
+    agency_reminder_after_days: Number(row?.agency_reminder_after_days || DEFAULT_AI_AGENT_SETTINGS.agency_reminder_after_days),
+    escalation_after_days: Number(row?.escalation_after_days || DEFAULT_AI_AGENT_SETTINGS.escalation_after_days),
+    max_auto_actions_per_run: Number(row?.max_auto_actions_per_run || DEFAULT_AI_AGENT_SETTINGS.max_auto_actions_per_run),
+    cooldown_minutes: Number(row?.cooldown_minutes || DEFAULT_AI_AGENT_SETTINGS.cooldown_minutes),
+    max_actions_per_hour: Number(row?.max_actions_per_hour || DEFAULT_AI_AGENT_SETTINGS.max_actions_per_hour),
+    max_retry_attempts: Number(row?.max_retry_attempts || DEFAULT_AI_AGENT_SETTINGS.max_retry_attempts),
+  };
+}
+
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [loading, setLoading] = useState(false);
@@ -892,6 +939,9 @@ const [aiCommanderLanguage, setAiCommanderLanguage] = useState("Arabic");
 const [aiAgentLoading, setAiAgentLoading] = useState(false);
 const [aiAgentLastRun, setAiAgentLastRun] = useState("");
 const [aiAgentLog, setAiAgentLog] = useState("");
+const [aiAgentSettings, setAiAgentSettings] = useState(DEFAULT_AI_AGENT_SETTINGS);
+const [aiAgentSettingsSaving, setAiAgentSettingsSaving] = useState(false);
+const [aiAgentSettingsMessage, setAiAgentSettingsMessage] = useState("");
 const aiAgentAutoRunRef = useRef("");
 const [offerModalOpen, setOfferModalOpen] = useState(false);
 const [offerCandidate, setOfferCandidate] = useState(null);
@@ -1821,6 +1871,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadUsers(),
       loadCompanies(),
       loadCompanyEmailSettings(),
+      loadAIAgentSettings(),
       loadAuditLogs(),
       loadMobilizations(),
       loadEmployees(),
@@ -1991,6 +2042,62 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       smtp_secure: data?.smtp_secure === false ? "false" : "true",
       test_email: localStorage.getItem("visaflow_last_test_email") || currentUser?.email || "",
     });
+  }
+
+  async function loadAIAgentSettings() {
+    if (!currentCompanyId || currentRole === "Agency") {
+      setAiAgentSettings(DEFAULT_AI_AGENT_SETTINGS);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("ai_agent_settings")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("ai_agent_settings:", error.message);
+      setAiAgentSettings(DEFAULT_AI_AGENT_SETTINGS);
+      return;
+    }
+
+    setAiAgentSettings(normalizeAIAgentSettings(data || DEFAULT_AI_AGENT_SETTINGS));
+  }
+
+  function updateAIAgentSetting(field, value) {
+    setAiAgentSettings((prev) => normalizeAIAgentSettings({ ...prev, [field]: value }));
+    setAiAgentSettingsMessage("");
+  }
+
+  async function saveAIAgentSettings() {
+    if (!currentCompanyId) return alert("Company ID is missing.");
+
+    setAiAgentSettingsSaving(true);
+    setAiAgentSettingsMessage("");
+
+    const payload = {
+      ...normalizeAIAgentSettings(aiAgentSettings),
+      company_id: currentCompanyId,
+      updated_by: currentUser?.id || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("ai_agent_settings")
+      .upsert([payload], { onConflict: "company_id" })
+      .select("*")
+      .maybeSingle();
+
+    setAiAgentSettingsSaving(false);
+
+    if (error) {
+      setAiAgentSettingsMessage(`AI Agent settings error: ${error.message}`);
+      return alert(error.message);
+    }
+
+    setAiAgentSettings(normalizeAIAgentSettings(data || payload));
+    setAiAgentSettingsMessage("AI Agent settings saved.");
   }
 
 const loadProfessions = async () => {
@@ -2462,6 +2569,13 @@ useEffect(() => {
 useEffect(() => {
   if (!currentUser || !currentCompanyId || isCurrentAgencyUser) return;
   if (!requests.length || !agencies.length) return;
+  if (!isAIAgentEnabled()) return;
+
+  // Production safety: automatic AI Agent execution must not run heavy actions in the browser.
+  // The browser shows recommendations only. Background automation is handled by Supabase Edge Functions / Cron.
+  if (isAIAgentBackgroundMode() && !aiAgentSettings?.client_auto_enabled) {
+    return;
+  }
 
   const signature = [
     currentCompanyId,
@@ -2470,14 +2584,23 @@ useEffect(() => {
     agencies.length,
     agencyScores.length,
     agencyAgreements.length,
+    aiAgentSettings.mode,
+    aiAgentSettings.auto_manager_approval,
+    aiAgentSettings.auto_followup_agencies,
+    aiAgentSettings.allow_auto_agency_emails,
+    aiAgentSettings.max_auto_actions_per_run,
+    aiAgentSettings.cooldown_minutes,
+    aiAgentSettings.max_actions_per_hour,
   ].join(":");
 
   if (aiAgentAutoRunRef.current === signature) return;
   aiAgentAutoRunRef.current = signature;
 
   const timer = window.setTimeout(() => {
-    runAIAgentAutoManagerApprovals({ limit: 5 });
-  }, 1200);
+    const limit = getAIAgentMaxAutoActions();
+    if (isAIAgentManagerAutoEnabled()) runAIAgentAutoManagerApprovals({ limit });
+    if (isAIAgentAgencyFollowUpAutoEnabled()) runAIAgentAutoAgencyFollowUp({ limit });
+  }, 1400);
 
   return () => window.clearTimeout(timer);
 }, [
@@ -2489,6 +2612,15 @@ useEffect(() => {
   agencies.length,
   agencyScores.length,
   agencyAgreements.length,
+  aiAgentSettings.mode,
+  aiAgentSettings.auto_manager_approval,
+  aiAgentSettings.auto_followup_agencies,
+  aiAgentSettings.allow_auto_agency_emails,
+  aiAgentSettings.max_auto_actions_per_run,
+  aiAgentSettings.run_in_background,
+  aiAgentSettings.client_auto_enabled,
+  aiAgentSettings.cooldown_minutes,
+  aiAgentSettings.max_actions_per_hour,
 ]);
 
 useEffect(() => {
@@ -8289,6 +8421,239 @@ async function runAICommander(question = aiQuestion) {
   }
 }
 
+function getAIAgentSettingsModeLabel(mode = aiAgentSettings.mode) {
+  const labels = {
+    off: "Off",
+    suggest_only: "Suggest Only",
+    auto_notify_manager: "Auto Notify Manager",
+    auto_followup_agencies: "Auto Follow-up Agencies",
+    full_auto: "Full Auto",
+  };
+  return labels[mode] || mode || "Auto Notify Manager";
+}
+
+function getAIAgentMaxAutoActions() {
+  const value = Number(aiAgentSettings?.max_auto_actions_per_run || DEFAULT_AI_AGENT_SETTINGS.max_auto_actions_per_run);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_AI_AGENT_SETTINGS.max_auto_actions_per_run;
+  return Math.min(Math.max(Math.round(value), 1), 20);
+}
+
+function getAIAgentCooldownMinutes() {
+  const value = Number(aiAgentSettings?.cooldown_minutes || DEFAULT_AI_AGENT_SETTINGS.cooldown_minutes);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_AI_AGENT_SETTINGS.cooldown_minutes;
+  return Math.min(Math.max(Math.round(value), 5), 1440);
+}
+
+function getAIAgentMaxActionsPerHour() {
+  const value = Number(aiAgentSettings?.max_actions_per_hour || DEFAULT_AI_AGENT_SETTINGS.max_actions_per_hour);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_AI_AGENT_SETTINGS.max_actions_per_hour;
+  return Math.min(Math.max(Math.round(value), 1), 200);
+}
+
+function getAIAgentMaxRetryAttempts() {
+  const value = Number(aiAgentSettings?.max_retry_attempts || DEFAULT_AI_AGENT_SETTINGS.max_retry_attempts);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_AI_AGENT_SETTINGS.max_retry_attempts;
+  return Math.min(Math.max(Math.round(value), 1), 10);
+}
+
+function isAIAgentBackgroundMode() {
+  return aiAgentSettings?.run_in_background !== false;
+}
+
+function isAIAgentEnabled() {
+  return aiAgentSettings?.is_active !== false && String(aiAgentSettings?.mode || "auto_notify_manager") !== "off";
+}
+
+function isAIAgentManagerAutoEnabled() {
+  const mode = String(aiAgentSettings?.mode || "auto_notify_manager");
+  return isAIAgentEnabled() && aiAgentSettings?.auto_manager_approval !== false && ["auto_notify_manager", "auto_followup_agencies", "full_auto"].includes(mode);
+}
+
+function isAIAgentAgencyFollowUpAutoEnabled() {
+  const mode = String(aiAgentSettings?.mode || "auto_notify_manager");
+  return isAIAgentEnabled() && Boolean(aiAgentSettings?.auto_followup_agencies) && ["auto_followup_agencies", "full_auto"].includes(mode);
+}
+
+function shouldAIAgentSendAgencyEmails() {
+  return Boolean(aiAgentSettings?.allow_auto_agency_emails);
+}
+
+function getAIAgentManagerEmailOverride() {
+  return String(aiAgentSettings?.manager_approval_email || "").trim();
+}
+
+async function writeAIAgentAuditLog({
+  actionType,
+  actionKey,
+  status = "completed",
+  severity = "info",
+  title = "AI Agent action",
+  targetTable = "",
+  targetId = "",
+  agencyId = null,
+  agencyName = "",
+  requestNo = "",
+  details = {},
+  errorMessage = "",
+} = {}) {
+  if (!currentCompanyId) return;
+
+  try {
+    await supabase.from("ai_agent_audit_logs").insert([{
+      company_id: currentCompanyId,
+      action_type: actionType || "AI_AGENT_ACTION",
+      action_key: actionKey || `${actionType || "AI_AGENT_ACTION"}:${Date.now()}`,
+      status,
+      severity,
+      actor: "AI_AGENT",
+      target_table: targetTable || null,
+      target_id: targetId ? String(targetId) : null,
+      agency_id: agencyId || null,
+      agency_name: agencyName || null,
+      request_no: requestNo || null,
+      title,
+      details,
+      error_message: errorMessage || null,
+      created_by: currentUser?.id || null,
+    }]);
+  } catch (error) {
+    console.warn("AI Agent audit log failed", error?.message || error);
+  }
+}
+
+async function acquireAIAgentActionLock({
+  actionType,
+  actionKey,
+  relatedTable = "",
+  relatedId = "",
+  agencyId = null,
+  title = "AI Agent action lock",
+  details = {},
+} = {}) {
+  if (!currentCompanyId || !actionKey) return { ok: false, skipped: true, reason: "Missing AI Agent lock key" };
+
+  try {
+    const { data, error } = await supabase.rpc("ai_agent_try_acquire_lock", {
+      p_company_id: currentCompanyId,
+      p_action_key: actionKey,
+      p_action_type: actionType || "AI_AGENT_ACTION",
+      p_related_table: relatedTable || null,
+      p_related_id: relatedId ? String(relatedId) : null,
+      p_agency_id: agencyId || null,
+      p_cooldown_minutes: getAIAgentCooldownMinutes(),
+    });
+
+    if (error) throw error;
+    if (!data) {
+      await writeAIAgentAuditLog({
+        actionType,
+        actionKey,
+        status: "skipped",
+        severity: "warning",
+        title: `${title} skipped by cooldown / duplicate lock`,
+        targetTable: relatedTable,
+        targetId: relatedId,
+        agencyId,
+        details: { reason: "cooldown_or_duplicate", cooldown_minutes: getAIAgentCooldownMinutes(), ...details },
+      });
+      return { ok: false, skipped: true, reason: "Cooldown / duplicate lock active" };
+    }
+
+    await writeAIAgentAuditLog({
+      actionType,
+      actionKey,
+      status: "lock_acquired",
+      severity: "info",
+      title,
+      targetTable: relatedTable,
+      targetId: relatedId,
+      agencyId,
+      details: { cooldown_minutes: getAIAgentCooldownMinutes(), ...details },
+    });
+
+    return { ok: true, skipped: false };
+  } catch (error) {
+    await writeAIAgentAuditLog({
+      actionType,
+      actionKey,
+      status: "failed",
+      severity: "error",
+      title: `${title} failed before execution`,
+      targetTable: relatedTable,
+      targetId: relatedId,
+      agencyId,
+      details,
+      errorMessage: error?.message || String(error),
+    });
+    console.warn("AI Agent lock failed", error?.message || error);
+    return { ok: false, skipped: true, reason: error?.message || "Lock failed" };
+  }
+}
+
+async function enqueueAIAgentBackgroundJob(jobType, payload = {}) {
+  if (!currentCompanyId) return alert("Company ID is missing.");
+
+  const hourBucket = new Date().toISOString().slice(0, 13);
+  const jobKey = `${jobType}:${currentCompanyId}:${hourBucket}`;
+  const jobPayload = {
+    requested_from: "VisaFlow UI",
+    settings_snapshot: normalizeAIAgentSettings(aiAgentSettings),
+    max_actions_per_run: getAIAgentMaxAutoActions(),
+    cooldown_minutes: getAIAgentCooldownMinutes(),
+    max_actions_per_hour: getAIAgentMaxActionsPerHour(),
+    ...payload,
+  };
+
+  const { error } = await supabase.from("ai_agent_jobs").insert([{
+    company_id: currentCompanyId,
+    job_type: jobType,
+    job_key: jobKey,
+    status: "queued",
+    priority: jobType.includes("agency") ? 70 : 60,
+    payload: jobPayload,
+    requested_by: currentUser?.id || null,
+    max_attempts: getAIAgentMaxRetryAttempts(),
+    scheduled_for: new Date().toISOString(),
+  }]);
+
+  if (error) {
+    if (String(error.code || "") === "23505" || String(error.message || "").toLowerCase().includes("duplicate")) {
+      setAiAgentLog("AI Agent background job is already queued for this hour. Duplicate job skipped.");
+      await writeAIAgentAuditLog({
+        actionType: "AI_AGENT_BACKGROUND_JOB",
+        actionKey: jobKey,
+        status: "skipped",
+        severity: "warning",
+        title: "Duplicate background job skipped",
+        details: jobPayload,
+      });
+      return;
+    }
+    setAiAgentLog(`AI Agent background job failed: ${error.message}`);
+    return alert(error.message);
+  }
+
+  setAiAgentLog(`AI Agent background job queued: ${jobType}. The Supabase Worker/Cron will process it safely outside the browser.`);
+  setAiAgentLastRun(new Date().toLocaleString());
+  await writeAIAgentAuditLog({
+    actionType: "AI_AGENT_BACKGROUND_JOB",
+    actionKey: jobKey,
+    status: "queued",
+    severity: "info",
+    title: `Background job queued: ${jobType}`,
+    details: jobPayload,
+  });
+}
+
+function getAIAgentFollowUpDedupeKey(task = {}) {
+  return [
+    task.type || "followup",
+    task.agency_id || task.agency || "agency",
+    task.related_table || "table",
+    task.related_id || task.reference || "reference",
+  ].join("|");
+}
+
 function getAIAgentAgencyTasks() {
   const today = new Date();
 
@@ -8544,6 +8909,9 @@ async function createAIAgentManagerBriefNotification() {
 }
 
 function getRecruitmentManagerEmails() {
+  const configuredManagerEmail = getAIAgentManagerEmailOverride();
+  if (configuredManagerEmail) return configuredManagerEmail;
+
   const roleMatches = ["recruitment manager", "recruitment_manager", "manager recruitment", "مدير التوظيف"];
   const managerEmails = (users || [])
     .filter((user) => String(user?.company_id || currentCompanyId) === String(currentCompanyId))
@@ -8614,8 +8982,35 @@ async function prepareAIAgentAssignmentApproval(item, options = {}) {
   }
 
   if (preventDuplicate && await hasAIAgentAssignmentApproval(item)) {
+    await writeAIAgentAuditLog({
+      actionType: auto ? "AI_AGENT_AUTO_MANAGER_APPROVAL" : "AI_AGENT_MANAGER_APPROVAL",
+      actionKey: `manager_approval:${item.request_no}:${item.bestAgency.id || item.bestAgency.agency}`,
+      status: "skipped",
+      severity: "warning",
+      title: "Manager approval duplicate skipped",
+      targetTable: "requests",
+      targetId: item.request_no,
+      agencyId: item.bestAgency.id || null,
+      agencyName: item.bestAgency.agency,
+      requestNo: item.request_no,
+      details: { reason: "notification_exists" },
+    });
     return { ok: true, skipped: true, reason: "Already prepared" };
   }
+
+  const actionType = auto ? "AI_AGENT_AUTO_MANAGER_APPROVAL" : "AI_AGENT_MANAGER_APPROVAL";
+  const actionKey = `manager_approval:${item.request_no}:${item.bestAgency.id || item.bestAgency.agency}`;
+  const lock = await acquireAIAgentActionLock({
+    actionType,
+    actionKey,
+    relatedTable: "requests",
+    relatedId: item.request_no,
+    agencyId: item.bestAgency.id || null,
+    title: `Manager approval prepared for ${item.request_no}`,
+    details: { recommended_agency: item.bestAgency.agency, fit_score: item.bestAgency.fitScore || 0, auto },
+  });
+
+  if (!lock.ok) return { ok: true, skipped: true, reason: lock.reason || "Duplicate lock" };
 
   const content = buildAIAgentAssignmentApprovalContent(item);
   const managerEmail = getRecruitmentManagerEmails();
@@ -8641,7 +9036,7 @@ async function prepareAIAgentAssignmentApproval(item, options = {}) {
 
   try {
     await dispatchVisaFlowEmail({
-      type: auto ? "AI_AGENT_AUTO_MANAGER_APPROVAL" : "AI_AGENT_MANAGER_APPROVAL",
+      type: actionType,
       to: managerEmail,
       subject: content.subject,
       text: content.emailLines.join("\n"),
@@ -8656,6 +9051,20 @@ async function prepareAIAgentAssignmentApproval(item, options = {}) {
   } catch (error) {
     console.warn("AI Agent manager email failed", error?.message || error);
   }
+
+  await writeAIAgentAuditLog({
+    actionType,
+    actionKey,
+    status: "completed",
+    severity: "info",
+    title: `Manager approval notification prepared for ${item.request_no}`,
+    targetTable: "requests",
+    targetId: item.request_no,
+    agencyId: item.bestAgency.id || null,
+    agencyName: item.bestAgency.agency,
+    requestNo: item.request_no,
+    details: { recommended_agency: item.bestAgency.agency, fit_score: item.bestAgency.fitScore || 0, auto },
+  });
 
   if (!silent) {
     await loadNotifications();
@@ -8697,8 +9106,9 @@ async function notifyAgencyFromAIAgentRecommendation(item) {
   alert("Agency assignment notification prepared.");
 }
 
-async function runAIAgentAutoManagerApprovals({ limit = 5 } = {}) {
+async function runAIAgentAutoManagerApprovals({ limit = getAIAgentMaxAutoActions() } = {}) {
   if (!currentCompanyId || isCurrentAgencyUser) return;
+  if (!isAIAgentManagerAutoEnabled()) return;
   if (!canManageAgencyAgreements && !canManageCandidates && !canManageUsers && !canManagePlatform) return;
   if (!requests.length || !agencies.length) return;
 
@@ -8739,57 +9149,186 @@ async function runAIAgentAutoManagerApprovals({ limit = 5 } = {}) {
   }
 }
 
-async function runAIAgentAgencyFollowUp() {
-  if (!canManageAgencyAgreements && !canManageCandidates && !canManageVisas) {
-    return alert("You do not have permission to run AI Agent follow-up.");
+async function hasAIAgentFollowUpToday(task, type = "AI_AGENT_AUTO_AGENCY_FOLLOWUP") {
+  if (!currentCompanyId || !task) return false;
+
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  let query = supabase
+    .from("notification_events")
+    .select("id")
+    .eq("company_id", currentCompanyId)
+    .eq("type", type)
+    .eq("related_table", task.related_table || "")
+    .eq("related_id", task.related_id || "")
+    .gte("created_at", startOfDay.toISOString())
+    .limit(1);
+
+  if (task.agency_id) query = query.eq("agency_id", task.agency_id);
+
+  const { data, error } = await query;
+  if (error) {
+    console.warn("AI Agent follow-up duplicate check failed", error.message);
+    return false;
+  }
+
+  return (data || []).length > 0;
+}
+
+async function sendAIAgentAgencyFollowUpTask(task, options = {}) {
+  const { auto = false, sendEmail = false } = options;
+  const email = buildAIAgentAgencyEmail(task);
+  const type = auto ? "AI_AGENT_AUTO_AGENCY_FOLLOWUP" : "AI_AGENT_AGENCY_FOLLOWUP";
+  const actionKey = getAIAgentFollowUpDedupeKey(task);
+
+  const lock = await acquireAIAgentActionLock({
+    actionType: type,
+    actionKey,
+    relatedTable: task.related_table || "",
+    relatedId: task.related_id || "",
+    agencyId: task.agency_id || null,
+    title: task.title || "Agency follow-up",
+    details: { agency: task.agency, request_no: task.request_no, priority: task.priority, sendEmail, auto },
+  });
+
+  if (!lock.ok) return { ok: true, skipped: true, reason: lock.reason || "Duplicate lock" };
+
+  await triggerExternalNotification(type, {
+    company_id: currentCompanyId,
+    agency_id: task.agency_id || null,
+    agency_name: task.agency,
+    agency_email: task.agency_email || "",
+    title: task.title,
+    message: email.body,
+    subject: email.subject,
+    priority: task.priority,
+    related_table: task.related_table,
+    related_id: task.related_id,
+    source: auto ? "AI Agent Auto Follow-up" : "AI Commander / AI Agent",
+    delivery_channel: sendEmail ? "Notification + Email" : "Notification Only",
+    auto_generated: auto,
+    dedupe_key: getAIAgentFollowUpDedupeKey(task),
+    task,
+  });
+
+  if (sendEmail && task.agency_email) {
+    await dispatchVisaFlowEmail({
+      type,
+      to: task.agency_email,
+      subject: email.subject,
+      text: email.body,
+      html: buildEmailCardHtml(email.subject, email.body.split("\n"), "This follow-up was generated by VisaFlow AI Recruitment Agent."),
+      payload: {
+        agency: task.agency,
+        request_no: task.request_no,
+        reference: task.reference,
+        priority: task.priority,
+        auto_generated: auto,
+        dedupe_key: actionKey,
+      },
+    });
+  }
+
+  await writeAIAgentAuditLog({
+    actionType: type,
+    actionKey,
+    status: "completed",
+    severity: task.priority === "High" ? "warning" : "info",
+    title: task.title,
+    targetTable: task.related_table,
+    targetId: task.related_id,
+    agencyId: task.agency_id || null,
+    agencyName: task.agency,
+    requestNo: task.request_no,
+    details: { task, sendEmail, auto },
+  });
+
+  return { ok: true, skipped: false, emailSkipped: Boolean(sendEmail && !task.agency_email) };
+}
+
+async function processAIAgentAgencyFollowUps(options = {}) {
+  const { auto = false, limit = 50, silent = false, sendEmail = false } = options;
+
+  if (!canManageAgencyAgreements && !canManageCandidates && !canManageVisas && !canManageUsers && !canManagePlatform) {
+    if (!silent) alert("You do not have permission to run AI Agent follow-up.");
+    return { ok: false, created: 0, skipped: 0, reason: "Permission denied" };
+  }
+
+  if (auto && !isAIAgentAgencyFollowUpAutoEnabled()) {
+    return { ok: true, created: 0, skipped: 0, reason: "Auto follow-up is disabled" };
   }
 
   const tasks = getAIAgentAgencyTasks();
   if (!tasks.length) {
-    setAiAgentLog("No agency follow-up tasks found. All agencies are within current follow-up rules.");
-    setAiAgentLastRun(new Date().toLocaleString());
-    return alert("No agency follow-up tasks found.");
+    if (!silent) {
+      setAiAgentLog("No agency follow-up tasks found. All agencies are within current follow-up rules.");
+      setAiAgentLastRun(new Date().toLocaleString());
+      alert("No agency follow-up tasks found.");
+    }
+    return { ok: true, created: 0, skipped: 0, reason: "No tasks" };
   }
 
   setAiAgentLoading(true);
-  setAiAgentLog("");
+  if (!silent) setAiAgentLog("");
 
   try {
-    const selectedTasks = tasks.slice(0, 50);
+    const selectedTasks = tasks.slice(0, limit);
+    let created = 0;
+    let skipped = 0;
+    let emailSkipped = 0;
 
     for (const task of selectedTasks) {
-      const email = buildAIAgentAgencyEmail(task);
-      await triggerExternalNotification("AI_AGENT_AGENCY_FOLLOWUP", {
-        company_id: currentCompanyId,
-        agency_id: task.agency_id || null,
-        agency_name: task.agency,
-        agency_email: task.agency_email || "",
-        title: task.title,
-        message: email.body,
-        subject: email.subject,
-        priority: task.priority,
-        related_table: task.related_table,
-        related_id: task.related_id,
-        source: "AI Commander / AI Agent",
-        delivery_channel: "Notification + Webhook/Email Automation",
-        task,
-      });
+      if (auto && await hasAIAgentFollowUpToday(task, "AI_AGENT_AUTO_AGENCY_FOLLOWUP")) {
+        skipped += 1;
+        continue;
+      }
+
+      const result = await sendAIAgentAgencyFollowUpTask(task, { auto, sendEmail });
+      if (result?.skipped) {
+        skipped += 1;
+        continue;
+      }
+      created += 1;
+      if (result?.emailSkipped) emailSkipped += 1;
     }
 
-    const summary = `AI Agent completed follow-up preparation for ${selectedTasks.length} item(s).\n\n` +
+    const summary = `${auto ? "AI Agent Auto Follow-up" : "AI Agent Manual Follow-up"} completed for ${created} item(s). ${skipped ? `${skipped} duplicate item(s) skipped for today.` : ""}${sendEmail ? ` ${emailSkipped ? `${emailSkipped} item(s) had no agency email.` : "Emails enabled."}` : " Notifications only."}\n\n` +
       selectedTasks.slice(0, 10).map((task, index) => `${index + 1}. [${task.priority}] ${task.agency} - ${task.title}`).join("\n") +
       (selectedTasks.length > 10 ? `\n...and ${selectedTasks.length - 10} more.` : "");
 
     setAiAgentLog(summary);
     setAiAgentLastRun(new Date().toLocaleString());
-    alert(`AI Agent follow-up created: ${selectedTasks.length} item(s).`);
     await loadNotifications();
+    if (sendEmail) await loadEmailLogs();
+
+    if (!silent) alert(`AI Agent follow-up created: ${created} item(s).`);
+    return { ok: true, created, skipped };
   } catch (error) {
     setAiAgentLog(`AI Agent failed: ${error.message}`);
-    alert(error.message);
+    if (!silent) alert(error.message);
+    return { ok: false, created: 0, skipped: 0, reason: error.message };
   } finally {
     setAiAgentLoading(false);
   }
+}
+
+async function runAIAgentAutoAgencyFollowUp({ limit = getAIAgentMaxAutoActions() } = {}) {
+  return processAIAgentAgencyFollowUps({
+    auto: true,
+    limit,
+    silent: true,
+    sendEmail: shouldAIAgentSendAgencyEmails(),
+  });
+}
+
+async function runAIAgentAgencyFollowUp() {
+  return processAIAgentAgencyFollowUps({
+    auto: false,
+    limit: 50,
+    silent: false,
+    sendEmail: shouldAIAgentSendAgencyEmails(),
+  });
 }
 
 function getCandidateRequest(candidate) {
@@ -12367,6 +12906,67 @@ if (!currentUser) {
               <Stat title="Emails / Notifications" value={notifications.filter((item) => String(item.type || "").startsWith("AI_AGENT")).length} className="passed" />
               <Stat title="Active Agencies" value={agencies.filter((agency) => String(agency.status || "Active") !== "Inactive").length} className="passed" />
             </div>
+
+            <TableCard title="⚙️ AI Agent Settings + Auto Follow-up Agencies">
+              <div style={{ padding: "16px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", marginBottom: "14px", lineHeight: 1.7 }}>
+                <b>Production Guardrails:</b> التشغيل التلقائي الحقيقي يتم عبر Supabase Edge Functions / Cron وليس من المتصفح. الواجهة تعرض التوصيات وتسمح بإنشاء Job آمن فقط، مع Cooldown وRate Limit وسجل حوكمة لكل حركة.
+              </div>
+
+              <div className="dashboard-grid" style={{ marginBottom: "14px" }}>
+                <Stat title="Agent Mode" value={getAIAgentSettingsModeLabel()} className={isAIAgentEnabled() ? "passed" : "warning"} />
+                <Stat title="Manager Auto" value={isAIAgentManagerAutoEnabled() ? "On" : "Off"} className={isAIAgentManagerAutoEnabled() ? "passed" : "warning"} />
+                <Stat title="Agency Auto Follow-up" value={isAIAgentAgencyFollowUpAutoEnabled() ? "On" : "Off"} className={isAIAgentAgencyFollowUpAutoEnabled() ? "passed" : "warning"} />
+                <Stat title="Runtime" value={isAIAgentBackgroundMode() ? "Background Worker" : "Browser Demo"} className={isAIAgentBackgroundMode() ? "passed" : "warning"} />
+                <Stat title="Agency Emails" value={shouldAIAgentSendAgencyEmails() ? "Enabled" : "Notifications Only"} className={shouldAIAgentSendAgencyEmails() ? "passed" : "warning"} />
+              </div>
+
+              <div className="form-grid">
+                <Select
+                  placeholder="AI Agent Mode"
+                  value={aiAgentSettings.mode || "auto_notify_manager"}
+                  options={AI_AGENT_MODE_OPTIONS}
+                  onChange={(v) => updateAIAgentSetting("mode", v)}
+                />
+                <Input placeholder="Manager Approval Email Override" value={aiAgentSettings.manager_approval_email || ""} onChange={(v) => updateAIAgentSetting("manager_approval_email", v)} />
+                <Input type="number" placeholder="Agency Reminder After Days" value={String(aiAgentSettings.agency_reminder_after_days || 3)} onChange={(v) => updateAIAgentSetting("agency_reminder_after_days", v)} />
+                <Input type="number" placeholder="Escalation After Days" value={String(aiAgentSettings.escalation_after_days || 7)} onChange={(v) => updateAIAgentSetting("escalation_after_days", v)} />
+                <Input type="number" placeholder="Max Auto Actions Per Run" value={String(aiAgentSettings.max_auto_actions_per_run || 5)} onChange={(v) => updateAIAgentSetting("max_auto_actions_per_run", v)} />
+                <Input type="number" placeholder="Cooldown Minutes" value={String(aiAgentSettings.cooldown_minutes || 60)} onChange={(v) => updateAIAgentSetting("cooldown_minutes", v)} />
+                <Input type="number" placeholder="Max Actions Per Hour" value={String(aiAgentSettings.max_actions_per_hour || 20)} onChange={(v) => updateAIAgentSetting("max_actions_per_hour", v)} />
+                <Input type="number" placeholder="Max Retry Attempts" value={String(aiAgentSettings.max_retry_attempts || 3)} onChange={(v) => updateAIAgentSetting("max_retry_attempts", v)} />
+                <Input placeholder="Daily Brief Time" value={aiAgentSettings.daily_brief_time || "08:00"} onChange={(v) => updateAIAgentSetting("daily_brief_time", v)} />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "10px", marginTop: "14px" }}>
+                <label className="check-row"><input type="checkbox" checked={aiAgentSettings.is_active !== false} onChange={(e) => updateAIAgentSetting("is_active", e.target.checked)} /> Enable AI Agent</label>
+                <label className="check-row"><input type="checkbox" checked={aiAgentSettings.auto_manager_approval !== false} onChange={(e) => updateAIAgentSetting("auto_manager_approval", e.target.checked)} /> Auto notify Recruitment Manager</label>
+                <label className="check-row"><input type="checkbox" checked={Boolean(aiAgentSettings.auto_followup_agencies)} onChange={(e) => updateAIAgentSetting("auto_followup_agencies", e.target.checked)} /> Auto follow-up agencies</label>
+                <label className="check-row"><input type="checkbox" checked={Boolean(aiAgentSettings.allow_auto_agency_emails)} onChange={(e) => updateAIAgentSetting("allow_auto_agency_emails", e.target.checked)} /> Send real emails to agencies</label>
+                <label className="check-row"><input type="checkbox" checked={aiAgentSettings.run_in_background !== false} onChange={(e) => updateAIAgentSetting("run_in_background", e.target.checked)} /> Run automation in background worker</label>
+                <label className="check-row"><input type="checkbox" checked={Boolean(aiAgentSettings.client_auto_enabled)} onChange={(e) => updateAIAgentSetting("client_auto_enabled", e.target.checked)} /> Allow browser demo auto-run</label>
+                <label className="check-row"><input type="checkbox" checked={aiAgentSettings.daily_brief_enabled !== false} onChange={(e) => updateAIAgentSetting("daily_brief_enabled", e.target.checked)} /> Daily brief enabled</label>
+              </div>
+
+              {aiAgentSettingsMessage && <p className="muted-text">{aiAgentSettingsMessage}</p>}
+              {aiAgentLog && (
+                <div style={{ marginTop: "14px", padding: "14px 16px", borderRadius: "16px", background: "#f8fafc", border: "1px solid #e2e8f0", whiteSpace: "pre-wrap", color: "#334155", fontWeight: 700 }}>
+                  {aiAgentLog}
+                </div>
+              )}
+
+              <div className="actions-line" style={{ marginTop: "14px" }}>
+                <button className="save-btn" onClick={saveAIAgentSettings} disabled={aiAgentSettingsSaving}>
+                  {aiAgentSettingsSaving ? "Saving..." : "Save AI Agent Settings"}
+                </button>
+                <button className="new-btn" onClick={() => isAIAgentBackgroundMode() ? enqueueAIAgentBackgroundJob("manager_auto_run") : runAIAgentAutoManagerApprovals({ limit: getAIAgentMaxAutoActions() })} disabled={aiAgentLoading || !isAIAgentManagerAutoEnabled()}>
+                  {isAIAgentBackgroundMode() ? "Queue Manager Job" : "Run Manager Auto Now"}
+                </button>
+                <button className="new-btn" onClick={() => isAIAgentBackgroundMode() ? enqueueAIAgentBackgroundJob("agency_auto_followup") : runAIAgentAutoAgencyFollowUp({ limit: getAIAgentMaxAutoActions() })} disabled={aiAgentLoading || !isAIAgentAgencyFollowUpAutoEnabled()}>
+                  {isAIAgentBackgroundMode() ? "Queue Agency Job" : "Run Agency Auto Follow-up Now"}
+                </button>
+                <button className="light-btn" onClick={loadAIAgentSettings}>Reload Settings</button>
+              </div>
+            </TableCard>
 
             <TableCard title="🧭 Request Assignment Recommendations">
               <div style={{ padding: "16px", borderRadius: "18px", background: "#f8fafc", border: "1px solid #e2e8f0", marginBottom: "14px", lineHeight: 1.7 }}>
