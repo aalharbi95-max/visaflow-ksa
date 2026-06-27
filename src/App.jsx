@@ -907,14 +907,27 @@ const [activeAgencyCompanyId, setActiveAgencyCompanyId] = useState(() =>
 const [activeAgencyCompanyName, setActiveAgencyCompanyName] = useState(() =>
   sessionStorage.getItem("visaflow_agency_company_name") || ""
 );
-const DEFAULT_COMPANY_ID = "bed19b89-b71c-4bd3-ac64-f5f1fa734a18";
+const DEFAULT_COMPANY_ID = "";
 const rawCurrentRole = String(currentUser?.role || "").trim();
 const isCurrentAgencyUser = rawCurrentRole.toLowerCase() === "agency";
-const currentCompanyId = isCurrentAgencyUser
-  ? (activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "")
-  : (currentUser?.company_id || DEFAULT_COMPANY_ID);
+
+const isCurrentPlatformUser = [
+  "platform owner",
+  "platform accounts user",
+  "platform support user",
+].includes(rawCurrentRole.toLowerCase());
+
+const currentCompanyId = isCurrentPlatformUser
+  ? ""
+  : isCurrentAgencyUser
+    ? (activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "")
+    : (currentUser?.company_id || "");
 
 function withCompany(payload = {}) {
+  if (!currentCompanyId && !isCurrentPlatformUser) {
+    throw new Error("Company ID is missing. Action blocked to prevent cross-company data mixing.");
+  }
+
   return {
     ...payload,
     company_id: currentCompanyId,
@@ -1927,6 +1940,15 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     return;
   }
 
+  if (!currentCompanyId && !globalTables.includes(table)) {
+    console.warn(`${table}: blocked because companyId is missing`, {
+      currentRole,
+      currentUser,
+    });
+    setter([]);
+    return;
+  }
+
   let query = supabase
     .from(table)
     .select("*")
@@ -2158,17 +2180,9 @@ setProfessions(allProfessions);
   const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
 
 async function loadNotifications() {
-  const companyIds = Array.from(new Set([
-    currentCompanyId,
-    currentUser?.company_id,
-    currentUser?.active_company_id,
-    DEFAULT_COMPANY_ID,
-  ].filter((value) => value && String(value).trim())));
-
-  if (companyIds.length === 0) {
-    console.warn("Notifications: companyId is missing", {
+  if (!currentCompanyId) {
+    console.warn("Notifications blocked: companyId is missing", {
       currentCompanyId,
-      DEFAULT_COMPANY_ID,
       currentRole,
       currentUser,
     });
@@ -2179,19 +2193,17 @@ async function loadNotifications() {
   let query = supabase
     .from("notification_events")
     .select("id, company_id, user_id, agency_id, type, title, message, priority, status, delivery_status, related_table, related_id, read_at, created_at, data")
+    .eq("company_id", currentCompanyId)
     .order("created_at", { ascending: false })
     .limit(100);
 
-  if (companyIds.length === 1) {
-    query = query.eq("company_id", companyIds[0]);
-  } else {
-    query = query.in("company_id", companyIds);
+  if (currentRole === "Agency" && currentUser?.agency_id) {
+    query = query.eq("agency_id", currentUser.agency_id);
   }
 
   const { data, error } = await query;
 
   console.log("NOTIFICATIONS DEBUG:", {
-    companyIds,
     currentCompanyId,
     currentRole,
     userCompanyId: currentUser?.company_id,
@@ -2222,7 +2234,6 @@ async function loadNotifications() {
   setNotifications(rows);
   return rows;
 }
-
   async function loadEmailLogs() {
     if (!currentCompanyId) return setEmailLogs([]);
 
