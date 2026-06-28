@@ -2387,6 +2387,9 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       return;
     }
 
+    const agencyMap = new Map();
+
+    // 1) Agencies already granted to the current company.
     const { data: accessRows, error: accessError } = await supabase
       .from("company_agency_access")
       .select("agency_id, status")
@@ -2399,26 +2402,68 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       return;
     }
 
-    const agencyIds = Array.from(new Set((accessRows || []).map((row) => row.agency_id).filter(Boolean)));
+    const linkedAgencyIds = Array.from(
+      new Set((accessRows || []).map((row) => row.agency_id).filter(Boolean))
+    );
 
-    if (agencyIds.length === 0) {
-      setAgencies([]);
-      return;
+    if (linkedAgencyIds.length > 0) {
+      const { data: linkedAgencies, error: linkedError } = await supabase
+        .from("agencies")
+        .select("*")
+        .in("id", linkedAgencyIds)
+        .range(0, 5000);
+
+      if (linkedError) {
+        alert(`agencies linked: ${linkedError.message}`);
+        return;
+      }
+
+      (linkedAgencies || []).forEach((agency) => {
+        if (agency?.id) agencyMap.set(String(agency.id), agency);
+      });
     }
 
-    const { data, error } = await supabase
+    // 2) Global agencies are available to be granted to this company.
+    // This keeps the Add User agency dropdown populated after agencies became platform-level records.
+    const { data: globalAgencies, error: globalError } = await supabase
       .from("agencies")
       .select("*")
-      .in("id", agencyIds)
-      .order("name", { ascending: true })
+      .is("company_id", null)
       .range(0, 5000);
 
-    if (error) {
-      alert(`agencies: ${error.message}`);
+    if (globalError) {
+      alert(`agencies global: ${globalError.message}`);
       return;
     }
 
-    setAgencies(data || []);
+    (globalAgencies || [])
+      .filter((agency) => String(agency?.status || "Active").toLowerCase() !== "inactive")
+      .forEach((agency) => {
+        if (agency?.id) agencyMap.set(String(agency.id), agency);
+      });
+
+    // 3) Backward compatibility for any old company-owned agency records.
+    const { data: companyAgencies, error: companyAgencyError } = await supabase
+      .from("agencies")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .range(0, 5000);
+
+    if (companyAgencyError) {
+      console.warn("company-owned agencies:", companyAgencyError.message);
+    }
+
+    (companyAgencies || [])
+      .filter((agency) => String(agency?.status || "Active").toLowerCase() !== "inactive")
+      .forEach((agency) => {
+        if (agency?.id) agencyMap.set(String(agency.id), agency);
+      });
+
+    const rows = Array.from(agencyMap.values()).sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""))
+    );
+
+    setAgencies(rows);
   }
   const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
