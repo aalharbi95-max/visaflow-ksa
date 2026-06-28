@@ -12342,21 +12342,52 @@ async function deleteSupportTicket(id) {
 }
 
 async function createSystemBackup(clientId = null) {
-  if (!canManagePlatform) return alert("You do not have permission to create backups.");
+  if (!canManagePlatform) {
+    return alert("You do not have permission to create backups.");
+  }
+
+  const selectedClient = clientId
+    ? platformClients.find((client) => String(client.id) === String(clientId))
+    : null;
+
+  const now = new Date();
+  const stamp = now
+    .toISOString()
+    .replaceAll(":", "-")
+    .replaceAll(".", "-");
+
+  const backupType = selectedClient ? "Company" : "Full System";
+  const companyName = selectedClient?.company_name || "Full System";
+  const safeCompanyName = normalizeMatchText(companyName).replaceAll(" ", "_") || "company";
 
   const payload = {
-    client_id: clientId || null,
-    backup_type: clientId ? "Company" : "Full System",
-    status: "Completed",
+    client_id: selectedClient?.id || null,
+    company_id: selectedClient?.operational_company_id || selectedClient?.company_id || null,
+    backup_type: backupType,
+    status: "Pending",
     file_url: "",
-    notes: clientId ? `Manual backup record for ${getPlatformClientName(clientId)}` : "Manual full system backup record",
+    file_name: selectedClient
+      ? `visaflow_company_backup_${safeCompanyName}_${stamp}.zip`
+      : `visaflow_full_system_backup_${stamp}.zip`,
+    file_size: "Pending",
+    tables_count: 0,
+    records_count: 0,
+    created_by: currentUser?.name || currentUser?.email || "Platform",
+    notes: selectedClient
+      ? `Backup request created for ${companyName}. Waiting for secure backend backup processor.`
+      : "Full system backup request created. Waiting for secure backend backup processor.",
+    created_at: now.toISOString(),
+    completed_at: null,
   };
 
   const { error } = await supabase.from("system_backups").insert([payload]);
-  if (error) return alert(error.message);
+
+  if (error) {
+    return alert(error.message);
+  }
 
   await loadSystemBackups();
-  alert("Backup record created successfully");
+  alert("Backup request created successfully. Status: Pending");
 }
 
 async function deleteSystemBackup(id) {
@@ -20330,40 +20361,134 @@ onClick={() => setActiveReport("lateSla")}>
 )}
 
 
-{activePage === "Backup Center" && canManagePlatform && (
-  <div className="page-section">
-    <div className="form-card">
-      <h2>Backup Center</h2>
-      <p>Create a backup log record for the full system or for a specific company.</p>
-      <div className="form-actions">
-        <button className="save-btn" onClick={() => createSystemBackup(null)}>Create Full System Backup Record</button>
-        <select onChange={(e) => e.target.value && createSystemBackup(e.target.value)} defaultValue="">
-          <option value="">Backup Specific Company</option>
-          {platformClients.map((client) => <option key={client.id} value={client.id}>{client.company_name}</option>)}
-        </select>
+{activePage === "Backup Center" && canManagePlatform && (() => {
+  const backupRows = [...systemBackups].sort(
+    (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+  );
+  const pendingBackups = backupRows.filter((item) => normalize(item.status) === "pending").length;
+  const completedBackups = backupRows.filter((item) => ["completed", "success", "done"].includes(normalize(item.status))).length;
+  const failedBackups = backupRows.filter((item) => ["failed", "error"].includes(normalize(item.status))).length;
+  const latestBackup = backupRows[0] || null;
+
+  return (
+    <div className="page-section">
+      <div className="executive-hero">
+        <div>
+          <p className="eyebrow">Platform Administration</p>
+          <h1>Backup Center</h1>
+          <p>Request secure full-system or company-level backups and track backup processing history.</p>
+        </div>
+        <div className="form-actions">
+          <button className="save-btn" onClick={() => createSystemBackup(null)}>
+            Request Full System Backup
+          </button>
+        </div>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card">
+          <h3>Total Backup Requests</h3>
+          <strong>{backupRows.length}</strong>
+          <p>All backup records</p>
+        </div>
+        <div className="stat-card">
+          <h3>Pending</h3>
+          <strong>{pendingBackups}</strong>
+          <p>Waiting for backend processor</p>
+        </div>
+        <div className="stat-card">
+          <h3>Completed</h3>
+          <strong>{completedBackups}</strong>
+          <p>Ready or processed</p>
+        </div>
+        <div className="stat-card">
+          <h3>Failed</h3>
+          <strong>{failedBackups}</strong>
+          <p>Needs review</p>
+        </div>
+      </div>
+
+      <div className="form-card">
+        <h2>Create Backup Request</h2>
+        <p>
+          Backup requests are logged here. The actual database export must be processed by the secure backend backup service, not directly from the browser.
+        </p>
+        <div className="form-grid">
+          <select
+            defaultValue=""
+            onChange={(e) => {
+              if (!e.target.value) return;
+              createSystemBackup(e.target.value);
+              e.target.value = "";
+            }}
+          >
+            <option value="">Request Company Backup</option>
+            {platformClients.map((client) => (
+              <option key={client.id} value={client.id}>{client.company_name}</option>
+            ))}
+          </select>
+          <input readOnly value={latestBackup?.file_name || "No backup request yet"} />
+          <input readOnly value={latestBackup?.created_at ? `Last request: ${new Date(latestBackup.created_at).toLocaleString()}` : "Last request: -"} />
+        </div>
+        <div className="form-actions">
+          <button className="save-btn" onClick={() => createSystemBackup(null)}>
+            Request Full System Backup
+          </button>
+          <button className="ghost-btn" onClick={loadSystemBackups}>Refresh History</button>
+        </div>
+      </div>
+
+      <div className="table-card">
+        <h2>Backup History</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Company</th>
+              <th>Status</th>
+              <th>File</th>
+              <th>Size</th>
+              <th>Tables</th>
+              <th>Records</th>
+              <th>Created By</th>
+              <th>Created</th>
+              <th>Completed</th>
+              <th>Notes</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {backupRows.length === 0 ? (
+              <tr><td colSpan="12">No backup records yet</td></tr>
+            ) : backupRows.map((item) => (
+              <tr key={item.id}>
+                <td>{item.backup_type || "Company"}</td>
+                <td>{item.client_id ? getPlatformClientName(item.client_id) : "Full System"}</td>
+                <td><Badge value={item.status || "Pending"} /></td>
+                <td>
+                  {item.file_url ? (
+                    <a href={item.file_url} target="_blank" rel="noreferrer">Download</a>
+                  ) : (item.file_name || "-")}
+                </td>
+                <td>{item.file_size || "-"}</td>
+                <td>{item.tables_count ?? 0}</td>
+                <td>{item.records_count ?? 0}</td>
+                <td>{item.created_by || "-"}</td>
+                <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                <td>{item.completed_at ? new Date(item.completed_at).toLocaleString() : "-"}</td>
+                <td>{item.notes || "-"}</td>
+                <td className="actions">
+                  {item.file_url && <button onClick={() => window.open(item.file_url, "_blank")}>Download</button>}
+                  <button onClick={() => deleteSystemBackup(item.id)}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
-    <div className="table-card">
-      <h2>System Backups</h2>
-      <table>
-        <thead><tr><th>Type</th><th>Company</th><th>Status</th><th>Date</th><th>File URL</th><th>Notes</th><th>Actions</th></tr></thead>
-        <tbody>
-          {systemBackups.length === 0 ? <tr><td colSpan="7">No backup records yet</td></tr> : systemBackups.map((item) => (
-            <tr key={item.id}>
-              <td>{item.backup_type || "Company"}</td>
-              <td>{getPlatformClientName(item.client_id)}</td>
-              <td><Badge value={item.status || "Completed"} /></td>
-              <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
-              <td>{item.file_url || "-"}</td>
-              <td>{item.notes || "-"}</td>
-              <td className="actions"><button onClick={() => deleteSystemBackup(item.id)}>Delete</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </div>
-)}
+  );
+})()}
 
 {activePage === "Central Support" && canManagePlatform && (
   <div className="page-section">
