@@ -12455,6 +12455,28 @@ async function runBackupWorker() {
   alert(data?.processed ? "Backup worker processed one request." : "No pending backup requests.");
 }
 
+async function runRestoreWorker() {
+  if (!isPlatformOwner) {
+    return alert("Only Platform Owner can run the restore worker.");
+  }
+
+  const { data, error } = await supabase.functions.invoke("visaflowrestoreworker", {
+    body: {},
+  });
+
+  if (error) return alert(error.message);
+  if (data?.ok === false) return alert(data.error || "Restore worker failed.");
+
+  await loadSystemBackups();
+  await loadSystemRestoreRequests();
+
+  if (data?.processed) {
+    alert(`Restore worker completed. Restored records: ${data?.restored_records_count || 0}`);
+  } else {
+    alert("No pending restore requests.");
+  }
+}
+
 async function requestLatestCompanyRestore(clientId = "") {
   if (!isPlatformOwner) {
     return alert("Only Platform Owner can request restore.");
@@ -20585,6 +20607,9 @@ onClick={() => setActiveReport("lateSla")}>
           <button className="ghost-btn" onClick={runBackupWorker}>
             Run Backup Worker
           </button>
+          <button className="ghost-btn" onClick={runRestoreWorker}>
+            Run Restore Worker
+          </button>
         </div>
       </div>
 
@@ -20638,6 +20663,7 @@ onClick={() => setActiveReport("lateSla")}>
             Request Full System Backup
           </button>
           <button className="ghost-btn" onClick={runBackupWorker}>Run Backup Worker</button>
+          <button className="ghost-btn" onClick={runRestoreWorker}>Run Restore Worker</button>
           <button className="ghost-btn" onClick={() => { loadSystemBackups(); loadSystemRestoreRequests(); }}>Refresh History</button>
         </div>
       </div>
