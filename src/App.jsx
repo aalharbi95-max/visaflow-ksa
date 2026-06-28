@@ -1389,49 +1389,86 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
     return [];
   }
 
+  if (!effectiveUser.id || !effectiveUser.agency_id) {
+    setAgencyClientAccess([]);
+    return [];
+  }
+
   setAgencyWorkspaceLoading(true);
 
-  const searches = [
-    ["user_id", effectiveUser.id],
-    ["user_email", effectiveUser.email],
-    ["agency_id", effectiveUser.agency_id],
-    ["agency_name", effectiveUser.agency_name],
-  ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "");
-
-  let allRows = [];
-
   try {
-    for (const [field, value] of searches) {
-      const { data, error } = await supabase
-        .from("agency_client_access")
-        .select("*")
-        .eq("status", "Active")
-        .eq(field, value)
-        .range(0, 500);
+    const { data: accessRows, error: accessError } = await supabase
+      .from("agency_company_user_access")
+      .select("*")
+      .eq("status", "Active")
+      .eq("user_id", effectiveUser.id)
+      .eq("agency_id", effectiveUser.agency_id)
+      .range(0, 500);
 
-      if (error) {
-        console.warn("agency_client_access:", error.message);
-        continue;
-      }
-
-      allRows = [...allRows, ...(data || [])];
+    if (accessError) {
+      console.warn("agency_company_user_access:", accessError.message);
+      setAgencyClientAccess([]);
+      return [];
     }
+
+    const companyIds = Array.from(
+      new Set((accessRows || []).map((row) => row.company_id).filter(Boolean))
+    );
+
+    if (companyIds.length === 0) {
+      setAgencyClientAccess([]);
+      return [];
+    }
+
+    const { data: companyRows, error: companyError } = await supabase
+      .from("companies")
+      .select("id, name, status, subscription_status")
+      .in("id", companyIds)
+      .range(0, 500);
+
+    if (companyError) {
+      console.warn("companies for agency workspaces:", companyError.message);
+      setAgencyClientAccess([]);
+      return [];
+    }
+
+    const companiesById = new Map((companyRows || []).map((company) => [String(company.id), company]));
+
+    const workspaces = getUniqueAgencyWorkspaces(
+      (accessRows || [])
+        .map((row) => {
+          const company = companiesById.get(String(row.company_id));
+          if (!company) return null;
+
+          return {
+            ...row,
+            company_id: row.company_id,
+            company_name: company.name || `Client ${row.company_id}`,
+            company_status: company.status || "Active",
+            subscription_status: company.subscription_status || "Active",
+            agency_name: effectiveUser.agency_name || row.agency_name || "Agency Portal",
+          };
+        })
+        .filter(Boolean)
+        .filter((row) => String(row.company_status || "Active").toLowerCase() === "active")
+    );
+
+    setAgencyClientAccess(workspaces);
+
+    if (workspaces.length > 0 && autoSelect) {
+      const currentId = activeAgencyCompanyId || effectiveUser.active_company_id || "";
+      const selected = workspaces.find((item) => String(item.company_id) === String(currentId)) || workspaces[0];
+      switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
+    }
+
+    return workspaces;
   } catch (error) {
-    console.warn("agency_client_access load failed", error?.message || error);
+    console.warn("agency workspace load failed", error?.message || error);
+    setAgencyClientAccess([]);
+    return [];
   } finally {
     setAgencyWorkspaceLoading(false);
   }
-
-  const workspaces = getUniqueAgencyWorkspaces(allRows);
-  setAgencyClientAccess(workspaces);
-
-  if (workspaces.length > 0 && autoSelect) {
-    const currentId = activeAgencyCompanyId || effectiveUser.active_company_id || effectiveUser.company_id || "";
-    const selected = workspaces.find((item) => String(item.company_id) === String(currentId)) || workspaces[0];
-    switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
-  }
-
-  return workspaces;
 }
 
 function switchAgencyWorkspace(workspace, options = {}) {
@@ -2307,7 +2344,82 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   const loadVisaBatchLines = () => loadTable("visa_batch_lines", setVisaBatchLines);
   const loadVisaAuthorizations = () => loadTable("visa_authorizations", setVisaAuthorizations);
   const loadVisaAllocations = () => loadTable("visa_allocations", setVisaAllocations);
-  const loadAgencies = () => loadTable("agencies", setAgencies);
+  async function loadAgencies() {
+    if (canManagePlatform) {
+      const { data, error } = await supabase
+        .from("agencies")
+        .select("*")
+        .order("name", { ascending: true })
+        .range(0, 5000);
+
+      if (error) {
+        alert(`agencies: ${error.message}`);
+        return;
+      }
+
+      setAgencies(data || []);
+      return;
+    }
+
+    if (currentRole === "Agency") {
+      if (!currentUser?.agency_id) {
+        setAgencies([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("agencies")
+        .select("*")
+        .eq("id", currentUser.agency_id)
+        .range(0, 1);
+
+      if (error) {
+        alert(`agencies: ${error.message}`);
+        return;
+      }
+
+      setAgencies(data || []);
+      return;
+    }
+
+    if (!currentCompanyId) {
+      setAgencies([]);
+      return;
+    }
+
+    const { data: accessRows, error: accessError } = await supabase
+      .from("company_agency_access")
+      .select("agency_id, status")
+      .eq("company_id", currentCompanyId)
+      .eq("status", "Active")
+      .range(0, 5000);
+
+    if (accessError) {
+      alert(`company_agency_access: ${accessError.message}`);
+      return;
+    }
+
+    const agencyIds = Array.from(new Set((accessRows || []).map((row) => row.agency_id).filter(Boolean)));
+
+    if (agencyIds.length === 0) {
+      setAgencies([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("agencies")
+      .select("*")
+      .in("id", agencyIds)
+      .order("name", { ascending: true })
+      .range(0, 5000);
+
+    if (error) {
+      alert(`agencies: ${error.message}`);
+      return;
+    }
+
+    setAgencies(data || []);
+  }
   const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
   const loadAgencyScoreHistory = () => loadTable("agency_score_history", setAgencyScoreHistory);
@@ -2331,7 +2443,59 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       return;
     }
 
-    return loadTable("users", setUsers);
+    if (currentRole === "Agency" || !currentCompanyId) {
+      setUsers([]);
+      return;
+    }
+
+    const { data: companyUsers, error: companyUsersError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 5000);
+
+    if (companyUsersError) {
+      alert(`users: ${companyUsersError.message}`);
+      return;
+    }
+
+    const { data: agencyAccessRows, error: agencyAccessError } = await supabase
+      .from("agency_company_user_access")
+      .select("user_id")
+      .eq("company_id", currentCompanyId)
+      .eq("status", "Active")
+      .range(0, 5000);
+
+    if (agencyAccessError) {
+      console.warn("agency_company_user_access users:", agencyAccessError.message);
+      setUsers(companyUsers || []);
+      return;
+    }
+
+    const agencyUserIds = Array.from(new Set((agencyAccessRows || []).map((row) => row.user_id).filter(Boolean)));
+    let agencyUsers = [];
+
+    if (agencyUserIds.length > 0) {
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .in("id", agencyUserIds)
+        .range(0, 5000);
+
+      if (error) {
+        console.warn("agency users:", error.message);
+      } else {
+        agencyUsers = data || [];
+      }
+    }
+
+    const merged = new Map();
+    [...(companyUsers || []), ...agencyUsers].forEach((user) => {
+      if (user?.id) merged.set(String(user.id), user);
+    });
+
+    setUsers(Array.from(merged.values()));
   };
   const loadCompanies = async () => {
     if (!currentCompanyId) return setCompanies([]);
@@ -4623,19 +4787,6 @@ async function saveUser() {
   if (!canManageUsers) return alert("You do not have permission to manage users.");
   if (!userForm.name) return alert("User name is required.");
   if (!userForm.email) return alert("Email is required.");
-  if (!userForm.password) return alert("Password is required.");
-  if (userForm.role === "Agency" && !userForm.agency_name) {
-    return alert("Please select the agency for this Agency user.");
-  }
-  const existingUser = users.find(
-  (u) =>
-    u.email?.trim().toLowerCase() === userForm.email?.trim().toLowerCase() &&
-    u.id !== userEditingId
-);
-
-if (existingUser) {
-  return alert("Email already exists");
-}
 
   const savingPlatformUser =
     canManagePlatformAccounts && activePage === "Platform Users";
@@ -4644,15 +4795,151 @@ if (existingUser) {
     ? (isPlatformRole(userForm.role) ? userForm.role : "Platform Accounts User")
     : (userForm.role || "Viewer");
 
+  const cleanEmail = userForm.email.trim().toLowerCase();
+  const selectedAgency = effectiveRole === "Agency"
+    ? agencies.find((agency) => String(agency.id || "") === String(userForm.agency_id || "")) ||
+      agencies.find((agency) => normalize(agency.name) === normalize(userForm.agency_name))
+    : null;
+
+  if (effectiveRole === "Agency" && !selectedAgency?.id) {
+    return alert("Please select the agency for this Agency user.");
+  }
+
+  if (!savingPlatformUser && !isPlatformRole(effectiveRole) && effectiveRole !== "Agency" && !currentCompanyId) {
+    return alert("Company ID is missing. User save was blocked to prevent cross-company data mixing.");
+  }
+
+  const { data: existingUser, error: findUserError } = await supabase
+    .from("users")
+    .select("*")
+    .eq("email", cleanEmail)
+    .maybeSingle();
+
+  if (findUserError) return alert(findUserError.message);
+
+  if (existingUser && String(existingUser.id) !== String(userEditingId || "")) {
+    if (effectiveRole !== "Agency") {
+      return alert("Email already exists in the platform.");
+    }
+
+    if (normalizeUserRole(existingUser.role) !== "Agency") {
+      return alert("This email is already used by an internal company/platform user and cannot be linked as an agency user.");
+    }
+
+    if (existingUser.agency_id && String(existingUser.agency_id) !== String(selectedAgency.id)) {
+      return alert("This email is already linked to another agency and cannot be linked to the selected agency.");
+    }
+  }
+
+  if (!existingUser && !userEditingId && !userForm.password) {
+    return alert("Password is required for new users.");
+  }
+
+  if (effectiveRole === "Agency") {
+    let agencyUserId = userEditingId || existingUser?.id || null;
+
+    const agencyPayload = {
+      name: userForm.name,
+      email: cleanEmail,
+      role: "Agency",
+      status: userForm.status || "Active",
+      company_id: null,
+      agency_id: selectedAgency.id,
+      agency_name: selectedAgency.name || userForm.agency_name || "",
+    };
+
+    if (userForm.password) agencyPayload.password = userForm.password.trim();
+
+    if (agencyUserId) {
+      const { error: updateError } = await supabase
+        .from("users")
+        .update(agencyPayload)
+        .eq("id", agencyUserId);
+
+      if (updateError) return alert(updateError.message);
+    } else {
+      const { data: createdUser, error: createError } = await supabase
+        .from("users")
+        .insert([{ ...agencyPayload, password: userForm.password.trim() }])
+        .select("*")
+        .single();
+
+      if (createError) return alert(createError.message);
+      agencyUserId = createdUser.id;
+    }
+
+    const { error: memberError } = await supabase
+      .from("agency_members")
+      .upsert(
+        [{ agency_id: selectedAgency.id, user_id: agencyUserId, role: "Agency User", status: userForm.status || "Active" }],
+        { onConflict: "agency_id,user_id" }
+      );
+
+    if (memberError) return alert(memberError.message);
+
+    const { error: companyAccessError } = await supabase
+      .from("company_agency_access")
+      .upsert(
+        [{
+          company_id: currentCompanyId,
+          agency_id: selectedAgency.id,
+          status: "Active",
+          can_view_requests: true,
+          can_upload_candidates: true,
+          can_update_candidates: true,
+          can_view_interviews: true,
+        }],
+        { onConflict: "company_id,agency_id" }
+      );
+
+    if (companyAccessError) return alert(companyAccessError.message);
+
+    const { error: userAccessError } = await supabase
+      .from("agency_company_user_access")
+      .upsert(
+        [{
+          company_id: currentCompanyId,
+          agency_id: selectedAgency.id,
+          user_id: agencyUserId,
+          role: "Agency User",
+          status: userForm.status || "Active",
+          can_view_requests: true,
+          can_upload_candidates: true,
+          can_update_candidates: true,
+          can_view_interviews: true,
+        }],
+        { onConflict: "company_id,agency_id,user_id" }
+      );
+
+    if (userAccessError) return alert(userAccessError.message);
+
+    setUserForm({
+      name: "",
+      email: "",
+      password: "",
+      role: savingPlatformUser ? "Platform Accounts User" : "Viewer",
+      status: "Active",
+      agency_id: "",
+      agency_name: "",
+    });
+
+    setUserEditingId(null);
+    await loadUsers();
+    await loadAgencies();
+    alert("Agency user access has been saved for this company.");
+    return;
+  }
+
   const payload = {
     name: userForm.name,
-    email: userForm.email.trim().toLowerCase(),
-    password: userForm.password.trim(),
+    email: cleanEmail,
     role: effectiveRole,
     status: userForm.status || "Active",
-    agency_id: effectiveRole === "Agency" ? (userForm.agency_id || null) : null,
-    agency_name: effectiveRole === "Agency" ? (userForm.agency_name || "") : "",
+    agency_id: null,
+    agency_name: "",
   };
+
+  if (userForm.password) payload.password = userForm.password.trim();
 
   const isInternalPlatformUser = isPlatformRole(payload.role);
   const userPayload = isInternalPlatformUser
@@ -4676,18 +4963,95 @@ if (existingUser) {
   });
 
   setUserEditingId(null);
-  loadUsers();
+  await loadUsers();
 }
-  async function saveAgency() {
-    if (!agencyForm.name) return alert("Agency name is required.");
-    const payload = { ...agencyForm, updated_at: new Date().toISOString() };
-    const result = agencyEditingId
-      ? await supabase.from("agencies").update(payload).eq("id", agencyEditingId)
-      : await supabase.from("agencies").insert([withCompany(payload)]);
-    if (result.error) return alert(result.error.message);
-    resetAgencyForm();
-    loadAgencies();
+
+async function findExistingAgencyByName(name) {
+  const normalizedName = normalize(name);
+  if (!normalizedName) return null;
+
+  const { data, error } = await supabase
+    .from("agencies")
+    .select("*")
+    .range(0, 5000);
+
+  if (error) throw error;
+
+  return (data || []).find((agency) => normalize(agency.name) === normalizedName) || null;
+}
+
+async function saveAgency() {
+  if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
+  if (!agencyForm.name) return alert("Agency name is required.");
+  if (!currentCompanyId && !canManagePlatform) return alert("Company ID is missing.");
+
+  const cleanName = String(agencyForm.name || "").trim();
+  const payload = {
+    name: cleanName,
+    country: agencyForm.country || "",
+    contact_person: agencyForm.contact_person || "",
+    email: agencyForm.email || "",
+    phone: agencyForm.phone || "",
+    status: agencyForm.status || "Active",
+    company_id: null,
+    updated_at: new Date().toISOString(),
+  };
+
+  let agencyId = agencyEditingId || null;
+  let linkedExistingAgency = false;
+
+  try {
+    if (agencyEditingId) {
+      const { error } = await supabase
+        .from("agencies")
+        .update(payload)
+        .eq("id", agencyEditingId);
+
+      if (error) return alert(error.message);
+    } else {
+      const existingAgency = await findExistingAgencyByName(cleanName);
+
+      if (existingAgency) {
+        agencyId = existingAgency.id;
+        linkedExistingAgency = true;
+      } else {
+        const { data, error } = await supabase
+          .from("agencies")
+          .insert([payload])
+          .select("*")
+          .single();
+
+        if (error) return alert(error.message);
+        agencyId = data.id;
+      }
+    }
+
+    if (currentCompanyId && agencyId) {
+      const { error: accessError } = await supabase
+        .from("company_agency_access")
+        .upsert(
+          [{
+            company_id: currentCompanyId,
+            agency_id: agencyId,
+            status: "Active",
+            can_view_requests: true,
+            can_upload_candidates: true,
+            can_update_candidates: true,
+            can_view_interviews: true,
+          }],
+          { onConflict: "company_id,agency_id" }
+        );
+
+      if (accessError) return alert(accessError.message);
+    }
+  } catch (error) {
+    return alert(error.message || "Agency save failed.");
   }
+
+  resetAgencyForm();
+  await loadAgencies();
+  alert(linkedExistingAgency ? "Existing agency has been linked to this company." : agencyEditingId ? "Agency updated successfully." : "Agency saved and linked to this company.");
+}
   function editUser(user) {
   setUserForm({
     name: user.name || "",
@@ -4718,10 +5082,38 @@ async function deleteUser(id) {
 }
 
   async function deleteAgency(id) {
-    if (!window.confirm("Delete this agency?")) return;
-    const { error } = await supabase.from("agencies").delete().eq("id", id);
-    if (error) return alert(error.message);
-    loadAgencies();
+    if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
+
+    if (canManagePlatform) {
+      if (!window.confirm("Delete this agency from the whole platform? This may affect all linked companies.")) return;
+      const { error } = await supabase.from("agencies").delete().eq("id", id);
+      if (error) return alert(error.message);
+      await loadAgencies();
+      return;
+    }
+
+    if (!currentCompanyId) return alert("Company ID is missing.");
+    if (!window.confirm("Remove this agency access from this company? The agency itself will remain available for other companies.")) return;
+
+    const { error: userAccessError } = await supabase
+      .from("agency_company_user_access")
+      .delete()
+      .eq("company_id", currentCompanyId)
+      .eq("agency_id", id);
+
+    if (userAccessError) return alert(userAccessError.message);
+
+    const { error: companyAccessError } = await supabase
+      .from("company_agency_access")
+      .delete()
+      .eq("company_id", currentCompanyId)
+      .eq("agency_id", id);
+
+    if (companyAccessError) return alert(companyAccessError.message);
+
+    await loadAgencies();
+    await loadUsers();
+    alert("Agency access has been removed from this company.");
   }
 
 function getAgreementTemplateDefaults(templateType) {
@@ -18372,7 +18764,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
   className="save-btn"
   onClick={saveUser}
 >
-  {userEditingId ? "Update User" : "Save User"}
+  {userForm.role === "Agency" ? (userEditingId ? "Update Agency Access" : "Grant Agency Access") : (userEditingId ? "Update User" : "Save User")}
 </button>
 {userEditingId && (
   <button
