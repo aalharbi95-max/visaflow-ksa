@@ -1088,6 +1088,7 @@ const [platformClients, setPlatformClients] = useState([]);
 const [subscriptionInvoices, setSubscriptionInvoices] = useState([]);
 const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
+const [systemRestoreRequests, setSystemRestoreRequests] = useState([]);
 const [companyReportClient, setCompanyReportClient] = useState(null);
 const [companyReportRows, setCompanyReportRows] = useState([]);
 const [companyReportLoading, setCompanyReportLoading] = useState(false);
@@ -1173,7 +1174,6 @@ const PLATFORM_ACCOUNT_PAGES = [
   "Platform Users",
   "Subscription Invoices",
   "Company Requests Report",
-  "Backup Center",
 ];
 
 const PLATFORM_SUPPORT_PAGES = [
@@ -2252,6 +2252,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadSubscriptionInvoices(),
       loadSupportTickets(),
       loadSystemBackups(),
+      loadSystemRestoreRequests(),
     ]);
     setLoading(false);
   }
@@ -2749,6 +2750,8 @@ setProfessions(allProfessions);
   const loadSubscriptionInvoices = () => loadPlatformTable("subscription_invoices", setSubscriptionInvoices);
   const loadSupportTickets = () => loadPlatformTable("support_tickets", setSupportTickets);
   const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
+  const loadSystemRestoreRequests = () =>
+    isPlatformOwner ? loadPlatformTable("system_restore_requests", setSystemRestoreRequests) : setSystemRestoreRequests([]);
 
 async function loadNotifications() {
   if (!currentCompanyId) {
@@ -11561,6 +11564,43 @@ function getPlatformClient(clientId) {
   return platformClients.find((client) => String(client.id) === String(clientId)) || null;
 }
 
+function getPlatformClientByCompanyId(companyId) {
+  const targetCompanyId = String(companyId || "");
+  if (!targetCompanyId) return null;
+
+  return platformClients.find((client) =>
+    String(client.operational_company_id || client.company_id || "") === targetCompanyId
+  ) || null;
+}
+
+function getBackupCompanyId(backup) {
+  if (!backup) return "";
+  if (String(backup.backup_type || "").toLowerCase().includes("full")) return "";
+
+  return (
+    backup.company_id ||
+    getPlatformClient(backup.client_id)?.operational_company_id ||
+    getPlatformClient(backup.client_id)?.company_id ||
+    ""
+  );
+}
+
+function getBackupCompanyName(backup) {
+  if (!backup) return "-";
+  if (String(backup.backup_type || "").toLowerCase().includes("full")) return "Full System";
+
+  const client =
+    getPlatformClient(backup.client_id) ||
+    getPlatformClientByCompanyId(backup.company_id);
+
+  return client?.company_name || backup.company_name || backup.company_id || "-";
+}
+
+function getRestoreCompanyName(restoreRequest) {
+  const client = getPlatformClientByCompanyId(restoreRequest?.company_id);
+  return client?.company_name || restoreRequest?.company_id || "-";
+}
+
 function calculateRequestMeetingReportRows(requestRows = [], candidateRows = [], mobilizationRows = []) {
   return (requestRows || []).map((request) => {
     const requestNo = String(request.request_no || "");
@@ -12342,8 +12382,8 @@ async function deleteSupportTicket(id) {
 }
 
 async function createSystemBackup(clientId = null) {
-  if (!canManagePlatform) {
-    return alert("You do not have permission to create backups.");
+  if (!isPlatformOwner) {
+    return alert("Only Platform Owner can create backups.");
   }
 
   const selectedClient = clientId
@@ -12367,15 +12407,24 @@ async function createSystemBackup(clientId = null) {
     status: "Pending",
     file_url: "",
     file_name: selectedClient
-      ? `visaflow_company_backup_${safeCompanyName}_${stamp}.zip`
-      : `visaflow_full_system_backup_${stamp}.zip`,
+      ? `visaflow_company_backup_${safeCompanyName}_${stamp}.json`
+      : `visaflow_full_system_backup_${stamp}.json`,
     file_size: "Pending",
     tables_count: 0,
     records_count: 0,
-    created_by: currentUser?.name || currentUser?.email || "Platform",
+    storage_bucket: "visaflow-backups",
+    storage_path: "",
+    signed_url: "",
+    signed_url_expires_at: null,
+    requested_by_user_id: currentUser?.id || null,
+    created_by: currentUser?.name || currentUser?.email || "Platform Owner",
     notes: selectedClient
       ? `Backup request created for ${companyName}. Waiting for secure backend backup processor.`
       : "Full system backup request created. Waiting for secure backend backup processor.",
+    metadata: {
+      requested_from: "Platform Owner Backup Center",
+      company_name: selectedClient?.company_name || "",
+    },
     created_at: now.toISOString(),
     completed_at: null,
   };
@@ -12390,8 +12439,151 @@ async function createSystemBackup(clientId = null) {
   alert("Backup request created successfully. Status: Pending");
 }
 
+async function runBackupWorker() {
+  if (!isPlatformOwner) {
+    return alert("Only Platform Owner can run the backup worker.");
+  }
+
+  const { data, error } = await supabase.functions.invoke("visaflowbackupworker", {
+    body: {},
+  });
+
+  if (error) return alert(error.message);
+  if (data?.ok === false) return alert(data.error || "Backup worker failed.");
+
+  await loadSystemBackups();
+  alert(data?.processed ? "Backup worker processed one request." : "No pending backup requests.");
+}
+
+async function requestLatestCompanyRestore(clientId = "") {
+  if (!isPlatformOwner) {
+    return alert("Only Platform Owner can request restore.");
+  }
+
+  const selectedClient = platformClients.find((client) => String(client.id) === String(clientId));
+  if (!selectedClient) return alert("Please select the client company.");
+
+  const companyId = selectedClient.operational_company_id || selectedClient.company_id || "";
+  if (!companyId) {
+    return alert("This client is not linked to an operational company_id.");
+  }
+
+  const latestCompletedBackup = [...systemBackups]
+    .filter((backup) => {
+      const isCompleted = normalize(backup.status) === "completed";
+      const isFullSystem = String(backup.backup_type || "").toLowerCase().includes("full");
+      const sameCompany = String(getBackupCompanyId(backup) || "") === String(companyId);
+      const hasFile = Boolean(backup.storage_path || backup.file_url || backup.signed_url);
+      return isCompleted && !isFullSystem && sameCompany && hasFile;
+    })
+    .sort((a, b) =>
+      new Date(b.completed_at || b.created_at || 0) - new Date(a.completed_at || a.created_at || 0)
+    )[0];
+
+  if (!latestCompletedBackup) {
+    return alert("No completed company backup found for this client.");
+  }
+
+  const reason = window.prompt(
+    `Restore reason for ${selectedClient.company_name}:`,
+    "Client requested recovery of accidentally deleted data"
+  );
+
+  if (reason === null) return;
+
+  const confirmed = window.confirm(
+    `Create SAFE restore request for ${selectedClient.company_name}?\n\n` +
+    `Backup file: ${latestCompletedBackup.file_name || latestCompletedBackup.storage_path || latestCompletedBackup.id}\n\n` +
+    "Safe Restore will restore missing records only after the secure restore worker is run."
+  );
+
+  if (!confirmed) return;
+
+  const now = new Date();
+  const stamp = now
+    .toISOString()
+    .replaceAll(":", "-")
+    .replaceAll(".", "-");
+
+  const safeCompanyName = normalizeMatchText(selectedClient.company_name).replaceAll(" ", "_") || "company";
+
+  const { data: preRestoreBackup, error: preBackupError } = await supabase
+    .from("system_backups")
+    .insert([{
+      client_id: selectedClient.id,
+      company_id: companyId,
+      backup_type: "Pre-Restore Company",
+      status: "Pending",
+      file_url: "",
+      file_name: `visaflow_pre_restore_${safeCompanyName}_${stamp}.json`,
+      file_size: "Pending",
+      tables_count: 0,
+      records_count: 0,
+      storage_bucket: "visaflow-backups",
+      storage_path: "",
+      signed_url: "",
+      signed_url_expires_at: null,
+      requested_by_user_id: currentUser?.id || null,
+      created_by: currentUser?.name || currentUser?.email || "Platform Owner",
+      notes: `Automatic safety backup before restore request for ${selectedClient.company_name}.`,
+      metadata: {
+        requested_from: "Restore Request",
+        restore_source_backup_id: latestCompletedBackup.id,
+        company_name: selectedClient.company_name,
+      },
+      created_at: now.toISOString(),
+      completed_at: null,
+    }])
+    .select("id")
+    .single();
+
+  if (preBackupError) return alert(preBackupError.message);
+
+  const { error } = await supabase
+    .from("system_restore_requests")
+    .insert([{
+      company_id: companyId,
+      backup_id: latestCompletedBackup.id,
+      restore_scope: "Company",
+      restore_mode: "Safe Missing Records",
+      status: "Pending",
+      reason: reason || "Client requested restore from latest completed backup.",
+      client_request_reference: "",
+      requested_by_user_id: currentUser?.id || null,
+      requested_by_name: currentUser?.name || currentUser?.email || "Platform Owner",
+      pre_restore_backup_id: preRestoreBackup?.id || null,
+      metadata: {
+        company_name: selectedClient.company_name,
+        source_backup_file: latestCompletedBackup.file_name || "",
+        source_storage_path: latestCompletedBackup.storage_path || "",
+        requested_from: "Platform Owner Backup Center",
+      },
+      created_at: now.toISOString(),
+    }]);
+
+  if (error) return alert(error.message);
+
+  await loadSystemBackups();
+  await loadSystemRestoreRequests();
+  alert("Restore request created. A pre-restore backup request was also created for safety.");
+}
+
+async function cancelRestoreRequest(id) {
+  if (!isPlatformOwner) return alert("Only Platform Owner can cancel restore requests.");
+  if (!window.confirm("Cancel this pending restore request?")) return;
+
+  const { error } = await supabase
+    .from("system_restore_requests")
+    .update({ status: "Cancelled" })
+    .eq("id", id)
+    .eq("status", "Pending");
+
+  if (error) return alert(error.message);
+  await loadSystemRestoreRequests();
+}
+
 async function deleteSystemBackup(id) {
-  if (!canManagePlatform) return alert("You do not have permission to delete backups.");
+  if (!isPlatformOwner) return alert("Only Platform Owner can delete backup records.");
   if (!window.confirm("Delete this backup record?")) return;
   const { error } = await supabase.from("system_backups").delete().eq("id", id);
   if (error) return alert(error.message);
@@ -20361,26 +20553,37 @@ onClick={() => setActiveReport("lateSla")}>
 )}
 
 
-{activePage === "Backup Center" && canManagePlatform && (() => {
+{activePage === "Backup Center" && isPlatformOwner && (() => {
   const backupRows = [...systemBackups].sort(
+    (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+  );
+  const restoreRows = [...systemRestoreRequests].sort(
     (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
   );
   const pendingBackups = backupRows.filter((item) => normalize(item.status) === "pending").length;
   const completedBackups = backupRows.filter((item) => ["completed", "success", "done"].includes(normalize(item.status))).length;
   const failedBackups = backupRows.filter((item) => ["failed", "error"].includes(normalize(item.status))).length;
+  const pendingRestores = restoreRows.filter((item) => normalize(item.status) === "pending").length;
   const latestBackup = backupRows[0] || null;
+
+  function getRestoreSourceBackup(restoreRequest) {
+    return backupRows.find((backup) => String(backup.id) === String(restoreRequest.backup_id)) || null;
+  }
 
   return (
     <div className="page-section">
       <div className="executive-hero">
         <div>
-          <p className="eyebrow">Platform Administration</p>
+          <p className="eyebrow">Platform Owner Administration</p>
           <h1>Backup Center</h1>
-          <p>Request secure full-system or company-level backups and track backup processing history.</p>
+          <p>Platform Owner only: request backups, run secure backup processing, and create safe restore requests for client recovery.</p>
         </div>
         <div className="form-actions">
           <button className="save-btn" onClick={() => createSystemBackup(null)}>
             Request Full System Backup
+          </button>
+          <button className="ghost-btn" onClick={runBackupWorker}>
+            Run Backup Worker
           </button>
         </div>
       </div>
@@ -20392,26 +20595,26 @@ onClick={() => setActiveReport("lateSla")}>
           <p>All backup records</p>
         </div>
         <div className="stat-card">
-          <h3>Pending</h3>
+          <h3>Pending Backups</h3>
           <strong>{pendingBackups}</strong>
           <p>Waiting for backend processor</p>
         </div>
         <div className="stat-card">
-          <h3>Completed</h3>
+          <h3>Completed Backups</h3>
           <strong>{completedBackups}</strong>
-          <p>Ready or processed</p>
+          <p>Ready for download or restore</p>
         </div>
         <div className="stat-card">
-          <h3>Failed</h3>
-          <strong>{failedBackups}</strong>
-          <p>Needs review</p>
+          <h3>Restore Requests</h3>
+          <strong>{restoreRows.length}</strong>
+          <p>{pendingRestores} pending restore request(s)</p>
         </div>
       </div>
 
       <div className="form-card">
         <h2>Create Backup Request</h2>
         <p>
-          Backup requests are logged here. The actual database export must be processed by the secure backend backup service, not directly from the browser.
+          Backup requests are created by the Platform Owner. The secure Edge Function processes the request and stores the file in private Supabase Storage.
         </p>
         <div className="form-grid">
           <select
@@ -20434,7 +20637,32 @@ onClick={() => setActiveReport("lateSla")}>
           <button className="save-btn" onClick={() => createSystemBackup(null)}>
             Request Full System Backup
           </button>
-          <button className="ghost-btn" onClick={loadSystemBackups}>Refresh History</button>
+          <button className="ghost-btn" onClick={runBackupWorker}>Run Backup Worker</button>
+          <button className="ghost-btn" onClick={() => { loadSystemBackups(); loadSystemRestoreRequests(); }}>Refresh History</button>
+        </div>
+      </div>
+
+      <div className="form-card">
+        <h2>Client Restore Request</h2>
+        <p>
+          Use this only when a client asks to recover deleted data. The system creates a restore request using the latest completed company backup and creates a pre-restore backup request for safety.
+        </p>
+        <div className="form-grid">
+          <select
+            defaultValue=""
+            onChange={(e) => {
+              if (!e.target.value) return;
+              requestLatestCompanyRestore(e.target.value);
+              e.target.value = "";
+            }}
+          >
+            <option value="">Restore Latest Completed Company Backup</option>
+            {platformClients.map((client) => (
+              <option key={client.id} value={client.id}>{client.company_name}</option>
+            ))}
+          </select>
+          <input readOnly value="Mode: Safe Missing Records" />
+          <input readOnly value="Access: Platform Owner only" />
         </div>
       </div>
 
@@ -20463,11 +20691,11 @@ onClick={() => setActiveReport("lateSla")}>
             ) : backupRows.map((item) => (
               <tr key={item.id}>
                 <td>{item.backup_type || "Company"}</td>
-                <td>{item.client_id ? getPlatformClientName(item.client_id) : "Full System"}</td>
+                <td>{getBackupCompanyName(item)}</td>
                 <td><Badge value={item.status || "Pending"} /></td>
                 <td>
-                  {item.file_url ? (
-                    <a href={item.file_url} target="_blank" rel="noreferrer">Download</a>
+                  {item.file_url || item.signed_url ? (
+                    <a href={item.file_url || item.signed_url} target="_blank" rel="noreferrer">Download</a>
                   ) : (item.file_name || "-")}
                 </td>
                 <td>{item.file_size || "-"}</td>
@@ -20478,7 +20706,7 @@ onClick={() => setActiveReport("lateSla")}>
                 <td>{item.completed_at ? new Date(item.completed_at).toLocaleString() : "-"}</td>
                 <td>{item.notes || "-"}</td>
                 <td className="actions">
-                  {item.file_url && <button onClick={() => window.open(item.file_url, "_blank")}>Download</button>}
+                  {(item.file_url || item.signed_url) && <button onClick={() => window.open(item.file_url || item.signed_url, "_blank")}>Download</button>}
                   <button onClick={() => deleteSystemBackup(item.id)}>Delete</button>
                 </td>
               </tr>
@@ -20486,9 +20714,58 @@ onClick={() => setActiveReport("lateSla")}>
           </tbody>
         </table>
       </div>
+
+      <div className="table-card">
+        <h2>Restore Requests</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th>Status</th>
+              <th>Mode</th>
+              <th>Source Backup</th>
+              <th>Pre-Restore Backup</th>
+              <th>Requested By</th>
+              <th>Created</th>
+              <th>Completed</th>
+              <th>Restored Records</th>
+              <th>Reason</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {restoreRows.length === 0 ? (
+              <tr><td colSpan="11">No restore requests yet</td></tr>
+            ) : restoreRows.map((item) => {
+              const sourceBackup = getRestoreSourceBackup(item);
+
+              return (
+                <tr key={item.id}>
+                  <td>{getRestoreCompanyName(item)}</td>
+                  <td><Badge value={item.status || "Pending"} /></td>
+                  <td>{item.restore_mode || "Safe Missing Records"}</td>
+                  <td>{sourceBackup?.file_name || item.backup_id || "-"}</td>
+                  <td>{item.pre_restore_backup_id || "-"}</td>
+                  <td>{item.requested_by_name || "-"}</td>
+                  <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                  <td>{item.completed_at ? new Date(item.completed_at).toLocaleString() : "-"}</td>
+                  <td>{item.restored_records_count ?? 0}</td>
+                  <td>{item.reason || "-"}</td>
+                  <td className="actions">
+                    {normalize(item.status) === "pending" && (
+                      <button onClick={() => cancelRestoreRequest(item.id)}>Cancel</button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 })()}
+
 
 {activePage === "Central Support" && canManagePlatform && (
   <div className="page-section">
