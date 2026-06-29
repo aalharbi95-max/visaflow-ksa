@@ -9073,8 +9073,12 @@ function buildOperationalRequestLineRows() {
       ).length;
 
       const candidatesCount = activeLineCandidates.length;
+      // Counted coverage is capped by the requested quantity for this exact request line.
+      // Extra matching submissions remain visible as backup candidates but must not inflate progress above demand.
+      const coveredCandidates = Math.min(candidatesCount, requestedQty);
+      const extraCandidates = Math.max(candidatesCount - requestedQty, 0);
       const rejectedCandidates = allLineCandidates.length - activeLineCandidates.length;
-      const candidateGap = Math.max(requestedQty - candidatesCount, 0);
+      const candidateGap = Math.max(requestedQty - coveredCandidates, 0);
       const visaGap = isSaudiLine ? 0 : Math.max(requestedQty - allocatedVisaQty, 0);
       const authorizationGap = isSaudiLine ? 0 : Math.max(allocatedVisaQty - authorizedQty, 0);
       const joiningGap = Math.max(requestedQty - joined, 0);
@@ -9157,6 +9161,8 @@ function buildOperationalRequestLineRows() {
         allocatedVisaQty,
         authorizedQty,
         candidates: candidatesCount,
+        coveredCandidates,
+        extraCandidates,
         rejectedCandidates,
         interviewRequired,
         interviewType,
@@ -9293,6 +9299,8 @@ function buildAICommanderSnapshot() {
     acc.allocated_visas += Number(line.allocatedVisaQty || 0);
     acc.authorized_qty += Number(line.authorizedQty || 0);
     acc.candidates += Number(line.candidates || 0);
+    acc.covered_candidates += Math.min(Number(line.candidates || 0), Number(line.requested_qty || 0));
+    acc.extra_candidates += Math.max(Number(line.candidates || 0) - Number(line.requested_qty || 0), 0);
     acc.interview_passed += Number(line.interviewPassed || 0);
     acc.medical_done += Number(line.medicalDone || 0);
     acc.visa_ready += Number(line.visaReady || 0);
@@ -9312,6 +9320,8 @@ function buildAICommanderSnapshot() {
     allocated_visas: 0,
     authorized_qty: 0,
     candidates: 0,
+    covered_candidates: 0,
+    extra_candidates: 0,
     interview_passed: 0,
     medical_done: 0,
     visa_ready: 0,
@@ -9326,7 +9336,7 @@ function buildAICommanderSnapshot() {
   });
 
   totalsFromLines.progress_percent = totalsFromLines.total_required
-    ? Math.round((totalsFromLines.candidates / totalsFromLines.total_required) * 100)
+    ? Math.min(Math.round((totalsFromLines.covered_candidates / totalsFromLines.total_required) * 100), 100)
     : 0;
 
   const visaShortage = operationalLines
@@ -12679,7 +12689,11 @@ const REPORT_AR_LABELS = {
   "Finance": "المالية",
   "All": "الكل",
   "Required Manpower": "القوى العاملة المطلوبة",
-  "Active Candidates": "المرشحون النشطون",
+  "Active Candidates": "المرشحون المحتسبون",
+  "Matched Linked Candidates": "المرشحون المطابقون والمرتبطون",
+  "Covered Candidates": "المرشحون المحتسبون",
+  "Submitted Candidates": "إجمالي المرشحين المطابقين",
+  "Extra / Backup Candidates": "مرشحون احتياط / زائدون",
   "Joined": "المباشرون",
   "Recruitment Progress": "نسبة تقدم التوظيف",
   "Visa Gap": "فجوة التأشيرات",
@@ -12792,14 +12806,26 @@ function buildAIReportStudioDataset() {
     failRate: row.candidates ? Math.round((Number(row.failed || 0) / Number(row.candidates || 1)) * 100) : 0,
   }));
   const forecast = buildRecruitmentForecast();
+
   const totalRequired = requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0);
-  const totalCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0);
-  const totalJoined = requestHealth.reduce((sum, row) => sum + Number(row.joined || 0), 0);
+  const totalSubmittedCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0);
+  const totalCoveredCandidates = requestHealth.reduce(
+    (sum, row) => sum + Math.min(Number(row.candidates || 0), Number(row.requested_qty || 0)),
+    0
+  );
+  const totalExtraCandidates = requestHealth.reduce(
+    (sum, row) => sum + Math.max(Number(row.candidates || 0) - Number(row.requested_qty || 0), 0),
+    0
+  );
+  const totalJoined = requestHealth.reduce((sum, row) => sum + Math.min(Number(row.joined || 0), Number(row.requested_qty || 0)), 0);
   const totalVisaGap = requestHealth.reduce((sum, row) => sum + Number(row.visaGap || 0), 0);
   const totalAuthorizationGap = requestHealth.reduce((sum, row) => sum + Number(row.authorizationGap || 0), 0);
   const highRiskLines = requestHealth.filter((row) => row.riskLevel === "High").length;
   const totalCost = mobilizationRows.reduce((sum, row) => sum + Number(row.totalCost || 0), 0);
   const totalBudget = mobilizationRows.reduce((sum, row) => sum + Number(row.budget || 0), 0);
+  const recruitmentProgress = totalRequired
+    ? Math.min(Math.round((totalCoveredCandidates / totalRequired) * 100), 100)
+    : 0;
 
   return {
     generated_at: new Date().toLocaleString(),
@@ -12809,11 +12835,21 @@ function buildAIReportStudioDataset() {
     project: reportStudioForm.project || "All",
     language: reportStudioForm.language,
     output_format: reportStudioForm.outputFormat,
+    totals: {
+      required: totalRequired,
+      covered_candidates: totalCoveredCandidates,
+      submitted_candidates: totalSubmittedCandidates,
+      extra_candidates: totalExtraCandidates,
+      joined: totalJoined,
+      recruitment_progress: recruitmentProgress,
+    },
     kpis: [
-      { metric: "Required Manpower", value: totalRequired || executiveDashboard.totalRequired },
-      { metric: "Active Candidates", value: totalCandidates || executiveDashboard.activeCandidates },
-      { metric: "Joined", value: totalJoined || executiveDashboard.joined },
-      { metric: "Recruitment Progress", value: `${executiveDashboard.recruitmentProgress}%` },
+      { metric: "Required Manpower", value: totalRequired },
+      { metric: "Active Candidates", value: totalCoveredCandidates },
+      { metric: "Submitted Candidates", value: totalSubmittedCandidates },
+      { metric: "Extra / Backup Candidates", value: totalExtraCandidates },
+      { metric: "Joined", value: totalJoined },
+      { metric: "Recruitment Progress", value: `${recruitmentProgress}%` },
       { metric: "Visa Gap", value: totalVisaGap },
       { metric: "Authorization Gap", value: totalAuthorizationGap },
       { metric: "High Risk Lines", value: highRiskLines },
@@ -12847,7 +12883,7 @@ function buildAIReportStudioNarrative() {
       `درجة السرية: ${reportStudioForm.confidential ? "سري" : "غير سري"}`,
       "",
       "الملخص التنفيذي",
-      `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والمرشحين والحشد والمكاتب. نسبة تقدم التوظيف الحالية ${executiveDashboard.recruitmentProgress}%، مع وجود ${data.forecast.totalRemainingRecruitment} فجوة توظيف متبقية و ${data.forecast.totalRemainingJoining} فجوة مباشرة متبقية.`,
+      `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والمرشحين والحشد والمكاتب. نسبة تقدم التوظيف الحالية ${data.totals?.recruitment_progress || 0}%، مع وجود ${data.forecast.totalRemainingRecruitment} فجوة توظيف متبقية و ${data.forecast.totalRemainingJoining} فجوة مباشرة متبقية.`,
       data.forecast.highRiskRequests > 0
         ? "توجد بنود طلبات عالية المخاطر قد تؤثر على الحشد إذا لم يتم التصعيد والمتابعة."
         : "المسار العام مستقر مع الحاجة إلى متابعة دورية للمؤشرات التشغيلية.",
@@ -12887,7 +12923,7 @@ function buildAIReportStudioNarrative() {
       `Confidential / سري: ${reportStudioForm.confidential ? "Yes / نعم" : "No / لا"}`,
       "",
       "الملخص التنفيذي / Executive Summary",
-      `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والحشد. Current recruitment progress is ${executiveDashboard.recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} recruitment gap(s) and ${data.forecast.totalRemainingJoining} joining gap(s).`,
+      `حلل VisaFlow بيانات التوظيف والتأشيرات والتفويض والحشد. Current recruitment progress is ${data.totals?.recruitment_progress || 0}%, with ${data.forecast.totalRemainingRecruitment} recruitment gap(s) and ${data.forecast.totalRemainingJoining} joining gap(s).`,
       data.forecast.forecastMessage,
       "",
       "لوحة المؤشرات / KPI Dashboard",
@@ -12912,7 +12948,7 @@ function buildAIReportStudioNarrative() {
     `Confidential: ${reportStudioForm.confidential ? "Yes" : "No"}`,
     "",
     "Executive Summary",
-    `VisaFlow analyzed live recruitment, visa, authorization, candidate, mobilization and agency data. Current recruitment progress is ${executiveDashboard.recruitmentProgress}%, with ${data.forecast.totalRemainingRecruitment} remaining recruitment gap(s) and ${data.forecast.totalRemainingJoining} remaining joining gap(s).`,
+    `VisaFlow analyzed live recruitment, visa, authorization, candidate, mobilization and agency data. Current recruitment progress is ${data.totals?.recruitment_progress || 0}%, with ${data.forecast.totalRemainingRecruitment} remaining recruitment gap(s) and ${data.forecast.totalRemainingJoining} remaining joining gap(s).`,
     data.forecast.forecastMessage,
     "",
     "KPI Dashboard",
@@ -13294,10 +13330,12 @@ async function buildReportStudioPptx(fileName) {
 
   const required = getReportNumber(getReportKpiValue(data, "Required Manpower", 0));
   const candidatesTotal = getReportNumber(getReportKpiValue(data, "Active Candidates", 0));
+  const submittedCandidatesTotal = getReportNumber(getReportKpiValue(data, "Submitted Candidates", candidatesTotal));
+  const extraCandidatesTotal = getReportNumber(getReportKpiValue(data, "Extra / Backup Candidates", 0));
   const joinedTotal = getReportNumber(getReportKpiValue(data, "Joined", 0));
-  const recruitmentProgress = getReportNumber(getReportKpiValue(data, "Recruitment Progress", executiveDashboard.recruitmentProgress));
-  const candidateCoverage = required ? Math.round((candidatesTotal / required) * 100) : recruitmentProgress;
-  const joiningProgress = required ? Math.round((joinedTotal / required) * 100) : 0;
+  const recruitmentProgress = getReportNumber(getReportKpiValue(data, "Recruitment Progress", data.totals?.recruitment_progress || 0));
+  const candidateCoverage = required ? Math.min(Math.round((candidatesTotal / required) * 100), 100) : recruitmentProgress;
+  const joiningProgress = required ? Math.min(Math.round((joinedTotal / required) * 100), 100) : 0;
   const saudizationRate = getReportNumber(getReportKpiValue(data, "Saudization Rate", executiveDashboard.saudizationRate));
   const highRiskCount = data.request_health.filter((row) => row.riskLevel === "High").length;
   const mediumRiskCount = data.request_health.filter((row) => row.riskLevel === "Medium").length;
@@ -13305,7 +13343,12 @@ async function buildReportStudioPptx(fileName) {
   const topRisks = data.request_health.filter((row) => row.riskLevel === "High").slice(0, 5);
   const riskRows = (topRisks.length ? topRisks : data.request_health.slice(0, 5));
   const topAgencies = data.agencies.slice(0, 7);
-  const funnelRows = (executiveDashboard.recruitmentFunnel || []).filter((item) => item.value !== undefined).slice(0, 7);
+  const funnelRows = [
+    { stage: "Required", value: required },
+    { stage: "Covered Candidates", value: candidatesTotal },
+    { stage: "Submitted Candidates", value: submittedCandidatesTotal },
+    { stage: "Joined", value: joinedTotal },
+  ].filter((item) => item.value !== undefined);
   const colors = ["2563EB", "14B8A6", "F97316", "A855F7", "06B6D4", "22C55E", "E11D48"];
   const reportName = getLocalizedReportName(data, language);
   const scopeText = isArabic
@@ -13370,7 +13413,12 @@ async function buildReportStudioPptx(fileName) {
     rtl: isArabic,
     margin: 0,
   });
-  addReportMetricCard(slide, 8.2, 1.05, 3.75, 1.05, localizeReportText("Recruitment Progress", language), `${recruitmentProgress}%`, "22C55E", isArabic ? `${candidatesTotal} نشط من أصل ${required} مطلوب` : `${candidatesTotal} active of ${required} required`);
+  const progressSubtitle = extraCandidatesTotal > 0
+    ? (isArabic
+        ? `${candidatesTotal} محتسب من أصل ${required} مطلوب + ${extraCandidatesTotal} احتياط`
+        : `${candidatesTotal} covered of ${required} required + ${extraCandidatesTotal} backup`)
+    : (isArabic ? `${candidatesTotal} محتسب من أصل ${required} مطلوب` : `${candidatesTotal} covered of ${required} required`);
+  addReportMetricCard(slide, 8.2, 1.05, 3.75, 1.05, localizeReportText("Recruitment Progress", language), `${recruitmentProgress}%`, "22C55E", progressSubtitle);
   addReportMetricCard(slide, 8.2, 2.35, 1.75, 1.05, localizeReportText("Visa Gap", language), getReportKpiValue(data, "Visa Gap"), "2563EB");
   addReportMetricCard(slide, 10.2, 2.35, 1.75, 1.05, localizeReportText("High Risk", language), getReportKpiValue(data, "High Risk Lines"), "E11D48");
   addReportMetricCard(slide, 8.2, 3.65, 1.75, 1.05, localizeReportText("Joined", language), joinedTotal, "14B8A6");
@@ -13382,7 +13430,7 @@ async function buildReportStudioPptx(fileName) {
   addReportSlideTitle(slide, localizeReportText("KPI Dashboard", language), reportPhrase("Live recruitment, visa, authorization and mobilization indicators.", "مؤشرات مباشرة للتوظيف والتأشيرات والتفويض والحشد.", language), language);
   const kpiCards = [
     ["Required Manpower", getReportKpiValue(data, "Required Manpower"), "2563EB", "Demand volume"],
-    ["Active Candidates", getReportKpiValue(data, "Active Candidates"), "14B8A6", "Submitted / active"],
+    ["Active Candidates", getReportKpiValue(data, "Active Candidates"), "14B8A6", "Candidate coverage"],
     ["Joined", getReportKpiValue(data, "Joined"), "22C55E", "Confirmed joining"],
     ["Recruitment Progress", getReportKpiValue(data, "Recruitment Progress"), "A855F7", "Candidate coverage"],
     ["Visa Gap", getReportKpiValue(data, "Visa Gap"), "F97316", "Allocation shortage"],
@@ -13821,9 +13869,14 @@ function getPlatformIntelligenceModel() {
 function getReportStudioVisualModel() {
   const data = buildAIReportStudioDataset();
   const requestHealth = data.request_health || [];
-  const totalRequired = requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0) || executiveDashboard.totalRequired;
-  const totalCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0) || executiveDashboard.activeCandidates;
-  const totalJoined = requestHealth.reduce((sum, row) => sum + Number(row.joined || 0), 0) || executiveDashboard.joined;
+  const totalRequired = data.totals?.required ?? requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0);
+  const totalCandidates = data.totals?.covered_candidates ?? requestHealth.reduce((sum, row) => sum + Math.min(Number(row.candidates || 0), Number(row.requested_qty || 0)), 0);
+  const totalJoined = data.totals?.joined ?? requestHealth.reduce((sum, row) => sum + Math.min(Number(row.joined || 0), Number(row.requested_qty || 0)), 0);
+  const totalSubmittedCandidates = data.totals?.submitted_candidates ?? requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0);
+  const totalInterviewPassed = requestHealth.reduce((sum, row) => sum + Math.min(Number(row.interviewPassed || 0), Number(row.requested_qty || 0)), 0);
+  const totalMedicalPassed = requestHealth.reduce((sum, row) => sum + Math.min(Number(row.medicalDone || 0), Number(row.requested_qty || 0)), 0);
+  const totalTicketsIssued = requestHealth.reduce((sum, row) => sum + Math.min(Number(row.ticketIssued || 0), Number(row.requested_qty || 0)), 0);
+  const totalArrived = requestHealth.reduce((sum, row) => sum + Math.min(Number(row.arrived || 0), Number(row.requested_qty || 0)), 0);
   const visaGap = requestHealth.reduce((sum, row) => sum + Number(row.visaGap || 0), 0);
   const authorizationGap = requestHealth.reduce((sum, row) => sum + Number(row.authorizationGap || 0), 0);
   const highRiskLines = requestHealth.filter((row) => row.riskLevel === "High").length;
@@ -13832,11 +13885,12 @@ function getReportStudioVisualModel() {
 
   const funnelRows = [
     { label: "Required", value: totalRequired, color: "#2563eb" },
-    { label: "Candidates", value: totalCandidates, color: "#14b8a6" },
-    { label: "Interview Passed", value: executiveDashboard.interviewPassed, color: "#a855f7" },
-    { label: "Medical Passed", value: executiveDashboard.medicalPassed, color: "#06b6d4" },
-    { label: "Tickets Issued", value: executiveDashboard.ticketsIssued, color: "#f97316" },
-    { label: "Arrived", value: executiveDashboard.arrived, color: "#22c55e" },
+    { label: "Covered Candidates", value: totalCandidates, color: "#14b8a6" },
+    { label: "Submitted Candidates", value: totalSubmittedCandidates, color: "#0ea5e9" },
+    { label: "Interview Passed", value: totalInterviewPassed, color: "#a855f7" },
+    { label: "Medical Passed", value: totalMedicalPassed, color: "#06b6d4" },
+    { label: "Tickets Issued", value: totalTicketsIssued, color: "#f97316" },
+    { label: "Arrived", value: totalArrived, color: "#22c55e" },
     { label: "Joined", value: totalJoined, color: "#0f766e" },
   ];
 
