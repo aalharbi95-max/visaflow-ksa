@@ -11982,6 +11982,160 @@ function buildMarketplaceInvoiceNotes(deal, breakdown) {
   return lines.filter(Boolean).join("\n");
 }
 
+
+function getMarketplaceDealCalculationSource(deal = {}) {
+  const dbWorkers = getMarketplaceDealWorkerRows(deal);
+  const snapshotWorkers = Array.isArray(deal.selected_workers) ? deal.selected_workers : [];
+  const workers = dbWorkers.length > 0 ? dbWorkers : snapshotWorkers;
+  return {
+    ...deal,
+    selected_workers: workers,
+    quantity: workers.length || Number(deal.quantity || 0),
+  };
+}
+
+function buildWorkforceCalculationRows(deal = {}, breakdown = {}) {
+  const rows = [];
+  const qty = Number(breakdown.quantity || deal.quantity || 0);
+
+  rows.push({ Section: "Deal", Item: "Deal No", Formula: "-", Value: deal.deal_no || "-", Unit: "" });
+  rows.push({ Section: "Deal", Item: "Client", Formula: "-", Value: deal.client_name || "-", Unit: "" });
+  rows.push({ Section: "Deal", Item: "Deal Type", Formula: "-", Value: breakdown.dealType || getWorkforceDealType(deal), Unit: "" });
+  rows.push({ Section: "Deal", Item: "Profession", Formula: "-", Value: deal.profession || "-", Unit: "" });
+  rows.push({ Section: "Deal", Item: "Quantity", Formula: "-", Value: qty, Unit: "worker(s)" });
+
+  if (breakdown.dealType === "Service Rental") {
+    rows.push({ Section: "Monthly Cost", Item: "Monthly Salary / Worker", Formula: "Manual input", Value: roundMoney(breakdown.baseSalary), Unit: "SAR" });
+    rows.push({ Section: "Monthly Cost", Item: "Iqama + Work Permit / Month / Worker", Formula: "Fixed platform rule", Value: roundMoney(breakdown.monthlyIqamaWorkPermit), Unit: "SAR" });
+    rows.push({ Section: "Monthly Cost", Item: "GOSI / Worker", Formula: "Monthly Salary × 2%", Value: roundMoney(breakdown.gosiAmount), Unit: "SAR" });
+    rows.push({ Section: "Monthly Cost", Item: "Annual Medical Insurance / Worker", Formula: "Manual input", Value: roundMoney(breakdown.annualMedicalInsurance), Unit: "SAR" });
+    rows.push({ Section: "Monthly Cost", Item: "Medical Insurance / Month / Worker", Formula: "Annual Medical Insurance ÷ 12", Value: roundMoney(breakdown.monthlyMedicalInsurance), Unit: "SAR" });
+    rows.push({ Section: "Monthly Cost", Item: "Monthly Base Cost / Worker", Formula: "Salary + Iqama/Work Permit + GOSI + Medical Insurance Monthly", Value: roundMoney(breakdown.monthlyBaseCost), Unit: "SAR" });
+    rows.push({ Section: "Pricing", Item: "Pricing Method", Formula: "Manual selection", Value: breakdown.pricingMethod || "Margin Percent", Unit: "" });
+    rows.push({ Section: "Pricing", Item: "Margin %", Formula: "Manual input", Value: Number(breakdown.marginPercent || 0), Unit: "%" });
+    rows.push({ Section: "Pricing", Item: "Monthly Margin / Worker", Formula: "Monthly Rate - Monthly Base Cost", Value: roundMoney(breakdown.monthlyMargin), Unit: "SAR" });
+    rows.push({ Section: "Pricing", Item: "Monthly Rental Rate / Worker", Formula: "Monthly Base Cost × (1 + Margin %) OR Manual Monthly Rate", Value: roundMoney(breakdown.monthlyRate), Unit: "SAR" });
+    rows.push({ Section: "Totals", Item: "Duration", Formula: "Manual input", Value: Number(breakdown.durationMonths || 0), Unit: "month(s)" });
+    rows.push({ Section: "Totals", Item: "Subtotal Before VAT", Formula: "Monthly Rental Rate × Quantity × Duration", Value: roundMoney(breakdown.totalValue), Unit: "SAR" });
+  } else {
+    rows.push({ Section: "Fixed Rules", Item: "Iqama + Work Permit / Month / Worker", Formula: "Fixed platform rule", Value: roundMoney(breakdown.monthlyIqamaWorkPermit), Unit: "SAR" });
+    rows.push({ Section: "Iqama", Item: "Average Remaining Months", Formula: "Average of each selected worker's remaining iqama months", Value: roundMoney(breakdown.remainingMonths), Unit: "month(s)" });
+    rows.push({ Section: "Iqama", Item: "Iqama + Work Permit Remaining Total", Formula: "Σ(862.5 × remaining months per worker)", Value: roundMoney(breakdown.iqamaRemainingTotal), Unit: "SAR" });
+    rows.push({ Section: "Medical Insurance", Item: "Annual Medical Insurance / Worker", Formula: "Manual input", Value: roundMoney(breakdown.annualMedicalInsurance), Unit: "SAR" });
+    rows.push({ Section: "Medical Insurance", Item: "Insurance Policy End Date", Formula: "Manual input / employee data", Value: breakdown.insurancePolicyEndDate || "From selected workers", Unit: "" });
+    rows.push({ Section: "Medical Insurance", Item: "Max Remaining Policy Days", Formula: "Policy end date - today", Value: Number(breakdown.insuranceRemainingDays || 0), Unit: "day(s)" });
+    rows.push({ Section: "Medical Insurance", Item: "Medical Insurance Remaining Total", Formula: "Σ(Annual Medical Insurance ÷ 365 × remaining policy days per worker)", Value: roundMoney(breakdown.medicalInsuranceRemainingTotal), Unit: "SAR" });
+    rows.push({ Section: "Transfer", Item: "Transfer / Service Fee / Worker", Formula: "Manual input", Value: roundMoney(breakdown.transferServiceFeePerWorker), Unit: "SAR" });
+    rows.push({ Section: "Transfer", Item: "Transfer Service Fee Total", Formula: "Transfer / Service Fee / Worker × Quantity", Value: roundMoney(Number(breakdown.transferServiceFeePerWorker || 0) * qty), Unit: "SAR" });
+    rows.push({ Section: "Transfer", Item: "Transfer Subtotal", Formula: "Iqama Remaining + Medical Remaining + Transfer Service Fee Total", Value: roundMoney(breakdown.transferSubtotal), Unit: "SAR" });
+    rows.push({ Section: "Admin Fee", Item: "Admin Fee Method", Formula: "Manual selection", Value: breakdown.adminFeeMethod || "Percent", Unit: "" });
+    rows.push({ Section: "Admin Fee", Item: "Admin Fee %", Formula: "Manual input", Value: Number(breakdown.adminFeePercent || 0), Unit: "%" });
+    rows.push({ Section: "Admin Fee", Item: "Admin Fee Amount", Formula: "Transfer Subtotal × Admin Fee % OR Fixed Amount", Value: roundMoney(breakdown.adminFee), Unit: "SAR" });
+    rows.push({ Section: "Totals", Item: "Subtotal Before VAT", Formula: "Transfer Subtotal + Admin Fee", Value: roundMoney(breakdown.totalValue), Unit: "SAR" });
+  }
+
+  const vat = roundMoney(Number(breakdown.totalValue || 0) * WORKFORCE_VAT_RATE);
+  rows.push({ Section: "VAT", Item: "VAT Rate", Formula: "Platform invoice rule", Value: WORKFORCE_VAT_RATE * 100, Unit: "%" });
+  rows.push({ Section: "VAT", Item: "VAT Amount", Formula: "Subtotal Before VAT × VAT Rate", Value: vat, Unit: "SAR" });
+  rows.push({ Section: "Grand Total", Item: "Total Including VAT", Formula: "Subtotal Before VAT + VAT Amount", Value: roundMoney(Number(breakdown.totalValue || 0) + vat), Unit: "SAR" });
+
+  return rows;
+}
+
+function buildWorkforceWorkerCalculationRows(deal = {}, breakdown = {}) {
+  const source = getMarketplaceDealCalculationSource(deal);
+  const workers = Array.isArray(source.selected_workers) ? source.selected_workers : [];
+  const annualFallback = Number(breakdown.annualMedicalInsurance || deal.annual_medical_insurance || 0);
+  const policyEndFallback = breakdown.insurancePolicyEndDate || deal.insurance_policy_end_date || "";
+
+  if (!workers.length) {
+    return [{
+      "Employee No": "Manual quantity only",
+      "Employee Name": "No selected worker rows attached",
+      "Iqama No": "-",
+      "Iqama Expiry Date": deal.iqama_expiry_date || "-",
+      "Iqama Remaining Months": getMonthsUntil(deal.iqama_expiry_date),
+      "Iqama Remaining Cost": roundMoney(WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST * getMonthsUntil(deal.iqama_expiry_date)),
+      "Insurance Policy End Date": policyEndFallback || "-",
+      "Annual Medical Insurance": annualFallback,
+      "Insurance Remaining Days": getDaysUntil(policyEndFallback),
+      "Medical Insurance Remaining": roundMoney(annualFallback * getDaysUntil(policyEndFallback) / 365),
+    }];
+  }
+
+  return workers.map((worker, index) => {
+    const annual = Number(worker.annual_medical_insurance || 0) || annualFallback;
+    const policyEnd = worker.insurance_policy_end_date || policyEndFallback;
+    const iqamaMonths = getMonthsUntil(worker.iqama_expiry_date);
+    const insuranceDays = getDaysUntil(policyEnd);
+    return {
+      "#": index + 1,
+      "Employee No": worker.employee_no || "",
+      "Employee Name": worker.employee_name || "",
+      "Iqama No": worker.iqama_no || "",
+      "Profession": worker.profession || deal.profession || "",
+      "Nationality": worker.nationality || deal.nationality || "",
+      "Gender": worker.gender || deal.gender || "",
+      "Project": worker.project_name || "",
+      "Iqama Expiry Date": worker.iqama_expiry_date || "",
+      "Iqama Remaining Months": iqamaMonths,
+      "Iqama + Work Permit Monthly": WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST,
+      "Iqama Remaining Cost": roundMoney(WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST * iqamaMonths),
+      "Insurance Policy End Date": policyEnd || "",
+      "Annual Medical Insurance": annual,
+      "Insurance Remaining Days": insuranceDays,
+      "Medical Insurance Remaining": roundMoney(annual * insuranceDays / 365),
+    };
+  });
+}
+
+function exportWorkforceAgreementCalculationExcel(deal = {}) {
+  const source = getMarketplaceDealCalculationSource(deal);
+  const breakdown = getMarketplacePricingBreakdown(source);
+  const agreementText = deal.agreement_text || buildWorkforceAgreementText(source);
+  const vat = roundMoney(Number(breakdown.totalValue || 0) * WORKFORCE_VAT_RATE);
+  const totalWithVat = roundMoney(Number(breakdown.totalValue || 0) + vat);
+
+  const summaryRows = [
+    { Field: "Deal No", Value: deal.deal_no || "-" },
+    { Field: "Agreement No", Value: deal.agreement_no || "Not generated" },
+    { Field: "Client", Value: deal.client_name || "-" },
+    { Field: "Deal Type", Value: breakdown.dealType },
+    { Field: "Profession", Value: deal.profession || "-" },
+    { Field: "Quantity", Value: breakdown.quantity },
+    { Field: "Total Before VAT", Value: roundMoney(breakdown.totalValue), Unit: "SAR" },
+    { Field: "VAT 15%", Value: vat, Unit: "SAR" },
+    { Field: "Total Including VAT", Value: totalWithVat, Unit: "SAR" },
+    { Field: "Generated At", Value: new Date().toLocaleString("en-GB") },
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+  const calcSheet = XLSX.utils.json_to_sheet(buildWorkforceCalculationRows(source, breakdown));
+  const workersSheet = XLSX.utils.json_to_sheet(buildWorkforceWorkerCalculationRows(source, breakdown));
+  const agreementSheet = XLSX.utils.aoa_to_sheet(
+    String(agreementText || "")
+      .split("\n")
+      .map((line) => [line])
+  );
+
+  summarySheet["!cols"] = [{ wch: 28 }, { wch: 36 }, { wch: 14 }];
+  calcSheet["!cols"] = [{ wch: 20 }, { wch: 42 }, { wch: 70 }, { wch: 20 }, { wch: 12 }];
+  workersSheet["!cols"] = [
+    { wch: 6 }, { wch: 18 }, { wch: 26 }, { wch: 16 }, { wch: 26 }, { wch: 18 }, { wch: 10 }, { wch: 22 },
+    { wch: 18 }, { wch: 22 }, { wch: 24 }, { wch: 22 }, { wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 28 },
+  ];
+  agreementSheet["!cols"] = [{ wch: 120 }];
+
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+  XLSX.utils.book_append_sheet(workbook, calcSheet, "Calculation");
+  XLSX.utils.book_append_sheet(workbook, workersSheet, "Workers");
+  XLSX.utils.book_append_sheet(workbook, agreementSheet, "Agreement Text");
+
+  const safeDealNo = String(deal.deal_no || "workforce_deal").replace(/[^a-zA-Z0-9_-]/g, "_");
+  XLSX.writeFile(workbook, `VisaFlow_${safeDealNo}_Calculation.xlsx`);
+}
+
 function buildWorkforceAgreementText(deal = {}) {
   const breakdown = getMarketplacePricingBreakdown(deal);
   const agreementNo = deal.agreement_no || generateMarketplaceNo("WFA", marketplaceDeals, "agreement_no", 5);
@@ -12027,8 +12181,10 @@ Total Before VAT: ${Number(breakdown.totalValue || 0).toLocaleString()} SAR`;
 
 async function generateWorkforceAgreement(deal) {
   if (!canManageMarketplace) return alert("You do not have permission to generate agreements.");
+  const source = getMarketplaceDealCalculationSource(deal);
   const agreementNo = deal.agreement_no || generateMarketplaceNo("WFA", marketplaceDeals, "agreement_no", 5);
-  const agreementText = buildWorkforceAgreementText({ ...deal, agreement_no: agreementNo });
+  const agreementText = buildWorkforceAgreementText({ ...source, agreement_no: agreementNo });
+  const breakdown = getMarketplacePricingBreakdown({ ...source, agreement_no: agreementNo });
 
   const { error } = await supabase
     .from("marketplace_deals")
@@ -12036,14 +12192,26 @@ async function generateWorkforceAgreement(deal) {
       agreement_no: agreementNo,
       agreement_status: "Generated",
       agreement_text: agreementText,
+      calc_breakdown: breakdown,
+      total_value: Number(breakdown.totalValue || deal.total_value || 0),
       updated_at: new Date().toISOString(),
     }))
     .eq("id", deal.id)
     .eq("company_id", currentCompanyId);
 
   if (error) return alert(error.message);
+
+  exportWorkforceAgreementCalculationExcel({
+    ...source,
+    agreement_no: agreementNo,
+    agreement_status: "Generated",
+    agreement_text: agreementText,
+    calc_breakdown: breakdown,
+    total_value: Number(breakdown.totalValue || deal.total_value || 0),
+  });
+
   await loadMarketplaceDeals();
-  alert(`Agreement generated: ${agreementNo}`);
+  alert(`Agreement generated and calculation Excel downloaded: ${agreementNo}`);
 }
 
 async function convertMarketplaceTransferToRental(deal) {
@@ -19340,7 +19508,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </TableCard>
 
     <TableCard title="Marketplace Deals">
-      <table><thead><tr><th>Deal No</th><th>Client</th><th>Type</th><th>Profession</th><th>Qty</th><th>Workers</th><th>Monthly Rate</th><th>Total Before VAT</th><th>Agreement</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceDeals.length === 0 ? <tr><td colSpan="11">No marketplace deals yet</td></tr> : marketplaceDeals.map((deal) => { const breakdown = getMarketplacePricingBreakdown(deal); const workers = getMarketplaceDealWorkerRows(deal); const selectedWorkers = Array.isArray(deal.selected_workers) ? deal.selected_workers : []; const workerCount = workers.length || selectedWorkers.length || 0; return <tr key={deal.id}><td>{deal.deal_no || "-"}</td><td>{deal.client_name || "-"}</td><td><Badge value={breakdown.dealType} /></td><td>{deal.profession || "-"}</td><td>{deal.quantity || 0}</td><td>{workerCount ? <div><Badge value={`${workerCount} worker(s)`} /><div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>{(workers.length ? workers : selectedWorkers).slice(0, 3).map((worker) => worker.employee_name || worker.employee_no || worker.iqama_no).filter(Boolean).join(", ")}{workerCount > 3 ? "..." : ""}</div></div> : "-"}</td><td>{breakdown.dealType === "Service Rental" ? `${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR` : "-"}</td><td><b>{Number(breakdown.totalValue || deal.total_value || 0).toLocaleString()} SAR</b></td><td>{deal.agreement_no ? <Badge value={deal.agreement_no} /> : "Not generated"}</td><td><Badge value={deal.status || deal.transfer_status || "Draft"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => generateWorkforceAgreement(deal)}>Generate Agreement</button>}{canManageMarketplace && <button onClick={() => generateInvoiceFromDeal(deal)}>Generate Invoice</button>}{canManageMarketplace && breakdown.dealType === "Sponsorship Transfer" && <button onClick={() => convertMarketplaceTransferToRental(deal)}>Convert to Rental</button>}</td></tr>; })}</tbody></table>
+      <table><thead><tr><th>Deal No</th><th>Client</th><th>Type</th><th>Profession</th><th>Qty</th><th>Workers</th><th>Monthly Rate</th><th>Total Before VAT</th><th>Agreement</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceDeals.length === 0 ? <tr><td colSpan="11">No marketplace deals yet</td></tr> : marketplaceDeals.map((deal) => { const breakdown = getMarketplacePricingBreakdown(deal); const workers = getMarketplaceDealWorkerRows(deal); const selectedWorkers = Array.isArray(deal.selected_workers) ? deal.selected_workers : []; const workerCount = workers.length || selectedWorkers.length || 0; return <tr key={deal.id}><td>{deal.deal_no || "-"}</td><td>{deal.client_name || "-"}</td><td><Badge value={breakdown.dealType} /></td><td>{deal.profession || "-"}</td><td>{deal.quantity || 0}</td><td>{workerCount ? <div><Badge value={`${workerCount} worker(s)`} /><div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>{(workers.length ? workers : selectedWorkers).slice(0, 3).map((worker) => worker.employee_name || worker.employee_no || worker.iqama_no).filter(Boolean).join(", ")}{workerCount > 3 ? "..." : ""}</div></div> : "-"}</td><td>{breakdown.dealType === "Service Rental" ? `${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR` : "-"}</td><td><b>{Number(breakdown.totalValue || deal.total_value || 0).toLocaleString()} SAR</b></td><td>{deal.agreement_no ? <Badge value={deal.agreement_no} /> : "Not generated"}</td><td><Badge value={deal.status || deal.transfer_status || "Draft"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => generateWorkforceAgreement(deal)}>Generate Agreement + Excel</button>}{canManageMarketplace && <button onClick={() => exportWorkforceAgreementCalculationExcel(deal)}>Calculation Excel</button>}{canManageMarketplace && <button onClick={() => generateInvoiceFromDeal(deal)}>Generate Invoice</button>}{canManageMarketplace && breakdown.dealType === "Sponsorship Transfer" && <button onClick={() => convertMarketplaceTransferToRental(deal)}>Convert to Rental</button>}</td></tr>; })}</tbody></table>
     </TableCard>
 
     <TableCard title="Invoices & Collections">
