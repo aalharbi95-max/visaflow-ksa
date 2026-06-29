@@ -330,6 +330,8 @@ const emptyRequest = {
   recruitment_type: "Foreign",
   request_type: "",
   project_name: "",
+  project_city: "",
+  project_location: "",
   department: "",
   profession: "",
   quantity: "",
@@ -568,6 +570,8 @@ const emptyEmployee = {
   gender: "",
   profession: "",
   project_name: "",
+  project_city: "",
+  project_location: "",
   department: "",
   joining_date: "",
   contract_end_date: "",
@@ -1218,6 +1222,8 @@ const [localContentSettingsForm, setLocalContentSettingsForm] = useState({
 const [localContentProjectTargets, setLocalContentProjectTargets] = useState([]);
 const [localContentProjectForm, setLocalContentProjectForm] = useState({
   project_name: "",
+  project_city: "",
+  project_location: "",
   target_percent: 35,
   monthly_invoice_amount: "",
   penalty_percent: 5,
@@ -4573,6 +4579,8 @@ const executiveDashboard = useMemo(() => {
       recruitment_type: item.recruitment_type || (isSaudiNationality(item.nationality) ? "Saudi" : "Foreign"),
       request_type: item.request_type || "",
       project_name: item.project_name || "",
+      project_city: item.project_city || "",
+      project_location: item.project_location || "",
       department: item.department || "",
       profession: item.profession || lines[0]?.profession || "",
       quantity: item.quantity || lines[0]?.quantity || "",
@@ -7515,6 +7523,8 @@ function downloadEmployeesTemplate() {
       "Gender": "Male",
       "Profession": "Electrician",
       "Project": "MODON",
+      "Project City": "Riyadh",
+      "Project Location": "Industrial Area",
       "Department": "Operation",
       "Joining Date": "2026-07-01",
       "Contract End Date": "2027-07-01",
@@ -7602,6 +7612,8 @@ async function handleEmployeesExcelUpload(event) {
         gender: getRowValue(row, ["Gender", "gender", "الجنس"]),
         profession,
         project_name: getRowValue(row, ["Project", "Project Name", "project_name", "المشروع"]),
+        project_city: getRowValue(row, ["Project City", "City", "project_city", "المدينة", "مدينة المشروع"]),
+        project_location: getRowValue(row, ["Project Location", "Location", "Site", "project_location", "الموقع", "موقع المشروع"]),
         department: getRowValue(row, ["Department", "department", "القسم"]),
         joining_date: parseExcelDateValue(row["Joining Date"] || row["joining_date"] || row["تاريخ المباشرة"]),
         contract_end_date: parseExcelDateValue(row["Contract End Date"] || row["contract_end_date"] || row["تاريخ نهاية العقد"]),
@@ -7649,6 +7661,8 @@ function editEmployee(item) {
     gender: item.gender || "",
     profession: item.profession || "",
     project_name: item.project_name || "",
+    project_city: item.project_city || "",
+    project_location: item.project_location || "",
     department: item.department || "",
     joining_date: item.joining_date || "",
     contract_end_date: item.contract_end_date || "",
@@ -7679,6 +7693,8 @@ async function saveEmployee() {
     gender: employeeForm.gender || "",
     profession: employeeForm.profession || "",
     project_name: employeeForm.project_name || "",
+    project_city: employeeForm.project_city || "",
+    project_location: employeeForm.project_location || "",
     department: employeeForm.department || "",
     joining_date: employeeForm.joining_date || null,
     contract_end_date: employeeForm.contract_end_date || null,
@@ -7863,6 +7879,8 @@ function getProjectTarget(projectName) {
   const target = localContentProjectTargets.find((item) => normalize(item.project_name) === normalize(projectName));
   return {
     project_name: projectName || "Unassigned",
+    project_city: target?.project_city || "",
+    project_location: target?.project_location || "",
     target_percent: getNumericPercent(target?.target_percent, localContentSettings.default_target_percent),
     monthly_invoice_amount: Number(target?.monthly_invoice_amount || 0),
     penalty_percent: getNumericPercent(target?.penalty_percent, localContentSettings.default_monthly_penalty_percent),
@@ -7918,6 +7936,9 @@ const localContentDashboard = useMemo(() => {
 
   const projectRows = Array.from(projectMap.entries()).map(([projectName, rows]) => {
     const target = getProjectTarget(projectName);
+    const relatedRequest = requests.find((request) => normalize(request.project_name || request.project || "Unassigned") === normalize(projectName));
+    const projectCity = target.project_city || rows.find((employee) => employee.project_city)?.project_city || relatedRequest?.project_city || "";
+    const projectLocation = target.project_location || rows.find((employee) => employee.project_location)?.project_location || relatedRequest?.project_location || "";
     const current = calculateLocalContentForEmployees(rows);
     const forecastRows = rows.filter((employee) => {
       const days = getDaysUntil(employee.contract_end_date, today);
@@ -7943,6 +7964,8 @@ const localContentDashboard = useMemo(() => {
 
     return {
       projectName,
+      projectCity,
+      projectLocation,
       ...current,
       targetPercent: target.target_percent,
       forecastSaudizationPercent: forecast.saudizationPercent,
@@ -8014,6 +8037,8 @@ const localContentDashboard = useMemo(() => {
         profession: employee.profession || "-",
         source_project: sourceProject,
         target_project: match.projectName,
+        target_city: match.project?.projectCity || match.request?.project_city || "",
+        target_location: match.project?.projectLocation || match.request?.project_location || "",
         request_no: match.request?.request_no || "-",
         days_to_contract_end: daysToEnd,
         salary: getEmployeeMonthlySalary(employee),
@@ -8046,6 +8071,8 @@ function resetLocalContentProjectForm() {
   setLocalContentEditingProjectId(null);
   setLocalContentProjectForm({
     project_name: "",
+    project_city: "",
+    project_location: "",
     target_percent: localContentSettings.default_target_percent || 35,
     monthly_invoice_amount: "",
     penalty_percent: localContentSettings.default_monthly_penalty_percent || 5,
@@ -8057,6 +8084,8 @@ function editLocalContentProjectTarget(item) {
   setLocalContentEditingProjectId(item.id);
   setLocalContentProjectForm({
     project_name: item.project_name || "",
+    project_city: item.project_city || "",
+    project_location: item.project_location || "",
     target_percent: item.target_percent || localContentSettings.default_target_percent || 35,
     monthly_invoice_amount: item.monthly_invoice_amount || "",
     penalty_percent: item.penalty_percent || localContentSettings.default_monthly_penalty_percent || 5,
@@ -8096,6 +8125,8 @@ async function saveLocalContentProjectTarget() {
 
   const payload = {
     project_name: localContentProjectForm.project_name,
+    project_city: localContentProjectForm.project_city || "",
+    project_location: localContentProjectForm.project_location || "",
     target_percent: Number(localContentProjectForm.target_percent || localContentSettings.default_target_percent || 35),
     monthly_invoice_amount: Number(localContentProjectForm.monthly_invoice_amount || 0),
     penalty_percent: Number(localContentProjectForm.penalty_percent || localContentSettings.default_monthly_penalty_percent || 5),
@@ -8140,6 +8171,8 @@ async function applySaudiTransferSuggestion(suggestion) {
     .from("employees")
     .update(withUpdateActor({
       project_name: suggestion.target_project,
+      project_city: suggestion.target_city || "",
+      project_location: suggestion.target_location || "",
       notes: `Transferred through Local Content Center from ${suggestion.source_project} to ${suggestion.target_project}. ${suggestion.reason}`,
       updated_at: new Date().toISOString(),
     }))
@@ -8174,7 +8207,7 @@ const filteredEmployeeRows = useMemo(() => {
   const keyword = String(search || "").toLowerCase();
   return employees.filter((item) => {
     if (!keyword) return true;
-    return [item.employee_no, item.employee_name, item.iqama_no, item.profession, item.nationality, item.project_name]
+    return [item.employee_no, item.employee_name, item.iqama_no, item.profession, item.nationality, item.project_name, item.project_city, item.project_location]
       .join(" ")
       .toLowerCase()
       .includes(keyword);
@@ -17766,6 +17799,8 @@ mobile: c.mobile || "",
                 <Select value={requestForm.recruitment_type || "Foreign"} onChange={(v) => updateForm(setRequestForm, "recruitment_type", v)} placeholder="Recruitment Type" options={RECRUITMENT_TYPES} />
                 <Select value={requestForm.request_type} onChange={(v) => updateForm(setRequestForm, "request_type", v)} placeholder="Request Type" options={["Project Recruitment", "Administration Recruitment", "Replacement", "Mobilization"]} />
                 <Input placeholder="Project Name" value={requestForm.project_name} onChange={(v) => updateForm(setRequestForm, "project_name", v)} />
+                <Input placeholder="Project City / مدينة المشروع" value={requestForm.project_city} onChange={(v) => updateForm(setRequestForm, "project_city", v)} />
+                <Input placeholder="Project Location / Site / موقع المشروع" value={requestForm.project_location} onChange={(v) => updateForm(setRequestForm, "project_location", v)} />
                 <Input placeholder="Department" value={requestForm.department} onChange={(v) => updateForm(setRequestForm, "department", v)} />
                 <Input placeholder="Salary Budget / Default Salary" value={requestForm.salary} onChange={(v) => updateForm(setRequestForm, "salary", v)} />
                 <Select value={requestForm.priority} onChange={(v) => updateForm(setRequestForm, "priority", v)} placeholder="Priority" options={PRIORITIES} />
@@ -17915,6 +17950,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <tr>
 <th>Request No</th>
 <th>Type</th>
+<th>Project</th>
+<th>City</th>
+<th>Location</th>
 <th>Profession</th>
 <th>Nationality</th>
 <th>Gender</th>
@@ -17937,7 +17975,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
     String(item.request_no || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.profession || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.nationality || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.project_name || "").toLowerCase().includes(search.toLowerCase())
+    String(item.project_name || "").toLowerCase().includes(search.toLowerCase()) ||
+    String(item.project_city || "").toLowerCase().includes(search.toLowerCase()) ||
+    String(item.project_location || "").toLowerCase().includes(search.toLowerCase())
   )
   .map((item) => (
                     <tr key={item.id}>
@@ -17958,6 +17998,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
   </button>
 </td>
 <td><Badge value={item.recruitment_type || (isSaudiNationality(item.nationality) ? "Saudi" : "Foreign")} /></td>
+<td>{item.project_name || "-"}</td>
+<td>{item.project_city || "-"}</td>
+<td>{item.project_location || "-"}</td>
 <td>{getRequestLineSummary(item, "profession")}</td>
 
 <td>{getRequestLineSummary(item, "nationality")}</td>
@@ -19893,11 +19936,26 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         <div className="form-grid">
           <Select
             value={localContentProjectForm.project_name}
-            onChange={(v) => updateForm(setLocalContentProjectForm, "project_name", v)}
+            onChange={(v) => {
+              const projectName = v;
+              const relatedEmployee = employees.find((item) => normalize(item.project_name || "Unassigned") === normalize(projectName));
+              const relatedRequest = requests.find((item) => normalize(item.project_name || item.project || "Unassigned") === normalize(projectName));
+              setLocalContentProjectForm((prev) => ({
+                ...prev,
+                project_name: projectName,
+                project_city: prev.project_city || relatedEmployee?.project_city || relatedRequest?.project_city || "",
+                project_location: prev.project_location || relatedEmployee?.project_location || relatedRequest?.project_location || "",
+              }));
+            }}
             placeholder="Project Name"
             searchable
-            options={Array.from(new Set(employees.map((item) => item.project_name || "Unassigned").filter(Boolean)))}
+            options={Array.from(new Set([
+              ...employees.map((item) => item.project_name || "Unassigned"),
+              ...requests.map((item) => item.project_name || item.project || "Unassigned"),
+            ].filter(Boolean)))}
           />
+          <Input placeholder="Project City / مدينة المشروع" value={localContentProjectForm.project_city} onChange={(v) => updateForm(setLocalContentProjectForm, "project_city", v)} />
+          <Input placeholder="Project Location / Site / موقع المشروع" value={localContentProjectForm.project_location} onChange={(v) => updateForm(setLocalContentProjectForm, "project_location", v)} />
           <Input placeholder="Target Saudization %" type="number" value={localContentProjectForm.target_percent} onChange={(v) => updateForm(setLocalContentProjectForm, "target_percent", v)} />
           <Input placeholder="Monthly Invoice Amount" type="number" value={localContentProjectForm.monthly_invoice_amount} onChange={(v) => updateForm(setLocalContentProjectForm, "monthly_invoice_amount", v)} />
           <Input placeholder="Penalty % if target missed" type="number" value={localContentProjectForm.penalty_percent} onChange={(v) => updateForm(setLocalContentProjectForm, "penalty_percent", v)} />
@@ -19926,6 +19984,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <tr>
               <th>Risk</th>
               <th>Project</th>
+              <th>City</th>
+              <th>Location</th>
               <th>Headcount</th>
               <th>Saudi</th>
               <th>Saudi %</th>
@@ -19940,11 +20000,13 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </thead>
           <tbody>
             {localContentDashboard.selectedProjects.length === 0 ? (
-              <tr><td colSpan="12" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No employee/project data found.</td></tr>
+              <tr><td colSpan="14" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No employee/project data found.</td></tr>
             ) : localContentDashboard.selectedProjects.map((row) => (
               <tr key={row.projectName}>
                 <td><Badge value={row.riskLevel} /></td>
                 <td>{row.projectName}</td>
+                <td>{row.projectCity || "-"}</td>
+                <td>{row.projectLocation || "-"}</td>
                 <td>{row.headcount}</td>
                 <td>{row.saudiHeadcount}</td>
                 <td>{row.saudizationPercent}%</td>
@@ -19974,6 +20036,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <th>Profession</th>
               <th>From Project</th>
               <th>To Project</th>
+              <th>City</th>
               <th>Open Request</th>
               <th>Contract Ends In</th>
               <th>Salary</th>
@@ -19983,7 +20046,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </thead>
           <tbody>
             {localContentDashboard.transferSuggestions.length === 0 ? (
-              <tr><td colSpan="10" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No transfer suggestions yet. Add Saudi employees with contract end dates and project targets.</td></tr>
+              <tr><td colSpan="11" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No transfer suggestions yet. Add Saudi employees with contract end dates and project targets.</td></tr>
             ) : localContentDashboard.transferSuggestions.map((item, index) => (
               <tr key={`${item.employee_id}-${item.target_project}-${index}`}>
                 <td><Badge value={`${item.match_score}%`} /></td>
@@ -19991,6 +20054,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.profession}</td>
                 <td>{item.source_project}</td>
                 <td>{item.target_project}</td>
+                <td>{item.target_city || "-"}</td>
                 <td>{item.request_no}</td>
                 <td>{item.days_to_contract_end ?? "-"} days</td>
                 <td>{Number(item.salary || 0).toLocaleString()} SAR</td>
@@ -20007,13 +20071,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
     <TableCard title="Project Targets Setup">
       <table>
-        <thead><tr><th>Project</th><th>Target %</th><th>Monthly Invoice</th><th>Penalty %</th><th>Notes</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Project</th><th>City</th><th>Location</th><th>Target %</th><th>Monthly Invoice</th><th>Penalty %</th><th>Notes</th><th>Actions</th></tr></thead>
         <tbody>
           {localContentProjectTargets.length === 0 ? (
-            <tr><td colSpan="6" style={{ textAlign: "center", color: "#64748b", padding: "20px" }}>No project targets saved. Default target is used for all projects.</td></tr>
+            <tr><td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "20px" }}>No project targets saved. Default target is used for all projects.</td></tr>
           ) : localContentProjectTargets.map((item) => (
             <tr key={item.id}>
               <td>{item.project_name}</td>
+              <td>{item.project_city || "-"}</td>
+              <td>{item.project_location || "-"}</td>
               <td>{item.target_percent}%</td>
               <td>{Number(item.monthly_invoice_amount || 0).toLocaleString()} SAR</td>
               <td>{item.penalty_percent || 0}%</td>
@@ -21734,6 +21800,8 @@ onClick={() => setActiveReport("activityLog")}>
                   <Select value={employeeForm.gender} onChange={(v) => updateForm(setEmployeeForm, "gender", v)} placeholder="Gender" options={GENDERS} />
                   <Select value={employeeForm.profession} onChange={(v) => updateForm(setEmployeeForm, "profession", v)} placeholder="Profession" searchable options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)} />
                   <Input placeholder="Project" value={employeeForm.project_name} onChange={(v) => updateForm(setEmployeeForm, "project_name", v)} />
+                  <Input placeholder="Project City / مدينة المشروع" value={employeeForm.project_city} onChange={(v) => updateForm(setEmployeeForm, "project_city", v)} />
+                  <Input placeholder="Project Location / Site / موقع المشروع" value={employeeForm.project_location} onChange={(v) => updateForm(setEmployeeForm, "project_location", v)} />
                   <Input placeholder="Department" value={employeeForm.department} onChange={(v) => updateForm(setEmployeeForm, "department", v)} />
                   <Input type="date" placeholder="Joining Date" value={employeeForm.joining_date} onChange={(v) => updateForm(setEmployeeForm, "joining_date", v)} />
                   <Input type="date" placeholder="Contract End Date" value={employeeForm.contract_end_date} onChange={(v) => updateForm(setEmployeeForm, "contract_end_date", v)} />
@@ -21771,6 +21839,8 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Nationality</th>
                     <th>Gender</th>
                     <th>Project</th>
+                    <th>City</th>
+                    <th>Location</th>
                     <th>Salary</th>
                     <th>Joining</th>
                     <th>Contract End</th>
@@ -21794,6 +21864,8 @@ onClick={() => setActiveReport("activityLog")}>
                         <td>{item.nationality || "-"}</td>
                         <td><Badge value={item.gender || "-"} /></td>
                         <td>{item.project_name || "-"}</td>
+                        <td>{item.project_city || "-"}</td>
+                        <td>{item.project_location || "-"}</td>
                         <td>{Number(item.salary || item.monthly_salary || 0).toLocaleString()} SAR</td>
                         <td>{item.joining_date || "-"}</td>
                         <td>{item.contract_end_date || "-"}</td>
