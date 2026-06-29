@@ -898,6 +898,7 @@ const [agreementForm, setAgreementForm] = useState(emptyAgreement);
 
 const [marketplaceRequests, setMarketplaceRequests] = useState([]);
 const [marketplaceDeals, setMarketplaceDeals] = useState([]);
+const [marketplaceDealWorkers, setMarketplaceDealWorkers] = useState([]);
 const [marketplaceInvoices, setMarketplaceInvoices] = useState([]);
 const [marketplaceCollections, setMarketplaceCollections] = useState([]);
 const [notifications, setNotifications] = useState([]);
@@ -951,6 +952,9 @@ const emptyMarketplaceRequest = {
   admin_fee_percent: "10",
   admin_fee_amount: "",
   transfer_status: "Transfer Pending",
+  source_type: "Manual",
+  source_employee_ids: [],
+  selected_workers: [],
   status: "Open",
   notes: "",
 };
@@ -1010,6 +1014,8 @@ const [interviews, setInterviews] = useState([]);
 const [mobilizations, setMobilizations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
 const [employees, setEmployees] = useState([]);
+const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]);
+const [marketplaceSelectedEmployeeIds, setMarketplaceSelectedEmployeeIds] = useState([]);
 const [employeeEditingId, setEmployeeEditingId] = useState(null);
 const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
 const [demobilizationEditingId, setDemobilizationEditingId] = useState(null);
@@ -2344,6 +2350,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadDemobilizations(),
       loadMarketplaceRequests(),
       loadMarketplaceDeals(),
+      loadMarketplaceDealWorkers(),
       loadMarketplaceInvoices(),
       loadMarketplaceCollections(),
       loadNotifications(),
@@ -2381,6 +2388,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     "demobilizations",
     "marketplace_requests",
     "marketplace_deals",
+    "marketplace_deal_workers",
     "invoices",
     "collections",
   ];
@@ -2823,6 +2831,7 @@ setProfessions(allProfessions);
   const loadDemobilizations = () => loadTable("demobilizations", setDemobilizations);
   const loadMarketplaceRequests = () => loadTable("marketplace_requests", setMarketplaceRequests);
   const loadMarketplaceDeals = () => loadTable("marketplace_deals", setMarketplaceDeals);
+  const loadMarketplaceDealWorkers = () => loadTable("marketplace_deal_workers", setMarketplaceDealWorkers);
   const loadMarketplaceInvoices = () => loadTable("invoices", setMarketplaceInvoices);
   const loadMarketplaceCollections = () => loadTable("collections", setMarketplaceCollections);
   const loadAuditLogs = () => loadTable("request_audit_logs", setAuditLogs);
@@ -7707,6 +7716,17 @@ const employeeIntelligence = useMemo(() => {
   };
 }, [employees, requests]);
 
+const filteredEmployeeRows = useMemo(() => {
+  const keyword = String(search || "").toLowerCase();
+  return employees.filter((item) => {
+    if (!keyword) return true;
+    return [item.employee_no, item.employee_name, item.iqama_no, item.profession, item.nationality, item.project_name]
+      .join(" ")
+      .toLowerCase()
+      .includes(keyword);
+  });
+}, [employees, search]);
+
 function estimateRedeploymentCost(source = demobilizationForm, suggestion = null) {
   const isSaudi = isSaudiNationality(source.nationality);
   const defaultNewRecruitmentCost = isSaudi ? 1200 : 3650;
@@ -11534,9 +11554,12 @@ function generateMarketplaceNo(prefix, rows, field, digits = 4) {
 function resetMarketplaceRequestForm() {
   setMarketplaceRequestForm(emptyMarketplaceRequest);
   setMarketplaceRequestEditingId(null);
+  setMarketplaceSelectedEmployeeIds([]);
 }
 
 function editMarketplaceRequest(item) {
+  const sourceEmployeeIds = parseMarketplaceEmployeeIds(item.source_employee_ids);
+  setMarketplaceSelectedEmployeeIds(sourceEmployeeIds);
   setMarketplaceRequestEditingId(item.id);
   setMarketplaceRequestForm({
     ...emptyMarketplaceRequest,
@@ -11563,11 +11586,173 @@ function editMarketplaceRequest(item) {
     admin_fee_percent: item.admin_fee_percent ?? "10",
     admin_fee_amount: item.admin_fee_amount || "",
     transfer_status: item.transfer_status || "Transfer Pending",
+    source_type: item.source_type || (sourceEmployeeIds.length ? "Employees Selection" : "Manual"),
+    source_employee_ids: sourceEmployeeIds,
+    selected_workers: item.selected_workers || [],
     status: item.status || "Open",
     notes: item.notes || "",
   });
   setActivePage("Workforce Marketplace");
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function parseMarketplaceEmployeeIds(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item)).filter(Boolean);
+    } catch {
+      return value.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function getSelectedMarketplaceEmployees(ids = marketplaceSelectedEmployeeIds) {
+  const idSet = new Set((ids || []).map((id) => String(id)));
+  return employees.filter((employee) => idSet.has(String(employee.id)));
+}
+
+function getCommonEmployeeValue(rows = [], field) {
+  const values = Array.from(new Set(rows.map((row) => String(row?.[field] || "").trim()).filter(Boolean)));
+  if (values.length === 0) return "";
+  if (values.length === 1) return values[0];
+  return "Multiple";
+}
+
+function getEmployeeMarketplaceStatus(employee = {}) {
+  return employee.marketplace_status || "Available";
+}
+
+function isEmployeeReservedForMarketplace(employee = {}) {
+  return ["Reserved", "Rented", "Transfer In Progress", "Transferred"].includes(getEmployeeMarketplaceStatus(employee));
+}
+
+function buildSelectedWorkerSnapshot(rows = []) {
+  return rows.map((employee) => ({
+    employee_id: String(employee.id || ""),
+    employee_no: employee.employee_no || "",
+    employee_name: employee.employee_name || "",
+    iqama_no: employee.iqama_no || "",
+    profession: employee.profession || "",
+    nationality: employee.nationality || "",
+    gender: employee.gender || "",
+    project_name: employee.project_name || "",
+    marketplace_status: getEmployeeMarketplaceStatus(employee),
+  }));
+}
+
+function buildSelectedWorkersNotes(rows = []) {
+  if (!rows.length) return "";
+  return [
+    "Selected from Employees for Workforce Marketplace:",
+    ...rows.map((employee, index) => `${index + 1}. ${employee.employee_name || employee.employee_no || employee.id} | ${employee.profession || "-"} | Iqama: ${employee.iqama_no || "-"}`),
+  ].join("\n");
+}
+
+function toggleEmployeeSelection(employeeId, disabled = false) {
+  if (disabled) return;
+  const id = String(employeeId || "");
+  if (!id) return;
+  setSelectedEmployeeIds((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
+}
+
+function toggleAllVisibleEmployeesSelection(rows = filteredEmployeeRows) {
+  const availableIds = (rows || [])
+    .filter((employee) => !isEmployeeReservedForMarketplace(employee))
+    .map((employee) => String(employee.id));
+
+  if (!availableIds.length) return;
+
+  const allSelected = availableIds.every((id) => selectedEmployeeIds.includes(id));
+  setSelectedEmployeeIds((prev) => allSelected
+    ? prev.filter((id) => !availableIds.includes(String(id)))
+    : Array.from(new Set([...prev, ...availableIds]))
+  );
+}
+
+function sendSelectedEmployeesToMarketplace() {
+  if (!canManageMarketplace) return alert("You do not have permission to manage Workforce Marketplace.");
+
+  const selectedRows = employees.filter((employee) => selectedEmployeeIds.includes(String(employee.id)));
+  if (!selectedRows.length) return alert("Please select at least one employee first.");
+
+  const blockedRows = selectedRows.filter(isEmployeeReservedForMarketplace);
+  const rows = selectedRows.filter((employee) => !isEmployeeReservedForMarketplace(employee));
+
+  if (!rows.length) {
+    return alert("All selected employees are already reserved or linked to a marketplace deal.");
+  }
+
+  if (blockedRows.length > 0) {
+    alert(`${blockedRows.length} selected employee(s) were skipped because they are already reserved or linked to a marketplace deal.`);
+  }
+
+  const ids = rows.map((employee) => String(employee.id));
+  const notes = buildSelectedWorkersNotes(rows);
+
+  setMarketplaceSelectedEmployeeIds(ids);
+  setMarketplaceRequestEditingId(null);
+  setMarketplaceRequestForm({
+    ...emptyMarketplaceRequest,
+    source_type: "Employees Selection",
+    source_employee_ids: ids,
+    selected_workers: buildSelectedWorkerSnapshot(rows),
+    deal_type: "Service Rental",
+    profession: getCommonEmployeeValue(rows, "profession"),
+    nationality: getCommonEmployeeValue(rows, "nationality"),
+    gender: getCommonEmployeeValue(rows, "gender"),
+    quantity: rows.length,
+    duration_months: 12,
+    notes,
+  });
+
+  setSelectedEmployeeIds([]);
+  setActivePage("Workforce Marketplace");
+  window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 120);
+}
+
+function getMarketplaceDealWorkerRows(deal) {
+  const dealId = String(deal?.id || "");
+  return marketplaceDealWorkers.filter((worker) => String(worker.deal_id || "") === dealId);
+}
+
+async function attachWorkersToMarketplaceDeal(deal, rows = []) {
+  if (!deal?.id || !rows.length) return;
+
+  const workerPayload = rows.map((employee) => withCompany(withCreateActor({
+    deal_id: String(deal.id || ""),
+    deal_no: deal.deal_no || "",
+    employee_id: String(employee.id || ""),
+    employee_no: employee.employee_no || "",
+    employee_name: employee.employee_name || "",
+    iqama_no: employee.iqama_no || "",
+    profession: employee.profession || "",
+    nationality: employee.nationality || "",
+    gender: employee.gender || "",
+    project_name: employee.project_name || "",
+    worker_status: getWorkforceDealType(deal) === "Sponsorship Transfer" ? "Transfer In Progress" : "Reserved",
+    notes: `Attached to marketplace deal ${deal.deal_no || ""}`,
+  })));
+
+  const { error: workerError } = await supabase.from("marketplace_deal_workers").insert(workerPayload);
+  if (workerError) throw workerError;
+
+  const marketplaceStatus = getWorkforceDealType(deal) === "Sponsorship Transfer" ? "Transfer In Progress" : "Reserved";
+  for (const employee of rows) {
+    const { error } = await supabase
+      .from("employees")
+      .update(withUpdateActor({
+        marketplace_status: marketplaceStatus,
+        marketplace_deal_id: String(deal.id),
+        updated_at: new Date().toISOString(),
+      }))
+      .eq("id", employee.id)
+      .eq("company_id", currentCompanyId);
+    if (error) throw error;
+  }
 }
 
 function roundMoney(value) {
@@ -11816,13 +12001,90 @@ async function convertMarketplaceTransferToRental(deal) {
   await loadMarketplaceDeals();
 }
 
+async function createDirectMarketplaceDealFromSelectedWorkers() {
+  if (!canManageMarketplace) return alert("You do not have permission to create marketplace deals.");
+
+  const selectedRows = getSelectedMarketplaceEmployees().filter((employee) => !isEmployeeReservedForMarketplace(employee));
+  if (!selectedRows.length) return alert("Please select available employees from Employees first.");
+  if (!marketplaceRequestForm.client_name) return alert("Client / Company Name is required.");
+
+  const breakdown = getMarketplacePricingBreakdown({ ...marketplaceRequestForm, quantity: selectedRows.length });
+  const dealNo = generateMarketplaceNo("DEAL", marketplaceDeals, "deal_no", 4);
+
+  const payload = {
+    deal_no: dealNo,
+    marketplace_request_id: null,
+    client_name: marketplaceRequestForm.client_name || "",
+    deal_type: breakdown.dealType,
+    service_type: breakdown.serviceType,
+    source_type: "Employees Selection",
+    source_employee_ids: selectedRows.map((employee) => String(employee.id)),
+    selected_workers: buildSelectedWorkerSnapshot(selectedRows),
+    profession: marketplaceRequestForm.profession || getCommonEmployeeValue(selectedRows, "profession"),
+    nationality: marketplaceRequestForm.nationality || getCommonEmployeeValue(selectedRows, "nationality"),
+    gender: marketplaceRequestForm.gender || getCommonEmployeeValue(selectedRows, "gender"),
+    quantity: selectedRows.length,
+    duration_months: breakdown.durationMonths || Number(marketplaceRequestForm.duration_months || 0),
+    base_salary: Number(marketplaceRequestForm.base_salary || 0),
+    monthly_medical_insurance: Number(marketplaceRequestForm.monthly_medical_insurance || 0),
+    pricing_method: marketplaceRequestForm.pricing_method || "Margin Percent",
+    margin_percent: Number(marketplaceRequestForm.margin_percent || 0),
+    manual_monthly_rate: Number(marketplaceRequestForm.manual_monthly_rate || 0),
+    monthly_rate: Number(breakdown.monthlyRate || 0),
+    iqama_expiry_date: marketplaceRequestForm.iqama_expiry_date || null,
+    insurance_policy_end_date: marketplaceRequestForm.insurance_policy_end_date || null,
+    transfer_remaining_months: Number(breakdown.remainingMonths || marketplaceRequestForm.transfer_remaining_months || 0),
+    transfer_medical_insurance_remaining: Number(marketplaceRequestForm.transfer_medical_insurance_remaining || 0),
+    transfer_service_fee: Number(marketplaceRequestForm.transfer_service_fee || 0),
+    admin_fee_method: marketplaceRequestForm.admin_fee_method || "Percent",
+    admin_fee_percent: Number(marketplaceRequestForm.admin_fee_percent || 0),
+    admin_fee_amount: Number(marketplaceRequestForm.admin_fee_amount || 0),
+    transfer_status: breakdown.dealType === "Sponsorship Transfer" ? (marketplaceRequestForm.transfer_status || "Transfer Pending") : "",
+    total_value: Number(breakdown.totalValue || 0),
+    calc_breakdown: breakdown,
+    status: "Draft",
+    notes: [
+      "Direct deal created from selected Employees.",
+      breakdown.description,
+      buildSelectedWorkersNotes(selectedRows),
+      marketplaceRequestForm.notes ? `Notes: ${marketplaceRequestForm.notes}` : "",
+    ].filter(Boolean).join("\n"),
+    updated_at: new Date().toISOString(),
+  };
+
+  const result = await supabase
+    .from("marketplace_deals")
+    .insert([withCompany(withCreateActor(payload))])
+    .select()
+    .single();
+
+  if (result.error) return alert(result.error.message);
+
+  try {
+    await attachWorkersToMarketplaceDeal(result.data, selectedRows);
+  } catch (workerError) {
+    return alert(`Deal created but worker attachment failed: ${workerError.message}`);
+  }
+
+  alert(`Direct workforce deal created: ${dealNo}`);
+  resetMarketplaceRequestForm();
+  await loadMarketplaceDeals();
+  await loadMarketplaceDealWorkers();
+  await loadEmployees();
+}
+
 async function saveMarketplaceRequest() {
   if (!canManageMarketplace) return alert("You do not have permission to manage marketplace requests.");
   if (!marketplaceRequestForm.client_name || !marketplaceRequestForm.profession || !marketplaceRequestForm.quantity) {
     return alert("Client, profession and quantity are required.");
   }
 
-  const breakdown = getMarketplacePricingBreakdown(marketplaceRequestForm);
+  const selectedWorkerRows = getSelectedMarketplaceEmployees();
+  const selectedWorkerIds = selectedWorkerRows.map((employee) => String(employee.id));
+  const breakdown = getMarketplacePricingBreakdown({
+    ...marketplaceRequestForm,
+    quantity: selectedWorkerIds.length ? selectedWorkerIds.length : marketplaceRequestForm.quantity,
+  });
   const payload = {
     ...marketplaceRequestForm,
     deal_type: marketplaceRequestForm.deal_type || "Service Rental",
@@ -11831,7 +12093,10 @@ async function saveMarketplaceRequest() {
     request_no: marketplaceRequestEditingId
       ? marketplaceRequestForm.request_no
       : (marketplaceRequestForm.request_no || generateMarketplaceNo("WR", marketplaceRequests, "request_no", 4)),
-    quantity: Number(marketplaceRequestForm.quantity || 0),
+    source_type: selectedWorkerIds.length ? "Employees Selection" : (marketplaceRequestForm.source_type || "Manual"),
+    source_employee_ids: selectedWorkerIds,
+    selected_workers: buildSelectedWorkerSnapshot(selectedWorkerRows),
+    quantity: selectedWorkerIds.length ? selectedWorkerIds.length : Number(marketplaceRequestForm.quantity || 0),
     duration_months: Number(marketplaceRequestForm.duration_months || 1),
     base_salary: Number(marketplaceRequestForm.base_salary || 0),
     monthly_medical_insurance: Number(marketplaceRequestForm.monthly_medical_insurance || 0),
@@ -11898,11 +12163,20 @@ function getMarketplaceMatches(item) {
 
 async function createMarketplaceDeal(item) {
   if (!canManageMarketplace) return alert("You do not have permission to create marketplace deals.");
+
+  const selectedWorkerIds = parseMarketplaceEmployeeIds(item.source_employee_ids);
+  const selectedWorkerRows = getSelectedMarketplaceEmployees(selectedWorkerIds).filter((employee) => !isEmployeeReservedForMarketplace(employee));
+  const hasSelectedWorkers = selectedWorkerIds.length > 0;
+
+  if (hasSelectedWorkers && !selectedWorkerRows.length) {
+    return alert("The selected employees are no longer available or are already linked to another marketplace deal.");
+  }
+
   const matches = getMarketplaceMatches(item);
-  if (matches.total <= 0 && !window.confirm("No matching available workforce found. Create deal anyway?")) return;
+  if (!hasSelectedWorkers && matches.total <= 0 && !window.confirm("No matching available workforce found. Create deal anyway?")) return;
 
   const requestedQty = Number(item.quantity || 0);
-  const qty = Math.min(requestedQty, Math.max(matches.total, requestedQty));
+  const qty = hasSelectedWorkers ? selectedWorkerRows.length : Math.min(requestedQty, Math.max(matches.total, requestedQty));
   const breakdown = getMarketplacePricingBreakdown({ ...item, quantity: qty });
   const dealNo = generateMarketplaceNo("DEAL", marketplaceDeals, "deal_no", 4);
 
@@ -11915,6 +12189,9 @@ async function createMarketplaceDeal(item) {
     profession: item.profession || "",
     nationality: item.nationality || "",
     gender: item.gender || "",
+    source_type: hasSelectedWorkers ? "Employees Selection" : (item.source_type || "Marketplace Request"),
+    source_employee_ids: hasSelectedWorkers ? selectedWorkerRows.map((employee) => String(employee.id)) : parseMarketplaceEmployeeIds(item.source_employee_ids),
+    selected_workers: hasSelectedWorkers ? buildSelectedWorkerSnapshot(selectedWorkerRows) : (item.selected_workers || []),
     quantity: qty,
     duration_months: breakdown.durationMonths || Number(item.duration_months || 0),
     base_salary: Number(item.base_salary || 0),
@@ -11936,15 +12213,28 @@ async function createMarketplaceDeal(item) {
     calc_breakdown: breakdown,
     status: "Draft",
     notes: [
-      `Created from ${item.request_no || "marketplace request"}. AI matched ${matches.total} available employee(s).`,
+      hasSelectedWorkers ? `Created from selected Employees. Workers attached: ${selectedWorkerRows.length}.` : `Created from ${item.request_no || "marketplace request"}. AI matched ${matches.total} available employee(s).`,
       breakdown.description,
+      hasSelectedWorkers ? buildSelectedWorkersNotes(selectedWorkerRows) : "",
       item.notes ? `Client request notes: ${item.notes}` : "",
     ].filter(Boolean).join("\n"),
     updated_at: new Date().toISOString(),
   };
 
-  const result = await supabase.from("marketplace_deals").insert([withCompany(withCreateActor(payload))]);
+  const result = await supabase
+    .from("marketplace_deals")
+    .insert([withCompany(withCreateActor(payload))])
+    .select()
+    .single();
   if (result.error) return alert(result.error.message);
+
+  try {
+    if (hasSelectedWorkers) {
+      await attachWorkersToMarketplaceDeal(result.data, selectedWorkerRows);
+    }
+  } catch (workerError) {
+    return alert(`Deal created but worker attachment failed: ${workerError.message}`);
+  }
 
   await supabase
     .from("marketplace_requests")
@@ -11955,6 +12245,8 @@ async function createMarketplaceDeal(item) {
   alert(`Deal created: ${payload.deal_no}`);
   await loadMarketplaceRequests();
   await loadMarketplaceDeals();
+  await loadMarketplaceDealWorkers();
+  await loadEmployees();
 }
 
 async function generateInvoiceFromDeal(deal) {
@@ -18877,6 +19169,31 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       </div>
     </TableCard>
 
+    {marketplaceSelectedEmployeeIds.length > 0 && (
+      <TableCard title="Selected Workers for Marketplace Deal">
+        <div className="actions-line" style={{ marginBottom: "12px" }}>
+          <Badge value={`${marketplaceSelectedEmployeeIds.length} selected worker(s)`} />
+          <button className="light-btn" onClick={() => { setMarketplaceSelectedEmployeeIds([]); setMarketplaceRequestForm((prev) => ({ ...prev, source_type: "Manual", source_employee_ids: [], selected_workers: [], quantity: "" })); }}>Clear Selected Workers</button>
+        </div>
+        <table>
+          <thead><tr><th>Employee No</th><th>Name</th><th>Iqama</th><th>Profession</th><th>Nationality</th><th>Gender</th><th>Project</th></tr></thead>
+          <tbody>
+            {getSelectedMarketplaceEmployees().map((employee) => (
+              <tr key={employee.id}>
+                <td>{employee.employee_no || "-"}</td>
+                <td>{employee.employee_name || "-"}</td>
+                <td>{employee.iqama_no || "-"}</td>
+                <td>{employee.profession || "-"}</td>
+                <td>{employee.nationality || "-"}</td>
+                <td><Badge value={employee.gender || "-"} /></td>
+                <td>{employee.project_name || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableCard>
+    )}
+
     {canManageMarketplace && (
       <FormCard title={marketplaceRequestEditingId ? "Edit Workforce Deal Request" : "New Workforce Deal Request"}>
         <div className="form-grid">
@@ -18886,7 +19203,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <Select value={marketplaceRequestForm.profession} onChange={(v) => updateForm(setMarketplaceRequestForm, "profession", v)} placeholder="Profession" searchable options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)} />
           <Select value={marketplaceRequestForm.nationality} onChange={(v) => updateForm(setMarketplaceRequestForm, "nationality", v)} placeholder="Nationality" searchable options={countries.map((c) => c.nationality ? `${c.nationality} (${c.name})` : c.name)} />
           <Select value={marketplaceRequestForm.gender} onChange={(v) => updateForm(setMarketplaceRequestForm, "gender", v)} placeholder="Gender" options={["", ...GENDERS]} />
-          <Input type="number" placeholder="Quantity" value={marketplaceRequestForm.quantity} onChange={(v) => updateForm(setMarketplaceRequestForm, "quantity", v)} />
+          <Input type="number" placeholder={marketplaceSelectedEmployeeIds.length ? "Quantity (from selected workers)" : "Quantity"} value={marketplaceSelectedEmployeeIds.length ? marketplaceSelectedEmployeeIds.length : marketplaceRequestForm.quantity} readOnly={marketplaceSelectedEmployeeIds.length > 0} onChange={(v) => updateForm(setMarketplaceRequestForm, "quantity", v)} />
           {marketplaceRequestForm.deal_type === "Service Rental" ? (
             <>
               <Input type="number" placeholder="Duration Months" value={marketplaceRequestForm.duration_months} onChange={(v) => updateForm(setMarketplaceRequestForm, "duration_months", v)} />
@@ -18909,12 +19226,13 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <Select value={marketplaceRequestForm.status} onChange={(v) => updateForm(setMarketplaceRequestForm, "status", v)} placeholder="Status" options={["Open", "Under Review", "Converted", "Closed", "Cancelled"]} />
         </div>
         {(() => {
-          const preview = getMarketplacePricingBreakdown(marketplaceRequestForm);
+          const preview = getMarketplacePricingBreakdown({ ...marketplaceRequestForm, quantity: marketplaceSelectedEmployeeIds.length ? marketplaceSelectedEmployeeIds.length : marketplaceRequestForm.quantity });
           return <p className="helper-text">Estimated total before VAT: <b>{Number(preview.totalValue || 0).toLocaleString()} SAR</b> — {preview.description}</p>;
         })()}
         <textarea rows="3" placeholder="Notes" value={marketplaceRequestForm.notes} onChange={(e) => updateForm(setMarketplaceRequestForm, "notes", e.target.value)} />
         <div className="actions-line">
           <button className="save-btn" onClick={saveMarketplaceRequest}>{marketplaceRequestEditingId ? "Update Request" : "Save Request"}</button>
+          {marketplaceSelectedEmployeeIds.length > 0 && <button className="new-btn" onClick={createDirectMarketplaceDealFromSelectedWorkers}>Create Direct Deal</button>}
           <button className="light-btn" onClick={resetMarketplaceRequestForm}>Clear</button>
         </div>
       </FormCard>
@@ -18929,7 +19247,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </TableCard>
 
     <TableCard title="Marketplace Deals">
-      <table><thead><tr><th>Deal No</th><th>Client</th><th>Type</th><th>Profession</th><th>Qty</th><th>Monthly Rate</th><th>Total Before VAT</th><th>Agreement</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceDeals.length === 0 ? <tr><td colSpan="10">No marketplace deals yet</td></tr> : marketplaceDeals.map((deal) => { const breakdown = getMarketplacePricingBreakdown(deal); return <tr key={deal.id}><td>{deal.deal_no || "-"}</td><td>{deal.client_name || "-"}</td><td><Badge value={breakdown.dealType} /></td><td>{deal.profession || "-"}</td><td>{deal.quantity || 0}</td><td>{breakdown.dealType === "Service Rental" ? `${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR` : "-"}</td><td><b>{Number(breakdown.totalValue || deal.total_value || 0).toLocaleString()} SAR</b></td><td>{deal.agreement_no ? <Badge value={deal.agreement_no} /> : "Not generated"}</td><td><Badge value={deal.status || deal.transfer_status || "Draft"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => generateWorkforceAgreement(deal)}>Generate Agreement</button>}{canManageMarketplace && <button onClick={() => generateInvoiceFromDeal(deal)}>Generate Invoice</button>}{canManageMarketplace && breakdown.dealType === "Sponsorship Transfer" && <button onClick={() => convertMarketplaceTransferToRental(deal)}>Convert to Rental</button>}</td></tr>; })}</tbody></table>
+      <table><thead><tr><th>Deal No</th><th>Client</th><th>Type</th><th>Profession</th><th>Qty</th><th>Workers</th><th>Monthly Rate</th><th>Total Before VAT</th><th>Agreement</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceDeals.length === 0 ? <tr><td colSpan="11">No marketplace deals yet</td></tr> : marketplaceDeals.map((deal) => { const breakdown = getMarketplacePricingBreakdown(deal); const workers = getMarketplaceDealWorkerRows(deal); const selectedWorkers = Array.isArray(deal.selected_workers) ? deal.selected_workers : []; const workerCount = workers.length || selectedWorkers.length || 0; return <tr key={deal.id}><td>{deal.deal_no || "-"}</td><td>{deal.client_name || "-"}</td><td><Badge value={breakdown.dealType} /></td><td>{deal.profession || "-"}</td><td>{deal.quantity || 0}</td><td>{workerCount ? <div><Badge value={`${workerCount} worker(s)`} /><div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>{(workers.length ? workers : selectedWorkers).slice(0, 3).map((worker) => worker.employee_name || worker.employee_no || worker.iqama_no).filter(Boolean).join(", ")}{workerCount > 3 ? "..." : ""}</div></div> : "-"}</td><td>{breakdown.dealType === "Service Rental" ? `${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR` : "-"}</td><td><b>{Number(breakdown.totalValue || deal.total_value || 0).toLocaleString()} SAR</b></td><td>{deal.agreement_no ? <Badge value={deal.agreement_no} /> : "Not generated"}</td><td><Badge value={deal.status || deal.transfer_status || "Draft"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => generateWorkforceAgreement(deal)}>Generate Agreement</button>}{canManageMarketplace && <button onClick={() => generateInvoiceFromDeal(deal)}>Generate Invoice</button>}{canManageMarketplace && breakdown.dealType === "Sponsorship Transfer" && <button onClick={() => convertMarketplaceTransferToRental(deal)}>Convert to Rental</button>}</td></tr>; })}</tbody></table>
     </TableCard>
 
     <TableCard title="Invoices & Collections">
@@ -20545,10 +20863,19 @@ onClick={() => setActiveReport("activityLog")}>
             <TableCard title="Employees Master List">
               <div className="toolbar">
                 <input placeholder="Search employee, iqama, profession, project" value={search} onChange={(e) => setSearch(e.target.value)} />
+                {canManageMarketplace && (
+                  <>
+                    <button className="new-btn" onClick={sendSelectedEmployeesToMarketplace} disabled={selectedEmployeeIds.length === 0}>
+                      Send Selected to Workforce Marketplace ({selectedEmployeeIds.length})
+                    </button>
+                    <button className="light-btn" onClick={() => setSelectedEmployeeIds([])} disabled={selectedEmployeeIds.length === 0}>Clear Selection</button>
+                  </>
+                )}
               </div>
               <table>
                 <thead>
                   <tr>
+                    {canManageMarketplace && <th><input type="checkbox" checked={filteredEmployeeRows.filter((employee) => !isEmployeeReservedForMarketplace(employee)).length > 0 && filteredEmployeeRows.filter((employee) => !isEmployeeReservedForMarketplace(employee)).every((employee) => selectedEmployeeIds.includes(String(employee.id)))} onChange={() => toggleAllVisibleEmployeesSelection()} /></th>}
                     <th>Employee No</th>
                     <th>Name</th>
                     <th>Iqama</th>
@@ -20559,21 +20886,17 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Joining</th>
                     <th>Contract End</th>
                     <th>Days Remaining</th>
+                    <th>Marketplace</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {employees
-                    .filter((item) =>
-                      !search ||
-                      [item.employee_no, item.employee_name, item.iqama_no, item.profession, item.nationality, item.project_name]
-                        .join(" ")
-                        .toLowerCase()
-                        .includes(search.toLowerCase())
-                    )
-                    .map((item) => (
+                  {filteredEmployeeRows.map((item) => {
+                      const marketplaceBlocked = isEmployeeReservedForMarketplace(item);
+                      return (
                       <tr key={item.id}>
+                        {canManageMarketplace && <td><input type="checkbox" checked={selectedEmployeeIds.includes(String(item.id))} disabled={marketplaceBlocked} onChange={() => toggleEmployeeSelection(item.id, marketplaceBlocked)} /></td>}
                         <td>{item.employee_no || "-"}</td>
                         <td>{item.employee_name || "-"}</td>
                         <td>{item.iqama_no || "-"}</td>
@@ -20592,6 +20915,7 @@ onClick={() => setActiveReport("activityLog")}>
                           const color = days <= 30 ? "#dc2626" : days <= 90 ? "#f59e0b" : "#16a34a";
                           return <b style={{ color }}>{days} days</b>;
                         })()}</td>
+                        <td><Badge value={getEmployeeMarketplaceStatus(item)} /></td>
                         <td><Badge value={item.status || "Active"} /></td>
                         <td className="table-actions">
                           {canManageEmployees ? (
@@ -20603,7 +20927,7 @@ onClick={() => setActiveReport("activityLog")}>
                           ) : "-"}
                         </td>
                       </tr>
-                    ))}
+                    );})}
                 </tbody>
               </table>
             </TableCard>
