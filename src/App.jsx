@@ -553,6 +553,9 @@ const emptyEmployee = {
   employee_no: "",
   employee_name: "",
   iqama_no: "",
+  iqama_expiry_date: "",
+  insurance_policy_end_date: "",
+  monthly_medical_insurance: "",
   nationality: "",
   gender: "",
   profession: "",
@@ -7407,6 +7410,9 @@ function downloadEmployeesTemplate() {
       "Employee No": "",
       "Employee Name": "Ahmed Ali",
       "Iqama No": "1234567890",
+      "Iqama Expiry Date": "2027-06-30",
+      "Insurance Policy End Date": "2027-03-31",
+      "Monthly Medical Insurance": "150",
       "Nationality": "India",
       "Gender": "Male",
       "Profession": "Electrician",
@@ -7489,6 +7495,9 @@ async function handleEmployeesExcelUpload(event) {
         employee_no: employeeNo,
         employee_name: employeeName,
         iqama_no: iqamaNo,
+        iqama_expiry_date: parseExcelDateValue(row["Iqama Expiry Date"] || row["Iqama Expiry"] || row["iqama_expiry_date"] || row["تاريخ انتهاء الاقامة"] || row["تاريخ انتهاء الإقامة"]),
+        insurance_policy_end_date: parseExcelDateValue(row["Insurance Policy End Date"] || row["Medical Insurance End Date"] || row["insurance_policy_end_date"] || row["تاريخ انتهاء التأمين"]),
+        monthly_medical_insurance: Number(getRowValue(row, ["Monthly Medical Insurance", "Medical Insurance Monthly", "monthly_medical_insurance", "التأمين الطبي الشهري"]) || 0),
         nationality: getRowValue(row, ["Nationality", "nationality", "الجنسية"]),
         gender: getRowValue(row, ["Gender", "gender", "الجنس"]),
         profession,
@@ -7531,6 +7540,9 @@ function editEmployee(item) {
     employee_no: item.employee_no || "",
     employee_name: item.employee_name || "",
     iqama_no: item.iqama_no || "",
+    iqama_expiry_date: item.iqama_expiry_date || "",
+    insurance_policy_end_date: item.insurance_policy_end_date || "",
+    monthly_medical_insurance: item.monthly_medical_insurance || "",
     nationality: item.nationality || "",
     gender: item.gender || "",
     profession: item.profession || "",
@@ -7556,6 +7568,9 @@ async function saveEmployee() {
     employee_no: employeeEditingId ? employeeForm.employee_no : await generateEmployeeNo(),
     employee_name: employeeForm.employee_name,
     iqama_no: employeeForm.iqama_no || "",
+    iqama_expiry_date: employeeForm.iqama_expiry_date || null,
+    insurance_policy_end_date: employeeForm.insurance_policy_end_date || null,
+    monthly_medical_insurance: Number(employeeForm.monthly_medical_insurance || 0),
     nationality: employeeForm.nationality || "",
     gender: employeeForm.gender || "",
     profession: employeeForm.profession || "",
@@ -7607,6 +7622,9 @@ function createDemobilizationFromEmployee(employee) {
     employee_name: employee.employee_name || "",
     employee_id: employee.employee_no || "",
     iqama_no: employee.iqama_no || "",
+    iqama_expiry_date: employee.iqama_expiry_date || "",
+    insurance_policy_end_date: employee.insurance_policy_end_date || "",
+    monthly_medical_insurance: Number(employee.monthly_medical_insurance || 0),
     profession: employee.profession || "",
     nationality: employee.nationality || "",
     gender: employee.gender || "",
@@ -11622,6 +11640,16 @@ function getCommonEmployeeValue(rows = [], field) {
   return "Multiple";
 }
 
+function getCommonEmployeeDate(rows = [], field) {
+  const value = getCommonEmployeeValue(rows, field);
+  return value === "Multiple" ? "" : value;
+}
+
+function getCommonEmployeeNumber(rows = [], field) {
+  const value = getCommonEmployeeValue(rows, field);
+  return value === "Multiple" ? "" : value;
+}
+
 function getEmployeeMarketplaceStatus(employee = {}) {
   return employee.marketplace_status || "Available";
 }
@@ -11636,6 +11664,9 @@ function buildSelectedWorkerSnapshot(rows = []) {
     employee_no: employee.employee_no || "",
     employee_name: employee.employee_name || "",
     iqama_no: employee.iqama_no || "",
+    iqama_expiry_date: employee.iqama_expiry_date || null,
+    insurance_policy_end_date: employee.insurance_policy_end_date || null,
+    monthly_medical_insurance: Number(employee.monthly_medical_insurance || 0),
     profession: employee.profession || "",
     nationality: employee.nationality || "",
     gender: employee.gender || "",
@@ -11648,7 +11679,7 @@ function buildSelectedWorkersNotes(rows = []) {
   if (!rows.length) return "";
   return [
     "Selected from Employees for Workforce Marketplace:",
-    ...rows.map((employee, index) => `${index + 1}. ${employee.employee_name || employee.employee_no || employee.id} | ${employee.profession || "-"} | Iqama: ${employee.iqama_no || "-"}`),
+    ...rows.map((employee, index) => `${index + 1}. ${employee.employee_name || employee.employee_no || employee.id} | ${employee.profession || "-"} | Iqama: ${employee.iqama_no || "-"} | Iqama Expiry: ${employee.iqama_expiry_date || "-"}`),
   ].join("\n");
 }
 
@@ -11704,6 +11735,9 @@ function sendSelectedEmployeesToMarketplace() {
     profession: getCommonEmployeeValue(rows, "profession"),
     nationality: getCommonEmployeeValue(rows, "nationality"),
     gender: getCommonEmployeeValue(rows, "gender"),
+    iqama_expiry_date: getCommonEmployeeDate(rows, "iqama_expiry_date"),
+    insurance_policy_end_date: getCommonEmployeeDate(rows, "insurance_policy_end_date"),
+    monthly_medical_insurance: getCommonEmployeeNumber(rows, "monthly_medical_insurance"),
     quantity: rows.length,
     duration_months: 12,
     notes,
@@ -11818,13 +11852,19 @@ function getMarketplacePricingBreakdown(source = {}) {
     };
   }
 
+  const selectedWorkers = Array.isArray(source.selected_workers) ? source.selected_workers : [];
+  const workersWithIqamaExpiry = selectedWorkers.filter((worker) => worker?.iqama_expiry_date);
   const enteredMonths = Number(source.transfer_remaining_months || 0);
   const remainingMonths = enteredMonths > 0 ? enteredMonths : getMonthsUntil(source.iqama_expiry_date);
+  const workerIqamaRemainingTotal = workersWithIqamaExpiry.length > 0 && enteredMonths <= 0
+    ? roundMoney(workersWithIqamaExpiry.reduce((sum, worker) => sum + (monthlyIqamaWorkPermit * getMonthsUntil(worker.iqama_expiry_date)), 0))
+    : 0;
   const iqamaRemainingCostPerWorker = roundMoney(monthlyIqamaWorkPermit * remainingMonths);
+  const iqamaRemainingTotal = workerIqamaRemainingTotal > 0 ? workerIqamaRemainingTotal : roundMoney(iqamaRemainingCostPerWorker * quantity);
   const medicalInsuranceRemainingPerWorker = Number(source.transfer_medical_insurance_remaining || source.medical_insurance_remaining || 0);
   const transferServiceFeePerWorker = Number(source.transfer_service_fee || 0);
   const transferBasePerWorker = roundMoney(iqamaRemainingCostPerWorker + medicalInsuranceRemainingPerWorker + transferServiceFeePerWorker);
-  const transferSubtotal = roundMoney(transferBasePerWorker * quantity);
+  const transferSubtotal = roundMoney(iqamaRemainingTotal + ((medicalInsuranceRemainingPerWorker + transferServiceFeePerWorker) * quantity));
   const adminFeeMethod = source.admin_fee_method || "Percent";
   const adminFeePercent = Number(source.admin_fee_percent || 0);
   const adminFeeAmount = Number(source.admin_fee_amount || 0);
@@ -11844,6 +11884,8 @@ function getMarketplacePricingBreakdown(source = {}) {
     remainingMonths,
     iqamaExpiryDate: source.iqama_expiry_date || "",
     insurancePolicyEndDate: source.insurance_policy_end_date || "",
+    iqamaRemainingTotal,
+    workerIqamaRemainingTotal,
     iqamaRemainingCostPerWorker,
     medicalInsuranceRemainingPerWorker,
     transferServiceFeePerWorker,
@@ -19176,13 +19218,14 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <button className="light-btn" onClick={() => { setMarketplaceSelectedEmployeeIds([]); setMarketplaceRequestForm((prev) => ({ ...prev, source_type: "Manual", source_employee_ids: [], selected_workers: [], quantity: "" })); }}>Clear Selected Workers</button>
         </div>
         <table>
-          <thead><tr><th>Employee No</th><th>Name</th><th>Iqama</th><th>Profession</th><th>Nationality</th><th>Gender</th><th>Project</th></tr></thead>
+          <thead><tr><th>Employee No</th><th>Name</th><th>Iqama</th><th>Iqama Expiry</th><th>Profession</th><th>Nationality</th><th>Gender</th><th>Project</th></tr></thead>
           <tbody>
             {getSelectedMarketplaceEmployees().map((employee) => (
               <tr key={employee.id}>
                 <td>{employee.employee_no || "-"}</td>
                 <td>{employee.employee_name || "-"}</td>
                 <td>{employee.iqama_no || "-"}</td>
+                <td>{employee.iqama_expiry_date || "-"}</td>
                 <td>{employee.profession || "-"}</td>
                 <td>{employee.nationality || "-"}</td>
                 <td><Badge value={employee.gender || "-"} /></td>
@@ -20843,6 +20886,9 @@ onClick={() => setActiveReport("activityLog")}>
                   <Input placeholder="Employee No (Auto)" value={employeeForm.employee_no} onChange={(v) => updateForm(setEmployeeForm, "employee_no", v)} />
                   <Input placeholder="Employee Name" value={employeeForm.employee_name} onChange={(v) => updateForm(setEmployeeForm, "employee_name", v)} />
                   <Input placeholder="Iqama No" value={employeeForm.iqama_no} onChange={(v) => updateForm(setEmployeeForm, "iqama_no", v)} />
+                  <Input type="date" placeholder="Iqama Expiry Date" value={employeeForm.iqama_expiry_date} onChange={(v) => updateForm(setEmployeeForm, "iqama_expiry_date", v)} />
+                  <Input type="date" placeholder="Insurance Policy End Date" value={employeeForm.insurance_policy_end_date} onChange={(v) => updateForm(setEmployeeForm, "insurance_policy_end_date", v)} />
+                  <Input type="number" placeholder="Monthly Medical Insurance" value={employeeForm.monthly_medical_insurance} onChange={(v) => updateForm(setEmployeeForm, "monthly_medical_insurance", v)} />
                   <Select value={employeeForm.nationality} onChange={(v) => updateForm(setEmployeeForm, "nationality", v)} placeholder="Nationality" searchable options={countries.map((c) => c.nationality ? `${c.nationality} (${c.name})` : c.name)} />
                   <Select value={employeeForm.gender} onChange={(v) => updateForm(setEmployeeForm, "gender", v)} placeholder="Gender" options={GENDERS} />
                   <Select value={employeeForm.profession} onChange={(v) => updateForm(setEmployeeForm, "profession", v)} placeholder="Profession" searchable options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)} />
@@ -20879,6 +20925,7 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Employee No</th>
                     <th>Name</th>
                     <th>Iqama</th>
+                    <th>Iqama Expiry</th>
                     <th>Profession</th>
                     <th>Nationality</th>
                     <th>Gender</th>
@@ -20900,6 +20947,7 @@ onClick={() => setActiveReport("activityLog")}>
                         <td>{item.employee_no || "-"}</td>
                         <td>{item.employee_name || "-"}</td>
                         <td>{item.iqama_no || "-"}</td>
+                        <td>{item.iqama_expiry_date || "-"}</td>
                         <td>{item.profession || "-"}</td>
                         <td>{item.nationality || "-"}</td>
                         <td><Badge value={item.gender || "-"} /></td>
