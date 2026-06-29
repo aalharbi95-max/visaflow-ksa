@@ -755,6 +755,40 @@ const REPORT_STUDIO_SECTIONS = [
   "Appendices",
 ];
 
+const DEFAULT_ACTIVITY_MODULES = [
+  "Requests",
+  "Request Lines",
+  "Visa Inventory",
+  "Visa Allocation",
+  "Authorization",
+  "Candidates",
+  "Interviews",
+  "Mobilization",
+  "Employees",
+  "Demobilization",
+  "Agency Agreements",
+  "Agency Performance",
+  "Penalty Register",
+  "Marketplace",
+  "Users",
+  "Company Management",
+];
+
+const DEFAULT_ACTIVITY_ACTION_TYPES = [
+  "Created",
+  "Updated",
+  "Deleted",
+  "Approved",
+  "Rejected",
+  "Cancelled",
+  "Bulk Updated",
+  "Sent",
+  "Accepted",
+  "Assigned",
+  "Unassigned",
+];
+
+
 const AGREEMENT_TEMPLATE_TYPES = [
   "Standard Recruitment SLA",
   "High Volume Mobilization SLA",
@@ -2783,89 +2817,75 @@ setProfessions(allProfessions);
         ...mobilizations.map((item) => item.request_no),
         activityFilters.requestNo,
       ].map((value) => String(value || "").trim()).filter(Boolean))
-    ).slice(0, 100);
+    ).slice(0, 200);
 
     const typedRequestNo = String(activityFilters.requestNo || "").trim();
     const loadedBy = [];
-    let rows = [];
+    const errors = [];
+    const rowsById = new Map();
+
+    const mergeRows = (items = []) => {
+      items.forEach((item) => {
+        if (!item) return;
+        const key = item.id ? String(item.id) : `${item.created_at || ""}-${item.module_name || ""}-${item.record_id || ""}-${item.request_no || ""}`;
+        rowsById.set(key, item);
+      });
+    };
 
     setActivityLogLoading(true);
     setActivityLogMessage("");
 
     try {
+      const baseQuery = () =>
+        supabase
+          .from("system_activity_logs")
+          .select(selectColumns)
+          .order("created_at", { ascending: false })
+          .limit(500);
+
       const runQuery = async (label, builder) => {
-        const result = await builder(
-          supabase
-            .from("system_activity_logs")
-            .select(selectColumns)
-            .order("created_at", { ascending: false })
-            .limit(500)
-        );
+        const result = await builder(baseQuery());
 
         if (result.error) {
           console.warn(`system_activity_logs ${label}:`, result.error.message);
-          return {
-            rows: [],
-            error: result.error.message,
-          };
-        }
-
-        return {
-          rows: result.data || [],
-          error: "",
-        };
-      };
-
-      // 1) Main path: load by the current tenant company_id.
-      if (!canManagePlatform && currentCompanyId) {
-        const companyResult = await runQuery("by company_id", (query) =>
-          query.eq("company_id", currentCompanyId)
-        );
-
-        if (companyResult.error) {
-          setSystemActivityLogs([]);
-          setActivityLogMessage(`Activity Log load error: ${companyResult.error}`);
+          errors.push(`${label}: ${result.error.message}`);
           return [];
         }
 
-        if (companyResult.rows.length > 0) {
-          rows = companyResult.rows;
-          loadedBy.push("company_id");
+        const data = result.data || [];
+        if (data.length > 0) {
+          loadedBy.push(`${label} (${data.length})`);
+          mergeRows(data);
+        }
+
+        return data;
+      };
+
+      if (canManagePlatform) {
+        await runQuery("platform latest", (query) => query);
+      } else if (currentCompanyId) {
+        await runQuery("company_id", (query) => query.eq("company_id", currentCompanyId));
+      } else {
+        setSystemActivityLogs([]);
+        setActivityLogMessage("Company ID is missing. Activity log was not loaded.");
+        return [];
+      }
+
+      if (typedRequestNo) {
+        await runQuery("typed request_no", (query) => query.ilike("request_no", `%${typedRequestNo}%`));
+      }
+
+      if (visibleRequestNos.length > 0) {
+        for (let index = 0; index < visibleRequestNos.length; index += 50) {
+          const requestChunk = visibleRequestNos.slice(index, index + 50);
+          await runQuery(
+            `visible request_no ${index + 1}-${index + requestChunk.length}`,
+            (query) => query.in("request_no", requestChunk)
+          );
         }
       }
 
-      // 2) If the company_id does not match because of legacy/moved data, load by typed request no.
-      if (rows.length === 0 && typedRequestNo) {
-        const typedResult = await runQuery("by typed request_no", (query) =>
-          query.ilike("request_no", `%${typedRequestNo}%`)
-        );
-
-        if (!typedResult.error && typedResult.rows.length > 0) {
-          rows = typedResult.rows;
-          loadedBy.push("typed request_no");
-        }
-      }
-
-      // 3) Fallback: load by visible request numbers already shown in the current company screen.
-      if (rows.length === 0 && visibleRequestNos.length > 0) {
-        const requestResult = await runQuery("by visible request_no list", (query) =>
-          query.in("request_no", visibleRequestNos)
-        );
-
-        if (!requestResult.error && requestResult.rows.length > 0) {
-          rows = requestResult.rows;
-          loadedBy.push("visible request_no");
-        }
-      }
-
-      // 4) Platform users can see the last logs. Company users only keep rows matching their visible requests or company_id.
-      if (rows.length === 0 && canManagePlatform) {
-        const platformResult = await runQuery("platform latest", (query) => query);
-        if (!platformResult.error && platformResult.rows.length > 0) {
-          rows = platformResult.rows;
-          loadedBy.push("platform latest");
-        }
-      }
+      let rows = Array.from(rowsById.values());
 
       if (!canManagePlatform && rows.length > 0) {
         const allowedRequestNos = new Set(visibleRequestNos.map((item) => String(item)));
@@ -2877,13 +2897,16 @@ setProfessions(allProfessions);
         });
       }
 
+      rows = rows.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
       setSystemActivityLogs(rows);
 
       const debugParts = [
         rows.length ? `Loaded ${rows.length} activity log record(s)` : "No activity log records loaded",
-        loadedBy.length ? `source: ${loadedBy.join(", ")}` : "",
+        loadedBy.length ? `source: ${loadedBy.join(", ")}` : "source: none",
         currentCompanyId ? `company: ${currentCompanyId}` : "company: missing",
         visibleRequestNos.length ? `visible requests: ${visibleRequestNos.length}` : "visible requests: 0",
+        errors.length ? `errors: ${errors.join(" / ")}` : "",
       ].filter(Boolean);
 
       setActivityLogMessage(debugParts.join(" | "));
@@ -3332,7 +3355,15 @@ useEffect(() => {
 useEffect(() => {
   if (!currentUser || activePage !== "Reports") return;
   loadSystemActivityLogs();
-}, [activePage, currentUser?.id, currentCompanyId]);
+}, [
+  activePage,
+  currentUser?.id,
+  currentCompanyId,
+  requests.length,
+  requestLines.length,
+  candidates.length,
+  mobilizations.length,
+]);
 
 useEffect(() => {
   if (!currentUser || !currentCompanyId || isCurrentAgencyUser) return;
@@ -3713,13 +3744,33 @@ const totalRequestBudget = requests.reduce((sum, request) => {
   };
 }, [requests, requestLines, visaRecords, visaAuthorizations, candidates, interviews, mobilizations]);
 
+const activityRequestOptions = useMemo(() => {
+  const requestNos = [
+    ...requests.map((item) => item.request_no),
+    ...requestLines.map((item) => item.request_no),
+    ...candidates.map((item) => item.request_no),
+    ...mobilizations.map((item) => item.request_no),
+    ...systemActivityLogs.map((item) => item.request_no),
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(requestNos)).sort();
+}, [requests, requestLines, candidates, mobilizations, systemActivityLogs]);
+
 const activityModules = useMemo(() => {
-  const modules = systemActivityLogs.map((item) => item.module_name).filter(Boolean);
+  const modules = [
+    ...DEFAULT_ACTIVITY_MODULES,
+    ...systemActivityLogs.map((item) => item.module_name).filter(Boolean),
+  ];
   return ["All", ...Array.from(new Set(modules)).sort()];
 }, [systemActivityLogs]);
 
 const activityActionTypes = useMemo(() => {
-  const actions = systemActivityLogs.map((item) => item.action_type).filter(Boolean);
+  const actions = [
+    ...DEFAULT_ACTIVITY_ACTION_TYPES,
+    ...systemActivityLogs.map((item) => item.action_type).filter(Boolean),
+  ];
   return ["All", ...Array.from(new Set(actions)).sort()];
 }, [systemActivityLogs]);
 
@@ -20032,11 +20083,15 @@ onClick={() => setActiveReport("activityLog")}>
   {(activeReport === "all" || activeReport === "activityLog") ? (
     <TableCard title="Operational Activity Log / سجل الحركة التشغيلية">
       <div className="toolbar">
-        <input
-          placeholder="Filter by request no... مثال: REQ-2026-0006"
+        <select
           value={activityFilters.requestNo}
           onChange={(e) => setActivityFilters((prev) => ({ ...prev, requestNo: e.target.value }))}
-        />
+        >
+          <option value="">All Requests / كل الطلبات</option>
+          {activityRequestOptions.map((requestNo) => (
+            <option key={requestNo} value={requestNo}>{requestNo}</option>
+          ))}
+        </select>
         <select
           value={activityFilters.moduleName}
           onChange={(e) => setActivityFilters((prev) => ({ ...prev, moduleName: e.target.value }))}
