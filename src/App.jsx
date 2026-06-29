@@ -1098,6 +1098,8 @@ const [activityFilters, setActivityFilters] = useState({
   dateFrom: "",
   dateTo: "",
 });
+const [activityLogLoading, setActivityLogLoading] = useState(false);
+const [activityLogMessage, setActivityLogMessage] = useState("");
 const [companyReportClient, setCompanyReportClient] = useState(null);
 const [companyReportRows, setCompanyReportRows] = useState([]);
 const [companyReportLoading, setCompanyReportLoading] = useState(false);
@@ -2766,33 +2768,63 @@ setProfessions(allProfessions);
   async function loadSystemActivityLogs() {
     if (!currentUser) {
       setSystemActivityLogs([]);
+      setActivityLogMessage("Login is required to load activity logs.");
       return [];
     }
 
-    let query = supabase
-      .from("system_activity_logs")
-      .select("id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at")
-      .order("created_at", { ascending: false })
-      .limit(500);
+    setActivityLogLoading(true);
+    setActivityLogMessage("");
 
-    if (!canManagePlatform) {
-      if (!currentCompanyId) {
+    try {
+      let query = supabase
+        .from("system_activity_logs")
+        .select("id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at")
+        .order("created_at", { ascending: false })
+        .limit(500);
+
+      if (!canManagePlatform) {
+        if (!currentCompanyId) {
+          setSystemActivityLogs([]);
+          setActivityLogMessage("Company ID is missing. Activity Log cannot be loaded.");
+          return [];
+        }
+        query = query.eq("company_id", currentCompanyId);
+      }
+
+      let { data, error } = await query;
+
+      if (error) {
+        console.warn("system_activity_logs:", error.message);
         setSystemActivityLogs([]);
+        setActivityLogMessage(`Activity Log load error: ${error.message}`);
         return [];
       }
-      query = query.eq("company_id", currentCompanyId);
+
+      // Safety fallback: if the company filter returns empty but the current screen already has requests,
+      // try loading records by visible request numbers. This keeps the report useful after legacy data moves.
+      if ((!data || data.length === 0) && !canManagePlatform && requests.length > 0) {
+        const requestNos = Array.from(new Set(requests.map((item) => item.request_no).filter(Boolean))).slice(0, 100);
+        if (requestNos.length > 0) {
+          const fallback = await supabase
+            .from("system_activity_logs")
+            .select("id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at")
+            .in("request_no", requestNos)
+            .order("created_at", { ascending: false })
+            .limit(500);
+
+          if (!fallback.error && fallback.data?.length) {
+            data = fallback.data;
+          }
+        }
+      }
+
+      const rows = data || [];
+      setSystemActivityLogs(rows);
+      setActivityLogMessage(rows.length ? `Loaded ${rows.length} activity log record(s).` : "No activity log records loaded for this company yet. Click Refresh after making an update.");
+      return rows;
+    } finally {
+      setActivityLogLoading(false);
     }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.warn("system_activity_logs:", error.message);
-      setSystemActivityLogs([]);
-      return [];
-    }
-
-    setSystemActivityLogs(data || []);
-    return data || [];
   }
 
 async function loadNotifications() {
@@ -3223,6 +3255,11 @@ useEffect(() => {
 
   loadAll();
 }, [currentUser?.id, currentCompanyId]);
+
+useEffect(() => {
+  if (!currentUser || activePage !== "Reports") return;
+  loadSystemActivityLogs();
+}, [activePage, currentUser?.id, currentCompanyId]);
 
 useEffect(() => {
   if (!currentUser || !currentCompanyId || isCurrentAgencyUser) return;
@@ -19923,7 +19960,7 @@ onClick={() => setActiveReport("activityLog")}>
     <TableCard title="Operational Activity Log / سجل الحركة التشغيلية">
       <div className="toolbar">
         <input
-          placeholder="Filter by request no..."
+          placeholder="Filter by request no... مثال: REQ-2026-0006"
           value={activityFilters.requestNo}
           onChange={(e) => setActivityFilters((prev) => ({ ...prev, requestNo: e.target.value }))}
         />
@@ -19932,7 +19969,7 @@ onClick={() => setActiveReport("activityLog")}>
           onChange={(e) => setActivityFilters((prev) => ({ ...prev, moduleName: e.target.value }))}
         >
           {activityModules.map((module) => (
-            <option key={module} value={module}>{module}</option>
+            <option key={module} value={module}>{module === "All" ? "All Modules" : module}</option>
           ))}
         </select>
         <select
@@ -19940,7 +19977,7 @@ onClick={() => setActiveReport("activityLog")}>
           onChange={(e) => setActivityFilters((prev) => ({ ...prev, actionType: e.target.value }))}
         >
           {activityActionTypes.map((action) => (
-            <option key={action} value={action}>{action}</option>
+            <option key={action} value={action}>{action === "All" ? "All Actions" : action}</option>
           ))}
         </select>
         <input
@@ -19954,11 +19991,24 @@ onClick={() => setActiveReport("activityLog")}>
           onChange={(e) => setActivityFilters((prev) => ({ ...prev, dateTo: e.target.value }))}
         />
         <button
+          className="primary-btn"
+          type="button"
+          onClick={loadSystemActivityLogs}
+          disabled={activityLogLoading}
+        >
+          {activityLogLoading ? "Loading..." : "Refresh / Apply"}
+        </button>
+        <button
           className="light-btn"
+          type="button"
           onClick={() => setActivityFilters({ requestNo: "", moduleName: "All", actionType: "All", dateFrom: "", dateTo: "" })}
         >
           Clear
         </button>
+      </div>
+      <div style={{ color: "#64748b", fontSize: "12px", margin: "8px 0 12px" }}>
+        Loaded: {systemActivityLogs.length} | Showing: {filteredActivityLogs.length}
+        {activityLogMessage ? ` — ${activityLogMessage}` : ""}
       </div>
       <div className="mini-table-scroll">
         <table>
@@ -19976,7 +20026,7 @@ onClick={() => setActiveReport("activityLog")}>
           </thead>
           <tbody>
             {filteredActivityLogs.length === 0 ? (
-              <tr><td colSpan="8">No activity log records found.</td></tr>
+              <tr><td colSpan="8">No activity log records found. Click Refresh / Apply after creating or updating records.</td></tr>
             ) : filteredActivityLogs.slice(0, 200).map((item) => (
               <tr key={item.id}>
                 <td>{formatActivityDate(item.created_at)}</td>
