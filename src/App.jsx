@@ -555,6 +555,7 @@ const emptyEmployee = {
   iqama_no: "",
   iqama_expiry_date: "",
   insurance_policy_end_date: "",
+  annual_medical_insurance: "",
   monthly_medical_insurance: "",
   nationality: "",
   gender: "",
@@ -941,6 +942,7 @@ const emptyMarketplaceRequest = {
   quantity: "",
   duration_months: 12,
   base_salary: "",
+  annual_medical_insurance: "",
   monthly_medical_insurance: "",
   pricing_method: "Margin Percent",
   margin_percent: "15",
@@ -7411,8 +7413,8 @@ function downloadEmployeesTemplate() {
       "Employee Name": "Ahmed Ali",
       "Iqama No": "1234567890",
       "Iqama Expiry Date": "2027-06-30",
-      "Insurance Policy End Date": "2027-03-31",
-      "Monthly Medical Insurance": "150",
+      "Insurance Policy End Date": "2026-12-31",
+      "Annual Medical Insurance": "1200",
       "Nationality": "India",
       "Gender": "Male",
       "Profession": "Electrician",
@@ -7497,7 +7499,8 @@ async function handleEmployeesExcelUpload(event) {
         iqama_no: iqamaNo,
         iqama_expiry_date: parseExcelDateValue(row["Iqama Expiry Date"] || row["Iqama Expiry"] || row["iqama_expiry_date"] || row["تاريخ انتهاء الاقامة"] || row["تاريخ انتهاء الإقامة"]),
         insurance_policy_end_date: parseExcelDateValue(row["Insurance Policy End Date"] || row["Medical Insurance End Date"] || row["insurance_policy_end_date"] || row["تاريخ انتهاء التأمين"]),
-        monthly_medical_insurance: Number(getRowValue(row, ["Monthly Medical Insurance", "Medical Insurance Monthly", "monthly_medical_insurance", "التأمين الطبي الشهري"]) || 0),
+        annual_medical_insurance: Number(getRowValue(row, ["Annual Medical Insurance", "Medical Insurance Annual", "annual_medical_insurance", "قيمة التأمين السنوي", "التأمين الطبي السنوي"]) || 0),
+        monthly_medical_insurance: roundMoney(Number(getRowValue(row, ["Annual Medical Insurance", "Medical Insurance Annual", "annual_medical_insurance", "قيمة التأمين السنوي", "التأمين الطبي السنوي"]) || 0) / 12),
         nationality: getRowValue(row, ["Nationality", "nationality", "الجنسية"]),
         gender: getRowValue(row, ["Gender", "gender", "الجنس"]),
         profession,
@@ -7542,6 +7545,7 @@ function editEmployee(item) {
     iqama_no: item.iqama_no || "",
     iqama_expiry_date: item.iqama_expiry_date || "",
     insurance_policy_end_date: item.insurance_policy_end_date || "",
+    annual_medical_insurance: item.annual_medical_insurance || (item.monthly_medical_insurance ? roundMoney(Number(item.monthly_medical_insurance || 0) * 12) : ""),
     monthly_medical_insurance: item.monthly_medical_insurance || "",
     nationality: item.nationality || "",
     gender: item.gender || "",
@@ -7570,7 +7574,8 @@ async function saveEmployee() {
     iqama_no: employeeForm.iqama_no || "",
     iqama_expiry_date: employeeForm.iqama_expiry_date || null,
     insurance_policy_end_date: employeeForm.insurance_policy_end_date || null,
-    monthly_medical_insurance: Number(employeeForm.monthly_medical_insurance || 0),
+    annual_medical_insurance: Number(employeeForm.annual_medical_insurance || 0),
+    monthly_medical_insurance: roundMoney(Number(employeeForm.annual_medical_insurance || 0) / 12),
     nationality: employeeForm.nationality || "",
     gender: employeeForm.gender || "",
     profession: employeeForm.profession || "",
@@ -7624,6 +7629,7 @@ function createDemobilizationFromEmployee(employee) {
     iqama_no: employee.iqama_no || "",
     iqama_expiry_date: employee.iqama_expiry_date || "",
     insurance_policy_end_date: employee.insurance_policy_end_date || "",
+    annual_medical_insurance: Number(employee.annual_medical_insurance || 0) || roundMoney(Number(employee.monthly_medical_insurance || 0) * 12),
     monthly_medical_insurance: Number(employee.monthly_medical_insurance || 0),
     profession: employee.profession || "",
     nationality: employee.nationality || "",
@@ -11590,6 +11596,7 @@ function editMarketplaceRequest(item) {
     quantity: item.quantity || "",
     duration_months: item.duration_months || 12,
     base_salary: item.base_salary || "",
+    annual_medical_insurance: item.annual_medical_insurance || (item.monthly_medical_insurance ? roundMoney(Number(item.monthly_medical_insurance || 0) * 12) : ""),
     monthly_medical_insurance: item.monthly_medical_insurance || "",
     pricing_method: item.pricing_method || "Margin Percent",
     margin_percent: item.margin_percent ?? "15",
@@ -11666,6 +11673,7 @@ function buildSelectedWorkerSnapshot(rows = []) {
     iqama_no: employee.iqama_no || "",
     iqama_expiry_date: employee.iqama_expiry_date || null,
     insurance_policy_end_date: employee.insurance_policy_end_date || null,
+    annual_medical_insurance: Number(employee.annual_medical_insurance || 0) || roundMoney(Number(employee.monthly_medical_insurance || 0) * 12),
     monthly_medical_insurance: Number(employee.monthly_medical_insurance || 0),
     profession: employee.profession || "",
     nationality: employee.nationality || "",
@@ -11737,6 +11745,7 @@ function sendSelectedEmployeesToMarketplace() {
     gender: getCommonEmployeeValue(rows, "gender"),
     iqama_expiry_date: getCommonEmployeeDate(rows, "iqama_expiry_date"),
     insurance_policy_end_date: getCommonEmployeeDate(rows, "insurance_policy_end_date"),
+    annual_medical_insurance: getCommonEmployeeNumber(rows, "annual_medical_insurance") || (getCommonEmployeeNumber(rows, "monthly_medical_insurance") ? roundMoney(Number(getCommonEmployeeNumber(rows, "monthly_medical_insurance") || 0) * 12) : ""),
     monthly_medical_insurance: getCommonEmployeeNumber(rows, "monthly_medical_insurance"),
     quantity: rows.length,
     duration_months: 12,
@@ -11763,6 +11772,10 @@ async function attachWorkersToMarketplaceDeal(deal, rows = []) {
     employee_no: employee.employee_no || "",
     employee_name: employee.employee_name || "",
     iqama_no: employee.iqama_no || "",
+    iqama_expiry_date: employee.iqama_expiry_date || null,
+    insurance_policy_end_date: employee.insurance_policy_end_date || null,
+    annual_medical_insurance: Number(employee.annual_medical_insurance || 0) || roundMoney(Number(employee.monthly_medical_insurance || 0) * 12),
+    monthly_medical_insurance: Number(employee.monthly_medical_insurance || 0),
     profession: employee.profession || "",
     nationality: employee.nationality || "",
     gender: employee.gender || "",
@@ -11793,7 +11806,7 @@ function roundMoney(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
 
-function getMonthsUntil(dateValue) {
+function getDaysUntil(dateValue) {
   if (!dateValue) return 0;
   const end = new Date(dateValue);
   if (Number.isNaN(end.getTime())) return 0;
@@ -11801,7 +11814,11 @@ function getMonthsUntil(dateValue) {
   today.setHours(0, 0, 0, 0);
   end.setHours(0, 0, 0, 0);
   const days = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
-  return Math.max(Math.ceil(days / 30.4375), 0);
+  return Math.max(days, 0);
+}
+
+function getMonthsUntil(dateValue) {
+  return Math.max(Math.ceil(getDaysUntil(dateValue) / 30.4375), 0);
 }
 
 function getWorkforceDealType(item = {}) {
@@ -11816,7 +11833,10 @@ function getMarketplacePricingBreakdown(source = {}) {
   const quantity = Math.max(Number(source.quantity || 0), 0);
   const durationMonths = Math.max(Number(source.duration_months || 1), 1);
   const baseSalary = Number(source.base_salary || source.salary || 0);
-  const monthlyMedicalInsurance = Number(source.monthly_medical_insurance || 0);
+  const annualMedicalInsurance = Number(source.annual_medical_insurance || 0) || roundMoney(Number(source.monthly_medical_insurance || 0) * 12);
+  const monthlyMedicalInsurance = annualMedicalInsurance > 0
+    ? roundMoney(annualMedicalInsurance / 12)
+    : Number(source.monthly_medical_insurance || 0);
   const monthlyIqamaWorkPermit = WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST;
   const gosiAmount = roundMoney(baseSalary * WORKFORCE_GOSI_RATE);
   const monthlyBaseCost = roundMoney(baseSalary + monthlyIqamaWorkPermit + gosiAmount + monthlyMedicalInsurance);
@@ -11835,6 +11855,7 @@ function getMarketplacePricingBreakdown(source = {}) {
       quantity,
       durationMonths,
       baseSalary,
+      annualMedicalInsurance,
       monthlyIqamaWorkPermit,
       gosiRate: WORKFORCE_GOSI_RATE,
       gosiAmount,
@@ -11855,16 +11876,37 @@ function getMarketplacePricingBreakdown(source = {}) {
   const selectedWorkers = Array.isArray(source.selected_workers) ? source.selected_workers : [];
   const workersWithIqamaExpiry = selectedWorkers.filter((worker) => worker?.iqama_expiry_date);
   const enteredMonths = Number(source.transfer_remaining_months || 0);
-  const remainingMonths = enteredMonths > 0 ? enteredMonths : getMonthsUntil(source.iqama_expiry_date);
+  const fallbackRemainingMonths = enteredMonths > 0 ? enteredMonths : getMonthsUntil(source.iqama_expiry_date);
   const workerIqamaRemainingTotal = workersWithIqamaExpiry.length > 0 && enteredMonths <= 0
     ? roundMoney(workersWithIqamaExpiry.reduce((sum, worker) => sum + (monthlyIqamaWorkPermit * getMonthsUntil(worker.iqama_expiry_date)), 0))
     : 0;
-  const iqamaRemainingCostPerWorker = roundMoney(monthlyIqamaWorkPermit * remainingMonths);
-  const iqamaRemainingTotal = workerIqamaRemainingTotal > 0 ? workerIqamaRemainingTotal : roundMoney(iqamaRemainingCostPerWorker * quantity);
-  const medicalInsuranceRemainingPerWorker = Number(source.transfer_medical_insurance_remaining || source.medical_insurance_remaining || 0);
+  const iqamaRemainingTotal = workerIqamaRemainingTotal > 0
+    ? workerIqamaRemainingTotal
+    : roundMoney(monthlyIqamaWorkPermit * fallbackRemainingMonths * quantity);
+  const iqamaRemainingCostPerWorker = quantity ? roundMoney(iqamaRemainingTotal / quantity) : 0;
+  const remainingMonths = quantity ? roundMoney(iqamaRemainingCostPerWorker / monthlyIqamaWorkPermit) : fallbackRemainingMonths;
+
+  const policyEndDate = source.insurance_policy_end_date || "";
+  const getWorkerAnnualInsurance = (worker = {}) => {
+    const workerAnnual = Number(worker.annual_medical_insurance || 0) || roundMoney(Number(worker.monthly_medical_insurance || 0) * 12);
+    return workerAnnual > 0 ? workerAnnual : annualMedicalInsurance;
+  };
+  const getWorkerPolicyEndDate = (worker = {}) => worker.insurance_policy_end_date || policyEndDate;
+  const medicalInsuranceRemainingTotal = selectedWorkers.length > 0
+    ? roundMoney(selectedWorkers.reduce((sum, worker) => {
+        const annual = getWorkerAnnualInsurance(worker);
+        const days = getDaysUntil(getWorkerPolicyEndDate(worker));
+        return sum + (annual * days / 365);
+      }, 0))
+    : roundMoney(annualMedicalInsurance * getDaysUntil(policyEndDate) / 365 * quantity);
+  const medicalInsuranceRemainingPerWorker = quantity ? roundMoney(medicalInsuranceRemainingTotal / quantity) : 0;
+  const insuranceRemainingDays = selectedWorkers.length > 0
+    ? Math.max(...selectedWorkers.map((worker) => getDaysUntil(getWorkerPolicyEndDate(worker))), 0)
+    : getDaysUntil(policyEndDate);
+
   const transferServiceFeePerWorker = Number(source.transfer_service_fee || 0);
   const transferBasePerWorker = roundMoney(iqamaRemainingCostPerWorker + medicalInsuranceRemainingPerWorker + transferServiceFeePerWorker);
-  const transferSubtotal = roundMoney(iqamaRemainingTotal + ((medicalInsuranceRemainingPerWorker + transferServiceFeePerWorker) * quantity));
+  const transferSubtotal = roundMoney(iqamaRemainingTotal + medicalInsuranceRemainingTotal + (transferServiceFeePerWorker * quantity));
   const adminFeeMethod = source.admin_fee_method || "Percent";
   const adminFeePercent = Number(source.admin_fee_percent || 0);
   const adminFeeAmount = Number(source.admin_fee_amount || 0);
@@ -11877,17 +11919,20 @@ function getMarketplacePricingBreakdown(source = {}) {
     quantity,
     durationMonths: 0,
     baseSalary,
+    annualMedicalInsurance,
     monthlyIqamaWorkPermit,
     gosiRate: WORKFORCE_GOSI_RATE,
     gosiAmount: 0,
     monthlyMedicalInsurance,
     remainingMonths,
+    insuranceRemainingDays,
     iqamaExpiryDate: source.iqama_expiry_date || "",
-    insurancePolicyEndDate: source.insurance_policy_end_date || "",
+    insurancePolicyEndDate: policyEndDate,
     iqamaRemainingTotal,
     workerIqamaRemainingTotal,
     iqamaRemainingCostPerWorker,
     medicalInsuranceRemainingPerWorker,
+    medicalInsuranceRemainingTotal,
     transferServiceFeePerWorker,
     transferBasePerWorker,
     transferSubtotal,
@@ -11899,7 +11944,7 @@ function getMarketplacePricingBreakdown(source = {}) {
     totalBeforeVat: totalValue,
     totalValue,
     transferStatus: source.transfer_status || "Transfer Pending",
-    description: `Sponsorship Transfer: remaining iqama/work permit ${remainingMonths} month(s) + medical insurance + admin fees`,
+    description: `Sponsorship Transfer: iqama/work permit remaining + medical insurance calculated from annual policy value and remaining policy days + admin fees`,
   };
 }
 
@@ -11916,6 +11961,7 @@ function buildMarketplaceInvoiceNotes(deal, breakdown) {
       `Monthly salary: ${Number(breakdown.baseSalary || 0).toLocaleString()} SAR`,
       `Monthly iqama + work permit: ${Number(breakdown.monthlyIqamaWorkPermit || 0).toLocaleString()} SAR`,
       `GOSI 2%: ${Number(breakdown.gosiAmount || 0).toLocaleString()} SAR`,
+      `Annual medical insurance / worker: ${Number(breakdown.annualMedicalInsurance || 0).toLocaleString()} SAR`,
       `Medical insurance / month: ${Number(breakdown.monthlyMedicalInsurance || 0).toLocaleString()} SAR`,
       `Monthly base cost: ${Number(breakdown.monthlyBaseCost || 0).toLocaleString()} SAR`,
       `Monthly rental rate: ${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR`,
@@ -11923,9 +11969,10 @@ function buildMarketplaceInvoiceNotes(deal, breakdown) {
     );
   } else {
     lines.push(
-      `Remaining months: ${breakdown.remainingMonths}`,
-      `Iqama + work permit remaining / worker: ${Number(breakdown.iqamaRemainingCostPerWorker || 0).toLocaleString()} SAR`,
-      `Medical insurance remaining / worker: ${Number(breakdown.medicalInsuranceRemainingPerWorker || 0).toLocaleString()} SAR`,
+      `Average iqama remaining months: ${breakdown.remainingMonths}`,
+      `Iqama + work permit remaining total: ${Number(breakdown.iqamaRemainingTotal || 0).toLocaleString()} SAR`,
+      `Annual medical insurance / worker: ${Number(breakdown.annualMedicalInsurance || 0).toLocaleString()} SAR`,
+      `Medical insurance remaining total: ${Number(breakdown.medicalInsuranceRemainingTotal || 0).toLocaleString()} SAR`,
       `Transfer service fee / worker: ${Number(breakdown.transferServiceFeePerWorker || 0).toLocaleString()} SAR`,
       `Admin fee: ${Number(breakdown.adminFee || 0).toLocaleString()} SAR`
     );
@@ -11951,9 +11998,9 @@ Quantity: ${breakdown.quantity}
 Duration: ${breakdown.durationMonths} month(s)
 Monthly Rental Rate / Worker: ${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR
 
-The monthly rental rate includes salary, iqama/work permit cost at ${WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST} SAR per month, GOSI at 2% of salary, medical insurance as entered by the company, and the approved company pricing margin or manual monthly rate.
+The monthly rental rate includes salary, iqama/work permit cost at ${WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST} SAR per month, GOSI at 2% of salary, and medical insurance calculated from the annual policy value entered by the company, plus the approved margin or manual monthly rate.
 
-تشمل القيمة الإيجارية الشهرية الراتب ورسوم الإقامة ورخصة العمل بواقع ${WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST} ريال شهرياً، والتأمينات بنسبة 2% من الراتب، والتأمين الطبي حسب القيمة المدخلة من الشركة، وهامش التسعير أو السعر الشهري اليدوي المعتمد من الشركة.
+تشمل القيمة الإيجارية الشهرية الراتب ورسوم الإقامة ورخصة العمل بواقع ${WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST} ريال شهرياً، والتأمينات بنسبة 2% من الراتب، والتأمين الطبي المحتسب من قيمة الوثيقة السنوية المدخلة من الشركة، وهامش التسعير أو السعر الشهري اليدوي المعتمد.
 
 Total Before VAT: ${Number(breakdown.totalValue || 0).toLocaleString()} SAR`;
   }
@@ -11967,9 +12014,9 @@ Profession: ${deal.profession || "-"}
 Quantity: ${breakdown.quantity}
 Transfer Status: ${deal.transfer_status || "Transfer Pending"}
 
-The transfer invoice includes the remaining iqama/work permit cost until expiry, remaining medical insurance value as entered by the company, transfer/service fees, and administrative fees approved by the company.
+The transfer invoice includes the remaining iqama/work permit cost until expiry, medical insurance remaining value calculated from the annual insurance value and remaining policy days, transfer/service fees, and administrative fees approved by the company.
 
-تشمل فاتورة التنازل تكلفة الإقامة ورخصة العمل المتبقية حتى تاريخ الانتهاء، وقيمة التأمين الطبي المتبقية حسب ما تحدده الشركة، ورسوم الخدمة أو التنازل، والرسوم الإدارية المعتمدة من الشركة.
+تشمل فاتورة التنازل تكلفة الإقامة ورخصة العمل المتبقية حتى تاريخ الانتهاء، وقيمة التأمين الطبي المتبقية المحسوبة من قيمة التأمين السنوية والأيام المتبقية من الوثيقة، ورسوم الخدمة أو التنازل، والرسوم الإدارية المعتمدة.
 
 If sponsorship transfer is not completed, the company may convert this deal into a service rental case and calculate monthly rental fees from the worker handover/start date according to the approved monthly rental rate.
 
@@ -12068,7 +12115,8 @@ async function createDirectMarketplaceDealFromSelectedWorkers() {
     quantity: selectedRows.length,
     duration_months: breakdown.durationMonths || Number(marketplaceRequestForm.duration_months || 0),
     base_salary: Number(marketplaceRequestForm.base_salary || 0),
-    monthly_medical_insurance: Number(marketplaceRequestForm.monthly_medical_insurance || 0),
+    annual_medical_insurance: Number(marketplaceRequestForm.annual_medical_insurance || 0),
+    monthly_medical_insurance: roundMoney(Number(marketplaceRequestForm.annual_medical_insurance || 0) / 12),
     pricing_method: marketplaceRequestForm.pricing_method || "Margin Percent",
     margin_percent: Number(marketplaceRequestForm.margin_percent || 0),
     manual_monthly_rate: Number(marketplaceRequestForm.manual_monthly_rate || 0),
@@ -12076,7 +12124,7 @@ async function createDirectMarketplaceDealFromSelectedWorkers() {
     iqama_expiry_date: marketplaceRequestForm.iqama_expiry_date || null,
     insurance_policy_end_date: marketplaceRequestForm.insurance_policy_end_date || null,
     transfer_remaining_months: Number(breakdown.remainingMonths || marketplaceRequestForm.transfer_remaining_months || 0),
-    transfer_medical_insurance_remaining: Number(marketplaceRequestForm.transfer_medical_insurance_remaining || 0),
+    transfer_medical_insurance_remaining: Number(breakdown.medicalInsuranceRemainingTotal || 0),
     transfer_service_fee: Number(marketplaceRequestForm.transfer_service_fee || 0),
     admin_fee_method: marketplaceRequestForm.admin_fee_method || "Percent",
     admin_fee_percent: Number(marketplaceRequestForm.admin_fee_percent || 0),
@@ -12141,14 +12189,15 @@ async function saveMarketplaceRequest() {
     quantity: selectedWorkerIds.length ? selectedWorkerIds.length : Number(marketplaceRequestForm.quantity || 0),
     duration_months: Number(marketplaceRequestForm.duration_months || 1),
     base_salary: Number(marketplaceRequestForm.base_salary || 0),
-    monthly_medical_insurance: Number(marketplaceRequestForm.monthly_medical_insurance || 0),
+    annual_medical_insurance: Number(marketplaceRequestForm.annual_medical_insurance || 0),
+    monthly_medical_insurance: roundMoney(Number(marketplaceRequestForm.annual_medical_insurance || 0) / 12),
     margin_percent: Number(marketplaceRequestForm.margin_percent || 0),
     manual_monthly_rate: Number(marketplaceRequestForm.manual_monthly_rate || 0),
     monthly_rate: Number(breakdown.monthlyRate || 0),
     iqama_expiry_date: marketplaceRequestForm.iqama_expiry_date || null,
     insurance_policy_end_date: marketplaceRequestForm.insurance_policy_end_date || null,
     transfer_remaining_months: Number(breakdown.remainingMonths || marketplaceRequestForm.transfer_remaining_months || 0),
-    transfer_medical_insurance_remaining: Number(marketplaceRequestForm.transfer_medical_insurance_remaining || 0),
+    transfer_medical_insurance_remaining: Number(breakdown.medicalInsuranceRemainingTotal || 0),
     transfer_service_fee: Number(marketplaceRequestForm.transfer_service_fee || 0),
     admin_fee_percent: Number(marketplaceRequestForm.admin_fee_percent || 0),
     admin_fee_amount: Number(marketplaceRequestForm.admin_fee_amount || 0),
@@ -12237,6 +12286,7 @@ async function createMarketplaceDeal(item) {
     quantity: qty,
     duration_months: breakdown.durationMonths || Number(item.duration_months || 0),
     base_salary: Number(item.base_salary || 0),
+    annual_medical_insurance: Number(item.annual_medical_insurance || 0) || roundMoney(Number(item.monthly_medical_insurance || 0) * 12),
     monthly_medical_insurance: Number(item.monthly_medical_insurance || 0),
     pricing_method: item.pricing_method || "Margin Percent",
     margin_percent: Number(item.margin_percent || 0),
@@ -12245,7 +12295,7 @@ async function createMarketplaceDeal(item) {
     iqama_expiry_date: item.iqama_expiry_date || null,
     insurance_policy_end_date: item.insurance_policy_end_date || null,
     transfer_remaining_months: Number(breakdown.remainingMonths || item.transfer_remaining_months || 0),
-    transfer_medical_insurance_remaining: Number(item.transfer_medical_insurance_remaining || 0),
+    transfer_medical_insurance_remaining: Number(breakdown.medicalInsuranceRemainingTotal || item.transfer_medical_insurance_remaining || 0),
     transfer_service_fee: Number(item.transfer_service_fee || 0),
     admin_fee_method: item.admin_fee_method || "Percent",
     admin_fee_percent: Number(item.admin_fee_percent || 0),
@@ -19251,15 +19301,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <>
               <Input type="number" placeholder="Duration Months" value={marketplaceRequestForm.duration_months} onChange={(v) => updateForm(setMarketplaceRequestForm, "duration_months", v)} />
               <Input type="number" placeholder="Monthly Salary / Worker" value={marketplaceRequestForm.base_salary} onChange={(v) => updateForm(setMarketplaceRequestForm, "base_salary", v)} />
-              <Input type="number" placeholder="Medical Insurance / Month" value={marketplaceRequestForm.monthly_medical_insurance} onChange={(v) => updateForm(setMarketplaceRequestForm, "monthly_medical_insurance", v)} />
+              <Input type="number" placeholder="Annual Medical Insurance / Worker" value={marketplaceRequestForm.annual_medical_insurance} onChange={(v) => updateForm(setMarketplaceRequestForm, "annual_medical_insurance", v)} />
               <Select value={marketplaceRequestForm.pricing_method} onChange={(v) => updateForm(setMarketplaceRequestForm, "pricing_method", v)} placeholder="Pricing Method" options={WORKFORCE_PRICING_METHODS} />
               {marketplaceRequestForm.pricing_method === "Margin Percent" ? <Input type="number" placeholder="Company Margin %" value={marketplaceRequestForm.margin_percent} onChange={(v) => updateForm(setMarketplaceRequestForm, "margin_percent", v)} /> : <Input type="number" placeholder="Manual Monthly Rate / Worker" value={marketplaceRequestForm.manual_monthly_rate} onChange={(v) => updateForm(setMarketplaceRequestForm, "manual_monthly_rate", v)} />}
             </>
           ) : (
             <>
-              <Input type="date" placeholder="Iqama Expiry Date" value={marketplaceRequestForm.iqama_expiry_date} onChange={(v) => updateForm(setMarketplaceRequestForm, "iqama_expiry_date", v)} />
-              <Input type="number" placeholder="Remaining Months (optional)" value={marketplaceRequestForm.transfer_remaining_months} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_remaining_months", v)} />
-              <Input type="number" placeholder="Medical Insurance Remaining" value={marketplaceRequestForm.transfer_medical_insurance_remaining} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_medical_insurance_remaining", v)} />
+              <Input type="date" placeholder="Iqama Expiry Date (manual only if no workers selected)" value={marketplaceRequestForm.iqama_expiry_date} onChange={(v) => updateForm(setMarketplaceRequestForm, "iqama_expiry_date", v)} />
+              <Input type="date" placeholder="Insurance Policy End Date" value={marketplaceRequestForm.insurance_policy_end_date} onChange={(v) => updateForm(setMarketplaceRequestForm, "insurance_policy_end_date", v)} />
+              <Input type="number" placeholder="Annual Medical Insurance / Worker" value={marketplaceRequestForm.annual_medical_insurance} onChange={(v) => updateForm(setMarketplaceRequestForm, "annual_medical_insurance", v)} />
               <Input type="number" placeholder="Transfer / Service Fee per Worker" value={marketplaceRequestForm.transfer_service_fee} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_service_fee", v)} />
               <Select value={marketplaceRequestForm.admin_fee_method} onChange={(v) => updateForm(setMarketplaceRequestForm, "admin_fee_method", v)} placeholder="Admin Fee Method" options={WORKFORCE_ADMIN_FEE_METHODS} />
               {marketplaceRequestForm.admin_fee_method === "Percent" ? <Input type="number" placeholder="Admin Fee %" value={marketplaceRequestForm.admin_fee_percent} onChange={(v) => updateForm(setMarketplaceRequestForm, "admin_fee_percent", v)} /> : <Input type="number" placeholder="Admin Fee Amount" value={marketplaceRequestForm.admin_fee_amount} onChange={(v) => updateForm(setMarketplaceRequestForm, "admin_fee_amount", v)} />}
@@ -19270,7 +19320,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </div>
         {(() => {
           const preview = getMarketplacePricingBreakdown({ ...marketplaceRequestForm, quantity: marketplaceSelectedEmployeeIds.length ? marketplaceSelectedEmployeeIds.length : marketplaceRequestForm.quantity });
-          return <p className="helper-text">Estimated total before VAT: <b>{Number(preview.totalValue || 0).toLocaleString()} SAR</b> — {preview.description}</p>;
+          return <p className="helper-text">Estimated total before VAT: <b>{Number(preview.totalValue || 0).toLocaleString()} SAR</b> — {preview.description}{preview.dealType === "Sponsorship Transfer" ? ` | Medical insurance remaining calculated: ${Number(preview.medicalInsuranceRemainingTotal || 0).toLocaleString()} SAR` : ""}</p>;
         })()}
         <textarea rows="3" placeholder="Notes" value={marketplaceRequestForm.notes} onChange={(e) => updateForm(setMarketplaceRequestForm, "notes", e.target.value)} />
         <div className="actions-line">
@@ -20888,7 +20938,7 @@ onClick={() => setActiveReport("activityLog")}>
                   <Input placeholder="Iqama No" value={employeeForm.iqama_no} onChange={(v) => updateForm(setEmployeeForm, "iqama_no", v)} />
                   <Input type="date" placeholder="Iqama Expiry Date" value={employeeForm.iqama_expiry_date} onChange={(v) => updateForm(setEmployeeForm, "iqama_expiry_date", v)} />
                   <Input type="date" placeholder="Insurance Policy End Date" value={employeeForm.insurance_policy_end_date} onChange={(v) => updateForm(setEmployeeForm, "insurance_policy_end_date", v)} />
-                  <Input type="number" placeholder="Monthly Medical Insurance" value={employeeForm.monthly_medical_insurance} onChange={(v) => updateForm(setEmployeeForm, "monthly_medical_insurance", v)} />
+                  <Input type="number" placeholder="Annual Medical Insurance" value={employeeForm.annual_medical_insurance} onChange={(v) => updateForm(setEmployeeForm, "annual_medical_insurance", v)} />
                   <Select value={employeeForm.nationality} onChange={(v) => updateForm(setEmployeeForm, "nationality", v)} placeholder="Nationality" searchable options={countries.map((c) => c.nationality ? `${c.nationality} (${c.name})` : c.name)} />
                   <Select value={employeeForm.gender} onChange={(v) => updateForm(setEmployeeForm, "gender", v)} placeholder="Gender" options={GENDERS} />
                   <Select value={employeeForm.profession} onChange={(v) => updateForm(setEmployeeForm, "profession", v)} placeholder="Profession" searchable options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)} />
