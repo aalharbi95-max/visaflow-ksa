@@ -748,6 +748,7 @@ const REPORT_STUDIO_SECTIONS = [
   "Charts",
   "Tables",
   "AI Insights",
+  "Operational Changes",
   "Risks",
   "Recommendations",
   "Action Plan",
@@ -1089,6 +1090,14 @@ const [subscriptionInvoices, setSubscriptionInvoices] = useState([]);
 const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
 const [systemRestoreRequests, setSystemRestoreRequests] = useState([]);
+const [systemActivityLogs, setSystemActivityLogs] = useState([]);
+const [activityFilters, setActivityFilters] = useState({
+  requestNo: "",
+  moduleName: "All",
+  actionType: "All",
+  dateFrom: "",
+  dateTo: "",
+});
 const [companyReportClient, setCompanyReportClient] = useState(null);
 const [companyReportRows, setCompanyReportRows] = useState([]);
 const [companyReportLoading, setCompanyReportLoading] = useState(false);
@@ -2253,6 +2262,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadSupportTickets(),
       loadSystemBackups(),
       loadSystemRestoreRequests(),
+      loadSystemActivityLogs(),
     ]);
     setLoading(false);
   }
@@ -2752,6 +2762,38 @@ setProfessions(allProfessions);
   const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
   const loadSystemRestoreRequests = () =>
     isPlatformOwner ? loadPlatformTable("system_restore_requests", setSystemRestoreRequests) : setSystemRestoreRequests([]);
+
+  async function loadSystemActivityLogs() {
+    if (!currentUser) {
+      setSystemActivityLogs([]);
+      return [];
+    }
+
+    let query = supabase
+      .from("system_activity_logs")
+      .select("id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at")
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (!canManagePlatform) {
+      if (!currentCompanyId) {
+        setSystemActivityLogs([]);
+        return [];
+      }
+      query = query.eq("company_id", currentCompanyId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn("system_activity_logs:", error.message);
+      setSystemActivityLogs([]);
+      return [];
+    }
+
+    setSystemActivityLogs(data || []);
+    return data || [];
+  }
 
 async function loadNotifications() {
   if (!currentCompanyId) {
@@ -3560,6 +3602,40 @@ const totalRequestBudget = requests.reduce((sum, request) => {
     }),
   };
 }, [requests, requestLines, visaRecords, visaAuthorizations, candidates, interviews, mobilizations]);
+
+const activityModules = useMemo(() => {
+  const modules = systemActivityLogs.map((item) => item.module_name).filter(Boolean);
+  return ["All", ...Array.from(new Set(modules)).sort()];
+}, [systemActivityLogs]);
+
+const activityActionTypes = useMemo(() => {
+  const actions = systemActivityLogs.map((item) => item.action_type).filter(Boolean);
+  return ["All", ...Array.from(new Set(actions)).sort()];
+}, [systemActivityLogs]);
+
+const filteredActivityLogs = useMemo(() => {
+  const requestNo = normalize(activityFilters.requestNo);
+  const moduleName = activityFilters.moduleName || "All";
+  const actionType = activityFilters.actionType || "All";
+  const fromDate = activityFilters.dateFrom ? new Date(`${activityFilters.dateFrom}T00:00:00`) : null;
+  const toDate = activityFilters.dateTo ? new Date(`${activityFilters.dateTo}T23:59:59`) : null;
+
+  return systemActivityLogs.filter((item) => {
+    const itemDate = item.created_at ? new Date(item.created_at) : null;
+    const matchesRequest = !requestNo || normalize(item.request_no).includes(requestNo) || normalize(item.record_label).includes(requestNo);
+    const matchesModule = moduleName === "All" || item.module_name === moduleName;
+    const matchesAction = actionType === "All" || item.action_type === actionType;
+    const matchesFrom = !fromDate || (itemDate && itemDate >= fromDate);
+    const matchesTo = !toDate || (itemDate && itemDate <= toDate);
+
+    return matchesRequest && matchesModule && matchesAction && matchesFrom && matchesTo;
+  });
+}, [systemActivityLogs, activityFilters]);
+
+const cleanOperationalChanges = useMemo(
+  () => filteredActivityLogs.filter((item) => !(item.module_name === "Request Lines" && ["Created", "Deleted"].includes(item.action_type))),
+  [filteredActivityLogs]
+);
 
 const mobilizationRequestRows = useMemo(() => {
   const countPercent = (value, total) => (total ? Math.min(Math.round((Number(value || 0) / Number(total || 0)) * 100), 100) : 0);
@@ -9221,6 +9297,132 @@ function buildRecruitmentForecast() {
 }
 
 
+function getActivityChangedFields(item) {
+  const value = item?.changed_fields;
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function getActivityFieldLabel(field) {
+  const labels = {
+    request_no: "Request No",
+    request_type: "Request Type",
+    project_name: "Project",
+    profession: "Profession",
+    nationality: "Nationality",
+    gender: "Gender",
+    quantity: "Quantity",
+    salary: "Salary",
+    status: "Status",
+    approval_status: "Approval Status",
+    request_status: "Request Status",
+    priority: "Priority",
+    agency: "Agency",
+    authorization_no: "Authorization No",
+    allocated_qty: "Allocated Qty",
+    candidate_name: "Candidate",
+    passport_no: "Passport No",
+    medical_status: "Medical Status",
+    ticket_no: "Ticket No",
+    flight_date: "Flight Date",
+    arrival_date: "Arrival Date",
+    joining_date: "Joining Date",
+    notes: "Notes",
+  };
+
+  return labels[field] || String(field || "").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatActivityValue(value) {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  const text = String(value);
+  return text.trim() === "" ? "-" : text;
+}
+
+function formatActivityDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("en-GB");
+}
+
+function formatActivitySummary(item) {
+  const moduleName = item?.module_name || "Activity";
+  const label = item?.record_label || item?.request_no || item?.record_id || "-";
+  const action = item?.action_type || "-";
+  const changes = getActivityChangedFields(item);
+
+  if (action === "Updated" && changes.length > 0) {
+    const visibleChanges = changes
+      .filter((change) => change?.field && !["updated_at"].includes(change.field))
+      .slice(0, 3)
+      .map((change) => `${getActivityFieldLabel(change.field)} changed from ${formatActivityValue(change.old)} to ${formatActivityValue(change.new)}`);
+
+    if (visibleChanges.length > 0) {
+      return `${moduleName}: ${label} — ${visibleChanges.join(" | ")}`;
+    }
+  }
+
+  if (action === "Created") return `${moduleName}: ${label} was created.`;
+  if (action === "Deleted") return `${moduleName}: ${label} was deleted.`;
+
+  return `${moduleName}: ${label} — ${action}`;
+}
+
+function formatActivityChangedFieldsText(item) {
+  const changes = getActivityChangedFields(item);
+  if (!changes.length) return "-";
+  return changes
+    .filter((change) => change?.field && !["updated_at"].includes(change.field))
+    .map((change) => `${getActivityFieldLabel(change.field)}: ${formatActivityValue(change.old)} → ${formatActivityValue(change.new)}`)
+    .join(" | ") || "-";
+}
+
+function getReportStudioRecentActivityLogs(requestHealthRows = []) {
+  const selectedProject = String(reportStudioForm.project || "All");
+  const requestNos = new Set(
+    requestHealthRows
+      .filter((row) => selectedProject === "All" || String(row.project || "") === selectedProject)
+      .map((row) => String(row.request_no || ""))
+      .filter(Boolean)
+  );
+
+  return systemActivityLogs
+    .filter((item) => {
+      if (selectedProject === "All") return true;
+      if (!item.request_no) return false;
+      return requestNos.has(String(item.request_no || ""));
+    })
+    .slice(0, 12)
+    .map((item) => ({
+      date: formatActivityDate(item.created_at),
+      module: item.module_name || "-",
+      action: item.action_type || "-",
+      reference: item.record_label || item.request_no || "-",
+      request_no: item.request_no || "-",
+      summary: formatActivitySummary(item),
+      changes: formatActivityChangedFieldsText(item),
+      changed_by: item.changed_by_name || "-",
+    }));
+}
+
+
 function buildOperationalLineBriefText() {
   const lines = buildOperationalRequestLineRows();
   const totals = lines.reduce((acc, line) => {
@@ -12806,6 +13008,7 @@ function buildAIReportStudioDataset() {
     failRate: row.candidates ? Math.round((Number(row.failed || 0) / Number(row.candidates || 1)) * 100) : 0,
   }));
   const forecast = buildRecruitmentForecast();
+  const recentOperationalChanges = getReportStudioRecentActivityLogs(requestHealth);
 
   const totalRequired = requestHealth.reduce((sum, row) => sum + Number(row.requested_qty || 0), 0);
   const totalSubmittedCandidates = requestHealth.reduce((sum, row) => sum + Number(row.candidates || 0), 0);
@@ -12859,7 +13062,9 @@ function buildAIReportStudioDataset() {
       { metric: "SLA Compliance", value: `${agencyRows.length ? Math.round(agencyRows.reduce((sum, item) => sum + Number(item.sla_score || 0), 0) / agencyRows.length) : 0}%` },
       { metric: "Delayed Candidates", value: agencyRows.reduce((sum, item) => sum + Number(item.delayed_candidates || 0), 0) },
       { metric: "SLA Penalty Exposure", value: `${Number(agencyRows.reduce((sum, item) => sum + Number(item.penalty_exposure || 0), 0)).toLocaleString()} SAR` },
+      { metric: "Recent Operational Changes", value: recentOperationalChanges.length },
     ],
+    recent_operational_changes: recentOperationalChanges,
     request_health: requestHealth,
     mobilization: mobilizationRows,
     agencies: agencyRows,
@@ -12890,6 +13095,11 @@ function buildAIReportStudioNarrative() {
       "",
       "لوحة المؤشرات",
       ...data.kpis.map((item) => `- ${localizeReportText(item.metric, language)}: ${item.value}`),
+      "",
+      "آخر التغييرات التشغيلية",
+      ...(data.recent_operational_changes?.length
+        ? data.recent_operational_changes.slice(0, 8).map((item) => `- ${item.date} | ${item.module} | ${item.request_no}: ${item.summary}`)
+        : ["- لا توجد تغييرات تشغيلية مسجلة ضمن نطاق التقرير."]),
       "",
       "أعلى المخاطر",
       ...(topRisks.length
@@ -12929,6 +13139,11 @@ function buildAIReportStudioNarrative() {
       "لوحة المؤشرات / KPI Dashboard",
       ...data.kpis.map((item) => `- ${localizeReportText(item.metric, language)}: ${item.value}`),
       "",
+      "آخر التغييرات التشغيلية / Recent Operational Changes",
+      ...(data.recent_operational_changes?.length
+        ? data.recent_operational_changes.slice(0, 8).map((item) => `- ${item.date} | ${item.module} | ${item.request_no}: ${item.summary}`)
+        : ["- لا توجد تغييرات تشغيلية ضمن النطاق / No operational changes in scope."]),
+      "",
       "أعلى المخاطر / Top Risks",
       ...(topRisks.length ? topRisks.map((row) => `- ${row.request_no} / Line ${row.line_no} / ${row.profession}: ${localizeReportText(row.bottleneck, language)}, progress ${row.progress}%, risk ${row.riskScore}.`) : ["- لا توجد بنود عالية المخاطر حاليًا / No high-risk request lines detected."]),
       "",
@@ -12953,6 +13168,11 @@ function buildAIReportStudioNarrative() {
     "",
     "KPI Dashboard",
     ...data.kpis.map((item) => `- ${item.metric}: ${item.value}`),
+    "",
+    "Recent Operational Changes",
+    ...(data.recent_operational_changes?.length
+      ? data.recent_operational_changes.slice(0, 8).map((item) => `- ${item.date} | ${item.module} | ${item.request_no}: ${item.summary}`)
+      : ["- No operational changes in scope."]),
     "",
     "Top Risks",
     ...(topRisks.length ? topRisks.map((row) => `- ${row.request_no} / Line ${row.line_no} / ${row.profession}: ${row.bottleneck}, progress ${row.progress}%, risk ${row.riskScore}.`) : ["- No high-risk request lines detected."]),
@@ -12996,6 +13216,9 @@ function buildReportStudioHtmlDocument(mode = "document") {
   const isArabic = isReportArabic(language);
   const title = getLocalizedReportName(data, language) || "VisaFlow AI Report";
   const rows = data.kpis.map((item) => `<tr><td>${localizeReportText(item.metric, language)}</td><td><b>${item.value}</b></td></tr>`).join("");
+  const activityRows = (data.recent_operational_changes || [])
+    .map((item) => `<tr><td>${item.date}</td><td>${item.module}</td><td>${item.request_no}</td><td>${item.summary}</td></tr>`)
+    .join("");
   const slideMode = mode === "presentation";
 
   return `<!doctype html>
@@ -13016,6 +13239,11 @@ body{font-family:Arial,Tahoma,sans-serif;margin:0;background:#f8fafc;color:#0f17
   </div>
   <h2>${localizeReportText("KPI Dashboard", language)}</h2>
   <table>${rows}</table>
+  <h2>${isArabic ? "آخر التغييرات التشغيلية" : "Recent Operational Changes"}</h2>
+  <table>
+    <thead><tr><th>${isArabic ? "التاريخ" : "Date"}</th><th>${isArabic ? "الموديول" : "Module"}</th><th>${isArabic ? "الطلب" : "Request"}</th><th>${isArabic ? "الملخص" : "Summary"}</th></tr></thead>
+    <tbody>${activityRows || `<tr><td colspan="4">${isArabic ? "لا توجد تغييرات ضمن النطاق" : "No operational changes in scope"}</td></tr>`}</tbody>
+  </table>
   <h2>${isArabic ? "التقرير التنفيذي الذكي" : "AI Executive Report"}</h2>
   <pre>${narrative.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>
   <div class="footer">Generated by VisaFlow KSA AI Report Studio on ${data.generated_at}. ${reportStudioForm.confidential ? "Confidential" : ""}</div>
@@ -13543,6 +13771,23 @@ async function buildReportStudioPptx(fileName) {
 
   slide = pptx.addSlide();
   slide.background = { color: "F8FAFC" };
+  addReportSlideTitle(slide, localizeReportText("Recent Operational Changes", language), reportPhrase("Latest request and process changes captured from the audit log.", "آخر التغييرات على الطلبات والإجراءات من سجل الحركة التشغيلية.", language), language);
+  const recentChanges = data.recent_operational_changes || [];
+  if (recentChanges.length) {
+    recentChanges.slice(0, 8).forEach((item, index) => {
+      const y = 1.25 + index * 0.62;
+      slide.addShape("roundRect", { x: 0.72, y, w: 11.65, h: 0.48, rectRadius: 0.05, fill: { color: "FFFFFF" }, line: { color: "E2E8F0" } });
+      slide.addShape("rect", { x: isArabic ? 12.29 : 0.72, y, w: 0.08, h: 0.48, fill: { color: "2563EB" }, line: { color: "2563EB" } });
+      slide.addText(`${item.date} · ${item.module} · ${item.request_no}`, { x: isArabic ? 7.55 : 0.92, y: y + 0.08, w: 4.4, h: 0.14, fontFace: getReportFont(language), fontSize: 7.5, bold: true, color: "334155", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+      slide.addText(trimSlideText(item.summary, 125), { x: 0.92, y: y + 0.27, w: 10.85, h: 0.14, fontFace: getReportFont(language), fontSize: 7.2, color: "0F172A", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
+    });
+  } else {
+    slide.addText(localizeReportText("No operational changes in scope.", language), { x: isArabic ? 6.3 : 0.72, y: 1.7, w: 6, h: 0.3, fontFace: getReportFont(language), fontSize: 15, color: "64748B", align: getReportTextAlign(language), rtl: isArabic, margin: 0 });
+  }
+  addReportFooter(slide, data, 7);
+
+  slide = pptx.addSlide();
+  slide.background = { color: "F8FAFC" };
   addReportSlideTitle(slide, localizeReportText("Recommended Actions", language), reportPhrase("Suggested executive decisions for the weekly meeting.", "قرارات تنفيذية مقترحة للاجتماع الأسبوعي.", language), language);
   const actions = isArabic
     ? [
@@ -13567,7 +13812,7 @@ async function buildReportStudioPptx(fileName) {
   });
   slide.addShape("roundRect", { x: 0.78, y: 6.25, w: 11.5, h: 0.52, rectRadius: 0.08, fill: { color: "ECFDF5" }, line: { color: "A7F3D0" } });
   slide.addText(isArabic ? "تم توليد هذا العرض مباشرة كملف PowerPoint حقيقي بصيغة .pptx من بيانات VisaFlow المباشرة." : "This presentation was generated directly as a PowerPoint .pptx file from VisaFlow live data.", { x: 1.0, y: 6.42, w: 11.0, h: 0.14, fontFace: getReportFont(language), fontSize: 8.5, color: "047857", align: getReportTextAlign(language), rtl: isArabic, margin: 0, fit: "shrink" });
-  addReportFooter(slide, data, 7);
+  addReportFooter(slide, data, 8);
 
   await pptx.writeFile({ fileName });
 }
@@ -13585,6 +13830,7 @@ async function exportAIReportStudio() {
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.request_health.slice(0, 200)), "Request Lines");
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.agencies.slice(0, 200)), "Agencies");
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.mobilization.slice(0, 200)), "Mobilization");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet((data.recent_operational_changes || []).slice(0, 200)), "Activity Log");
     XLSX.writeFile(workbook, `${safeName}.xlsx`);
     return;
   }
@@ -13949,7 +14195,26 @@ function exportCurrentPage() {
   if (activePage === "Demobilization") return exportRowsToExcel(demobilizations, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
   if (activePage === "Notifications") return exportRowsToExcel(notifications, "VisaFlow_Notifications", "Notifications");
-  if (activePage === "Reports") return exportRowsToExcel(reports.requestLifecycle, "VisaFlow_Recruitment_Pipeline", "Pipeline");
+  if (activePage === "Reports") {
+    if (activeReport === "activityLog") {
+      return exportRowsToExcel(
+        filteredActivityLogs.map((item) => ({
+          created_at: item.created_at,
+          module_name: item.module_name,
+          action_type: item.action_type,
+          request_no: item.request_no,
+          record_label: item.record_label,
+          changed_by: item.changed_by_name,
+          summary: formatActivitySummary(item),
+          changed_fields: formatActivityChangedFieldsText(item),
+          source: item.source,
+        })),
+        "VisaFlow_Operational_Activity_Log",
+        "Activity Log"
+      );
+    }
+    return exportRowsToExcel(reports.requestLifecycle, "VisaFlow_Recruitment_Pipeline", "Pipeline");
+  }
   if (activePage === "AI Report Studio") return exportAIReportStudio();
   if (activePage === "Platform Dashboard") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Clients", "Platform Clients");
   if (activePage === "Companies Management") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Companies", "Companies");
@@ -19321,6 +19586,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     <Stat title="Authorizations Without Candidates" value={reports.authorizationsWithoutCandidates.length} className="danger" />
     <Stat title="Candidates Without Interviews" value={reports.candidatesWithoutInterviews.length} className="warning" />
     <Stat title="Late SLA Items" value={reports.lateItems.length} className="danger" />
+    <Stat title="Operational Changes" value={cleanOperationalChanges.length} className={cleanOperationalChanges.length ? "warning" : "passed"} />
 </div>
 <TableCard title="Recruitment Pipeline Summary">
   <table>
@@ -19481,6 +19747,13 @@ onClick={() => setActiveReport("lateSla")}>
 <h2>⏰</h2>
 <h4>SLA</h4>
 <p>Late Items</p>
+</div>
+
+<div className="report-card"
+onClick={() => setActiveReport("activityLog")}>
+<h2>🧾</h2>
+<h4>Activity Log</h4>
+<p>Changes & Timeline</p>
 </div>
 
 </div>
@@ -19645,6 +19918,87 @@ onClick={() => setActiveReport("lateSla")}>
       </tbody>
     </table>
   </TableCard>
+
+  {(activeReport === "all" || activeReport === "activityLog") ? (
+    <TableCard title="Operational Activity Log / سجل الحركة التشغيلية">
+      <div className="toolbar">
+        <input
+          placeholder="Filter by request no..."
+          value={activityFilters.requestNo}
+          onChange={(e) => setActivityFilters((prev) => ({ ...prev, requestNo: e.target.value }))}
+        />
+        <select
+          value={activityFilters.moduleName}
+          onChange={(e) => setActivityFilters((prev) => ({ ...prev, moduleName: e.target.value }))}
+        >
+          {activityModules.map((module) => (
+            <option key={module} value={module}>{module}</option>
+          ))}
+        </select>
+        <select
+          value={activityFilters.actionType}
+          onChange={(e) => setActivityFilters((prev) => ({ ...prev, actionType: e.target.value }))}
+        >
+          {activityActionTypes.map((action) => (
+            <option key={action} value={action}>{action}</option>
+          ))}
+        </select>
+        <input
+          type="date"
+          value={activityFilters.dateFrom}
+          onChange={(e) => setActivityFilters((prev) => ({ ...prev, dateFrom: e.target.value }))}
+        />
+        <input
+          type="date"
+          value={activityFilters.dateTo}
+          onChange={(e) => setActivityFilters((prev) => ({ ...prev, dateTo: e.target.value }))}
+        />
+        <button
+          className="light-btn"
+          onClick={() => setActivityFilters({ requestNo: "", moduleName: "All", actionType: "All", dateFrom: "", dateTo: "" })}
+        >
+          Clear
+        </button>
+      </div>
+      <div className="mini-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Module</th>
+              <th>Action</th>
+              <th>Reference</th>
+              <th>Request No</th>
+              <th>Change Summary</th>
+              <th>Changed By</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredActivityLogs.length === 0 ? (
+              <tr><td colSpan="8">No activity log records found.</td></tr>
+            ) : filteredActivityLogs.slice(0, 200).map((item) => (
+              <tr key={item.id}>
+                <td>{formatActivityDate(item.created_at)}</td>
+                <td>{item.module_name || "-"}</td>
+                <td><Badge value={item.action_type || "-"} /></td>
+                <td>{item.record_label || item.record_id || "-"}</td>
+                <td>{item.request_no || "-"}</td>
+                <td>
+                  <b>{formatActivitySummary(item)}</b>
+                  <div style={{ color: "#64748b", fontSize: "12px", marginTop: "4px" }}>
+                    {formatActivityChangedFieldsText(item)}
+                  </div>
+                </td>
+                <td>{item.changed_by_name || "-"}</td>
+                <td>{item.source || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </TableCard>
+  ) : null}
 
   <TableCard title="Request Full Lifecycle">
     <table>
