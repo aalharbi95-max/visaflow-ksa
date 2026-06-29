@@ -2772,56 +2772,129 @@ setProfessions(allProfessions);
       return [];
     }
 
+    const selectColumns =
+      "id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at";
+
+    const visibleRequestNos = Array.from(
+      new Set([
+        ...requests.map((item) => item.request_no),
+        ...requestLines.map((item) => item.request_no),
+        ...candidates.map((item) => item.request_no),
+        ...mobilizations.map((item) => item.request_no),
+        activityFilters.requestNo,
+      ].map((value) => String(value || "").trim()).filter(Boolean))
+    ).slice(0, 100);
+
+    const typedRequestNo = String(activityFilters.requestNo || "").trim();
+    const loadedBy = [];
+    let rows = [];
+
     setActivityLogLoading(true);
     setActivityLogMessage("");
 
     try {
-      let query = supabase
-        .from("system_activity_logs")
-        .select("id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at")
-        .order("created_at", { ascending: false })
-        .limit(500);
+      const runQuery = async (label, builder) => {
+        const result = await builder(
+          supabase
+            .from("system_activity_logs")
+            .select(selectColumns)
+            .order("created_at", { ascending: false })
+            .limit(500)
+        );
 
-      if (!canManagePlatform) {
-        if (!currentCompanyId) {
+        if (result.error) {
+          console.warn(`system_activity_logs ${label}:`, result.error.message);
+          return {
+            rows: [],
+            error: result.error.message,
+          };
+        }
+
+        return {
+          rows: result.data || [],
+          error: "",
+        };
+      };
+
+      // 1) Main path: load by the current tenant company_id.
+      if (!canManagePlatform && currentCompanyId) {
+        const companyResult = await runQuery("by company_id", (query) =>
+          query.eq("company_id", currentCompanyId)
+        );
+
+        if (companyResult.error) {
           setSystemActivityLogs([]);
-          setActivityLogMessage("Company ID is missing. Activity Log cannot be loaded.");
+          setActivityLogMessage(`Activity Log load error: ${companyResult.error}`);
           return [];
         }
-        query = query.eq("company_id", currentCompanyId);
-      }
 
-      let { data, error } = await query;
-
-      if (error) {
-        console.warn("system_activity_logs:", error.message);
-        setSystemActivityLogs([]);
-        setActivityLogMessage(`Activity Log load error: ${error.message}`);
-        return [];
-      }
-
-      // Safety fallback: if the company filter returns empty but the current screen already has requests,
-      // try loading records by visible request numbers. This keeps the report useful after legacy data moves.
-      if ((!data || data.length === 0) && !canManagePlatform && requests.length > 0) {
-        const requestNos = Array.from(new Set(requests.map((item) => item.request_no).filter(Boolean))).slice(0, 100);
-        if (requestNos.length > 0) {
-          const fallback = await supabase
-            .from("system_activity_logs")
-            .select("id, company_id, request_no, module_name, record_id, record_label, action_type, action_title, old_values, new_values, changed_fields, changed_by_name, changed_by_email, changed_by_role, notes, source, created_at")
-            .in("request_no", requestNos)
-            .order("created_at", { ascending: false })
-            .limit(500);
-
-          if (!fallback.error && fallback.data?.length) {
-            data = fallback.data;
-          }
+        if (companyResult.rows.length > 0) {
+          rows = companyResult.rows;
+          loadedBy.push("company_id");
         }
       }
 
-      const rows = data || [];
+      // 2) If the company_id does not match because of legacy/moved data, load by typed request no.
+      if (rows.length === 0 && typedRequestNo) {
+        const typedResult = await runQuery("by typed request_no", (query) =>
+          query.ilike("request_no", `%${typedRequestNo}%`)
+        );
+
+        if (!typedResult.error && typedResult.rows.length > 0) {
+          rows = typedResult.rows;
+          loadedBy.push("typed request_no");
+        }
+      }
+
+      // 3) Fallback: load by visible request numbers already shown in the current company screen.
+      if (rows.length === 0 && visibleRequestNos.length > 0) {
+        const requestResult = await runQuery("by visible request_no list", (query) =>
+          query.in("request_no", visibleRequestNos)
+        );
+
+        if (!requestResult.error && requestResult.rows.length > 0) {
+          rows = requestResult.rows;
+          loadedBy.push("visible request_no");
+        }
+      }
+
+      // 4) Platform users can see the last logs. Company users only keep rows matching their visible requests or company_id.
+      if (rows.length === 0 && canManagePlatform) {
+        const platformResult = await runQuery("platform latest", (query) => query);
+        if (!platformResult.error && platformResult.rows.length > 0) {
+          rows = platformResult.rows;
+          loadedBy.push("platform latest");
+        }
+      }
+
+      if (!canManagePlatform && rows.length > 0) {
+        const allowedRequestNos = new Set(visibleRequestNos.map((item) => String(item)));
+        rows = rows.filter((item) => {
+          const sameCompany = currentCompanyId && String(item.company_id || "") === String(currentCompanyId);
+          const sameVisibleRequest = item.request_no && allowedRequestNos.has(String(item.request_no));
+          const sameTypedRequest = typedRequestNo && String(item.request_no || "").toLowerCase().includes(typedRequestNo.toLowerCase());
+          return sameCompany || sameVisibleRequest || sameTypedRequest;
+        });
+      }
+
       setSystemActivityLogs(rows);
-      setActivityLogMessage(rows.length ? `Loaded ${rows.length} activity log record(s).` : "No activity log records loaded for this company yet. Click Refresh after making an update.");
+
+      const debugParts = [
+        rows.length ? `Loaded ${rows.length} activity log record(s)` : "No activity log records loaded",
+        loadedBy.length ? `source: ${loadedBy.join(", ")}` : "",
+        currentCompanyId ? `company: ${currentCompanyId}` : "company: missing",
+        visibleRequestNos.length ? `visible requests: ${visibleRequestNos.length}` : "visible requests: 0",
+      ].filter(Boolean);
+
+      setActivityLogMessage(debugParts.join(" | "));
+
       return rows;
+    } catch (error) {
+      const message = error?.message || String(error);
+      console.warn("system_activity_logs unexpected error:", message);
+      setSystemActivityLogs([]);
+      setActivityLogMessage(`Activity Log unexpected error: ${message}`);
+      return [];
     } finally {
       setActivityLogLoading(false);
     }
