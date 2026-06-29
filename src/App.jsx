@@ -919,15 +919,38 @@ const [emailTemplateForm, setEmailTemplateForm] = useState(emptyEmailTemplate);
 const [notificationOpen, setNotificationOpen] = useState(false);
 const [marketplaceRequestEditingId, setMarketplaceRequestEditingId] = useState(null);
 
+const WORKFORCE_DEAL_TYPES = ["Service Rental", "Sponsorship Transfer"];
+const WORKFORCE_PRICING_METHODS = ["Margin Percent", "Manual Monthly Rate"];
+const WORKFORCE_ADMIN_FEE_METHODS = ["Percent", "Fixed Amount"];
+const WORKFORCE_TRANSFER_STATUSES = ["Transfer Pending", "Transfer Completed", "Transfer Failed", "Converted to Rental", "Cancelled"];
+const WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST = 862.5;
+const WORKFORCE_GOSI_RATE = 0.02;
+const WORKFORCE_VAT_RATE = 0.15;
+
 const emptyMarketplaceRequest = {
   request_no: "",
   client_name: "",
+  deal_type: "Service Rental",
   profession: "",
   nationality: "",
   gender: "",
   quantity: "",
   duration_months: 12,
+  base_salary: "",
+  monthly_medical_insurance: "",
+  pricing_method: "Margin Percent",
+  margin_percent: "15",
+  manual_monthly_rate: "",
   monthly_rate: "",
+  iqama_expiry_date: "",
+  insurance_policy_end_date: "",
+  transfer_remaining_months: "",
+  transfer_medical_insurance_remaining: "",
+  transfer_service_fee: "",
+  admin_fee_method: "Percent",
+  admin_fee_percent: "10",
+  admin_fee_amount: "",
+  transfer_status: "Transfer Pending",
   status: "Open",
   notes: "",
 };
@@ -11516,19 +11539,281 @@ function resetMarketplaceRequestForm() {
 function editMarketplaceRequest(item) {
   setMarketplaceRequestEditingId(item.id);
   setMarketplaceRequestForm({
+    ...emptyMarketplaceRequest,
     request_no: item.request_no || "",
     client_name: item.client_name || "",
+    deal_type: item.deal_type || item.service_type || "Service Rental",
     profession: item.profession || "",
     nationality: item.nationality || "",
     gender: item.gender || "",
     quantity: item.quantity || "",
     duration_months: item.duration_months || 12,
+    base_salary: item.base_salary || "",
+    monthly_medical_insurance: item.monthly_medical_insurance || "",
+    pricing_method: item.pricing_method || "Margin Percent",
+    margin_percent: item.margin_percent ?? "15",
+    manual_monthly_rate: item.manual_monthly_rate || item.monthly_rate || "",
     monthly_rate: item.monthly_rate || "",
+    iqama_expiry_date: item.iqama_expiry_date || "",
+    insurance_policy_end_date: item.insurance_policy_end_date || "",
+    transfer_remaining_months: item.transfer_remaining_months || "",
+    transfer_medical_insurance_remaining: item.transfer_medical_insurance_remaining || item.medical_insurance_remaining || "",
+    transfer_service_fee: item.transfer_service_fee || "",
+    admin_fee_method: item.admin_fee_method || "Percent",
+    admin_fee_percent: item.admin_fee_percent ?? "10",
+    admin_fee_amount: item.admin_fee_amount || "",
+    transfer_status: item.transfer_status || "Transfer Pending",
     status: item.status || "Open",
     notes: item.notes || "",
   });
   setActivePage("Workforce Marketplace");
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function getMonthsUntil(dateValue) {
+  if (!dateValue) return 0;
+  const end = new Date(dateValue);
+  if (Number.isNaN(end.getTime())) return 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  const days = Math.ceil((end - today) / (1000 * 60 * 60 * 24));
+  return Math.max(Math.ceil(days / 30.4375), 0);
+}
+
+function getWorkforceDealType(item = {}) {
+  const value = String(item.deal_type || item.service_type || "Service Rental");
+  return value.toLowerCase().includes("transfer") || value.includes("تنازل") || value.includes("كفالة")
+    ? "Sponsorship Transfer"
+    : "Service Rental";
+}
+
+function getMarketplacePricingBreakdown(source = {}) {
+  const dealType = getWorkforceDealType(source);
+  const quantity = Math.max(Number(source.quantity || 0), 0);
+  const durationMonths = Math.max(Number(source.duration_months || 1), 1);
+  const baseSalary = Number(source.base_salary || source.salary || 0);
+  const monthlyMedicalInsurance = Number(source.monthly_medical_insurance || 0);
+  const monthlyIqamaWorkPermit = WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST;
+  const gosiAmount = roundMoney(baseSalary * WORKFORCE_GOSI_RATE);
+  const monthlyBaseCost = roundMoney(baseSalary + monthlyIqamaWorkPermit + gosiAmount + monthlyMedicalInsurance);
+  const pricingMethod = source.pricing_method || "Margin Percent";
+  const marginPercent = Number(source.margin_percent || 0);
+  const manualMonthlyRate = Number(source.manual_monthly_rate || source.monthly_rate || 0);
+
+  if (dealType === "Service Rental") {
+    const calculatedMonthlyRate = pricingMethod === "Manual Monthly Rate" && manualMonthlyRate > 0
+      ? manualMonthlyRate
+      : roundMoney(monthlyBaseCost * (1 + marginPercent / 100));
+    const subtotal = roundMoney(calculatedMonthlyRate * quantity * durationMonths);
+    return {
+      dealType,
+      serviceType: "Service Rental",
+      quantity,
+      durationMonths,
+      baseSalary,
+      monthlyIqamaWorkPermit,
+      gosiRate: WORKFORCE_GOSI_RATE,
+      gosiAmount,
+      monthlyMedicalInsurance,
+      monthlyBaseCost,
+      pricingMethod,
+      marginPercent,
+      monthlyMargin: roundMoney(calculatedMonthlyRate - monthlyBaseCost),
+      monthlyRate: roundMoney(calculatedMonthlyRate),
+      subtotal,
+      adminFee: 0,
+      totalBeforeVat: subtotal,
+      totalValue: subtotal,
+      description: `Service Rental: ${quantity} worker(s) × ${durationMonths} month(s) × ${roundMoney(calculatedMonthlyRate).toLocaleString()} SAR`,
+    };
+  }
+
+  const enteredMonths = Number(source.transfer_remaining_months || 0);
+  const remainingMonths = enteredMonths > 0 ? enteredMonths : getMonthsUntil(source.iqama_expiry_date);
+  const iqamaRemainingCostPerWorker = roundMoney(monthlyIqamaWorkPermit * remainingMonths);
+  const medicalInsuranceRemainingPerWorker = Number(source.transfer_medical_insurance_remaining || source.medical_insurance_remaining || 0);
+  const transferServiceFeePerWorker = Number(source.transfer_service_fee || 0);
+  const transferBasePerWorker = roundMoney(iqamaRemainingCostPerWorker + medicalInsuranceRemainingPerWorker + transferServiceFeePerWorker);
+  const transferSubtotal = roundMoney(transferBasePerWorker * quantity);
+  const adminFeeMethod = source.admin_fee_method || "Percent";
+  const adminFeePercent = Number(source.admin_fee_percent || 0);
+  const adminFeeAmount = Number(source.admin_fee_amount || 0);
+  const adminFee = adminFeeMethod === "Fixed Amount" ? roundMoney(adminFeeAmount) : roundMoney(transferSubtotal * adminFeePercent / 100);
+  const totalValue = roundMoney(transferSubtotal + adminFee);
+
+  return {
+    dealType,
+    serviceType: "Sponsorship Transfer",
+    quantity,
+    durationMonths: 0,
+    baseSalary,
+    monthlyIqamaWorkPermit,
+    gosiRate: WORKFORCE_GOSI_RATE,
+    gosiAmount: 0,
+    monthlyMedicalInsurance,
+    remainingMonths,
+    iqamaExpiryDate: source.iqama_expiry_date || "",
+    insurancePolicyEndDate: source.insurance_policy_end_date || "",
+    iqamaRemainingCostPerWorker,
+    medicalInsuranceRemainingPerWorker,
+    transferServiceFeePerWorker,
+    transferBasePerWorker,
+    transferSubtotal,
+    adminFeeMethod,
+    adminFeePercent,
+    adminFee,
+    monthlyRate: 0,
+    subtotal: transferSubtotal,
+    totalBeforeVat: totalValue,
+    totalValue,
+    transferStatus: source.transfer_status || "Transfer Pending",
+    description: `Sponsorship Transfer: remaining iqama/work permit ${remainingMonths} month(s) + medical insurance + admin fees`,
+  };
+}
+
+function buildMarketplaceInvoiceNotes(deal, breakdown) {
+  if (!breakdown) return deal?.notes || "";
+  const lines = [
+    `Generated from deal ${deal?.deal_no || "-"}`,
+    `Deal Type: ${breakdown.dealType}`,
+    `Quantity: ${breakdown.quantity}`,
+  ];
+
+  if (breakdown.dealType === "Service Rental") {
+    lines.push(
+      `Monthly salary: ${Number(breakdown.baseSalary || 0).toLocaleString()} SAR`,
+      `Monthly iqama + work permit: ${Number(breakdown.monthlyIqamaWorkPermit || 0).toLocaleString()} SAR`,
+      `GOSI 2%: ${Number(breakdown.gosiAmount || 0).toLocaleString()} SAR`,
+      `Medical insurance / month: ${Number(breakdown.monthlyMedicalInsurance || 0).toLocaleString()} SAR`,
+      `Monthly base cost: ${Number(breakdown.monthlyBaseCost || 0).toLocaleString()} SAR`,
+      `Monthly rental rate: ${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR`,
+      `Duration: ${breakdown.durationMonths} month(s)`
+    );
+  } else {
+    lines.push(
+      `Remaining months: ${breakdown.remainingMonths}`,
+      `Iqama + work permit remaining / worker: ${Number(breakdown.iqamaRemainingCostPerWorker || 0).toLocaleString()} SAR`,
+      `Medical insurance remaining / worker: ${Number(breakdown.medicalInsuranceRemainingPerWorker || 0).toLocaleString()} SAR`,
+      `Transfer service fee / worker: ${Number(breakdown.transferServiceFeePerWorker || 0).toLocaleString()} SAR`,
+      `Admin fee: ${Number(breakdown.adminFee || 0).toLocaleString()} SAR`
+    );
+  }
+
+  if (deal?.notes) lines.push(`Deal notes: ${deal.notes}`);
+  return lines.filter(Boolean).join("\n");
+}
+
+function buildWorkforceAgreementText(deal = {}) {
+  const breakdown = getMarketplacePricingBreakdown(deal);
+  const agreementNo = deal.agreement_no || generateMarketplaceNo("WFA", marketplaceDeals, "agreement_no", 5);
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (breakdown.dealType === "Service Rental") {
+    return `WORKFORCE SERVICE RENTAL AGREEMENT / اتفاقية تأجير خدمات عمالة
+
+Agreement No: ${agreementNo}
+Date: ${today}
+Client: ${deal.client_name || "-"}
+Profession: ${deal.profession || "-"}
+Quantity: ${breakdown.quantity}
+Duration: ${breakdown.durationMonths} month(s)
+Monthly Rental Rate / Worker: ${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR
+
+The monthly rental rate includes salary, iqama/work permit cost at ${WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST} SAR per month, GOSI at 2% of salary, medical insurance as entered by the company, and the approved company pricing margin or manual monthly rate.
+
+تشمل القيمة الإيجارية الشهرية الراتب ورسوم الإقامة ورخصة العمل بواقع ${WORKFORCE_MONTHLY_IQAMA_WORK_PERMIT_COST} ريال شهرياً، والتأمينات بنسبة 2% من الراتب، والتأمين الطبي حسب القيمة المدخلة من الشركة، وهامش التسعير أو السعر الشهري اليدوي المعتمد من الشركة.
+
+Total Before VAT: ${Number(breakdown.totalValue || 0).toLocaleString()} SAR`;
+  }
+
+  return `SPONSORSHIP TRANSFER AGREEMENT / اتفاقية تنازل ونقل كفالة
+
+Agreement No: ${agreementNo}
+Date: ${today}
+Client: ${deal.client_name || "-"}
+Profession: ${deal.profession || "-"}
+Quantity: ${breakdown.quantity}
+Transfer Status: ${deal.transfer_status || "Transfer Pending"}
+
+The transfer invoice includes the remaining iqama/work permit cost until expiry, remaining medical insurance value as entered by the company, transfer/service fees, and administrative fees approved by the company.
+
+تشمل فاتورة التنازل تكلفة الإقامة ورخصة العمل المتبقية حتى تاريخ الانتهاء، وقيمة التأمين الطبي المتبقية حسب ما تحدده الشركة، ورسوم الخدمة أو التنازل، والرسوم الإدارية المعتمدة من الشركة.
+
+If sponsorship transfer is not completed, the company may convert this deal into a service rental case and calculate monthly rental fees from the worker handover/start date according to the approved monthly rental rate.
+
+في حال عدم إتمام نقل الكفالة، يحق للشركة تحويل العملية إلى تأجير خدمات واحتساب القيمة الإيجارية الشهرية من تاريخ تسليم/بدء العامل حسب السعر الشهري المعتمد.
+
+Total Before VAT: ${Number(breakdown.totalValue || 0).toLocaleString()} SAR`;
+}
+
+async function generateWorkforceAgreement(deal) {
+  if (!canManageMarketplace) return alert("You do not have permission to generate agreements.");
+  const agreementNo = deal.agreement_no || generateMarketplaceNo("WFA", marketplaceDeals, "agreement_no", 5);
+  const agreementText = buildWorkforceAgreementText({ ...deal, agreement_no: agreementNo });
+
+  const { error } = await supabase
+    .from("marketplace_deals")
+    .update(withUpdateActor({
+      agreement_no: agreementNo,
+      agreement_status: "Generated",
+      agreement_text: agreementText,
+      updated_at: new Date().toISOString(),
+    }))
+    .eq("id", deal.id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+  await loadMarketplaceDeals();
+  alert(`Agreement generated: ${agreementNo}`);
+}
+
+async function convertMarketplaceTransferToRental(deal) {
+  if (!canManageMarketplace) return alert("You do not have permission to convert deals.");
+  if (getWorkforceDealType(deal) !== "Sponsorship Transfer") return alert("Only sponsorship transfer deals can be converted to rental.");
+
+  const monthlyRateText = window.prompt("Monthly rental rate per worker:", String(deal.manual_monthly_rate || deal.monthly_rate || ""));
+  if (!monthlyRateText) return;
+  const monthsText = window.prompt("Rental duration in months:", "1");
+  if (!monthsText) return;
+
+  const monthlyRate = Number(monthlyRateText || 0);
+  const durationMonths = Number(monthsText || 1);
+  if (!monthlyRate || monthlyRate <= 0) return alert("Monthly rental rate must be greater than zero.");
+
+  const qty = Number(deal.quantity || 1);
+  const totalValue = roundMoney(qty * monthlyRate * durationMonths);
+  const notes = [
+    deal.notes || "",
+    `[${new Date().toLocaleDateString("en-GB")}] Transfer was converted to Service Rental. Monthly rate: ${monthlyRate.toLocaleString()} SAR, Duration: ${durationMonths} month(s).`,
+  ].filter(Boolean).join("\n");
+
+  const { error } = await supabase
+    .from("marketplace_deals")
+    .update(withUpdateActor({
+      deal_type: "Service Rental",
+      service_type: "Service Rental",
+      pricing_method: "Manual Monthly Rate",
+      manual_monthly_rate: monthlyRate,
+      monthly_rate: monthlyRate,
+      duration_months: durationMonths,
+      transfer_status: "Converted to Rental",
+      status: "Converted to Rental",
+      total_value: totalValue,
+      calc_breakdown: getMarketplacePricingBreakdown({ ...deal, deal_type: "Service Rental", pricing_method: "Manual Monthly Rate", manual_monthly_rate: monthlyRate, monthly_rate: monthlyRate, duration_months: durationMonths }),
+      notes,
+      updated_at: new Date().toISOString(),
+    }))
+    .eq("id", deal.id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+  alert("Transfer deal converted to rental.");
+  await loadMarketplaceDeals();
 }
 
 async function saveMarketplaceRequest() {
@@ -11537,25 +11822,41 @@ async function saveMarketplaceRequest() {
     return alert("Client, profession and quantity are required.");
   }
 
+  const breakdown = getMarketplacePricingBreakdown(marketplaceRequestForm);
   const payload = {
     ...marketplaceRequestForm,
+    deal_type: marketplaceRequestForm.deal_type || "Service Rental",
+    service_type: marketplaceRequestForm.deal_type || "Service Rental",
     notes: marketplaceRequestForm.notes || "",
     request_no: marketplaceRequestEditingId
       ? marketplaceRequestForm.request_no
       : (marketplaceRequestForm.request_no || generateMarketplaceNo("WR", marketplaceRequests, "request_no", 4)),
     quantity: Number(marketplaceRequestForm.quantity || 0),
     duration_months: Number(marketplaceRequestForm.duration_months || 1),
-    monthly_rate: Number(marketplaceRequestForm.monthly_rate || 0),
+    base_salary: Number(marketplaceRequestForm.base_salary || 0),
+    monthly_medical_insurance: Number(marketplaceRequestForm.monthly_medical_insurance || 0),
+    margin_percent: Number(marketplaceRequestForm.margin_percent || 0),
+    manual_monthly_rate: Number(marketplaceRequestForm.manual_monthly_rate || 0),
+    monthly_rate: Number(breakdown.monthlyRate || 0),
+    iqama_expiry_date: marketplaceRequestForm.iqama_expiry_date || null,
+    insurance_policy_end_date: marketplaceRequestForm.insurance_policy_end_date || null,
+    transfer_remaining_months: Number(breakdown.remainingMonths || marketplaceRequestForm.transfer_remaining_months || 0),
+    transfer_medical_insurance_remaining: Number(marketplaceRequestForm.transfer_medical_insurance_remaining || 0),
+    transfer_service_fee: Number(marketplaceRequestForm.transfer_service_fee || 0),
+    admin_fee_percent: Number(marketplaceRequestForm.admin_fee_percent || 0),
+    admin_fee_amount: Number(marketplaceRequestForm.admin_fee_amount || 0),
+    estimated_total_value: Number(breakdown.totalValue || 0),
+    calc_breakdown: breakdown,
     updated_at: new Date().toISOString(),
   };
 
   const result = marketplaceRequestEditingId
     ? await supabase
         .from("marketplace_requests")
-        .update(payload)
+        .update(withUpdateActor(payload))
         .eq("id", marketplaceRequestEditingId)
         .eq("company_id", currentCompanyId)
-    : await supabase.from("marketplace_requests").insert([withCompany(payload)]);
+    : await supabase.from("marketplace_requests").insert([withCompany(withCreateActor(payload))]);
 
   if (result.error) return alert(result.error.message);
   alert(marketplaceRequestEditingId ? "Marketplace request updated" : `Marketplace request saved: ${payload.request_no}`);
@@ -11600,35 +11901,54 @@ async function createMarketplaceDeal(item) {
   const matches = getMarketplaceMatches(item);
   if (matches.total <= 0 && !window.confirm("No matching available workforce found. Create deal anyway?")) return;
 
-  const qty = Math.min(Number(item.quantity || 0), Math.max(matches.total, Number(item.quantity || 0)));
-  const monthlyRate = Number(item.monthly_rate || 0);
-  const durationMonths = Number(item.duration_months || 1);
-  const totalValue = qty * monthlyRate * durationMonths;
+  const requestedQty = Number(item.quantity || 0);
+  const qty = Math.min(requestedQty, Math.max(matches.total, requestedQty));
+  const breakdown = getMarketplacePricingBreakdown({ ...item, quantity: qty });
+  const dealNo = generateMarketplaceNo("DEAL", marketplaceDeals, "deal_no", 4);
 
   const payload = {
-    deal_no: generateMarketplaceNo("DEAL", marketplaceDeals, "deal_no", 4),
+    deal_no: dealNo,
     marketplace_request_id: item.id,
     client_name: item.client_name || "",
-    service_type: "Manpower Supply",
+    deal_type: breakdown.dealType,
+    service_type: breakdown.serviceType,
     profession: item.profession || "",
+    nationality: item.nationality || "",
+    gender: item.gender || "",
     quantity: qty,
-    duration_months: durationMonths,
-    monthly_rate: monthlyRate,
-    total_value: totalValue,
+    duration_months: breakdown.durationMonths || Number(item.duration_months || 0),
+    base_salary: Number(item.base_salary || 0),
+    monthly_medical_insurance: Number(item.monthly_medical_insurance || 0),
+    pricing_method: item.pricing_method || "Margin Percent",
+    margin_percent: Number(item.margin_percent || 0),
+    manual_monthly_rate: Number(item.manual_monthly_rate || 0),
+    monthly_rate: Number(breakdown.monthlyRate || 0),
+    iqama_expiry_date: item.iqama_expiry_date || null,
+    insurance_policy_end_date: item.insurance_policy_end_date || null,
+    transfer_remaining_months: Number(breakdown.remainingMonths || item.transfer_remaining_months || 0),
+    transfer_medical_insurance_remaining: Number(item.transfer_medical_insurance_remaining || 0),
+    transfer_service_fee: Number(item.transfer_service_fee || 0),
+    admin_fee_method: item.admin_fee_method || "Percent",
+    admin_fee_percent: Number(item.admin_fee_percent || 0),
+    admin_fee_amount: Number(item.admin_fee_amount || 0),
+    transfer_status: breakdown.dealType === "Sponsorship Transfer" ? (item.transfer_status || "Transfer Pending") : "",
+    total_value: Number(breakdown.totalValue || 0),
+    calc_breakdown: breakdown,
     status: "Draft",
     notes: [
       `Created from ${item.request_no || "marketplace request"}. AI matched ${matches.total} available employee(s).`,
+      breakdown.description,
       item.notes ? `Client request notes: ${item.notes}` : "",
     ].filter(Boolean).join("\n"),
     updated_at: new Date().toISOString(),
   };
 
-  const result = await supabase.from("marketplace_deals").insert([withCompany(payload)]);
+  const result = await supabase.from("marketplace_deals").insert([withCompany(withCreateActor(payload))]);
   if (result.error) return alert(result.error.message);
 
   await supabase
     .from("marketplace_requests")
-    .update({ status: "Converted", updated_at: new Date().toISOString() })
+    .update(withUpdateActor({ status: "Converted", updated_at: new Date().toISOString() }))
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
 
@@ -11639,50 +11959,57 @@ async function createMarketplaceDeal(item) {
 
 async function generateInvoiceFromDeal(deal) {
   if (!canManageMarketplace) return alert("You do not have permission to generate invoices.");
-  const subtotal = Number(deal.total_value || 0);
-  const vat = Math.round(subtotal * 0.15 * 100) / 100;
-  const total = subtotal + vat;
+  const breakdown = getMarketplacePricingBreakdown(deal);
+  const subtotal = Number(breakdown.totalValue || deal.total_value || 0);
+  const vat = roundMoney(subtotal * WORKFORCE_VAT_RATE);
+  const total = roundMoney(subtotal + vat);
   const invoiceNo = generateMarketplaceNo("INV", marketplaceInvoices, "invoice_no", 6);
 
   const invoicePayload = {
     invoice_no: invoiceNo,
     deal_id: deal.id,
+    deal_no: deal.deal_no || "",
+    agreement_no: deal.agreement_no || "",
     client_name: deal.client_name || "",
     invoice_date: new Date().toISOString().slice(0, 10),
     due_date: null,
-    service_type: deal.service_type || "Manpower Supply",
+    service_type: breakdown.serviceType || deal.service_type || "Workforce Service",
+    deal_type: breakdown.dealType,
     subtotal,
+    vat_rate: WORKFORCE_VAT_RATE,
     vat_amount: vat,
     total_amount: total,
     paid_amount: 0,
     balance_amount: total,
     status: "Draft",
-    notes: [
-      `Generated from deal ${deal.deal_no || "-"}`,
-      deal.notes ? `Deal notes: ${deal.notes}` : "",
-    ].filter(Boolean).join("\n"),
+    calc_breakdown: breakdown,
+    notes: buildMarketplaceInvoiceNotes(deal, breakdown),
     updated_at: new Date().toISOString(),
   };
 
   const { data, error } = await supabase
     .from("invoices")
-    .insert([withCompany(invoicePayload)])
+    .insert([withCompany(withCreateActor(invoicePayload))])
     .select()
     .single();
 
   if (error) return alert(error.message);
 
+  const itemDescription = breakdown.dealType === "Service Rental"
+    ? `Service Rental - ${deal.profession || "Workforce"} (${breakdown.durationMonths} month(s))`
+    : `Sponsorship Transfer - ${deal.profession || "Workforce"}`;
+
   await supabase.from("invoice_items").insert([withCompany({
     invoice_id: data.id,
-    description: `${deal.service_type || "Manpower Supply"} - ${deal.profession || "Workforce"}`,
+    description: itemDescription,
     quantity: Number(deal.quantity || 1),
-    unit_price: Number(deal.monthly_rate || 0) * Number(deal.duration_months || 1),
+    unit_price: breakdown.dealType === "Service Rental" ? Number(breakdown.monthlyRate || 0) * Number(breakdown.durationMonths || 1) : roundMoney(subtotal / Math.max(Number(deal.quantity || 1), 1)),
     total: subtotal,
   })]);
 
   await supabase
     .from("marketplace_deals")
-    .update({ status: "Invoiced", updated_at: new Date().toISOString() })
+    .update(withUpdateActor({ status: "Invoiced", total_value: subtotal, calc_breakdown: breakdown, updated_at: new Date().toISOString() }))
     .eq("id", deal.id)
     .eq("company_id", currentCompanyId);
 
@@ -11734,9 +12061,12 @@ const marketplaceIntelligence = useMemo(() => {
   const openClientRequests = marketplaceRequests.filter((item) => ["Open", "Under Review"].includes(item.status || "Open"));
   const potentialMatches = openClientRequests.reduce((sum, request) => sum + Math.min(Number(request.quantity || 0), getMarketplaceMatches(request).total), 0);
   const potentialRevenue = openClientRequests.reduce((sum, request) => {
-    const matchQty = Math.min(Number(request.quantity || 0), getMarketplaceMatches(request).total);
-    return sum + matchQty * Number(request.monthly_rate || 0) * Number(request.duration_months || 1);
+    const matchQty = Math.min(Number(request.quantity || 0), getMarketplaceMatches(request).total || Number(request.quantity || 0));
+    const breakdown = getMarketplacePricingBreakdown({ ...request, quantity: matchQty });
+    return sum + Number(breakdown.totalValue || 0);
   }, 0);
+  const rentalDeals = marketplaceDeals.filter((deal) => getWorkforceDealType(deal) === "Service Rental").length;
+  const transferDeals = marketplaceDeals.filter((deal) => getWorkforceDealType(deal) === "Sponsorship Transfer").length;
   const outstanding = marketplaceInvoices.reduce((sum, invoice) => sum + Number(invoice.balance_amount || invoice.total_amount || 0), 0);
   const collected = marketplaceCollections.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   return {
@@ -11744,6 +12074,8 @@ const marketplaceIntelligence = useMemo(() => {
     openClientRequests: openClientRequests.length,
     potentialMatches,
     potentialRevenue,
+    rentalDeals,
+    transferDeals,
     activeDeals: marketplaceDeals.filter((deal) => deal.status !== "Cancelled").length,
     outstanding,
     collected,
@@ -18531,36 +18863,55 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Available Workforce" value={marketplaceIntelligence.availableWorkforce} className="passed" />
       <Stat title="Open Client Requests" value={marketplaceIntelligence.openClientRequests} className="warning" />
       <Stat title="AI Matched Qty" value={marketplaceIntelligence.potentialMatches} className="passed" />
-      <Stat title="Potential Revenue" value={`${Number(marketplaceIntelligence.potentialRevenue || 0).toLocaleString()} SAR`} className="passed" />
-      <Stat title="Active Deals" value={marketplaceIntelligence.activeDeals} />
+      <Stat title="Potential Value" value={`${Number(marketplaceIntelligence.potentialRevenue || 0).toLocaleString()} SAR`} className="passed" />
+      <Stat title="Rental Deals" value={marketplaceIntelligence.rentalDeals || 0} />
+      <Stat title="Transfer Deals" value={marketplaceIntelligence.transferDeals || 0} />
       <Stat title="Outstanding" value={`${Number(marketplaceIntelligence.outstanding || 0).toLocaleString()} SAR`} className="warning" />
     </div>
 
+    <TableCard title="Workforce Marketplace Pricing Rules">
+      <div className="insight-list">
+        <p><b>Service Rental:</b> Monthly cost = salary + iqama/work permit 862.5 SAR + GOSI 2% + monthly medical insurance. Pricing can be margin percent or manual monthly rate.</p>
+        <p><b>Sponsorship Transfer:</b> Invoice = remaining iqama/work permit + remaining medical insurance + transfer/service fee + admin fee.</p>
+        <p><b>Conversion:</b> If transfer is not completed, convert the deal to Service Rental and invoice monthly.</p>
+      </div>
+    </TableCard>
+
     {canManageMarketplace && (
-      <FormCard title={marketplaceRequestEditingId ? "Edit Client Workforce Request" : "New Client Workforce Request"}>
+      <FormCard title={marketplaceRequestEditingId ? "Edit Workforce Deal Request" : "New Workforce Deal Request"}>
         <div className="form-grid">
           <Input placeholder="Request No (Auto)" value={marketplaceRequestForm.request_no} onChange={(v) => updateForm(setMarketplaceRequestForm, "request_no", v)} />
           <Input placeholder="Client / Company Name" value={marketplaceRequestForm.client_name} onChange={(v) => updateForm(setMarketplaceRequestForm, "client_name", v)} />
-          <Select
-            value={marketplaceRequestForm.profession}
-            onChange={(v) => updateForm(setMarketplaceRequestForm, "profession", v)}
-            placeholder="Profession"
-            searchable
-            options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)}
-          />
-          <Select
-            value={marketplaceRequestForm.nationality}
-            onChange={(v) => updateForm(setMarketplaceRequestForm, "nationality", v)}
-            placeholder="Nationality"
-            searchable
-            options={countries.map((c) => c.nationality ? `${c.nationality} (${c.name})` : c.name)}
-          />
+          <Select value={marketplaceRequestForm.deal_type} onChange={(v) => updateForm(setMarketplaceRequestForm, "deal_type", v)} placeholder="Deal Type" options={WORKFORCE_DEAL_TYPES} />
+          <Select value={marketplaceRequestForm.profession} onChange={(v) => updateForm(setMarketplaceRequestForm, "profession", v)} placeholder="Profession" searchable options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)} />
+          <Select value={marketplaceRequestForm.nationality} onChange={(v) => updateForm(setMarketplaceRequestForm, "nationality", v)} placeholder="Nationality" searchable options={countries.map((c) => c.nationality ? `${c.nationality} (${c.name})` : c.name)} />
           <Select value={marketplaceRequestForm.gender} onChange={(v) => updateForm(setMarketplaceRequestForm, "gender", v)} placeholder="Gender" options={["", ...GENDERS]} />
           <Input type="number" placeholder="Quantity" value={marketplaceRequestForm.quantity} onChange={(v) => updateForm(setMarketplaceRequestForm, "quantity", v)} />
-          <Input type="number" placeholder="Duration Months" value={marketplaceRequestForm.duration_months} onChange={(v) => updateForm(setMarketplaceRequestForm, "duration_months", v)} />
-          <Input type="number" placeholder="Monthly Rate / Employee" value={marketplaceRequestForm.monthly_rate} onChange={(v) => updateForm(setMarketplaceRequestForm, "monthly_rate", v)} />
+          {marketplaceRequestForm.deal_type === "Service Rental" ? (
+            <>
+              <Input type="number" placeholder="Duration Months" value={marketplaceRequestForm.duration_months} onChange={(v) => updateForm(setMarketplaceRequestForm, "duration_months", v)} />
+              <Input type="number" placeholder="Monthly Salary / Worker" value={marketplaceRequestForm.base_salary} onChange={(v) => updateForm(setMarketplaceRequestForm, "base_salary", v)} />
+              <Input type="number" placeholder="Medical Insurance / Month" value={marketplaceRequestForm.monthly_medical_insurance} onChange={(v) => updateForm(setMarketplaceRequestForm, "monthly_medical_insurance", v)} />
+              <Select value={marketplaceRequestForm.pricing_method} onChange={(v) => updateForm(setMarketplaceRequestForm, "pricing_method", v)} placeholder="Pricing Method" options={WORKFORCE_PRICING_METHODS} />
+              {marketplaceRequestForm.pricing_method === "Margin Percent" ? <Input type="number" placeholder="Company Margin %" value={marketplaceRequestForm.margin_percent} onChange={(v) => updateForm(setMarketplaceRequestForm, "margin_percent", v)} /> : <Input type="number" placeholder="Manual Monthly Rate / Worker" value={marketplaceRequestForm.manual_monthly_rate} onChange={(v) => updateForm(setMarketplaceRequestForm, "manual_monthly_rate", v)} />}
+            </>
+          ) : (
+            <>
+              <Input type="date" placeholder="Iqama Expiry Date" value={marketplaceRequestForm.iqama_expiry_date} onChange={(v) => updateForm(setMarketplaceRequestForm, "iqama_expiry_date", v)} />
+              <Input type="number" placeholder="Remaining Months (optional)" value={marketplaceRequestForm.transfer_remaining_months} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_remaining_months", v)} />
+              <Input type="number" placeholder="Medical Insurance Remaining" value={marketplaceRequestForm.transfer_medical_insurance_remaining} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_medical_insurance_remaining", v)} />
+              <Input type="number" placeholder="Transfer / Service Fee per Worker" value={marketplaceRequestForm.transfer_service_fee} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_service_fee", v)} />
+              <Select value={marketplaceRequestForm.admin_fee_method} onChange={(v) => updateForm(setMarketplaceRequestForm, "admin_fee_method", v)} placeholder="Admin Fee Method" options={WORKFORCE_ADMIN_FEE_METHODS} />
+              {marketplaceRequestForm.admin_fee_method === "Percent" ? <Input type="number" placeholder="Admin Fee %" value={marketplaceRequestForm.admin_fee_percent} onChange={(v) => updateForm(setMarketplaceRequestForm, "admin_fee_percent", v)} /> : <Input type="number" placeholder="Admin Fee Amount" value={marketplaceRequestForm.admin_fee_amount} onChange={(v) => updateForm(setMarketplaceRequestForm, "admin_fee_amount", v)} />}
+              <Select value={marketplaceRequestForm.transfer_status} onChange={(v) => updateForm(setMarketplaceRequestForm, "transfer_status", v)} placeholder="Transfer Status" options={WORKFORCE_TRANSFER_STATUSES} />
+            </>
+          )}
           <Select value={marketplaceRequestForm.status} onChange={(v) => updateForm(setMarketplaceRequestForm, "status", v)} placeholder="Status" options={["Open", "Under Review", "Converted", "Closed", "Cancelled"]} />
         </div>
+        {(() => {
+          const preview = getMarketplacePricingBreakdown(marketplaceRequestForm);
+          return <p className="helper-text">Estimated total before VAT: <b>{Number(preview.totalValue || 0).toLocaleString()} SAR</b> — {preview.description}</p>;
+        })()}
         <textarea rows="3" placeholder="Notes" value={marketplaceRequestForm.notes} onChange={(e) => updateForm(setMarketplaceRequestForm, "notes", e.target.value)} />
         <div className="actions-line">
           <button className="save-btn" onClick={saveMarketplaceRequest}>{marketplaceRequestEditingId ? "Update Request" : "Save Request"}</button>
@@ -18570,163 +18921,19 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     )}
 
     <TableCard title="AI Available Workforce from Demobilization">
-      <table>
-        <thead>
-          <tr>
-            <th>Employee</th>
-            <th>Profession</th>
-            <th>Nationality</th>
-            <th>Gender</th>
-            <th>Current Project</th>
-            <th>Status</th>
-            <th>AI Note</th>
-          </tr>
-        </thead>
-        <tbody>
-          {demobilizations.filter((item) => ["Available", "Suggested"].includes(item.status || "Available")).length === 0 ? (
-            <tr><td colSpan="7">No available demobilized workforce yet</td></tr>
-          ) : (
-            demobilizations
-              .filter((item) => ["Available", "Suggested"].includes(item.status || "Available"))
-              .slice(0, 30)
-              .map((item) => (
-                <tr key={item.id}>
-                  <td>{item.employee_name || "-"}</td>
-                  <td>{item.profession || "-"}</td>
-                  <td>{item.nationality || "-"}</td>
-                  <td>{item.gender || "-"}</td>
-                  <td>{item.current_project || "-"}</td>
-                  <td><Badge value={item.status || "Available"} /></td>
-                  <td>{item.ai_recommendation || "Available for internal redeployment or marketplace deal."}</td>
-                </tr>
-              ))
-          )}
-        </tbody>
-      </table>
+      <table><thead><tr><th>Employee</th><th>Profession</th><th>Nationality</th><th>Gender</th><th>Current Project</th><th>Status</th><th>AI Note</th></tr></thead><tbody>{demobilizations.filter((item) => ["Available", "Suggested"].includes(item.status || "Available")).length === 0 ? <tr><td colSpan="7">No available demobilized workforce yet</td></tr> : demobilizations.filter((item) => ["Available", "Suggested"].includes(item.status || "Available")).slice(0, 30).map((item) => <tr key={item.id}><td>{item.employee_name || "-"}</td><td>{item.profession || "-"}</td><td>{item.nationality || "-"}</td><td>{item.gender || "-"}</td><td>{item.current_project || "-"}</td><td><Badge value={item.status || "Available"} /></td><td>{item.ai_recommendation || "Available for redeployment, rental, or transfer."}</td></tr>)}</tbody></table>
     </TableCard>
 
     <TableCard title="Client Workforce Requests & AI Matching">
-      <table>
-        <thead>
-          <tr>
-            <th>Request No</th>
-            <th>Client</th>
-            <th>Profession</th>
-            <th>Nationality</th>
-            <th>Qty</th>
-            <th>Matched</th>
-            <th>Potential Revenue</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {marketplaceRequests.length === 0 ? (
-            <tr><td colSpan="9">No marketplace client requests yet</td></tr>
-          ) : (
-            marketplaceRequests.map((item) => {
-              const matches = getMarketplaceMatches(item);
-              const matchedQty = Math.min(Number(item.quantity || 0), matches.total);
-              const revenue = matchedQty * Number(item.monthly_rate || 0) * Number(item.duration_months || 1);
-              return (
-                <tr key={item.id}>
-                  <td>{item.request_no || "-"}</td>
-                  <td>{item.client_name || "-"}</td>
-                  <td>{item.profession || "-"}</td>
-                  <td>{item.nationality || "-"}</td>
-                  <td>{item.quantity || 0}</td>
-                  <td><Badge value={`${matchedQty} / ${item.quantity || 0}`} /></td>
-                  <td>{Number(revenue || 0).toLocaleString()} SAR</td>
-                  <td><Badge value={item.status || "Open"} /></td>
-                  <td className="table-actions">
-                    {canManageMarketplace && <button onClick={() => editMarketplaceRequest(item)}>Edit</button>}
-                    {canManageMarketplace && <button onClick={() => createMarketplaceDeal(item)}>Create Deal</button>}
-                    {canManageMarketplace && <button className="danger" onClick={() => deleteMarketplaceRequest(item.id)}>Delete</button>}
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
+      <table><thead><tr><th>Request No</th><th>Client</th><th>Deal Type</th><th>Profession</th><th>Qty</th><th>Matched</th><th>Estimated Value</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceRequests.length === 0 ? <tr><td colSpan="9">No marketplace client requests yet</td></tr> : marketplaceRequests.map((item) => { const matches = getMarketplaceMatches(item); const matchedQty = Math.min(Number(item.quantity || 0), matches.total || Number(item.quantity || 0)); const breakdown = getMarketplacePricingBreakdown({ ...item, quantity: matchedQty }); return <tr key={item.id}><td>{item.request_no || "-"}</td><td>{item.client_name || "-"}</td><td><Badge value={breakdown.dealType} /></td><td>{item.profession || "-"}</td><td>{item.quantity || 0}</td><td><Badge value={`${Math.min(Number(item.quantity || 0), matches.total)} / ${item.quantity || 0}`} /></td><td>{Number(breakdown.totalValue || 0).toLocaleString()} SAR</td><td><Badge value={item.status || "Open"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => editMarketplaceRequest(item)}>Edit</button>}{canManageMarketplace && <button onClick={() => createMarketplaceDeal(item)}>Create Deal</button>}{canManageMarketplace && <button className="danger" onClick={() => deleteMarketplaceRequest(item.id)}>Delete</button>}</td></tr>; })}</tbody></table>
     </TableCard>
 
     <TableCard title="Marketplace Deals">
-      <table>
-        <thead>
-          <tr>
-            <th>Deal No</th>
-            <th>Client</th>
-            <th>Service</th>
-            <th>Profession</th>
-            <th>Qty</th>
-            <th>Duration</th>
-            <th>Monthly Rate</th>
-            <th>Total Value</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {marketplaceDeals.length === 0 ? (
-            <tr><td colSpan="10">No marketplace deals yet</td></tr>
-          ) : (
-            marketplaceDeals.map((deal) => (
-              <tr key={deal.id}>
-                <td>{deal.deal_no || "-"}</td>
-                <td>{deal.client_name || "-"}</td>
-                <td>{deal.service_type || "-"}</td>
-                <td>{deal.profession || "-"}</td>
-                <td>{deal.quantity || 0}</td>
-                <td>{deal.duration_months || 0} months</td>
-                <td>{Number(deal.monthly_rate || 0).toLocaleString()} SAR</td>
-                <td><b>{Number(deal.total_value || 0).toLocaleString()} SAR</b></td>
-                <td><Badge value={deal.status || "Draft"} /></td>
-                <td className="table-actions">
-                  {canManageMarketplace && <button onClick={() => generateInvoiceFromDeal(deal)}>Generate Invoice</button>}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+      <table><thead><tr><th>Deal No</th><th>Client</th><th>Type</th><th>Profession</th><th>Qty</th><th>Monthly Rate</th><th>Total Before VAT</th><th>Agreement</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceDeals.length === 0 ? <tr><td colSpan="10">No marketplace deals yet</td></tr> : marketplaceDeals.map((deal) => { const breakdown = getMarketplacePricingBreakdown(deal); return <tr key={deal.id}><td>{deal.deal_no || "-"}</td><td>{deal.client_name || "-"}</td><td><Badge value={breakdown.dealType} /></td><td>{deal.profession || "-"}</td><td>{deal.quantity || 0}</td><td>{breakdown.dealType === "Service Rental" ? `${Number(breakdown.monthlyRate || 0).toLocaleString()} SAR` : "-"}</td><td><b>{Number(breakdown.totalValue || deal.total_value || 0).toLocaleString()} SAR</b></td><td>{deal.agreement_no ? <Badge value={deal.agreement_no} /> : "Not generated"}</td><td><Badge value={deal.status || deal.transfer_status || "Draft"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => generateWorkforceAgreement(deal)}>Generate Agreement</button>}{canManageMarketplace && <button onClick={() => generateInvoiceFromDeal(deal)}>Generate Invoice</button>}{canManageMarketplace && breakdown.dealType === "Sponsorship Transfer" && <button onClick={() => convertMarketplaceTransferToRental(deal)}>Convert to Rental</button>}</td></tr>; })}</tbody></table>
     </TableCard>
 
     <TableCard title="Invoices & Collections">
-      <table>
-        <thead>
-          <tr>
-            <th>Invoice No</th>
-            <th>Client</th>
-            <th>Service</th>
-            <th>Total</th>
-            <th>Paid</th>
-            <th>Balance</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {marketplaceInvoices.length === 0 ? (
-            <tr><td colSpan="8">No invoices yet</td></tr>
-          ) : (
-            marketplaceInvoices.map((invoice) => (
-              <tr key={invoice.id}>
-                <td>{invoice.invoice_no || "-"}</td>
-                <td>{invoice.client_name || "-"}</td>
-                <td>{invoice.service_type || "-"}</td>
-                <td>{Number(invoice.total_amount || 0).toLocaleString()} SAR</td>
-                <td>{Number(invoice.paid_amount || 0).toLocaleString()} SAR</td>
-                <td><b>{Number(invoice.balance_amount || 0).toLocaleString()} SAR</b></td>
-                <td><Badge value={invoice.status || "Draft"} /></td>
-                <td className="table-actions">
-                  {canManageMarketplace && <button onClick={() => recordMarketplaceCollection(invoice)}>Record Collection</button>}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+      <table><thead><tr><th>Invoice No</th><th>Client</th><th>Deal Type</th><th>Subtotal</th><th>VAT</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Actions</th></tr></thead><tbody>{marketplaceInvoices.length === 0 ? <tr><td colSpan="10">No invoices yet</td></tr> : marketplaceInvoices.map((invoice) => <tr key={invoice.id}><td>{invoice.invoice_no || "-"}</td><td>{invoice.client_name || "-"}</td><td>{invoice.deal_type || invoice.service_type || "-"}</td><td>{Number(invoice.subtotal || 0).toLocaleString()} SAR</td><td>{Number(invoice.vat_amount || 0).toLocaleString()} SAR</td><td>{Number(invoice.total_amount || 0).toLocaleString()} SAR</td><td>{Number(invoice.paid_amount || 0).toLocaleString()} SAR</td><td><b>{Number(invoice.balance_amount || 0).toLocaleString()} SAR</b></td><td><Badge value={invoice.status || "Draft"} /></td><td className="table-actions">{canManageMarketplace && <button onClick={() => recordMarketplaceCollection(invoice)}>Record Collection</button>}</td></tr>)}</tbody></table>
     </TableCard>
   </>
 )}
