@@ -23,6 +23,7 @@ const PAGES = [
   "Employees",
   "Demobilization",
   "Workforce Marketplace",
+  "Local Content",
   "Rejected Candidates",
   "Agencies",
   "Agency Agreements",
@@ -68,6 +69,11 @@ const SIDEBAR_GROUPS = [
     title: "Mobilization & Workforce",
     icon: "👷",
     pages: ["Mobilization", "Employees", "Demobilization", "Workforce Marketplace"],
+  },
+  {
+    title: "Compliance & Localization",
+    icon: "🇸🇦",
+    pages: ["Local Content"],
   },
   {
     title: "Agencies",
@@ -557,6 +563,7 @@ const emptyEmployee = {
   insurance_policy_end_date: "",
   annual_medical_insurance: "",
   monthly_medical_insurance: "",
+  salary: "",
   nationality: "",
   gender: "",
   profession: "",
@@ -1192,6 +1199,32 @@ const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
 const [systemRestoreRequests, setSystemRestoreRequests] = useState([]);
 const [systemActivityLogs, setSystemActivityLogs] = useState([]);
+const [localContentSettings, setLocalContentSettings] = useState({
+  saudi_labor_weight: 100,
+  non_saudi_labor_weight: 54,
+  default_target_percent: 35,
+  forecast_days: 90,
+  expiring_window_days: 60,
+  default_monthly_penalty_percent: 5,
+});
+const [localContentSettingsForm, setLocalContentSettingsForm] = useState({
+  saudi_labor_weight: 100,
+  non_saudi_labor_weight: 54,
+  default_target_percent: 35,
+  forecast_days: 90,
+  expiring_window_days: 60,
+  default_monthly_penalty_percent: 5,
+});
+const [localContentProjectTargets, setLocalContentProjectTargets] = useState([]);
+const [localContentProjectForm, setLocalContentProjectForm] = useState({
+  project_name: "",
+  target_percent: 35,
+  monthly_invoice_amount: "",
+  penalty_percent: 5,
+  notes: "",
+});
+const [localContentEditingProjectId, setLocalContentEditingProjectId] = useState(null);
+const [localContentSelectedProject, setLocalContentSelectedProject] = useState("All");
 const [activityFilters, setActivityFilters] = useState({
   requestNo: "",
   moduleName: "All",
@@ -1314,6 +1347,7 @@ const ROLE_PAGES = {
     "Agency Ranking",
     "Agency Performance",
     "Penalty Register",
+    "Local Content",
     "Reports",
     "Notifications",
   ],
@@ -1331,6 +1365,7 @@ const ROLE_PAGES = {
     "Employees",
     "Demobilization",
     "Workforce Marketplace",
+    "Local Content",
     "Recruitment Performance",
     "Agency Performance",
     "Notifications",
@@ -1345,6 +1380,7 @@ const ROLE_PAGES = {
     "Mobilization",
     "Employees",
     "Demobilization",
+    "Local Content",
     "Reports",
     "Notifications",
   ],
@@ -1370,6 +1406,7 @@ const ROLE_PAGES = {
     "Employees",
     "Demobilization",
     "Workforce Marketplace",
+    "Local Content",
     "Agencies",
     "Agency Agreements",
     "Agency Ranking",
@@ -1470,6 +1507,8 @@ const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager
 const canManageEmployees = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageMarketplace = ["Admin", "Recruitment Manager", "Operations Manager"].includes(currentRole);
 const canExport = hasAction("export") || ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager", "Visa Team", "Viewer"].includes(currentRole);
+const canViewLocalContent = ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager"].includes(currentRole);
+const canManageLocalContent = ["Admin", "Operations Manager", "Recruitment Manager"].includes(currentRole);
 
 const getUniqueAgencyWorkspaces = (rows = []) => {
   const map = new Map();
@@ -2367,6 +2406,8 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadSystemBackups(),
       loadSystemRestoreRequests(),
       loadSystemActivityLogs(),
+      loadLocalContentSettings(),
+      loadLocalContentProjectTargets(),
     ]);
     setLoading(false);
   }
@@ -2991,6 +3032,60 @@ setProfessions(allProfessions);
     } finally {
       setActivityLogLoading(false);
     }
+  }
+
+
+  async function loadLocalContentSettings() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("local_content_settings")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("local_content_settings:", error.message);
+      return [];
+    }
+
+    const nextSettings = {
+      saudi_labor_weight: Number(data?.saudi_labor_weight ?? 100),
+      non_saudi_labor_weight: Number(data?.non_saudi_labor_weight ?? 54),
+      default_target_percent: Number(data?.default_target_percent ?? 35),
+      forecast_days: Number(data?.forecast_days ?? 90),
+      expiring_window_days: Number(data?.expiring_window_days ?? 60),
+      default_monthly_penalty_percent: Number(data?.default_monthly_penalty_percent ?? 5),
+    };
+
+    setLocalContentSettings(nextSettings);
+    setLocalContentSettingsForm(nextSettings);
+    return nextSettings;
+  }
+
+  async function loadLocalContentProjectTargets() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setLocalContentProjectTargets([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("local_content_project_targets")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("project_name", { ascending: true })
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("local_content_project_targets:", error.message);
+      setLocalContentProjectTargets([]);
+      return [];
+    }
+
+    setLocalContentProjectTargets(data || []);
+    return data || [];
   }
 
 async function loadNotifications() {
@@ -7415,6 +7510,7 @@ function downloadEmployeesTemplate() {
       "Iqama Expiry Date": "2027-06-30",
       "Insurance Policy End Date": "2026-12-31",
       "Annual Medical Insurance": "1200",
+      "Monthly Salary": "1800",
       "Nationality": "India",
       "Gender": "Male",
       "Profession": "Electrician",
@@ -7501,6 +7597,7 @@ async function handleEmployeesExcelUpload(event) {
         insurance_policy_end_date: parseExcelDateValue(row["Insurance Policy End Date"] || row["Medical Insurance End Date"] || row["insurance_policy_end_date"] || row["تاريخ انتهاء التأمين"]),
         annual_medical_insurance: Number(getRowValue(row, ["Annual Medical Insurance", "Medical Insurance Annual", "annual_medical_insurance", "قيمة التأمين السنوي", "التأمين الطبي السنوي"]) || 0),
         monthly_medical_insurance: roundMoney(Number(getRowValue(row, ["Annual Medical Insurance", "Medical Insurance Annual", "annual_medical_insurance", "قيمة التأمين السنوي", "التأمين الطبي السنوي"]) || 0) / 12),
+        salary: Number(getRowValue(row, ["Monthly Salary", "Salary", "salary", "monthly_salary", "الراتب", "الراتب الشهري"]) || 0),
         nationality: getRowValue(row, ["Nationality", "nationality", "الجنسية"]),
         gender: getRowValue(row, ["Gender", "gender", "الجنس"]),
         profession,
@@ -7547,6 +7644,7 @@ function editEmployee(item) {
     insurance_policy_end_date: item.insurance_policy_end_date || "",
     annual_medical_insurance: item.annual_medical_insurance || (item.monthly_medical_insurance ? roundMoney(Number(item.monthly_medical_insurance || 0) * 12) : ""),
     monthly_medical_insurance: item.monthly_medical_insurance || "",
+    salary: item.salary || item.monthly_salary || "",
     nationality: item.nationality || "",
     gender: item.gender || "",
     profession: item.profession || "",
@@ -7576,6 +7674,7 @@ async function saveEmployee() {
     insurance_policy_end_date: employeeForm.insurance_policy_end_date || null,
     annual_medical_insurance: Number(employeeForm.annual_medical_insurance || 0),
     monthly_medical_insurance: roundMoney(Number(employeeForm.annual_medical_insurance || 0) / 12),
+    salary: Number(employeeForm.salary || 0),
     nationality: employeeForm.nationality || "",
     gender: employeeForm.gender || "",
     profession: employeeForm.profession || "",
@@ -7739,6 +7838,337 @@ const employeeIntelligence = useMemo(() => {
     projectRisk,
   };
 }, [employees, requests]);
+
+
+function getNumericPercent(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function getEmployeeMonthlySalary(employee) {
+  return Number(employee?.salary || employee?.basic_salary || employee?.monthly_salary || employee?.total_salary || 0);
+}
+
+function getDaysUntil(dateValue, fromDate = new Date()) {
+  if (!dateValue) return null;
+  const start = new Date(fromDate);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(dateValue);
+  if (Number.isNaN(end.getTime())) return null;
+  end.setHours(0, 0, 0, 0);
+  return Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+}
+
+function getProjectTarget(projectName) {
+  const target = localContentProjectTargets.find((item) => normalize(item.project_name) === normalize(projectName));
+  return {
+    project_name: projectName || "Unassigned",
+    target_percent: getNumericPercent(target?.target_percent, localContentSettings.default_target_percent),
+    monthly_invoice_amount: Number(target?.monthly_invoice_amount || 0),
+    penalty_percent: getNumericPercent(target?.penalty_percent, localContentSettings.default_monthly_penalty_percent),
+    notes: target?.notes || "",
+    id: target?.id || null,
+  };
+}
+
+function calculateLocalContentForEmployees(rows = []) {
+  const activeRows = rows.filter((employee) => String(employee.status || "Active").toLowerCase() !== "final exit");
+  const saudiRows = activeRows.filter((employee) => isSaudiNationality(employee.nationality));
+  const nonSaudiRows = activeRows.filter((employee) => !isSaudiNationality(employee.nationality));
+  const saudiPayroll = saudiRows.reduce((sum, employee) => sum + getEmployeeMonthlySalary(employee), 0);
+  const nonSaudiPayroll = nonSaudiRows.reduce((sum, employee) => sum + getEmployeeMonthlySalary(employee), 0);
+  const totalPayroll = saudiPayroll + nonSaudiPayroll;
+  const localWorkforceValue =
+    saudiPayroll * (getNumericPercent(localContentSettings.saudi_labor_weight, 100) / 100) +
+    nonSaudiPayroll * (getNumericPercent(localContentSettings.non_saudi_labor_weight, 54) / 100);
+  const headcount = activeRows.length;
+  const saudiHeadcount = saudiRows.length;
+  const saudizationPercent = headcount ? Math.round((saudiHeadcount / headcount) * 10000) / 100 : 0;
+  const workforceLocalContentPercent = totalPayroll ? Math.round((localWorkforceValue / totalPayroll) * 10000) / 100 : 0;
+
+  return {
+    headcount,
+    saudiHeadcount,
+    nonSaudiHeadcount: nonSaudiRows.length,
+    saudiPayroll,
+    nonSaudiPayroll,
+    totalPayroll,
+    localWorkforceValue,
+    saudizationPercent,
+    workforceLocalContentPercent,
+  };
+}
+
+const localContentDashboard = useMemo(() => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const forecastDays = Number(localContentSettings.forecast_days || 90);
+  const expiringWindowDays = Number(localContentSettings.expiring_window_days || 60);
+
+  const activeEmployees = employees.filter((employee) =>
+    !["Final Exit", "Transferred"].includes(String(employee.status || "Active"))
+  );
+
+  const projectMap = new Map();
+  activeEmployees.forEach((employee) => {
+    const projectName = employee.project_name || "Unassigned";
+    if (!projectMap.has(projectName)) projectMap.set(projectName, []);
+    projectMap.get(projectName).push(employee);
+  });
+
+  const projectRows = Array.from(projectMap.entries()).map(([projectName, rows]) => {
+    const target = getProjectTarget(projectName);
+    const current = calculateLocalContentForEmployees(rows);
+    const forecastRows = rows.filter((employee) => {
+      const days = getDaysUntil(employee.contract_end_date, today);
+      return !(isSaudiNationality(employee.nationality) && days !== null && days >= 0 && days <= forecastDays);
+    });
+    const forecast = calculateLocalContentForEmployees(forecastRows);
+    const expiringSaudi = rows.filter((employee) => {
+      const days = getDaysUntil(employee.contract_end_date, today);
+      return isSaudiNationality(employee.nationality) && days !== null && days >= 0 && days <= forecastDays;
+    });
+    const gap = Math.max(target.target_percent - current.saudizationPercent, 0);
+    const forecastGap = Math.max(target.target_percent - forecast.saudizationPercent, 0);
+    const neededSaudiNow = Math.ceil((gap / 100) * Math.max(current.headcount, 1));
+    const neededSaudiForecast = Math.ceil((forecastGap / 100) * Math.max(forecast.headcount, 1));
+    const expectedPenalty = target.monthly_invoice_amount && target.penalty_percent && forecastGap > 0
+      ? Math.round(target.monthly_invoice_amount * (target.penalty_percent / 100))
+      : 0;
+    const riskLevel = forecastGap >= 10 || expectedPenalty > 0
+      ? "High"
+      : forecastGap > 0 || expiringSaudi.length > 0
+        ? "Medium"
+        : "Low";
+
+    return {
+      projectName,
+      ...current,
+      targetPercent: target.target_percent,
+      forecastSaudizationPercent: forecast.saudizationPercent,
+      expiringSaudiCount: expiringSaudi.length,
+      gap,
+      forecastGap,
+      neededSaudiNow,
+      neededSaudiForecast,
+      monthlyInvoiceAmount: target.monthly_invoice_amount,
+      penaltyPercent: target.penalty_percent,
+      expectedPenalty,
+      riskLevel,
+      notes: target.notes,
+    };
+  }).sort((a, b) => {
+    const order = { High: 0, Medium: 1, Low: 2 };
+    return (order[a.riskLevel] ?? 9) - (order[b.riskLevel] ?? 9) || b.forecastGap - a.forecastGap;
+  });
+
+  const company = calculateLocalContentForEmployees(activeEmployees);
+  const companyTarget = Number(localContentSettings.default_target_percent || 35);
+  const highRiskProjects = projectRows.filter((row) => row.riskLevel === "High").length;
+  const mediumRiskProjects = projectRows.filter((row) => row.riskLevel === "Medium").length;
+  const forecastExpiringSaudi = projectRows.reduce((sum, row) => sum + Number(row.expiringSaudiCount || 0), 0);
+  const expectedPenalty = projectRows.reduce((sum, row) => sum + Number(row.expectedPenalty || 0), 0);
+
+  const riskyProjects = projectRows.filter((row) => row.forecastGap > 0 || row.gap > 0);
+  const expiringSaudiEmployees = activeEmployees.filter((employee) => {
+    const days = getDaysUntil(employee.contract_end_date, today);
+    return isSaudiNationality(employee.nationality) && days !== null && days >= 0 && days <= expiringWindowDays;
+  });
+
+  const transferSuggestions = expiringSaudiEmployees.flatMap((employee) => {
+    const sourceProject = employee.project_name || "Unassigned";
+    const openRequestMatches = requests.filter((request) => {
+      const status = request.status || "Open";
+      const project = request.project_name || request.project || "Unassigned";
+      if (!["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(status)) return false;
+      if (project === sourceProject) return false;
+      if (!isSaudiRequest(request) && request.nationality && !isSaudiNationality(request.nationality)) return false;
+      return isCompatibleText(employee.profession, request.profession);
+    });
+
+    const projectMatches = riskyProjects
+      .filter((project) => project.projectName !== sourceProject)
+      .map((project) => ({ projectName: project.projectName, project, request: null }));
+
+    const requestMatches = openRequestMatches.map((request) => {
+      const projectName = request.project_name || request.project || "Unassigned";
+      const project = projectRows.find((row) => row.projectName === projectName) || null;
+      return { projectName, project, request };
+    });
+
+    const combined = [...requestMatches, ...projectMatches]
+      .filter((match, index, arr) => arr.findIndex((item) => item.projectName === match.projectName) === index)
+      .slice(0, 3);
+
+    return combined.map((match) => {
+      const daysToEnd = getDaysUntil(employee.contract_end_date, today);
+      const professionScore = match.request ? 35 : 15;
+      const riskScore = match.project?.riskLevel === "High" ? 35 : match.project?.riskLevel === "Medium" ? 25 : 10;
+      const timingScore = daysToEnd !== null && daysToEnd <= 30 ? 20 : 12;
+      const salaryScore = getEmployeeMonthlySalary(employee) ? 10 : 5;
+      const score = Math.min(100, professionScore + riskScore + timingScore + salaryScore);
+      return {
+        employee_id: employee.id,
+        employee_no: employee.employee_no || "-",
+        employee_name: employee.employee_name || "-",
+        profession: employee.profession || "-",
+        source_project: sourceProject,
+        target_project: match.projectName,
+        request_no: match.request?.request_no || "-",
+        days_to_contract_end: daysToEnd,
+        salary: getEmployeeMonthlySalary(employee),
+        match_score: score,
+        reason: match.request
+          ? `Open Saudi request ${match.request.request_no || ""} + project risk ${match.project?.riskLevel || "Medium"}`
+          : `Project forecast gap ${Number(match.project?.forecastGap || 0).toFixed(1)}%`,
+      };
+    });
+  }).sort((a, b) => b.match_score - a.match_score).slice(0, 20);
+
+  const selectedProjects = localContentSelectedProject === "All"
+    ? projectRows
+    : projectRows.filter((row) => row.projectName === localContentSelectedProject);
+
+  return {
+    company,
+    companyTarget,
+    projectRows,
+    selectedProjects,
+    highRiskProjects,
+    mediumRiskProjects,
+    forecastExpiringSaudi,
+    expectedPenalty,
+    transferSuggestions,
+  };
+}, [employees, requests, localContentSettings, localContentProjectTargets, localContentSelectedProject]);
+
+function resetLocalContentProjectForm() {
+  setLocalContentEditingProjectId(null);
+  setLocalContentProjectForm({
+    project_name: "",
+    target_percent: localContentSettings.default_target_percent || 35,
+    monthly_invoice_amount: "",
+    penalty_percent: localContentSettings.default_monthly_penalty_percent || 5,
+    notes: "",
+  });
+}
+
+function editLocalContentProjectTarget(item) {
+  setLocalContentEditingProjectId(item.id);
+  setLocalContentProjectForm({
+    project_name: item.project_name || "",
+    target_percent: item.target_percent || localContentSettings.default_target_percent || 35,
+    monthly_invoice_amount: item.monthly_invoice_amount || "",
+    penalty_percent: item.penalty_percent || localContentSettings.default_monthly_penalty_percent || 5,
+    notes: item.notes || "",
+  });
+}
+
+async function saveLocalContentSettings() {
+  if (!canManageLocalContent) return alert("You do not have permission to manage Local Content settings.");
+  if (!currentCompanyId) return alert("Company ID is missing.");
+
+  const payload = {
+    company_id: currentCompanyId,
+    saudi_labor_weight: Number(localContentSettingsForm.saudi_labor_weight || 100),
+    non_saudi_labor_weight: Number(localContentSettingsForm.non_saudi_labor_weight || 54),
+    default_target_percent: Number(localContentSettingsForm.default_target_percent || 35),
+    forecast_days: Number(localContentSettingsForm.forecast_days || 90),
+    expiring_window_days: Number(localContentSettingsForm.expiring_window_days || 60),
+    default_monthly_penalty_percent: Number(localContentSettingsForm.default_monthly_penalty_percent || 5),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from("local_content_settings")
+    .upsert([payload], { onConflict: "company_id" });
+
+  if (error) return alert(error.message);
+  setLocalContentSettings(payload);
+  await loadLocalContentSettings();
+  alert("Local Content settings saved.");
+}
+
+async function saveLocalContentProjectTarget() {
+  if (!canManageLocalContent) return alert("You do not have permission to manage project targets.");
+  if (!currentCompanyId) return alert("Company ID is missing.");
+  if (!localContentProjectForm.project_name) return alert("Project name is required.");
+
+  const payload = {
+    project_name: localContentProjectForm.project_name,
+    target_percent: Number(localContentProjectForm.target_percent || localContentSettings.default_target_percent || 35),
+    monthly_invoice_amount: Number(localContentProjectForm.monthly_invoice_amount || 0),
+    penalty_percent: Number(localContentProjectForm.penalty_percent || localContentSettings.default_monthly_penalty_percent || 5),
+    notes: localContentProjectForm.notes || "",
+    updated_at: new Date().toISOString(),
+  };
+
+  const result = localContentEditingProjectId
+    ? await supabase
+        .from("local_content_project_targets")
+        .update(payload)
+        .eq("id", localContentEditingProjectId)
+        .eq("company_id", currentCompanyId)
+    : await supabase
+        .from("local_content_project_targets")
+        .insert([withCompany({ ...payload, created_at: new Date().toISOString() })]);
+
+  if (result.error) return alert(result.error.message);
+  resetLocalContentProjectForm();
+  await loadLocalContentProjectTargets();
+  alert("Project target saved.");
+}
+
+async function deleteLocalContentProjectTarget(id) {
+  if (!canManageLocalContent) return alert("You do not have permission to delete project targets.");
+  if (!window.confirm("Delete this project target?")) return;
+  const { error } = await supabase
+    .from("local_content_project_targets")
+    .delete()
+    .eq("id", id)
+    .eq("company_id", currentCompanyId);
+  if (error) return alert(error.message);
+  await loadLocalContentProjectTargets();
+}
+
+async function applySaudiTransferSuggestion(suggestion) {
+  if (!canManageLocalContent) return alert("You do not have permission to transfer employees.");
+  if (!suggestion?.employee_id || !suggestion?.target_project) return;
+  if (!window.confirm(`Transfer ${suggestion.employee_name} to ${suggestion.target_project}?`)) return;
+
+  const { error } = await supabase
+    .from("employees")
+    .update(withUpdateActor({
+      project_name: suggestion.target_project,
+      notes: `Transferred through Local Content Center from ${suggestion.source_project} to ${suggestion.target_project}. ${suggestion.reason}`,
+      updated_at: new Date().toISOString(),
+    }))
+    .eq("id", suggestion.employee_id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+  await loadEmployees();
+  alert("Employee transfer prepared.");
+}
+
+function downloadLocalContentExcel() {
+  const workbook = XLSX.utils.book_new();
+  const summaryRows = [{
+    company_saudization_percent: localContentDashboard.company.saudizationPercent,
+    company_workforce_local_content_percent: localContentDashboard.company.workforceLocalContentPercent,
+    saudi_headcount: localContentDashboard.company.saudiHeadcount,
+    non_saudi_headcount: localContentDashboard.company.nonSaudiHeadcount,
+    saudi_payroll: localContentDashboard.company.saudiPayroll,
+    non_saudi_payroll: localContentDashboard.company.nonSaudiPayroll,
+    local_workforce_value: localContentDashboard.company.localWorkforceValue,
+    high_risk_projects: localContentDashboard.highRiskProjects,
+    expected_penalty: localContentDashboard.expectedPenalty,
+  }];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summaryRows), "Summary");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(localContentDashboard.projectRows), "Projects");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(localContentDashboard.transferSuggestions), "Transfer Suggestions");
+  XLSX.writeFile(workbook, `VisaFlow_Local_Content_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
 
 const filteredEmployeeRows = useMemo(() => {
   const keyword = String(search || "").toLowerCase();
@@ -15272,6 +15702,7 @@ function exportCurrentPage() {
   if (activePage === "Employees") return exportRowsToExcel(employees, "VisaFlow_Employees", "Employees");
   if (activePage === "Demobilization") return exportRowsToExcel(demobilizations, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
+  if (activePage === "Local Content") return downloadLocalContentExcel();
   if (activePage === "Notifications") return exportRowsToExcel(notifications, "VisaFlow_Notifications", "Notifications");
   if (activePage === "Reports") {
     if (activeReport === "activityLog") {
@@ -19409,6 +19840,197 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
 
 
+{activePage === "Local Content" && canViewLocalContent && (
+  <>
+    <div className="executive-hero" style={{ marginBottom: 18 }}>
+      <div>
+        <p className="eyebrow">Compliance & Localization</p>
+        <h1>Local Content & Saudization Center</h1>
+        <p>Company and project-level workforce localization estimator, risk forecast and Saudi transfer suggestions.</p>
+      </div>
+      <div className="hero-actions">
+        <button onClick={downloadLocalContentExcel}>Export Local Content Excel</button>
+        <button onClick={loadAll}>Refresh</button>
+      </div>
+    </div>
+
+    <div className="dashboard-grid">
+      <Stat title="Company Saudization" value={`${localContentDashboard.company.saudizationPercent}%`} className={localContentDashboard.company.saudizationPercent >= localContentDashboard.companyTarget ? "passed" : "warning"} />
+      <Stat title="Workforce Local Content" value={`${localContentDashboard.company.workforceLocalContentPercent}%`} className="passed" />
+      <Stat title="Saudi Employees" value={localContentDashboard.company.saudiHeadcount} />
+      <Stat title="Non-Saudi Employees" value={localContentDashboard.company.nonSaudiHeadcount} />
+      <Stat title="High Risk Projects" value={localContentDashboard.highRiskProjects} className={localContentDashboard.highRiskProjects ? "danger" : "passed"} />
+      <Stat title="Expected Penalty Risk" value={`${Number(localContentDashboard.expectedPenalty || 0).toLocaleString()} SAR`} className={localContentDashboard.expectedPenalty ? "danger" : "passed"} />
+    </div>
+
+    <TableCard title="Calculation Rules / قواعد الحسبة">
+      <div className="insight-list">
+        <p><b>Saudi workforce:</b> counted at {localContentSettings.saudi_labor_weight}% of salary cost.</p>
+        <p><b>Non-Saudi workforce:</b> counted at {localContentSettings.non_saudi_labor_weight}% of salary cost by default.</p>
+        <p><b>Forecast:</b> predicts project risk after {localContentSettings.forecast_days} days based on Saudi employees whose contracts are ending.</p>
+        <p style={{ color: "#64748b" }}>This is an internal estimator for management visibility. Official reporting should remain configurable based on each contract or authority template.</p>
+      </div>
+    </TableCard>
+
+    {canManageLocalContent && (
+      <FormCard title="Local Content Settings">
+        <div className="form-grid">
+          <Input placeholder="Saudi Labor Weight %" type="number" value={localContentSettingsForm.saudi_labor_weight} onChange={(v) => updateForm(setLocalContentSettingsForm, "saudi_labor_weight", v)} />
+          <Input placeholder="Non-Saudi Labor Weight %" type="number" value={localContentSettingsForm.non_saudi_labor_weight} onChange={(v) => updateForm(setLocalContentSettingsForm, "non_saudi_labor_weight", v)} />
+          <Input placeholder="Default Project Target %" type="number" value={localContentSettingsForm.default_target_percent} onChange={(v) => updateForm(setLocalContentSettingsForm, "default_target_percent", v)} />
+          <Input placeholder="Forecast Days" type="number" value={localContentSettingsForm.forecast_days} onChange={(v) => updateForm(setLocalContentSettingsForm, "forecast_days", v)} />
+          <Input placeholder="Expiring Saudi Window Days" type="number" value={localContentSettingsForm.expiring_window_days} onChange={(v) => updateForm(setLocalContentSettingsForm, "expiring_window_days", v)} />
+          <Input placeholder="Default Penalty %" type="number" value={localContentSettingsForm.default_monthly_penalty_percent} onChange={(v) => updateForm(setLocalContentSettingsForm, "default_monthly_penalty_percent", v)} />
+        </div>
+        <div className="actions-line">
+          <button className="save-btn" onClick={saveLocalContentSettings}>Save Settings</button>
+        </div>
+      </FormCard>
+    )}
+
+    {canManageLocalContent && (
+      <FormCard title={localContentEditingProjectId ? "Edit Project Target" : "Add Project Target / Penalty Risk"}>
+        <div className="form-grid">
+          <Select
+            value={localContentProjectForm.project_name}
+            onChange={(v) => updateForm(setLocalContentProjectForm, "project_name", v)}
+            placeholder="Project Name"
+            searchable
+            options={Array.from(new Set(employees.map((item) => item.project_name || "Unassigned").filter(Boolean)))}
+          />
+          <Input placeholder="Target Saudization %" type="number" value={localContentProjectForm.target_percent} onChange={(v) => updateForm(setLocalContentProjectForm, "target_percent", v)} />
+          <Input placeholder="Monthly Invoice Amount" type="number" value={localContentProjectForm.monthly_invoice_amount} onChange={(v) => updateForm(setLocalContentProjectForm, "monthly_invoice_amount", v)} />
+          <Input placeholder="Penalty % if target missed" type="number" value={localContentProjectForm.penalty_percent} onChange={(v) => updateForm(setLocalContentProjectForm, "penalty_percent", v)} />
+        </div>
+        <textarea rows="3" placeholder="Notes / contract localization clause" value={localContentProjectForm.notes} onChange={(e) => updateForm(setLocalContentProjectForm, "notes", e.target.value)} />
+        <div className="actions-line">
+          <button className="save-btn" onClick={saveLocalContentProjectTarget}>{localContentEditingProjectId ? "Update Target" : "Save Target"}</button>
+          <button className="light-btn" onClick={resetLocalContentProjectForm}>Clear</button>
+        </div>
+      </FormCard>
+    )}
+
+    <TableCard title="Project Local Content Risk Forecast">
+      <div className="form-grid" style={{ marginBottom: "14px" }}>
+        <Select
+          value={localContentSelectedProject}
+          onChange={setLocalContentSelectedProject}
+          placeholder="Filter Project"
+          searchable
+          options={["All", ...localContentDashboard.projectRows.map((row) => row.projectName)]}
+        />
+      </div>
+      <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "520px" }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Risk</th>
+              <th>Project</th>
+              <th>Headcount</th>
+              <th>Saudi</th>
+              <th>Saudi %</th>
+              <th>LC Workforce %</th>
+              <th>Target</th>
+              <th>Forecast Saudi %</th>
+              <th>Expiring Saudis</th>
+              <th>Needed Saudis</th>
+              <th>Penalty Risk</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {localContentDashboard.selectedProjects.length === 0 ? (
+              <tr><td colSpan="12" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No employee/project data found.</td></tr>
+            ) : localContentDashboard.selectedProjects.map((row) => (
+              <tr key={row.projectName}>
+                <td><Badge value={row.riskLevel} /></td>
+                <td>{row.projectName}</td>
+                <td>{row.headcount}</td>
+                <td>{row.saudiHeadcount}</td>
+                <td>{row.saudizationPercent}%</td>
+                <td>{row.workforceLocalContentPercent}%</td>
+                <td>{row.targetPercent}%</td>
+                <td>{row.forecastSaudizationPercent}%</td>
+                <td>{row.expiringSaudiCount}</td>
+                <td>{row.neededSaudiForecast}</td>
+                <td>{Number(row.expectedPenalty || 0).toLocaleString()} SAR</td>
+                <td className="table-actions">
+                  {canManageLocalContent && row.notes ? <details><summary>Notes</summary><p>{row.notes}</p></details> : "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </TableCard>
+
+    <TableCard title="Saudi Internal Transfer Suggestions / مقترحات تدوير السعوديين بين المشاريع">
+      <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "520px" }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Score</th>
+              <th>Employee</th>
+              <th>Profession</th>
+              <th>From Project</th>
+              <th>To Project</th>
+              <th>Open Request</th>
+              <th>Contract Ends In</th>
+              <th>Salary</th>
+              <th>Reason</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {localContentDashboard.transferSuggestions.length === 0 ? (
+              <tr><td colSpan="10" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No transfer suggestions yet. Add Saudi employees with contract end dates and project targets.</td></tr>
+            ) : localContentDashboard.transferSuggestions.map((item, index) => (
+              <tr key={`${item.employee_id}-${item.target_project}-${index}`}>
+                <td><Badge value={`${item.match_score}%`} /></td>
+                <td>{item.employee_name}<br /><small>{item.employee_no}</small></td>
+                <td>{item.profession}</td>
+                <td>{item.source_project}</td>
+                <td>{item.target_project}</td>
+                <td>{item.request_no}</td>
+                <td>{item.days_to_contract_end ?? "-"} days</td>
+                <td>{Number(item.salary || 0).toLocaleString()} SAR</td>
+                <td style={{ maxWidth: 320, whiteSpace: "normal" }}>{item.reason}</td>
+                <td className="table-actions">
+                  {canManageLocalContent ? <button className="save-btn" onClick={() => applySaudiTransferSuggestion(item)}>Prepare Transfer</button> : "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </TableCard>
+
+    <TableCard title="Project Targets Setup">
+      <table>
+        <thead><tr><th>Project</th><th>Target %</th><th>Monthly Invoice</th><th>Penalty %</th><th>Notes</th><th>Actions</th></tr></thead>
+        <tbody>
+          {localContentProjectTargets.length === 0 ? (
+            <tr><td colSpan="6" style={{ textAlign: "center", color: "#64748b", padding: "20px" }}>No project targets saved. Default target is used for all projects.</td></tr>
+          ) : localContentProjectTargets.map((item) => (
+            <tr key={item.id}>
+              <td>{item.project_name}</td>
+              <td>{item.target_percent}%</td>
+              <td>{Number(item.monthly_invoice_amount || 0).toLocaleString()} SAR</td>
+              <td>{item.penalty_percent || 0}%</td>
+              <td>{item.notes || "-"}</td>
+              <td className="table-actions">
+                {canManageLocalContent && <button onClick={() => editLocalContentProjectTarget(item)}>Edit</button>}
+                {canManageLocalContent && <button onClick={() => deleteLocalContentProjectTarget(item.id)}>Delete</button>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableCard>
+  </>
+)}
+
+
 {activePage === "Workforce Marketplace" && (
   <>
     <div className="dashboard-grid">
@@ -21107,6 +21729,7 @@ onClick={() => setActiveReport("activityLog")}>
                   <Input type="date" placeholder="Iqama Expiry Date" value={employeeForm.iqama_expiry_date} onChange={(v) => updateForm(setEmployeeForm, "iqama_expiry_date", v)} />
                   <Input type="date" placeholder="Insurance Policy End Date" value={employeeForm.insurance_policy_end_date} onChange={(v) => updateForm(setEmployeeForm, "insurance_policy_end_date", v)} />
                   <Input type="number" placeholder="Annual Medical Insurance" value={employeeForm.annual_medical_insurance} onChange={(v) => updateForm(setEmployeeForm, "annual_medical_insurance", v)} />
+                  <Input type="number" placeholder="Monthly Salary" value={employeeForm.salary} onChange={(v) => updateForm(setEmployeeForm, "salary", v)} />
                   <Select value={employeeForm.nationality} onChange={(v) => updateForm(setEmployeeForm, "nationality", v)} placeholder="Nationality" searchable options={countries.map((c) => c.nationality ? `${c.nationality} (${c.name})` : c.name)} />
                   <Select value={employeeForm.gender} onChange={(v) => updateForm(setEmployeeForm, "gender", v)} placeholder="Gender" options={GENDERS} />
                   <Select value={employeeForm.profession} onChange={(v) => updateForm(setEmployeeForm, "profession", v)} placeholder="Profession" searchable options={professions.map((p) => p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar)} />
@@ -21148,6 +21771,7 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Nationality</th>
                     <th>Gender</th>
                     <th>Project</th>
+                    <th>Salary</th>
                     <th>Joining</th>
                     <th>Contract End</th>
                     <th>Days Remaining</th>
@@ -21170,6 +21794,7 @@ onClick={() => setActiveReport("activityLog")}>
                         <td>{item.nationality || "-"}</td>
                         <td><Badge value={item.gender || "-"} /></td>
                         <td>{item.project_name || "-"}</td>
+                        <td>{Number(item.salary || item.monthly_salary || 0).toLocaleString()} SAR</td>
                         <td>{item.joining_date || "-"}</td>
                         <td>{item.contract_end_date || "-"}</td>
                         <td>{(() => {
