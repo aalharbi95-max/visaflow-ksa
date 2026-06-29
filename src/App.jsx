@@ -1064,6 +1064,39 @@ function withCompany(payload = {}) {
   };
 }
 
+
+function getCurrentActorFields(prefix = "updated") {
+  const actorName =
+    currentUser?.name ||
+    currentUser?.full_name ||
+    currentUser?.email ||
+    "System";
+
+  const actorEmail = currentUser?.email || "";
+  const actorRole = currentRole || currentUser?.role || "";
+
+  return {
+    [`${prefix}_by_name`]: actorName,
+    [`${prefix}_by_email`]: actorEmail,
+    [`${prefix}_by_role`]: actorRole,
+  };
+}
+
+function withCreateActor(payload = {}) {
+  return {
+    ...payload,
+    ...getCurrentActorFields("created"),
+    ...getCurrentActorFields("updated"),
+  };
+}
+
+function withUpdateActor(payload = {}) {
+  return {
+    ...payload,
+    ...getCurrentActorFields("updated"),
+  };
+}
+
 const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 const [loginLoading, setLoginLoading] = useState(false);
 const [rememberMe, setRememberMe] = useState(true);
@@ -1639,7 +1672,7 @@ status: "Open"
 };
 const {error}=await supabase
 .from("visa_authorizations")
-.insert([withCompany(payload)]);
+.insert([withCompany(withCreateActor(payload))]);
 
 if(error){
 alert(error.message);
@@ -1675,11 +1708,11 @@ async function cancelAuthorization(id) {
 
   const { error } = await supabase
     .from("visa_authorizations")
-    .update({
+    .update(withUpdateActor({
       status: "Cancelled",
       cancellation_no: cancellationNo,
       cancelled_at: cancellationDate,
-    })
+    }))
     .eq("id", id);
 
   if (error) {
@@ -1895,8 +1928,8 @@ const extraVisaRequests = visaInventoryLines.filter((line) => {
   };
 
   const result = allocationEditingId
-    ? await supabase.from("visa_allocations").update(payload).eq("id", allocationEditingId)
-    : await supabase.from("visa_allocations").insert([withCompany(payload)]);
+    ? await supabase.from("visa_allocations").update(withUpdateActor(payload)).eq("id", allocationEditingId)
+    : await supabase.from("visa_allocations").insert([withCompany(withCreateActor(payload))]);
 
   if (result.error) {
     alert(result.error.message);
@@ -1990,12 +2023,12 @@ async function saveSelectedAllocations() {
   }
 
   const payload = rows.map(({ line, qty }) =>
-    withCompany({
+    withCompany(withCreateActor({
       request_no: allocationForm.request_no,
       visa_no: line.visa_no,
       visa_batch_line_id: line.legacy ? null : line.id,
       allocated_qty: qty,
-    })
+    }))
   );
 
   const { error } = await supabase.from("visa_allocations").insert(payload);
@@ -4474,8 +4507,8 @@ const executiveDashboard = useMemo(() => {
     Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
 
     const result = requestEditingId
-      ? await supabase.from("requests").update(payload).eq("id", requestEditingId).select().single()
-      : await supabase.from("requests").insert([withCompany(payload)]).select().single();
+      ? await supabase.from("requests").update(withUpdateActor(payload)).eq("id", requestEditingId).select().single()
+      : await supabase.from("requests").insert([withCompany(withCreateActor(payload))]).select().single();
 
     if (result.error) return alert(result.error.message);
 
@@ -4493,7 +4526,7 @@ const executiveDashboard = useMemo(() => {
     if (deleteResult.error) return alert(`request_lines delete: ${deleteResult.error.message}`);
 
     const linePayload = linesToSave.map((line, index) =>
-      withCompany({
+      withCompany(withCreateActor({
         request_id: savedRequest.id,
         request_no: savedRequest.request_no,
         line_no: index + 1,
@@ -4505,7 +4538,7 @@ const executiveDashboard = useMemo(() => {
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_required === "No Interview" ? "N/A" : line.interview_type || "Online",
         notes: line.notes || "",
-      })
+      }))
     );
 
     const lineResult = await supabase.from("request_lines").insert(linePayload);
@@ -4527,7 +4560,7 @@ const executiveDashboard = useMemo(() => {
     if (!canApproveRequest) return alert("You do not have permission to approve requests.");
     const { error } = await supabase
       .from("requests")
-      .update({ approval_status: "Approved by Recruitment", request_status: "Approved", updated_at: new Date().toISOString() })
+      .update(withUpdateActor({ approval_status: "Approved by Recruitment", request_status: "Approved", updated_at: new Date().toISOString() }))
       .eq("id", item.id);
     if (error) return alert(error.message);
     await addAudit(item.id, "Approved", "Final approval by Recruitment Department");
@@ -4539,12 +4572,12 @@ const executiveDashboard = useMemo(() => {
     const reason = window.prompt("Rejection reason:") || "Rejected by Recruitment";
     const { error } = await supabase
       .from("requests")
-      .update({
+      .update(withUpdateActor({
         approval_status: "Rejected by Recruitment",
         request_status: "Rejected",
         notes: `${item.notes || ""}\nRejection: ${reason}`,
         updated_at: new Date().toISOString(),
-      })
+      }))
       .eq("id", item.id);
     if (error) return alert(error.message);
     await addAudit(item.id, "Rejected", reason);
@@ -5960,7 +5993,7 @@ async function deleteAgreement(id) {
 
         const { error } = await supabase
           .from("candidates")
-          .update(payload)
+          .update(withUpdateActor(payload))
           .eq("id", item.id)
           .eq("company_id", currentCompanyId);
 
@@ -6000,10 +6033,10 @@ async function deleteAgreement(id) {
         if (requiredQty > 0) {
           await supabase
             .from("requests")
-            .update({
+            .update(withUpdateActor({
               status: Number(count || 0) >= requiredQty ? "Completed" : "Under Recruitment",
               updated_at: now,
-            })
+            }))
             .eq("request_no", requestNo)
             .eq("company_id", currentCompanyId);
         }
@@ -6195,14 +6228,14 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
     const result = candidateEditingId
       ? await supabase
           .from("candidates")
-          .update(payload)
+          .update(withUpdateActor(payload))
           .eq("id", candidateEditingId)
           .eq("company_id", currentCompanyId)
           .select("id")
           .single()
       : await supabase
           .from("candidates")
-          .insert([withCompany(payload)])
+          .insert([withCompany(withCreateActor(payload))])
           .select("id")
           .single();
 
@@ -6311,19 +6344,19 @@ const requestRemaining =
 if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   await supabase
     .from("requests")
-    .update({
+    .update(withUpdateActor({
       status: "Completed",
       updated_at: new Date().toISOString(),
-    })
+    }))
     .eq("request_no", candidateForm.request_no)
     .eq("company_id", currentCompanyId);
 } else {
   await supabase
     .from("requests")
-    .update({
+    .update(withUpdateActor({
       status: "Under Recruitment",
       updated_at: new Date().toISOString(),
-    })
+    }))
     .eq("request_no", candidateForm.request_no)
     .eq("company_id", currentCompanyId);
 }
@@ -6779,7 +6812,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         : null;
 
       payloads.push(
-        withCompany({
+        withCompany(withCreateActor({
           candidate_name: candidateName,
           request_line_id: null,
           profession: rowProfession,
@@ -6807,7 +6840,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           ai_reasoning: technicalScores?.ai_reasoning || "",
           final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
-        })
+        }))
       );
 
       candidateTechnicalImportMeta.push(
@@ -7090,7 +7123,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         : null;
 
       payloads.push(
-        withCompany({
+        withCompany(withCreateActor({
           candidate_name: candidateName,
           request_line_id: matchedLine.id || null,
           profession: matchedLine.profession || "",
@@ -7118,7 +7151,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           ai_reasoning: technicalScores?.ai_reasoning || "",
           final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
-        })
+        }))
       );
 
       candidateTechnicalImportMeta.push(
@@ -7169,12 +7202,12 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     await supabase
       .from("requests")
-      .update({
+      .update(withUpdateActor({
         remaining: newRemaining,
         remaining_qty: newRemaining,
         status: newRemaining === 0 ? "Visa Process" : "Under Recruitment",
         updated_at: new Date().toISOString(),
-      })
+      }))
       .eq("request_no", requestNo)
       .eq("company_id", currentCompanyId);
 
@@ -7252,10 +7285,10 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
   await supabase
     .from("candidates")
-    .update({
+    .update(withUpdateActor({
       status: candidateStatus,
       updated_at: new Date().toISOString(),
-    })
+    }))
     .eq("id", interviewForm.candidate_id);
 
   loadInterviews();
@@ -7589,7 +7622,7 @@ async function convertCandidateToEmployee(candidate) {
 
   await supabase
     .from("candidates")
-    .update({ status: "Joined", updated_at: new Date().toISOString() })
+    .update(withUpdateActor({ status: "Joined", updated_at: new Date().toISOString() }))
     .eq("id", candidate.id)
     .eq("company_id", currentCompanyId);
 
@@ -8119,7 +8152,7 @@ async function saveMobilization() {
 
   await supabase
     .from("candidates")
-    .update({
+    .update(withUpdateActor({
       status: candidateStatus,
       medical_status: payload.medical_status === "Fit" ? "Passed" : payload.medical_status === "Unfit" ? "Failed" : "Pending",
       medical_date: payload.medical_date,
@@ -8127,7 +8160,7 @@ async function saveMobilization() {
       flight_date: payload.flight_date,
       arrival_date: payload.arrival_date,
       updated_at: new Date().toISOString(),
-    })
+    }))
     .eq("id", payload.candidate_id);
 
   alert(mobilizationEditingId ? "Mobilization updated successfully" : "Mobilization saved successfully");
@@ -8171,23 +8204,23 @@ async function createVisaFromRequest(item) {
 
   const { error } = await supabase
     .from("visa_allocations")
-    .insert([withCompany({
+    .insert([withCompany(withCreateActor({
       request_no: item.request_no,
       visa_no: matchedLine.visa_no,
       visa_batch_line_id: matchedLine.legacy ? null : matchedLine.id,
       allocated_qty: neededQty,
-    })]);
+    }))]);
 
   if (error) return alert(error.message);
 
   await supabase
     .from("requests")
-    .update({
+    .update(withUpdateActor({
       status: "Visa Process",
       visa_no: matchedLine.visa_no,
       allocated_visa_qty: neededQty,
       updated_at: new Date().toISOString(),
-    })
+    }))
     .eq("id", item.id);
 
   alert(`Visa allocated successfully. Remaining visa line balance: ${getVisaLineRemainingQty(matchedLine) - neededQty}`);
@@ -11445,12 +11478,12 @@ async function sendOfferEmail() {
 
     await supabase
       .from("candidates")
-      .update({
+      .update(withUpdateActor({
         offer_status: "Sent",
         contract_status: "Sent",
         status: offerCandidate.status === "Interview Passed" ? "Selected" : offerCandidate.status,
         updated_at: new Date().toISOString(),
-      })
+      }))
       .eq("id", offerCandidate.id);
 
     await loadCandidates();
