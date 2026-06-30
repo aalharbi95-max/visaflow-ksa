@@ -860,3 +860,32 @@ main.vf-login-shell,
     width: 100%;
   }
 }
+/* Force VisaFlow KSA official logo on launch/login page */
+.vf-brand {
+  display: block !important;
+}
+
+.vf-brand > * {
+  display: none !important;
+}
+
+.vf-brand::before {
+  content: "";
+  display: block;
+  width: 290px;
+  height: 145px;
+  background: rgba(255, 255, 255, 0.96) url("/visaflow-logo.png") center / contain no-repeat;
+  border-radius: 22px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.25);
+}
+
+.vf-login-logo {
+  width: 160px !important;
+  height: 90px !important;
+  background: url("/visaflow-logo.png") center / contain no-repeat !important;
+  border-radius: 18px !important;
+}
+
+.vf-login-logo > * {
+  display: none !important;
+}

@@ -16387,18 +16387,19 @@ if (!currentUser) {
 
         <div className="vf-left-content">
           <header className="vf-brand-row">
-            <div className="vf-symbol vf-symbol-large" aria-hidden="true">
-              <span className="vf-globe" />
-              <span className="vf-plane">✈</span>
-              <span className="vf-vmark">V</span>
-            </div>
-
-            <div>
-              <div className="vf-brand-title">
-                VISA <span>FLOW</span>
-              </div>
-              <div className="vf-brand-subtitle">MANPOWER. MOBILIZED. MANAGED.</div>
-            </div>
+            <img
+              src="/visaflow-logo.png"
+              alt="VisaFlow KSA"
+              style={{
+                width: "280px",
+                maxWidth: "100%",
+                height: "auto",
+                display: "block",
+                borderRadius: "24px",
+                boxShadow: "0 24px 70px rgba(0, 0, 0, 0.22)",
+                background: "rgba(255, 255, 255, 0.96)",
+              }}
+            />
           </header>
 
           <div className="vf-platform-badge">
@@ -16486,11 +16487,18 @@ if (!currentUser) {
 
         <div className="vf-login-card">
           <div className="vf-login-logo">
-            <div className="vf-symbol vf-symbol-small" aria-hidden="true">
-              <span className="vf-globe" />
-              <span className="vf-plane">✈</span>
-              <span className="vf-vmark">V</span>
-            </div>
+            <img
+              src="/visaflow-logo.png"
+              alt="VisaFlow KSA"
+              style={{
+                width: "150px",
+                maxWidth: "100%",
+                height: "auto",
+                display: "block",
+                margin: "0 auto",
+                borderRadius: "16px",
+              }}
+            />
           </div>
 
           <h2>Welcome Back!</h2>
@@ -16638,11 +16646,18 @@ if (!currentUser) {
         <section className="vf-login-right" style={{ width: "100%" }}>
           <div className="vf-login-card" style={{ maxWidth: "680px" }}>
             <div className="vf-login-logo">
-              <div className="vf-symbol vf-symbol-small" aria-hidden="true">
-                <span className="vf-globe" />
-                <span className="vf-plane">✈</span>
-                <span className="vf-vmark">V</span>
-              </div>
+              <img
+                src="/visaflow-logo.png"
+                alt="VisaFlow KSA"
+                style={{
+                  width: "150px",
+                  maxWidth: "100%",
+                  height: "auto",
+                  display: "block",
+                  margin: "0 auto",
+                  borderRadius: "16px",
+                }}
+              />
             </div>
             <h2>Choose Client Workspace</h2>
             <p className="vf-login-subtitle">Select the company workspace you want to manage for {currentUser?.agency_name || "your agency"}.</p>
