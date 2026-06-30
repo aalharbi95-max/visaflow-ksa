@@ -23411,7 +23411,31 @@ onClick={() => setActiveReport("activityLog")}>
     </table>
   </TableCard>
 )}
-{activePage === "Master Data" && (
+{activePage === "Master Data" && (() => {
+  const masterCountries = Array.isArray(countries) && countries.length
+    ? countries
+    : COUNTRIES.map((item) => ({ id: item, name_en: item }));
+
+  const masterProfessions = Array.isArray(professions) && professions.length
+    ? professions
+    : PROFESSIONS.map((item) => ({ id: item, name_en: item }));
+
+  const masterAliases = Array.isArray(professionAliases) ? professionAliases : [];
+  const masterReviewRows = Array.isArray(professionImportReviewRows) ? professionImportReviewRows : [];
+  const allowMasterDataManage = currentRole === "Admin" || currentRole === "Platform Owner";
+
+  const safeGetProfessionLabel = (item) => {
+    if (!item) return "-";
+    if (typeof item === "string") return item;
+    return getProfessionLabel(item) || item.name_en || item.name_ar || item.profession_name || item.name || "-";
+  };
+
+  const safeClearProfessionForm = () => {
+    if (typeof resetProfessionForm === "function") resetProfessionForm();
+    else setProfessionForm({ name_ar: "", name_en: "", category: "" });
+  };
+
+  return (
   <>
     <div className="executive-hero" style={{ marginBottom: 18 }}>
       <div>
@@ -23425,30 +23449,30 @@ onClick={() => setActiveReport("activityLog")}>
     </div>
 
     <div className="dashboard-grid">
-      <Stat title="Countries" value={countries.length || COUNTRIES.length} />
-      <Stat title="Professions" value={professions.length || PROFESSIONS.length} />
-      <Stat title="Profession Aliases" value={professionAliases.length} />
-      <Stat title="Needs Review" value={professionImportReviewRows.length} className={professionImportReviewRows.length ? "warning" : "passed"} />
+      <Stat title="Countries" value={masterCountries.length} />
+      <Stat title="Professions" value={masterProfessions.length} />
+      <Stat title="Profession Aliases" value={masterAliases.length} />
+      <Stat title="Needs Review" value={masterReviewRows.length} className={masterReviewRows.length ? "warning" : "passed"} />
     </div>
 
-    {canManageMasterData && (
+    {allowMasterDataManage && (
       <FormCard title="Add New Profession / إضافة وظيفة جديدة">
         <div className="form-grid">
-          <Input placeholder="Arabic Profession Name / اسم الوظيفة بالعربي" value={professionForm.name_ar} onChange={(v) => updateForm(setProfessionForm, "name_ar", v)} />
-          <Input placeholder="English Profession Name" value={professionForm.name_en} onChange={(v) => updateForm(setProfessionForm, "name_en", v)} />
-          <Input placeholder="Category / التصنيف" value={professionForm.category} onChange={(v) => updateForm(setProfessionForm, "category", v)} />
+          <Input placeholder="Arabic Profession Name / اسم الوظيفة بالعربي" value={professionForm?.name_ar || ""} onChange={(v) => updateForm(setProfessionForm, "name_ar", v)} />
+          <Input placeholder="English Profession Name" value={professionForm?.name_en || ""} onChange={(v) => updateForm(setProfessionForm, "name_en", v)} />
+          <Input placeholder="Category / التصنيف" value={professionForm?.category || ""} onChange={(v) => updateForm(setProfessionForm, "category", v)} />
         </div>
         <div className="insight-list" style={{ marginTop: "12px" }}>
           <p>The system checks exact duplicates and similar job titles caused by hamza, taa marbuta, yaa/alif maqsurah, spelling or spacing differences.</p>
         </div>
         <div className="actions-line">
           <button className="save-btn" onClick={saveProfession}>Save Profession</button>
-          <button className="light-btn" onClick={resetProfessionForm}>Clear</button>
+          <button className="light-btn" onClick={safeClearProfessionForm}>Clear</button>
         </div>
       </FormCard>
     )}
 
-    {canManageMasterData && (
+    {allowMasterDataManage && (
       <FormCard title="Import Professions from Excel / رفع الوظائف من إكسل">
         <div className="actions-line" style={{ justifyContent: "space-between" }}>
           <div style={{ color: "#64748b", lineHeight: 1.7 }}>
@@ -23475,7 +23499,7 @@ onClick={() => setActiveReport("activityLog")}>
       </FormCard>
     )}
 
-    {professionImportReviewRows.length > 0 && (
+    {masterReviewRows.length > 0 && (
       <TableCard title="Review Similar Professions / مراجعة الوظائف المتشابهة">
         <table>
           <thead>
@@ -23487,15 +23511,15 @@ onClick={() => setActiveReport("activityLog")}>
             </tr>
           </thead>
           <tbody>
-            {professionImportReviewRows.map((row) => (
+            {masterReviewRows.map((row) => (
               <tr key={row.id}>
                 <td>{row.uploaded_name}<br /><small>Row {row.row_no}</small></td>
                 <td>{row.similar_label}</td>
                 <td><Badge value={`${row.similarity}%`} /></td>
                 <td className="table-actions">
-                  {canManageMasterData ? <button className="save-btn" onClick={() => mergeProfessionReviewRow(row)}>Merge / توحيد</button> : "-"}
-                  {canManageMasterData && <button onClick={() => addProfessionReviewRowAsNew(row)}>Add as New</button>}
-                  {canManageMasterData && <button onClick={() => ignoreProfessionReviewRow(row.id)}>Ignore</button>}
+                  {allowMasterDataManage ? <button className="save-btn" onClick={() => mergeProfessionReviewRow(row)}>Merge / توحيد</button> : "-"}
+                  {allowMasterDataManage && <button onClick={() => addProfessionReviewRowAsNew(row)}>Add as New</button>}
+                  {allowMasterDataManage && <button onClick={() => ignoreProfessionReviewRow(row.id)}>Ignore</button>}
                 </td>
               </tr>
             ))}
@@ -23512,9 +23536,9 @@ onClick={() => setActiveReport("activityLog")}>
           </tr>
         </thead>
         <tbody>
-          {(countries.length ? countries : COUNTRIES.map((item) => ({ id: item, name_en: item }))).map((item) => (
-            <tr key={item.id || item.name_en || item}>
-              <td>{item.name_en || item.name_ar || item.country_name || item}</td>
+          {masterCountries.map((item) => (
+            <tr key={item.id || item.name_en || item.name_ar || item.country_name || item}>
+              <td>{item.name_en || item.name_ar || item.country_name || item.name || item}</td>
             </tr>
           ))}
         </tbody>
@@ -23531,11 +23555,11 @@ onClick={() => setActiveReport("activityLog")}>
           </tr>
         </thead>
         <tbody>
-          {(professions.length ? professions : PROFESSIONS.map((item) => ({ id: item, name_en: item }))).map((item) => {
-            const aliases = professionAliases.filter((alias) => String(alias.profession_id || "") === String(item.id || ""));
+          {masterProfessions.map((item) => {
+            const aliases = masterAliases.filter((alias) => String(alias.profession_id || "") === String(item.id || ""));
             return (
-              <tr key={item.id || getProfessionLabel(item)}>
-                <td>{getProfessionLabel(item) || item.name_en || item.name_ar}</td>
+              <tr key={item.id || safeGetProfessionLabel(item)}>
+                <td>{safeGetProfessionLabel(item)}</td>
                 <td>{aliases.length ? aliases.map((alias) => alias.alias_name).join(", ") : "-"}</td>
                 <td>{item.candidate_intelligence_level || (item.technical_profile_required ? "Technical" : "None")}</td>
               </tr>
@@ -23545,8 +23569,8 @@ onClick={() => setActiveReport("activityLog")}>
       </table>
     </TableCard>
   </>
-)}
-
+  );
+})()}
 
         {offerModalOpen && (
           <div
