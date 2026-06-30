@@ -683,6 +683,56 @@ function getRowValue(row, keys) {
   return "";
 }
 
+function isArabicText(value) {
+  return /[\u0600-\u06FF]/.test(String(value || ""));
+}
+
+function isAnyValue(value) {
+  const normalizedValue = normalizeMatchText(value);
+  return !normalizedValue || ["any", "all", "na", "n a", "not specified", "غير محدد", "الكل", "جميع", "اي", "اى"].includes(normalizedValue);
+}
+
+function getTextSimilarity(left, right) {
+  const a = normalizeMatchText(left);
+  const b = normalizeMatchText(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.92;
+
+  const aTokens = getMatchTokens(a);
+  const bTokens = getMatchTokens(b);
+  const tokenUnion = new Set([...aTokens, ...bTokens]);
+  const sharedTokens = aTokens.filter((token) => bTokens.includes(token));
+  const tokenScore = tokenUnion.size ? sharedTokens.length / tokenUnion.size : 0;
+
+  const maxLength = Math.max(a.length, b.length, 1);
+  const distance = levenshteinDistance(a, b);
+  const editScore = Math.max(0, 1 - distance / maxLength);
+
+  return Math.max(tokenScore, editScore);
+}
+
+function levenshteinDistance(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  const matrix = Array.from({ length: left.length + 1 }, (_, i) => [i]);
+
+  for (let j = 1; j <= right.length; j += 1) matrix[0][j] = j;
+
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return matrix[left.length][right.length];
+}
+
 
 const REPLACEMENT_STATUSES = ["KSA Medical Failed", "Refused to Work", "Absconded"];
 
@@ -1057,6 +1107,10 @@ const [mobilizationForm, setMobilizationForm] = useState({
 });
 const [countries, setCountries] = useState([]);
 const [professions, setProfessions] = useState([]);
+const [professionAliases, setProfessionAliases] = useState([]);
+const [professionForm, setProfessionForm] = useState({ name_ar: "", name_en: "", category: "" });
+const [professionImportReviewRows, setProfessionImportReviewRows] = useState([]);
+const [professionImportSummary, setProfessionImportSummary] = useState("");
 const [selectedVisa,setSelectedVisa] = useState(null);
 const [selectedRequest, setSelectedRequest] = useState(null);
 const [showAuthForm,setShowAuthForm] = useState(false);
@@ -1515,6 +1569,7 @@ const canManageMarketplace = ["Admin", "Recruitment Manager", "Operations Manage
 const canExport = hasAction("export") || ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager", "Visa Team", "Viewer"].includes(currentRole);
 const canViewLocalContent = ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager"].includes(currentRole);
 const canManageLocalContent = ["Admin", "Operations Manager", "Recruitment Manager"].includes(currentRole);
+const canManageMasterData = currentRole === "Admin" || isPlatformOwner;
 
 const getUniqueAgencyWorkspaces = (rows = []) => {
   const map = new Map();
@@ -2149,6 +2204,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   const candidateExcelInputRef = useRef(null);
   const requestExcelInputRef = useRef(null);
   const employeeExcelInputRef = useRef(null);
+  const professionExcelInputRef = useRef(null);
   const [excelRequestNo, setExcelRequestNo] = useState("");
 
   function updateForm(setter, field, value) {
@@ -2159,22 +2215,284 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     return profession?.name_en ? `${profession.name_ar || ""} - ${profession.name_en}`.trim() : profession?.name_ar || profession?.name_en || "";
   }
 
+  function getProfessionSearchValues(profession = {}) {
+    if (!profession) return [];
+
+    const directValues = [
+      getProfessionLabel(profession),
+      profession.name_ar,
+      profession.name_en,
+      profession.profession_name,
+    ];
+
+    const aliases = professionAliases
+      .filter((alias) => String(alias.profession_id || "") === String(profession.id || ""))
+      .flatMap((alias) => [alias.alias_name, alias.normalized_alias]);
+
+    return Array.from(new Set([...directValues, ...aliases].map((item) => String(item || "").trim()).filter(Boolean)));
+  }
+
   function findProfessionRecord(value) {
     const target = normalizeMatchText(value);
     if (!target) return null;
 
     return professions.find((profession) => {
-      const label = normalizeMatchText(getProfessionLabel(profession));
-      const nameAr = normalizeMatchText(profession.name_ar);
-      const nameEn = normalizeMatchText(profession.name_en);
-      return (
-        label === target ||
-        nameAr === target ||
-        nameEn === target ||
-        (nameAr && target.includes(nameAr)) ||
-        (nameEn && target.includes(nameEn))
-      );
+      const values = getProfessionSearchValues(profession).map((item) => normalizeMatchText(item)).filter(Boolean);
+      return values.some((item) => item === target || item.includes(target) || target.includes(item));
     }) || null;
+  }
+
+  function isUnifiedProfessionMatch(left, right) {
+    const leftRecord = findProfessionRecord(left);
+    const rightRecord = findProfessionRecord(right);
+
+    if (leftRecord?.id && rightRecord?.id && String(leftRecord.id) === String(rightRecord.id)) {
+      return true;
+    }
+
+    if (leftRecord?.id) {
+      return getProfessionSearchValues(leftRecord).some((value) => isCompatibleText(value, right));
+    }
+
+    if (rightRecord?.id) {
+      return getProfessionSearchValues(rightRecord).some((value) => isCompatibleText(left, value));
+    }
+
+    return isCompatibleText(left, right);
+  }
+
+  function getProfessionPayloadFromName(inputValue = "") {
+    const value = String(inputValue || "").trim();
+    if (!value) return null;
+
+    return {
+      name_ar: isArabicText(value) ? value : "",
+      name_en: isArabicText(value) ? "" : value,
+    };
+  }
+
+  function getProfessionExactMatch(value) {
+    const target = normalizeMatchText(value);
+    if (!target) return null;
+
+    return professions.find((profession) =>
+      getProfessionSearchValues(profession).some((item) => normalizeMatchText(item) === target)
+    ) || null;
+  }
+
+  function getSimilarProfessions(value, threshold = 0.72) {
+    const target = String(value || "").trim();
+    if (!target) return [];
+
+    return professions
+      .map((profession) => {
+        const values = getProfessionSearchValues(profession);
+        const bestScore = values.reduce((max, item) => Math.max(max, getTextSimilarity(target, item)), 0);
+        return {
+          profession,
+          label: getProfessionLabel(profession),
+          score: Math.round(bestScore * 100),
+        };
+      })
+      .filter((item) => item.score >= threshold * 100)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }
+
+  async function insertProfessionAlias(professionId, aliasName) {
+    const cleanAlias = String(aliasName || "").trim();
+    if (!professionId || !cleanAlias) return { ok: false, skipped: true };
+
+    const existingAlias = professionAliases.find((alias) =>
+      String(alias.profession_id || "") === String(professionId || "") &&
+      normalizeMatchText(alias.alias_name || alias.normalized_alias) === normalizeMatchText(cleanAlias)
+    );
+
+    if (existingAlias) return { ok: true, skipped: true };
+
+    const { error } = await supabase.from("profession_aliases").insert([{
+      profession_id: professionId,
+      alias_name: cleanAlias,
+      normalized_alias: normalizeMatchText(cleanAlias),
+      created_at: new Date().toISOString(),
+    }]);
+
+    if (error) {
+      console.warn("profession_aliases insert:", error.message);
+      return { ok: false, error };
+    }
+
+    await loadProfessionAliases();
+    return { ok: true };
+  }
+
+  async function insertProfessionRecordFromName(name, extra = {}) {
+    const payload = getProfessionPayloadFromName(name);
+    if (!payload) return { ok: false, error: new Error("Profession name is required") };
+
+    const professionPayload = {
+      ...payload,
+      name_ar: extra.name_ar !== undefined ? String(extra.name_ar || "").trim() : payload.name_ar,
+      name_en: extra.name_en !== undefined ? String(extra.name_en || "").trim() : payload.name_en,
+    };
+    if (extra.category) professionPayload.profession_category = extra.category;
+
+    const { data, error } = await supabase
+      .from("professions")
+      .insert([professionPayload])
+      .select("*")
+      .single();
+
+    if (error) return { ok: false, error };
+    await loadProfessions();
+    return { ok: true, data };
+  }
+
+  function resetProfessionForm() {
+    setProfessionForm({ name_ar: "", name_en: "", category: "" });
+  }
+
+  async function saveProfession() {
+    if (!canManageMasterData) return alert("You do not have permission to manage master data.");
+
+    const name = String(professionForm.name_ar || professionForm.name_en || "").trim();
+    if (!name) return alert("Profession name is required.");
+
+    const exact = getProfessionExactMatch(name);
+    if (exact) {
+      resetProfessionForm();
+      return alert(`Skipped duplicate. This profession already exists: ${getProfessionLabel(exact)}`);
+    }
+
+    const similar = getSimilarProfessions(name, 0.82)[0];
+    if (similar) {
+      const shouldMerge = window.confirm(
+        `وجدنا وظيفة مشابهة:
+
+${name}
+≈
+${similar.label} (${similar.score}%)
+
+OK = توحيدها كاسم بديل
+Cancel = إضافتها كوظيفة مستقلة`
+      );
+
+      if (shouldMerge) {
+        const aliasResult = await insertProfessionAlias(similar.profession.id, name);
+        if (!aliasResult.ok) return alert(aliasResult.error?.message || "Profession alias table is not ready. Please run the SQL migration.");
+        resetProfessionForm();
+        return alert("Profession merged as an alias for the existing job title.");
+      }
+    }
+
+    const result = await insertProfessionRecordFromName(name, {
+      category: professionForm.category,
+      name_ar: professionForm.name_ar,
+      name_en: professionForm.name_en,
+    });
+    if (!result.ok) return alert(result.error?.message || "Profession save failed.");
+    resetProfessionForm();
+    alert("Profession added successfully.");
+  }
+
+  function downloadProfessionTemplate() {
+    const workbook = XLSX.utils.book_new();
+    const rows = [
+      { Profession: "Electrician", "Job Title": "", "المهنة": "" },
+      { Profession: "", "Job Title": "", "المهنة": "فني كهرباء" },
+      { Profession: "Cleaner", "Job Title": "", "المهنة": "عامل نظافة" },
+    ];
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "Professions");
+    XLSX.writeFile(workbook, "VisaFlow_Professions_Template.xlsx");
+  }
+
+  async function handleProfessionExcelUpload(event) {
+    if (!canManageMasterData) return alert("You do not have permission to import professions.");
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const seenInFile = new Set();
+      const toAdd = [];
+      const reviewRows = [];
+      let skipped = 0;
+
+      rows.forEach((row, index) => {
+        const name = getRowValue(row, [
+          "Profession",
+          "Job Title",
+          "profession",
+          "job_title",
+          "المهنة",
+          "الوظيفة",
+          "المسمى الوظيفي",
+        ]);
+
+        const normalizedName = normalizeMatchText(name);
+        if (!normalizedName || seenInFile.has(normalizedName)) {
+          skipped += 1;
+          return;
+        }
+        seenInFile.add(normalizedName);
+
+        const exact = getProfessionExactMatch(name);
+        if (exact) {
+          skipped += 1;
+          return;
+        }
+
+        const similar = getSimilarProfessions(name, 0.72)[0];
+        if (similar) {
+          reviewRows.push({
+            id: `${normalizedName}-${index}-${Date.now()}`,
+            uploaded_name: name,
+            similar_profession_id: similar.profession.id,
+            similar_label: similar.label,
+            similarity: similar.score,
+            row_no: index + 2,
+          });
+          return;
+        }
+
+        toAdd.push(name);
+      });
+
+      let added = 0;
+      for (const name of toAdd) {
+        const result = await insertProfessionRecordFromName(name);
+        if (result.ok) added += 1;
+        else console.warn("profession import add failed", name, result.error?.message);
+      }
+
+      await loadProfessions();
+      await loadProfessionAliases();
+      setProfessionImportReviewRows(reviewRows);
+      setProfessionImportSummary(`Added: ${added} | Skipped duplicates: ${skipped} | Needs review: ${reviewRows.length}`);
+
+      if (professionExcelInputRef.current) professionExcelInputRef.current.value = "";
+    } catch (error) {
+      alert(`Profession import failed: ${error.message}`);
+    }
+  }
+
+  async function mergeProfessionReviewRow(row) {
+    const result = await insertProfessionAlias(row.similar_profession_id, row.uploaded_name);
+    if (!result.ok) return alert(result.error?.message || "Profession alias table is not ready. Please run the SQL migration.");
+    setProfessionImportReviewRows((prev) => prev.filter((item) => item.id !== row.id));
+  }
+
+  async function addProfessionReviewRowAsNew(row) {
+    const result = await insertProfessionRecordFromName(row.uploaded_name);
+    if (!result.ok) return alert(result.error?.message || "Profession save failed.");
+    setProfessionImportReviewRows((prev) => prev.filter((item) => item.id !== row.id));
+  }
+
+  function ignoreProfessionReviewRow(rowId) {
+    setProfessionImportReviewRows((prev) => prev.filter((item) => item.id !== rowId));
   }
 
   function getCandidateProfessionIntelligence(professionValue) {
@@ -2386,6 +2704,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
       loadAgencyPenalties(),
        loadCountries(),
   loadProfessions(),
+  loadProfessionAliases(),
       loadEducationInstitutions(),
       loadCandidates(),
       loadCandidateTechnicalProfiles(),
@@ -2419,7 +2738,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   }
 
   async function loadTable(table, setter) {
-  const globalTables = ["countries", "professions"];
+  const globalTables = ["countries", "professions", "profession_aliases"];
   const agencyNameFields = {
     candidates: "agency",
     visa_authorizations: "agency",
@@ -2829,6 +3148,28 @@ const loadProfessions = async () => {
 console.log("professions total", allProfessions.length);
 setProfessions(allProfessions);
 };
+
+async function loadProfessionAliases() {
+  try {
+    const { data, error } = await supabase
+      .from("profession_aliases")
+      .select("*")
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("profession_aliases:", error.message);
+      setProfessionAliases([]);
+      return [];
+    }
+
+    setProfessionAliases(data || []);
+    return data || [];
+  } catch (error) {
+    console.warn("profession_aliases load failed", error?.message || error);
+    setProfessionAliases([]);
+    return [];
+  }
+}
   async function loadEducationInstitutions() {
     let query = supabase
       .from("education_institutions")
@@ -7993,62 +8334,127 @@ const localContentDashboard = useMemo(() => {
   const expectedPenalty = projectRows.reduce((sum, row) => sum + Number(row.expectedPenalty || 0), 0);
 
   const riskyProjects = projectRows.filter((row) => row.forecastGap > 0 || row.gap > 0);
-  const expiringSaudiEmployees = activeEmployees.filter((employee) => {
-    const days = getDaysUntil(employee.contract_end_date, today);
-    return isSaudiNationality(employee.nationality) && days !== null && days >= 0 && days <= expiringWindowDays;
+  const transferableEmployees = activeEmployees.filter((employee) => {
+    const status = String(employee.status || "Active").toLowerCase();
+    if (!["active", "available"].includes(status)) return false;
+    if (!employee.profession) return false;
+    return true;
   });
 
-  const transferSuggestions = expiringSaudiEmployees.flatMap((employee) => {
-    const sourceProject = employee.project_name || "Unassigned";
-    const openRequestMatches = requests.filter((request) => {
-      const status = request.status || "Open";
-      const project = request.project_name || request.project || "Unassigned";
-      if (!["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(status)) return false;
-      if (project === sourceProject) return false;
-      if (!isSaudiRequest(request) && request.nationality && !isSaudiNationality(request.nationality)) return false;
-      return isCompatibleText(employee.profession, request.profession);
-    });
+  const blockedCandidateStatuses = ["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "KSA Medical Failed", "Refused to Work", "Absconded"];
 
-    const projectMatches = riskyProjects
-      .filter((project) => project.projectName !== sourceProject)
-      .map((project) => ({ projectName: project.projectName, project, request: null }));
+  function getFilledDemandQty(request, line) {
+    const qtyField = Number(line?.quantity || request?.quantity || 0);
+    return candidates.filter((candidate) => {
+      if (String(candidate.request_no || "") !== String(request.request_no || "")) return false;
+      if (blockedCandidateStatuses.includes(candidate.status)) return false;
 
-    const requestMatches = openRequestMatches.map((request) => {
-      const projectName = request.project_name || request.project || "Unassigned";
-      const project = projectRows.find((row) => row.projectName === projectName) || null;
-      return { projectName, project, request };
-    });
+      if (line?.id && !String(line.id).includes("legacy")) {
+        return String(candidate.request_line_id || "") === String(line.id || "") || (
+          isUnifiedProfessionMatch(candidate.profession, line.profession) &&
+          (isAnyValue(line.nationality) || isAnyValue(candidate.nationality) || normalizeMatchText(candidate.nationality) === normalizeMatchText(line.nationality)) &&
+          (isAnyValue(line.gender) || isAnyValue(candidate.gender) || normalize(candidate.gender) === normalize(line.gender))
+        );
+      }
 
-    const combined = [...requestMatches, ...projectMatches]
-      .filter((match, index, arr) => arr.findIndex((item) => item.projectName === match.projectName) === index)
-      .slice(0, 3);
+      return (
+        isUnifiedProfessionMatch(candidate.profession, line?.profession || request.profession) &&
+        (isAnyValue(line?.nationality || request.nationality) || isAnyValue(candidate.nationality) || normalizeMatchText(candidate.nationality) === normalizeMatchText(line?.nationality || request.nationality)) &&
+        (isAnyValue(line?.gender || request.gender) || isAnyValue(candidate.gender) || normalize(candidate.gender) === normalize(line?.gender || request.gender))
+      );
+    }).slice(0, qtyField || undefined).length;
+  }
 
-    return combined.map((match) => {
-      const daysToEnd = getDaysUntil(employee.contract_end_date, today);
-      const professionScore = match.request ? 35 : 15;
-      const riskScore = match.project?.riskLevel === "High" ? 35 : match.project?.riskLevel === "Medium" ? 25 : 10;
-      const timingScore = daysToEnd !== null && daysToEnd <= 30 ? 20 : 12;
-      const salaryScore = getEmployeeMonthlySalary(employee) ? 10 : 5;
-      const score = Math.min(100, professionScore + riskScore + timingScore + salaryScore);
+  function employeeMatchesDemand(employee, demand) {
+    if (!isUnifiedProfessionMatch(employee.profession, demand.profession)) return false;
+
+    const demandNationality = demand.nationality;
+    const employeeNationality = employee.nationality;
+    const demandGender = demand.gender;
+    const employeeGender = employee.gender;
+
+    const nationalityMatches = isAnyValue(demandNationality) || isAnyValue(employeeNationality) ||
+      (isSaudiNationality(demandNationality) && isSaudiNationality(employeeNationality)) ||
+      normalizeMatchText(demandNationality) === normalizeMatchText(employeeNationality);
+
+    const genderMatches = isAnyValue(demandGender) || isAnyValue(employeeGender) || normalize(demandGender) === normalize(employeeGender);
+
+    return nationalityMatches && genderMatches;
+  }
+
+  const openDemandRows = requests.flatMap((request) => {
+    const status = request.status || "Open";
+    if (!["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(status)) return [];
+    if (["Rejected by Recruitment", "Cancelled"].includes(request.approval_status)) return [];
+
+    const projectName = request.project_name || request.project || "Unassigned";
+    const lines = getRequestLinesForRequest(request);
+
+    return lines.map((line) => {
+      const requiredQty = Number(line.quantity || request.quantity || 0);
+      const filledQty = getFilledDemandQty(request, line);
+      const remainingQty = Math.max(requiredQty - filledQty, 0);
       return {
-        employee_id: employee.id,
-        employee_no: employee.employee_no || "-",
-        employee_name: employee.employee_name || "-",
-        profession: employee.profession || "-",
-        source_project: sourceProject,
-        target_project: match.projectName,
-        target_city: match.project?.projectCity || match.request?.project_city || "",
-        target_location: match.project?.projectLocation || match.request?.project_location || "",
-        request_no: match.request?.request_no || "-",
-        days_to_contract_end: daysToEnd,
-        salary: getEmployeeMonthlySalary(employee),
-        match_score: score,
-        reason: match.request
-          ? `Open Saudi request ${match.request.request_no || ""} + project risk ${match.project?.riskLevel || "Medium"}`
-          : `Project forecast gap ${Number(match.project?.forecastGap || 0).toFixed(1)}%`,
+        request,
+        line,
+        projectName,
+        projectCity: request.project_city || "",
+        projectLocation: request.project_location || "",
+        profession: line.profession || request.profession || "",
+        nationality: line.nationality || request.nationality || "",
+        gender: line.gender || request.gender || "",
+        requiredQty,
+        filledQty,
+        remainingQty,
       };
-    });
-  }).sort((a, b) => b.match_score - a.match_score).slice(0, 20);
+    }).filter((demand) => demand.remainingQty > 0 && demand.profession);
+  });
+
+  const transferSuggestions = transferableEmployees.flatMap((employee) => {
+    const sourceProject = employee.project_name || "Unassigned";
+    const daysToEnd = getDaysUntil(employee.contract_end_date, today);
+
+    return openDemandRows
+      .filter((demand) => normalize(demand.projectName) !== normalize(sourceProject))
+      .filter((demand) => employeeMatchesDemand(employee, demand))
+      .slice(0, 5)
+      .map((demand) => {
+        const targetProject = projectRows.find((row) => normalize(row.projectName) === normalize(demand.projectName)) || null;
+        const isSaudi = isSaudiNationality(employee.nationality);
+        const timingScore = daysToEnd !== null && daysToEnd <= expiringWindowDays ? 20 : 8;
+        const cityScore = employee.project_city && demand.projectCity && normalize(employee.project_city) === normalize(demand.projectCity) ? 10 : 0;
+        const demandScore = Math.min(35, 20 + Math.min(demand.remainingQty, 15));
+        const professionScore = 35;
+        const score = Math.min(100, professionScore + demandScore + timingScore + cityScore);
+
+        return {
+          employee_id: employee.id,
+          employee_no: employee.employee_no || "-",
+          employee_name: employee.employee_name || "-",
+          employee_type: isSaudi ? "Saudi" : "Expat",
+          profession: employee.profession || "-",
+          nationality: employee.nationality || "-",
+          gender: employee.gender || "-",
+          source_project: sourceProject,
+          target_project: demand.projectName,
+          target_city: targetProject?.projectCity || demand.projectCity || "",
+          target_location: targetProject?.projectLocation || demand.projectLocation || "",
+          request_no: demand.request.request_no || "-",
+          demand_profession: demand.profession,
+          demand_nationality: demand.nationality || "Any",
+          demand_gender: demand.gender || "Any",
+          remaining_demand_qty: demand.remainingQty,
+          days_to_contract_end: daysToEnd,
+          salary: getEmployeeMonthlySalary(employee),
+          match_score: score,
+          reason: `Matching open demand ${demand.request.request_no || ""}: ${demand.profession}${demand.nationality ? ` / ${demand.nationality}` : ""}${demand.gender ? ` / ${demand.gender}` : ""}. Suggested for Operations review only.`,
+        };
+      });
+  })
+    .sort((a, b) => b.match_score - a.match_score)
+    .filter((item, index, arr) => arr.findIndex((x) => String(x.employee_id) === String(item.employee_id) && x.request_no === item.request_no) === index)
+    .slice(0, 30);
+
 
   const selectedProjects = localContentSelectedProject === "All"
     ? projectRows
@@ -8065,7 +8471,7 @@ const localContentDashboard = useMemo(() => {
     expectedPenalty,
     transferSuggestions,
   };
-}, [employees, requests, localContentSettings, localContentProjectTargets, localContentSelectedProject]);
+}, [employees, requests, requestLines, candidates, professions, professionAliases, localContentSettings, localContentProjectTargets, localContentSelectedProject]);
 
 function resetLocalContentProjectForm() {
   setLocalContentEditingProjectId(null);
@@ -8162,26 +8568,32 @@ async function deleteLocalContentProjectTarget(id) {
   await loadLocalContentProjectTargets();
 }
 
-async function applySaudiTransferSuggestion(suggestion) {
-  if (!canManageLocalContent) return alert("You do not have permission to transfer employees.");
+async function sendWorkforceTransferSuggestionToOperations(suggestion) {
+  if (!canManageLocalContent) return alert("You do not have permission to send workforce suggestions.");
   if (!suggestion?.employee_id || !suggestion?.target_project) return;
-  if (!window.confirm(`Transfer ${suggestion.employee_name} to ${suggestion.target_project}?`)) return;
+  if (!window.confirm(`Send ${suggestion.employee_name} to Operations review for ${suggestion.target_project}?`)) return;
 
-  const { error } = await supabase
-    .from("employees")
-    .update(withUpdateActor({
-      project_name: suggestion.target_project,
-      project_city: suggestion.target_city || "",
-      project_location: suggestion.target_location || "",
-      notes: `Transferred through Local Content Center from ${suggestion.source_project} to ${suggestion.target_project}. ${suggestion.reason}`,
-      updated_at: new Date().toISOString(),
-    }))
-    .eq("id", suggestion.employee_id)
-    .eq("company_id", currentCompanyId);
+  await triggerExternalNotification("WORKFORCE_REDEPLOYMENT_REVIEW", {
+    company_id: currentCompanyId,
+    title: "Workforce redeployment review",
+    message: `${suggestion.employee_name} (${suggestion.profession}) matches open demand ${suggestion.request_no} for ${suggestion.target_project}.`,
+    priority: suggestion.match_score >= 80 ? "High" : "Medium",
+    related_table: "employees",
+    related_id: String(suggestion.employee_id || ""),
+    employee_no: suggestion.employee_no,
+    employee_name: suggestion.employee_name,
+    employee_type: suggestion.employee_type,
+    profession: suggestion.profession,
+    nationality: suggestion.nationality,
+    gender: suggestion.gender,
+    source_project: suggestion.source_project,
+    target_project: suggestion.target_project,
+    request_no: suggestion.request_no,
+    remaining_demand_qty: suggestion.remaining_demand_qty,
+    recommendation: "Suggested for Operations review only. No automatic transfer was performed.",
+  });
 
-  if (error) return alert(error.message);
-  await loadEmployees();
-  alert("Employee transfer prepared.");
+  alert("Suggestion sent to Operations review. No employee data was changed.");
 }
 
 function downloadLocalContentExcel() {
@@ -19889,7 +20301,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <div>
         <p className="eyebrow">Compliance & Localization</p>
         <h1>Local Content & Saudization Center</h1>
-        <p>Company and project-level workforce localization estimator, risk forecast and Saudi transfer suggestions.</p>
+        <p>Company and project-level workforce localization estimator, risk forecast and workforce redeployment suggestions for Saudi and expat employees.</p>
       </div>
       <div className="hero-actions">
         <button onClick={downloadLocalContentExcel}>Export Local Content Excel</button>
@@ -19922,7 +20334,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <Input placeholder="Non-Saudi Labor Weight %" type="number" value={localContentSettingsForm.non_saudi_labor_weight} onChange={(v) => updateForm(setLocalContentSettingsForm, "non_saudi_labor_weight", v)} />
           <Input placeholder="Default Project Target %" type="number" value={localContentSettingsForm.default_target_percent} onChange={(v) => updateForm(setLocalContentSettingsForm, "default_target_percent", v)} />
           <Input placeholder="Forecast Days" type="number" value={localContentSettingsForm.forecast_days} onChange={(v) => updateForm(setLocalContentSettingsForm, "forecast_days", v)} />
-          <Input placeholder="Expiring Saudi Window Days" type="number" value={localContentSettingsForm.expiring_window_days} onChange={(v) => updateForm(setLocalContentSettingsForm, "expiring_window_days", v)} />
+          <Input placeholder="Redeployment Window Days" type="number" value={localContentSettingsForm.expiring_window_days} onChange={(v) => updateForm(setLocalContentSettingsForm, "expiring_window_days", v)} />
           <Input placeholder="Default Penalty %" type="number" value={localContentSettingsForm.default_monthly_penalty_percent} onChange={(v) => updateForm(setLocalContentSettingsForm, "default_monthly_penalty_percent", v)} />
         </div>
         <div className="actions-line">
@@ -20026,41 +20438,48 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       </div>
     </TableCard>
 
-    <TableCard title="Saudi Internal Transfer Suggestions / مقترحات تدوير السعوديين بين المشاريع">
+    <TableCard title="Workforce Redeployment Suggestions / مقترحات إعادة توزيع القوى العاملة">
+      <div className="insight-list" style={{ marginBottom: "12px" }}>
+        <p><b>Rule:</b> Suggestions are based on matching open demand only: profession + nationality/gender where required. Final transfer decision stays with Operations.</p>
+      </div>
       <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "520px" }}>
         <table>
           <thead>
             <tr>
               <th>Score</th>
               <th>Employee</th>
+              <th>Type</th>
               <th>Profession</th>
+              <th>Nationality</th>
+              <th>Gender</th>
               <th>From Project</th>
               <th>To Project</th>
-              <th>City</th>
               <th>Open Request</th>
+              <th>Remaining Demand</th>
               <th>Contract Ends In</th>
-              <th>Salary</th>
               <th>Reason</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
             {localContentDashboard.transferSuggestions.length === 0 ? (
-              <tr><td colSpan="11" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No transfer suggestions yet. Add Saudi employees with contract end dates and project targets.</td></tr>
+              <tr><td colSpan="13" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No workforce suggestions yet. Add open requests and employees with matching professions.</td></tr>
             ) : localContentDashboard.transferSuggestions.map((item, index) => (
-              <tr key={`${item.employee_id}-${item.target_project}-${index}`}>
+              <tr key={`${item.employee_id}-${item.target_project}-${item.request_no}-${index}`}>
                 <td><Badge value={`${item.match_score}%`} /></td>
                 <td>{item.employee_name}<br /><small>{item.employee_no}</small></td>
+                <td><Badge value={item.employee_type || "Employee"} /></td>
                 <td>{item.profession}</td>
+                <td>{item.nationality || "-"}</td>
+                <td>{item.gender || "-"}</td>
                 <td>{item.source_project}</td>
                 <td>{item.target_project}</td>
-                <td>{item.target_city || "-"}</td>
                 <td>{item.request_no}</td>
+                <td>{item.remaining_demand_qty || 0}</td>
                 <td>{item.days_to_contract_end ?? "-"} days</td>
-                <td>{Number(item.salary || 0).toLocaleString()} SAR</td>
-                <td style={{ maxWidth: 320, whiteSpace: "normal" }}>{item.reason}</td>
+                <td style={{ maxWidth: 360, whiteSpace: "normal" }}>{item.reason}</td>
                 <td className="table-actions">
-                  {canManageLocalContent ? <button className="save-btn" onClick={() => applySaudiTransferSuggestion(item)}>Prepare Transfer</button> : "-"}
+                  {canManageLocalContent ? <button className="save-btn" onClick={() => sendWorkforceTransferSuggestionToOperations(item)}>Send to Operations Review</button> : "-"}
                 </td>
               </tr>
             ))}
@@ -22994,10 +23413,96 @@ onClick={() => setActiveReport("activityLog")}>
 )}
 {activePage === "Master Data" && (
   <>
-    <div className="dashboard-grid">
-      <Stat title="Countries" value={COUNTRIES.length} />
-      <Stat title="Professions" value={PROFESSIONS.length} />
+    <div className="executive-hero" style={{ marginBottom: 18 }}>
+      <div>
+        <p className="eyebrow">Administration</p>
+        <h1>Master Data</h1>
+        <p>Manage countries, professions, Excel imports and similar job-title review before they affect requests, candidates and workforce matching.</p>
+      </div>
+      <div className="hero-actions">
+        <button onClick={loadAll}>Refresh</button>
+      </div>
     </div>
+
+    <div className="dashboard-grid">
+      <Stat title="Countries" value={countries.length || COUNTRIES.length} />
+      <Stat title="Professions" value={professions.length || PROFESSIONS.length} />
+      <Stat title="Profession Aliases" value={professionAliases.length} />
+      <Stat title="Needs Review" value={professionImportReviewRows.length} className={professionImportReviewRows.length ? "warning" : "passed"} />
+    </div>
+
+    {canManageMasterData && (
+      <FormCard title="Add New Profession / إضافة وظيفة جديدة">
+        <div className="form-grid">
+          <Input placeholder="Arabic Profession Name / اسم الوظيفة بالعربي" value={professionForm.name_ar} onChange={(v) => updateForm(setProfessionForm, "name_ar", v)} />
+          <Input placeholder="English Profession Name" value={professionForm.name_en} onChange={(v) => updateForm(setProfessionForm, "name_en", v)} />
+          <Input placeholder="Category / التصنيف" value={professionForm.category} onChange={(v) => updateForm(setProfessionForm, "category", v)} />
+        </div>
+        <div className="insight-list" style={{ marginTop: "12px" }}>
+          <p>The system checks exact duplicates and similar job titles caused by hamza, taa marbuta, yaa/alif maqsurah, spelling or spacing differences.</p>
+        </div>
+        <div className="actions-line">
+          <button className="save-btn" onClick={saveProfession}>Save Profession</button>
+          <button className="light-btn" onClick={resetProfessionForm}>Clear</button>
+        </div>
+      </FormCard>
+    )}
+
+    {canManageMasterData && (
+      <FormCard title="Import Professions from Excel / رفع الوظائف من إكسل">
+        <div className="actions-line" style={{ justifyContent: "space-between" }}>
+          <div style={{ color: "#64748b", lineHeight: 1.7 }}>
+            Accepted headers: <b>Profession</b>, <b>Job Title</b>, <b>المهنة</b>, <b>الوظيفة</b>, <b>المسمى الوظيفي</b>.
+            Exact duplicates are skipped. Similar titles are sent to review before unifying.
+          </div>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <button className="light-btn" onClick={downloadProfessionTemplate}>Download Template</button>
+            <button className="save-btn" onClick={() => professionExcelInputRef.current?.click()}>Upload Excel</button>
+            <input
+              ref={professionExcelInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              style={{ display: "none" }}
+              onChange={handleProfessionExcelUpload}
+            />
+          </div>
+        </div>
+        {professionImportSummary && (
+          <div style={{ marginTop: "12px", padding: "12px 14px", borderRadius: "14px", background: "#f8fafc", border: "1px solid #e2e8f0", fontWeight: 800 }}>
+            {professionImportSummary}
+          </div>
+        )}
+      </FormCard>
+    )}
+
+    {professionImportReviewRows.length > 0 && (
+      <TableCard title="Review Similar Professions / مراجعة الوظائف المتشابهة">
+        <table>
+          <thead>
+            <tr>
+              <th>Uploaded Job</th>
+              <th>Similar Existing Job</th>
+              <th>Similarity</th>
+              <th>Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            {professionImportReviewRows.map((row) => (
+              <tr key={row.id}>
+                <td>{row.uploaded_name}<br /><small>Row {row.row_no}</small></td>
+                <td>{row.similar_label}</td>
+                <td><Badge value={`${row.similarity}%`} /></td>
+                <td className="table-actions">
+                  {canManageMasterData ? <button className="save-btn" onClick={() => mergeProfessionReviewRow(row)}>Merge / توحيد</button> : "-"}
+                  {canManageMasterData && <button onClick={() => addProfessionReviewRowAsNew(row)}>Add as New</button>}
+                  {canManageMasterData && <button onClick={() => ignoreProfessionReviewRow(row.id)}>Ignore</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableCard>
+    )}
 
     <TableCard title="Countries">
       <table>
@@ -23007,28 +23512,35 @@ onClick={() => setActiveReport("activityLog")}>
           </tr>
         </thead>
         <tbody>
-          {COUNTRIES.map((item) => (
-            <tr key={item}>
-              <td>{item}</td>
+          {(countries.length ? countries : COUNTRIES.map((item) => ({ id: item, name_en: item }))).map((item) => (
+            <tr key={item.id || item.name_en || item}>
+              <td>{item.name_en || item.name_ar || item.country_name || item}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </TableCard>
 
-    <TableCard title="Professions">
+    <TableCard title="Professions / الوظائف">
       <table>
         <thead>
           <tr>
             <th>Profession</th>
+            <th>Aliases / أسماء موحدة</th>
+            <th>Candidate Intelligence</th>
           </tr>
         </thead>
         <tbody>
-          {PROFESSIONS.map((item) => (
-            <tr key={item}>
-              <td>{item}</td>
-            </tr>
-          ))}
+          {(professions.length ? professions : PROFESSIONS.map((item) => ({ id: item, name_en: item }))).map((item) => {
+            const aliases = professionAliases.filter((alias) => String(alias.profession_id || "") === String(item.id || ""));
+            return (
+              <tr key={item.id || getProfessionLabel(item)}>
+                <td>{getProfessionLabel(item) || item.name_en || item.name_ar}</td>
+                <td>{aliases.length ? aliases.map((alias) => alias.alias_name).join(", ") : "-"}</td>
+                <td>{item.candidate_intelligence_level || (item.technical_profile_required ? "Technical" : "None")}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </TableCard>
