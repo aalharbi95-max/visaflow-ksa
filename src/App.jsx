@@ -11271,20 +11271,6 @@ function getAICommanderIntent(question = "") {
     "غرامات",
   ];
 
-  const greetings = [
-    "كيف الحال",
-    "كيفك",
-    "شلونك",
-    "السلام عليكم",
-    "هلا",
-    "مرحبا",
-    "مرحباً",
-    "اهلا",
-    "أهلا",
-    "hi",
-    "hello",
-  ];
-
   const writingKeywords = [
     "وصف وظيفي",
     "job description",
@@ -11299,10 +11285,11 @@ function getAICommanderIntent(question = "") {
   ];
 
   if (!q) return "welcome";
-  if (greetings.some((keyword) => q.includes(keyword))) return "welcome";
   if (operationalKeywords.some((keyword) => q.includes(keyword))) return "operational";
   if (writingKeywords.some((keyword) => q.includes(keyword)) && !q.includes("req-")) return "writing";
-  return "welcome";
+
+  // Any non-empty question that is not clearly operational or writing should still go to the AI Edge Function.
+  return "chat";
 }
 
 async function callVisaFlowAIEdge(payload = {}) {
@@ -11325,6 +11312,20 @@ async function runAICommander(question = aiQuestion) {
   try {
     if (intent === "welcome") {
       setAiAnswer(buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
+      setAiLastRun(new Date().toLocaleString());
+      return;
+    }
+
+    if (intent === "chat") {
+      const aiText = await callVisaFlowAIEdge({
+        action: "chat",
+        question: finalQuestion,
+        language: aiCommanderLanguage,
+        mode: aiCommanderMode,
+        intent,
+      });
+
+      setAiAnswer(aiText || buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
       setAiLastRun(new Date().toLocaleString());
       return;
     }
@@ -11371,6 +11372,12 @@ async function runAICommander(question = aiQuestion) {
         aiCommanderLanguage === "English"
           ? `AI writing request failed through Edge Function: ${error.message}`
           : `تعذر تنفيذ طلب الكتابة عبر Edge Function: ${error.message}`
+      );
+    } else if (intent === "chat") {
+      setAiAnswer(
+        aiCommanderLanguage === "English"
+          ? `AI chat request failed through Edge Function: ${error.message}`
+          : `تعذر تنفيذ سؤال العميل عبر Edge Function: ${error.message}`
       );
     } else {
       setAiAnswer(buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
