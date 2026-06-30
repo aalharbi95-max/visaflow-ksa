@@ -11033,6 +11033,70 @@ function buildLocalAICommanderAnswer(question = "", mode = aiCommanderMode, lang
   ].filter(Boolean).join("\n");
 }
 
+
+function getAICommanderCompanyName() {
+  if (isCurrentPlatformUser) return "VisaFlow Platform Administration";
+
+  return (
+    companies.find((company) => String(company.id || "") === String(currentCompanyId || ""))?.name ||
+    companies[0]?.name ||
+    currentUser?.active_company_name ||
+    currentUser?.company_name ||
+    activeAgencyCompanyName ||
+    "Current Client Company"
+  );
+}
+
+function buildAICommanderTenantContext() {
+  const companyName = getAICommanderCompanyName();
+  const userName = currentUser?.name || currentUser?.full_name || currentUser?.email || "Current User";
+
+  return {
+    app: "VisaFlow KSA",
+    authenticated_user: {
+      name: userName,
+      email: currentUser?.email || "",
+      role: currentRole || currentUser?.role || "Viewer",
+      user_id: currentUser?.id || null,
+    },
+    tenant: {
+      company_id: currentCompanyId || null,
+      company_name: companyName,
+      is_platform_scope: Boolean(isCurrentPlatformUser),
+      active_agency_company_id: activeAgencyCompanyId || null,
+      active_agency_company_name: activeAgencyCompanyName || "",
+    },
+    data_boundary: isCurrentPlatformUser
+      ? "Platform administration account. Use only platform-level data already provided in the request payload."
+      : `Single-client account. Use only data for company_id ${currentCompanyId || "UNKNOWN"} (${companyName}). Do not answer using, infer, expose, compare, or fabricate data from any other company.`,
+  };
+}
+
+function buildAICommanderGuardedQuestion(question = "") {
+  const tenantContext = buildAICommanderTenantContext();
+  const user = tenantContext.authenticated_user;
+  const tenant = tenantContext.tenant;
+
+  return [
+    "You are VisaFlow AI Commander inside a multi-tenant SaaS recruitment platform.",
+    "Always answer according to the authenticated user's tenant context below.",
+    "Never mention or expose another company's data. Never assume the user is Adel, Abu Ibrahim, or the platform owner unless the provided context says so.",
+    "If the user asks who they are or which company they use, answer from the authenticated_user and tenant fields below.",
+    "If the user asks for operational data, use only the snapshot/localDecisionContext supplied for the current tenant. If data is not supplied, say that the data is not available in the current context.",
+    "",
+    "Authenticated User Context:",
+    `- User name: ${user.name || "Current User"}`,
+    `- User email: ${user.email || ""}`,
+    `- User role: ${user.role || "Viewer"}`,
+    `- Company name: ${tenant.company_name || "Current Client Company"}`,
+    `- Company ID: ${tenant.company_id || "Not available"}`,
+    `- Data boundary: ${tenantContext.data_boundary}`,
+    "",
+    "User Question:",
+    question || "اعطني لقطة تنفيذية سريعة عن حالة VisaFlow الحالية.",
+  ].join("\n");
+}
+
 function buildAICommanderWelcomeAnswer(question = "", mode = aiCommanderMode, language = aiCommanderLanguage) {
   const isArabic = language !== "English";
   const context = buildAICommanderDecisionContext();
@@ -11041,7 +11105,7 @@ function buildAICommanderWelcomeAnswer(question = "", mode = aiCommanderMode, la
   if (!isArabic) {
     return [
       "🧠 VisaFlow AI Commander",
-      "I am ready as your recruitment operations commander, not a general chatbot.",
+      `I am ready as your recruitment operations commander for ${getAICommanderCompanyName()}.`,
       "",
       "📌 Executive Quick Snapshot",
       `- Current risk level: ${riskLabel} / AI Risk Score: ${context.riskScore}`,
@@ -11061,9 +11125,14 @@ function buildAICommanderWelcomeAnswer(question = "", mode = aiCommanderMode, la
     ].join("\n");
   }
 
+  const userName = currentUser?.name || currentUser?.full_name || currentUser?.email || "";
+  const companyName = getAICommanderCompanyName();
+
   return [
     "🧠 VisaFlow AI Commander",
-    "مرحبًا يا أبو إبراهيم، أنا جاهز كمدير عمليات ذكي داخل VisaFlow، مو كشات عام.",
+    userName
+      ? `مرحبًا ${userName}، أنا جاهز كمدير عمليات ذكي داخل VisaFlow لشركة ${companyName}.`
+      : `مرحبًا، أنا جاهز كمدير عمليات ذكي داخل VisaFlow لشركة ${companyName}.`,
     "",
     "📌 لقطة تنفيذية سريعة",
     `- مستوى المخاطر الحالي: ${riskLabel} / AI Risk Score: ${context.riskScore}`,
@@ -11308,6 +11377,8 @@ async function runAICommander(question = aiQuestion) {
   setAiAnswer("");
 
   const intent = getAICommanderIntent(finalQuestion);
+  const tenantContext = buildAICommanderTenantContext();
+  const guardedQuestion = buildAICommanderGuardedQuestion(finalQuestion);
 
   try {
     if (intent === "welcome") {
@@ -11316,46 +11387,44 @@ async function runAICommander(question = aiQuestion) {
       return;
     }
 
-    if (intent === "chat") {
-      const aiText = await callVisaFlowAIEdge({
-        action: "chat",
-        question: finalQuestion,
-        language: aiCommanderLanguage,
-        mode: aiCommanderMode,
-        intent,
-      });
-
-      setAiAnswer(aiText || buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
-      setAiLastRun(new Date().toLocaleString());
-      return;
-    }
-
-    if (intent === "writing") {
-      const aiText = await callVisaFlowAIEdge({
-        action: "chat",
-        question: finalQuestion,
-        language: aiCommanderLanguage,
-        mode: aiCommanderMode,
-        intent,
-      });
-
-      setAiAnswer(aiText || buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
-      setAiLastRun(new Date().toLocaleString());
-      return;
-    }
-
     const lockedReport = buildLockedVIEReport(finalQuestion);
     const snapshot = buildAICommanderSnapshot();
     const localDecisionContext = buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage);
 
+    if (intent === "chat" || intent === "writing") {
+      const aiText = await callVisaFlowAIEdge({
+        action: "chat",
+        question: guardedQuestion,
+        originalQuestion: finalQuestion,
+        language: aiCommanderLanguage,
+        mode: aiCommanderMode,
+        intent,
+        userContext: tenantContext,
+        snapshot: {
+          tenantContext,
+          ...(snapshot || {}),
+        },
+        localDecisionContext,
+      });
+
+      setAiAnswer(aiText || buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
+      setAiLastRun(new Date().toLocaleString());
+      return;
+    }
+
     const aiText = await callVisaFlowAIEdge({
       action: "commander",
-      question: finalQuestion || "اعطني لقطة تنفيذية سريعة عن حالة VisaFlow الحالية.",
+      question: guardedQuestion,
+      originalQuestion: finalQuestion || "اعطني لقطة تنفيذية سريعة عن حالة VisaFlow الحالية.",
       mode: aiCommanderMode,
       language: aiCommanderLanguage,
       intent,
+      userContext: tenantContext,
       lockedReport,
-      snapshot,
+      snapshot: {
+        tenantContext,
+        ...(snapshot || {}),
+      },
       localDecisionContext,
     });
 
