@@ -224,7 +224,7 @@ const ACTION_PERMISSIONS = {
 
   "Visa Team": ["view", "createVisa", "editVisa", "deleteVisa", "export"],
 
-  Agency: ["view", "createCandidate", "editCandidate"],
+  Agency: ["view", "createCandidate", "editCandidate", "scheduleInterview"],
 
   Viewer: ["view", "export"],
 };
@@ -238,7 +238,7 @@ const ROLE_DESCRIPTIONS = {
   "Recruitment Manager": "Recruitment leader. Manages recruitment requests, approvals, candidates, interviews, recruiter performance, agency performance and agency approvals.",
   "Recruitment Officer": "Recruiter. Handles daily recruitment operations: requests, candidates, interviews and candidate follow-up.",
   "Visa Team": "Visa coordinator. Manages visa inventory, allocation, authorizations and cancellation register.",
-  Agency: "External office user. Uses Office Portal only for candidate updates and mobilization tracking.",
+  Agency: "External office user. Uses Office Portal for candidate updates, mobilization tracking and interview scheduling only. Interview results remain controlled by the company.",
   Viewer: "Read-only user for dashboards, notifications and reports.",
 };
 
@@ -1564,6 +1564,8 @@ const canViewCandidateIntelligence = Boolean(currentUser) && currentRole !== "Ag
 const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePortal;
 const canViewEmailAdministration = currentRole !== "Agency";
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
+const canManageInterviewResults = canManageInterviews;
+const canScheduleInterviews = canManageInterviewResults || currentRole === "Agency" || hasAction("scheduleInterview");
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageEmployees = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
@@ -2747,6 +2749,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     agency_agreements: "agency_name",
     agency_scores: "agency_name",
     agency_penalties: "agency_name",
+    interviews: "agency",
   };
   const agencyBlockedTables = [
     "requests",
@@ -6371,6 +6374,56 @@ async function deleteAgreement(id) {
     return candidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
   }
 
+  function getCandidateInterview(candidate) {
+    if (!candidate) return null;
+
+    return interviews
+      .filter((item) =>
+        String(item.candidate_id || "") === String(candidate.id || "") ||
+        (
+          String(item.passport_no || "") &&
+          String(item.passport_no || "") === String(candidate.passport_no || "") &&
+          String(item.request_no || "") === String(candidate.request_no || "")
+        ) ||
+        (
+          normalize(item.candidate_name) === normalize(candidate.candidate_name) &&
+          String(item.request_no || "") === String(candidate.request_no || "")
+        )
+      )
+      .sort((a, b) => new Date(b.updated_at || b.created_at || b.interview_date || 0) - new Date(a.updated_at || a.created_at || a.interview_date || 0))[0] || null;
+  }
+
+  function openInterviewScheduleFromCandidate(item) {
+    if (!canScheduleInterviews) return alert("You do not have permission to schedule interviews.");
+
+    const existingInterview = getCandidateInterview(item);
+    const finalDecisionAlreadyMade = ["Passed", "Rejected"].includes(existingInterview?.status || "");
+
+    if (currentRole === "Agency" && finalDecisionAlreadyMade) {
+      return alert("Interview result was already finalized by the company. Agency cannot change it.");
+    }
+
+    setInterviewForm({
+      ...emptyInterview,
+      ...(existingInterview || {}),
+      candidate_id: item.id,
+      candidate_name: item.candidate_name || existingInterview?.candidate_name || "",
+      profession: item.profession || existingInterview?.profession || "",
+      nationality: item.nationality || existingInterview?.nationality || "",
+      agency: item.agency || existingInterview?.agency || currentUser?.agency_name || "",
+      project: item.project || existingInterview?.project || "",
+      request_no: item.request_no || existingInterview?.request_no || "",
+      passport_no: item.passport_no || existingInterview?.passport_no || "",
+      mobile: item.mobile || existingInterview?.mobile || "",
+      status: existingInterview?.status || "Waiting",
+      score: existingInterview?.score || "",
+    });
+
+    setInterviewEditingId(existingInterview?.id || null);
+    setActivePage(currentRole === "Agency" ? "Office Portal" : "Interviews");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function toggleOfficeCandidateSelection(candidateId) {
     const id = String(candidateId || "");
     if (!id) return;
@@ -7722,67 +7775,128 @@ ${errors.slice(0, 10).join("\n")}` : "")
   function editInterview(item) {
     setInterviewEditingId(item.id);
     setInterviewForm({
+      candidate_id: item.candidate_id || "",
       candidate_name: item.candidate_name || "",
       profession: item.profession || "",
       nationality: item.nationality || "",
       agency: item.agency || "",
       project: item.project || "",
+      request_no: item.request_no || "",
       interview_date: item.interview_date || "",
       interview_type: item.interview_type || "",
       interviewers: item.interviewers || "",
       score: item.score || "",
       notes: item.notes || "",
+      passport_no: item.passport_no || "",
+      mobile: item.mobile || "",
       status: item.status || "Waiting",
     });
-    setActivePage("Interviews");
+    setActivePage(currentRole === "Agency" ? "Office Portal" : "Interviews");
   }
 
  async function saveInterview() {
-  if (!canManageInterviews) return alert("You do not have permission to manage interviews.");
+  if (!canScheduleInterviews) return alert("You do not have permission to schedule interviews.");
   if (!interviewForm.candidate_id) {
     return alert("Candidate is required.");
   }
 
+  const existingInterview = interviewEditingId
+    ? interviews.find((item) => String(item.id || "") === String(interviewEditingId || ""))
+    : null;
+
+  if (currentRole === "Agency" && ["Passed", "Rejected"].includes(existingInterview?.status || "")) {
+    return alert("Interview result was already finalized by the company. Agency cannot change it.");
+  }
+
+  const now = new Date().toISOString();
+  const isAgencyScheduling = currentRole === "Agency";
+  const safeStatus = isAgencyScheduling ? (existingInterview?.status || "Waiting") : (interviewForm.status || "Waiting");
+  const safeScore = isAgencyScheduling ? (existingInterview?.score || "") : (interviewForm.score || "");
+  const agencyScheduleNote = isAgencyScheduling
+    ? `[Agency Schedule] ${currentUser?.agency_name || currentUser?.name || "Agency"} scheduled/proposed interview on ${new Date().toLocaleString()}`
+    : "";
+
   const interviewPayload = {
-    ...interviewForm,
-    notes: interviewForm.notes || "",
+    candidate_id: interviewForm.candidate_id,
+    candidate_name: interviewForm.candidate_name || "",
+    profession: interviewForm.profession || "",
+    nationality: interviewForm.nationality || "",
+    agency: interviewForm.agency || currentUser?.agency_name || "",
+    project: interviewForm.project || "",
+    request_no: interviewForm.request_no || "",
+    passport_no: interviewForm.passport_no || "",
+    mobile: interviewForm.mobile || "",
     interview_date: interviewForm.interview_date || null,
-    updated_at: new Date().toISOString(),
+    interview_type: interviewForm.interview_type || "",
+    interviewers: interviewForm.interviewers || "",
+    score: safeScore,
+    status: safeStatus,
+    notes: [interviewForm.notes || "", agencyScheduleNote].filter(Boolean).join("\n"),
+    updated_at: now,
   };
 
   const result = interviewEditingId
-    ? await supabase.from("interviews").update(interviewPayload).eq("id", interviewEditingId)
+    ? await supabase
+        .from("interviews")
+        .update(interviewPayload)
+        .eq("id", interviewEditingId)
+        .eq("company_id", currentCompanyId)
     : await supabase.from("interviews").insert([withCompany(interviewPayload)]);
 
   if (result.error) return alert(result.error.message);
 
   let candidateStatus = "Interview Scheduled";
 
-  if (interviewForm.status === "Passed") {
-    candidateStatus = "Interview Passed";
-  } else if (interviewForm.status === "Rejected") {
-    candidateStatus = "Interview Failed";
-  } else if (interviewForm.status === "Re-Interview") {
-    candidateStatus = "Re-Interview";
+  if (!isAgencyScheduling) {
+    if (safeStatus === "Passed") {
+      candidateStatus = "Interview Passed";
+    } else if (safeStatus === "Rejected") {
+      candidateStatus = "Interview Failed";
+    } else if (safeStatus === "Re-Interview") {
+      candidateStatus = "Re-Interview";
+    }
   }
 
   await supabase
     .from("candidates")
     .update(withUpdateActor({
       status: candidateStatus,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     }))
-    .eq("id", interviewForm.candidate_id);
+    .eq("id", interviewForm.candidate_id)
+    .eq("company_id", currentCompanyId);
 
-  loadInterviews();
-  loadCandidates();
+  if (isAgencyScheduling) {
+    await triggerExternalNotification("AGENCY_INTERVIEW_SCHEDULED", {
+      company_id: currentCompanyId,
+      agency_id: currentUser?.agency_id || null,
+      agency_name: currentUser?.agency_name || interviewForm.agency || "Agency",
+      title: "Interview Scheduled by Agency",
+      message: `${interviewForm.candidate_name || "Candidate"} interview was scheduled/proposed by ${currentUser?.agency_name || "agency"}. Company decision is still pending.`,
+      priority: "Medium",
+      related_table: "interviews",
+      related_id: String(interviewEditingId || interviewForm.candidate_id || ""),
+      data: {
+        candidate_name: interviewForm.candidate_name,
+        request_no: interviewForm.request_no,
+        interview_date: interviewForm.interview_date,
+        interview_type: interviewForm.interview_type,
+        company_decision_required: true,
+      },
+    });
+  }
+
+  await loadInterviews();
+  await loadCandidates();
+  await loadNotifications();
   resetInterviewForm();
+  alert(isAgencyScheduling ? "Interview schedule saved. Company will approve or reject the result." : "Interview saved successfully.");
 }
 
   async function deleteInterview(id) {
-    if (!canManageInterviews) return alert("You do not have permission to delete interviews.");
+    if (!canManageInterviewResults) return alert("You do not have permission to delete interviews.");
     if (!window.confirm("Delete this interview?")) return;
-    const { error } = await supabase.from("interviews").delete().eq("id", id);
+    const { error } = await supabase.from("interviews").delete().eq("id", id).eq("company_id", currentCompanyId);
     if (error) return alert(error.message);
     loadInterviews();
   }
@@ -19741,28 +19855,8 @@ Save Authorization
                   Edit
                 </button>
 
-                {canManageInterviews && (
-                  <button
-                    onClick={() => {
-                      setInterviewForm({
-                        ...emptyInterview,
-                        candidate_id: item.id,
-                        candidate_name: item.candidate_name || "",
-                        profession: item.profession || "",
-                        nationality: item.nationality || "",
-                        agency: item.agency || "",
-                        project: item.project || "",
-                        request_no: item.request_no || "",
-                        passport_no: item.passport_no || "",
-                        mobile: item.mobile || "",
-                        status: "Waiting",
-                      });
-
-                      setInterviewEditingId(null);
-                      setActivePage("Interviews");
-                      window.scrollTo({ top: 0, behavior: "smooth" });
-                    }}
-                  >
+                {canScheduleInterviews && (
+                  <button onClick={() => openInterviewScheduleFromCandidate(item)}>
                     Interview
                   </button>
                 )}
@@ -19804,7 +19898,7 @@ Save Authorization
 
         {activePage === "Interviews" && (
           <>
-            {canManageInterviews && (
+            {canScheduleInterviews && (
             <FormCard title={interviewEditingId ? "Edit Interview" : "Add Interview"}>
               <div className="form-grid">
                 <Input placeholder="Candidate Name" value={interviewForm.candidate_name} onChange={(v) => updateForm(setInterviewForm, "candidate_name", v)} />
@@ -19865,7 +19959,7 @@ Save Authorization
                         <td>{item.score}</td>
                         <td><Badge value={item.status} /></td>
                         <td className="table-actions">
-                          {canManageInterviews ? (
+                          {canManageInterviewResults ? (
                             <>
                               <button onClick={() => editInterview(item)}>Edit</button>
                               {item.status === "Passed" && interviewCandidate && (
@@ -20348,6 +20442,29 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </FormCard>
     )}
 
+    {currentRole === "Agency" && canScheduleInterviews && interviewForm.candidate_id && (
+      <FormCard title="Schedule Interview / تحديد موعد المقابلة">
+        <p style={{ marginTop: 0, color: "#64748b", fontSize: "13px" }}>
+          Agency can schedule or propose the interview date. The company remains responsible for Passed / Rejected / Re-Interview decision.
+        </p>
+        <div className="form-grid">
+          <Input placeholder="Candidate Name" value={interviewForm.candidate_name} onChange={(v) => updateForm(setInterviewForm, "candidate_name", v)} />
+          <Input placeholder="Request No" value={interviewForm.request_no} onChange={(v) => updateForm(setInterviewForm, "request_no", v)} />
+          <Input placeholder="Profession" value={interviewForm.profession} onChange={(v) => updateForm(setInterviewForm, "profession", v)} />
+          <Input placeholder="Passport No" value={interviewForm.passport_no} onChange={(v) => updateForm(setInterviewForm, "passport_no", v)} />
+          <Input type="date" placeholder="Interview Date" value={interviewForm.interview_date} onChange={(v) => updateForm(setInterviewForm, "interview_date", v)} />
+          <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person"]} />
+          <Input placeholder="Interviewers / Meeting Link" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
+          <Input placeholder="Company Decision" value="Pending Company Decision" onChange={() => {}} />
+        </div>
+        <textarea rows="3" placeholder="Agency Notes / Candidate Availability" value={interviewForm.notes} onChange={(e) => updateForm(setInterviewForm, "notes", e.target.value)} />
+        <div className="actions-line">
+          <button className="save-btn" onClick={saveInterview}>{interviewEditingId ? "Update Interview Schedule" : "Save Interview Schedule"}</button>
+          <button className="light-btn" onClick={resetInterviewForm}>Cancel</button>
+        </div>
+      </FormCard>
+    )}
+
     {canManageOfficePortal && (
       <FormCard title={`Bulk Candidate Update (${officeSelectedCandidateIds.length} selected)`}>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: "13px" }}>
@@ -20412,7 +20529,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       </FormCard>
     )}
 
-    <TableCard title="Office Candidates Tracking - Select Multiple for Bulk Update">
+    <TableCard title="Office Candidates Tracking - Candidate Updates & Interview Scheduling">
       <table>
         <thead>
           <tr>
@@ -20433,6 +20550,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Nationality</th>
             <th>Office</th>
             <th>Stage</th>
+            <th>Interview</th>
             <th>Mobile</th>
             <th>Remarks</th>
             <th>Timeline</th>
@@ -20459,6 +20577,17 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <td>{item.nationality || "-"}</td>
               <td>{item.agency || "-"}</td>
               <td><Badge value={item.status} /></td>
+              <td>
+                {(() => {
+                  const candidateInterview = getCandidateInterview(item);
+                  return candidateInterview ? (
+                    <div>
+                      <div>{candidateInterview.interview_date || "Date not set"}</div>
+                      <Badge value={candidateInterview.status || "Waiting"} />
+                    </div>
+                  ) : "-";
+                })()}
+              </td>
               <td>{item.mobile || "-"}</td>
               <td>{item.notes || "-"}</td>
               <td>
@@ -20492,9 +20621,16 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 </td>
               <td className="table-actions">
   {canManageOfficePortal ? (
-    <button onClick={() => editCandidate(item)}>
-      Edit
-    </button>
+    <>
+      <button onClick={() => editCandidate(item)}>
+        Edit
+      </button>
+      {currentRole === "Agency" && canScheduleInterviews && (
+        <button onClick={() => openInterviewScheduleFromCandidate(item)}>
+          {getCandidateInterview(item) ? "Update Interview Date" : "Schedule Interview"}
+        </button>
+      )}
+    </>
   ) : (
     "-"
   )}
