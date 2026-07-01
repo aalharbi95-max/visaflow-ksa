@@ -316,6 +316,9 @@ const OFFICE_STATUSES = [
   "Cancelled",
 ];
 const INTERVIEW_STATUSES = ["Passed", "Rejected", "Waiting", "Re-Interview"];
+const INTERVIEW_SCHEDULE_PENDING_STATUS = "Schedule Pending Approval";
+const INTERVIEW_SCHEDULE_REJECTED_STATUS = "Schedule Rejected";
+const INTERVIEW_SCHEDULE_APPROVED_STATUS = "Waiting";
 const MEDICAL_STATUSES = ["Pending", "Fit", "Unfit", "Re-Medical"];
 const MOBILIZATION_VISA_STATUSES = ["Pending", "Stamped", "Ready"];
 const MOBILIZATION_STATUSES = ["New", "Medical", "Visa Ready", "Ticket Issued", "Arrived KSA", "Joined", "Cancelled"];
@@ -1566,6 +1569,7 @@ const canViewEmailAdministration = currentRole !== "Agency";
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageInterviewResults = canManageInterviews;
 const canScheduleInterviews = canManageInterviewResults || currentRole === "Agency" || hasAction("scheduleInterview");
+const canApproveInterviewSchedule = canManageInterviewResults;
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageEmployees = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
@@ -6393,11 +6397,44 @@ async function deleteAgreement(id) {
       .sort((a, b) => new Date(b.updated_at || b.created_at || b.interview_date || 0) - new Date(a.updated_at || a.created_at || a.interview_date || 0))[0] || null;
   }
 
+  function isInterviewSchedulePending(item) {
+    return String(item?.status || "") === INTERVIEW_SCHEDULE_PENDING_STATUS;
+  }
+
+  function isInterviewScheduleRejected(item) {
+    return String(item?.status || "") === INTERVIEW_SCHEDULE_REJECTED_STATUS;
+  }
+
+  function isInterviewFinalResult(item) {
+    return ["Passed", "Rejected"].includes(String(item?.status || ""));
+  }
+
+  function getInterviewMeetingLink(item) {
+    const value = String(item?.interviewers || "").trim();
+    if (!value) return "";
+    const match = value.match(/https?:\/\/[^\s]+/i);
+    return match ? match[0] : value;
+  }
+
+  function renderInterviewMeetingLink(item) {
+    const link = getInterviewMeetingLink(item);
+
+    if (!link) return "-";
+    if (isInterviewSchedulePending(item)) return "Pending company approval";
+    if (isInterviewScheduleRejected(item)) return "Schedule rejected";
+
+    if (/^https?:\/\//i.test(link)) {
+      return <a href={link} target="_blank" rel="noreferrer">Open Interview Link</a>;
+    }
+
+    return link;
+  }
+
   function openInterviewScheduleFromCandidate(item) {
     if (!canScheduleInterviews) return alert("You do not have permission to schedule interviews.");
 
     const existingInterview = getCandidateInterview(item);
-    const finalDecisionAlreadyMade = ["Passed", "Rejected"].includes(existingInterview?.status || "");
+    const finalDecisionAlreadyMade = isInterviewFinalResult(existingInterview);
 
     if (currentRole === "Agency" && finalDecisionAlreadyMade) {
       return alert("Interview result was already finalized by the company. Agency cannot change it.");
@@ -7804,16 +7841,16 @@ ${errors.slice(0, 10).join("\n")}` : "")
     ? interviews.find((item) => String(item.id || "") === String(interviewEditingId || ""))
     : null;
 
-  if (currentRole === "Agency" && ["Passed", "Rejected"].includes(existingInterview?.status || "")) {
+  if (currentRole === "Agency" && isInterviewFinalResult(existingInterview)) {
     return alert("Interview result was already finalized by the company. Agency cannot change it.");
   }
 
   const now = new Date().toISOString();
   const isAgencyScheduling = currentRole === "Agency";
-  const safeStatus = isAgencyScheduling ? (existingInterview?.status || "Waiting") : (interviewForm.status || "Waiting");
+  const safeStatus = isAgencyScheduling ? INTERVIEW_SCHEDULE_PENDING_STATUS : (interviewForm.status || INTERVIEW_SCHEDULE_APPROVED_STATUS);
   const safeScore = isAgencyScheduling ? (existingInterview?.score || "") : (interviewForm.score || "");
   const agencyScheduleNote = isAgencyScheduling
-    ? `[Agency Schedule] ${currentUser?.agency_name || currentUser?.name || "Agency"} scheduled/proposed interview on ${new Date().toLocaleString()}`
+    ? `[Agency Schedule Pending Approval] ${currentUser?.agency_name || currentUser?.name || "Agency"} scheduled/proposed interview on ${new Date().toLocaleString()}`
     : "";
 
   const interviewPayload = {
@@ -7845,7 +7882,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
   if (result.error) return alert(result.error.message);
 
-  let candidateStatus = "Interview Scheduled";
+  let candidateStatus = isAgencyScheduling ? "Interview Pending Approval" : "Interview Scheduled";
 
   if (!isAgencyScheduling) {
     if (safeStatus === "Passed") {
@@ -7854,6 +7891,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
       candidateStatus = "Interview Failed";
     } else if (safeStatus === "Re-Interview") {
       candidateStatus = "Re-Interview";
+    } else if (safeStatus === INTERVIEW_SCHEDULE_PENDING_STATUS) {
+      candidateStatus = "Interview Pending Approval";
     }
   }
 
@@ -7890,7 +7929,111 @@ ${errors.slice(0, 10).join("\n")}` : "")
   await loadCandidates();
   await loadNotifications();
   resetInterviewForm();
-  alert(isAgencyScheduling ? "Interview schedule saved. Company will approve or reject the result." : "Interview saved successfully.");
+  alert(isAgencyScheduling ? "Interview schedule submitted. Company approval is required before the interview link becomes active." : "Interview saved successfully.");
+}
+
+async function approveInterviewSchedule(item) {
+  if (!canApproveInterviewSchedule) return alert("You do not have permission to approve interview schedules.");
+  if (!item?.id) return;
+
+  const now = new Date().toISOString();
+  const meetingLink = getInterviewMeetingLink(item);
+  const approvalNote = `[Company Approved Schedule] ${currentUser?.name || currentUser?.email || "Company"} approved interview schedule on ${new Date().toLocaleString()}`;
+
+  const { error } = await supabase
+    .from("interviews")
+    .update(withUpdateActor({
+      status: INTERVIEW_SCHEDULE_APPROVED_STATUS,
+      score: "",
+      notes: [item.notes || "", approvalNote].filter(Boolean).join("\n"),
+      updated_at: now,
+    }))
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+
+  if (item.candidate_id) {
+    await supabase
+      .from("candidates")
+      .update(withUpdateActor({ status: "Interview Scheduled", updated_at: now }))
+      .eq("id", item.candidate_id)
+      .eq("company_id", currentCompanyId);
+  }
+
+  await triggerExternalNotification("INTERVIEW_SCHEDULE_APPROVED", {
+    company_id: currentCompanyId,
+    agency_name: item.agency || "Agency",
+    title: "Interview Schedule Approved",
+    message: `${item.candidate_name || "Candidate"} interview schedule was approved by the company.${meetingLink ? " Meeting link is now available." : ""}`,
+    priority: "Medium",
+    related_table: "interviews",
+    related_id: String(item.id || ""),
+    data: {
+      candidate_name: item.candidate_name,
+      request_no: item.request_no,
+      interview_date: item.interview_date,
+      interview_type: item.interview_type,
+      meeting_link: meetingLink,
+    },
+  });
+
+  await loadInterviews();
+  await loadCandidates();
+  await loadNotifications();
+  alert("Interview schedule approved. The meeting link is now available.");
+}
+
+async function rejectInterviewSchedule(item) {
+  if (!canApproveInterviewSchedule) return alert("You do not have permission to reject interview schedules.");
+  if (!item?.id) return;
+
+  const reason = window.prompt("Rejection reason / سبب رفض الموعد:") || "Schedule rejected by company";
+  const now = new Date().toISOString();
+  const rejectionNote = `[Company Rejected Schedule] ${reason} - ${currentUser?.name || currentUser?.email || "Company"} on ${new Date().toLocaleString()}`;
+
+  const { error } = await supabase
+    .from("interviews")
+    .update(withUpdateActor({
+      status: INTERVIEW_SCHEDULE_REJECTED_STATUS,
+      score: "",
+      notes: [item.notes || "", rejectionNote].filter(Boolean).join("\n"),
+      updated_at: now,
+    }))
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+
+  if (item.candidate_id) {
+    await supabase
+      .from("candidates")
+      .update(withUpdateActor({ status: "Candidate Submitted", updated_at: now }))
+      .eq("id", item.candidate_id)
+      .eq("company_id", currentCompanyId);
+  }
+
+  await triggerExternalNotification("INTERVIEW_SCHEDULE_REJECTED", {
+    company_id: currentCompanyId,
+    agency_name: item.agency || "Agency",
+    title: "Interview Schedule Rejected",
+    message: `${item.candidate_name || "Candidate"} interview schedule was rejected by the company. Reason: ${reason}`,
+    priority: "Medium",
+    related_table: "interviews",
+    related_id: String(item.id || ""),
+    data: {
+      candidate_name: item.candidate_name,
+      request_no: item.request_no,
+      interview_date: item.interview_date,
+      interview_type: item.interview_type,
+      rejection_reason: reason,
+    },
+  });
+
+  await loadInterviews();
+  await loadCandidates();
+  await loadNotifications();
+  alert("Interview schedule rejected. Agency can submit a new schedule.");
 }
 
   async function deleteInterview(id) {
@@ -19926,6 +20069,7 @@ Save Authorization
                     <th>Profession</th>
                     <th>Agency</th>
                     <th>Type</th>
+                    <th>Meeting Link</th>
                     <th>Score</th>
                     <th>Status</th>
                     <th>Actions</th>
@@ -19956,12 +20100,21 @@ Save Authorization
                         <td>{item.profession}</td>
                         <td>{item.agency}</td>
                         <td>{item.interview_type}</td>
+                        <td>{renderInterviewMeetingLink(item)}</td>
                         <td>{item.score}</td>
                         <td><Badge value={item.status} /></td>
                         <td className="table-actions">
                           {canManageInterviewResults ? (
                             <>
-                              <button onClick={() => editInterview(item)}>Edit</button>
+                              {isInterviewSchedulePending(item) && (
+                                <>
+                                  <button onClick={() => approveInterviewSchedule(item)}>Approve Schedule</button>
+                                  <button className="danger" onClick={() => rejectInterviewSchedule(item)}>Reject Schedule</button>
+                                </>
+                              )}
+                              <button onClick={() => editInterview(item)}>
+                                {isInterviewSchedulePending(item) ? "Edit / Result Later" : "Edit Result"}
+                              </button>
                               {item.status === "Passed" && interviewCandidate && (
                                 <button onClick={() => openOfferEmail(interviewCandidate)}>Send Offer</button>
                               )}
@@ -20454,8 +20607,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <Input placeholder="Passport No" value={interviewForm.passport_no} onChange={(v) => updateForm(setInterviewForm, "passport_no", v)} />
           <Input type="date" placeholder="Interview Date" value={interviewForm.interview_date} onChange={(v) => updateForm(setInterviewForm, "interview_date", v)} />
           <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person"]} />
-          <Input placeholder="Interviewers / Meeting Link" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
-          <Input placeholder="Company Decision" value="Pending Company Decision" onChange={() => {}} />
+          <Input placeholder="Meeting Link / Interview Location" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
+          <Input placeholder="Company Schedule Approval" value="Pending Company Approval" onChange={() => {}} />
         </div>
         <textarea rows="3" placeholder="Agency Notes / Candidate Availability" value={interviewForm.notes} onChange={(e) => updateForm(setInterviewForm, "notes", e.target.value)} />
         <div className="actions-line">
@@ -20584,6 +20737,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     <div>
                       <div>{candidateInterview.interview_date || "Date not set"}</div>
                       <Badge value={candidateInterview.status || "Waiting"} />
+                      <div style={{ marginTop: 6, fontSize: "12px" }}>{renderInterviewMeetingLink(candidateInterview)}</div>
                     </div>
                   ) : "-";
                 })()}
