@@ -333,6 +333,7 @@ const emptyRequest = {
   recruitment_type: "Foreign",
   request_type: "",
   project_name: "",
+  project_no: "",
   project_city: "",
   project_location: "",
   department: "",
@@ -4929,6 +4930,7 @@ const executiveDashboard = useMemo(() => {
       recruitment_type: item.recruitment_type || (isSaudiNationality(item.nationality) ? "Saudi" : "Foreign"),
       request_type: item.request_type || "",
       project_name: item.project_name || "",
+      project_no: item.project_no || "",
       project_city: item.project_city || "",
       project_location: item.project_location || "",
       department: item.department || "",
@@ -7942,12 +7944,12 @@ async function approveInterviewSchedule(item) {
 
   const { error } = await supabase
     .from("interviews")
-    .update(withUpdateActor({
+    .update({
       status: INTERVIEW_SCHEDULE_APPROVED_STATUS,
       score: "",
       notes: [item.notes || "", approvalNote].filter(Boolean).join("\n"),
       updated_at: now,
-    }))
+    })
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
 
@@ -7994,12 +7996,12 @@ async function rejectInterviewSchedule(item) {
 
   const { error } = await supabase
     .from("interviews")
-    .update(withUpdateActor({
+    .update({
       status: INTERVIEW_SCHEDULE_REJECTED_STATUS,
       score: "",
       notes: [item.notes || "", rejectionNote].filter(Boolean).join("\n"),
       updated_at: now,
-    }))
+    })
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
 
@@ -18480,7 +18482,7 @@ if (!currentUser) {
               <Stat title="Active Agencies" value={stats.activeAgencies} />
             </div>
             <div className="grid">
-              <SimpleList title="Latest Requests" rows={requests.slice(0, 6)} columns={["request_no", "profession", "gender", "quantity", "approval_status"]} />
+              <SimpleList title="Latest Requests" rows={requests.slice(0, 6)} columns={["request_no", "project_no", "profession", "gender", "quantity", "approval_status"]} />
               <SimpleList title="Latest Visa Records" rows={visaRecords.slice(0, 6)} columns={["visa_no", "project", "profession", "status"]} />
             </div>
           </>
@@ -18491,6 +18493,7 @@ if (!currentUser) {
 
   <div className="dashboard-grid">
     <Stat title="Request No" value={selectedRequest.request_no} />
+    <Stat title="Project No" value={selectedRequest.project_no || "-"} />
     <Stat title="Profession" value={getRequestLineSummary(selectedRequest, "profession")} />
     <Stat title="Nationality" value={getRequestLineSummary(selectedRequest, "nationality")} />
     <Stat title="Qty" value={getRequestTotalQty(selectedRequest)} />
@@ -18682,6 +18685,7 @@ mobile: c.mobile || "",
                 <Select value={requestForm.recruitment_type || "Foreign"} onChange={(v) => updateForm(setRequestForm, "recruitment_type", v)} placeholder="Recruitment Type" options={RECRUITMENT_TYPES} />
                 <Select value={requestForm.request_type} onChange={(v) => updateForm(setRequestForm, "request_type", v)} placeholder="Request Type" options={["Project Recruitment", "Administration Recruitment", "Replacement", "Mobilization"]} />
                 <Input placeholder="Project Name" value={requestForm.project_name} onChange={(v) => updateForm(setRequestForm, "project_name", v)} />
+                <Input placeholder="Project No / رقم المشروع (Cost Center Ref)" value={requestForm.project_no} onChange={(v) => updateForm(setRequestForm, "project_no", v)} />
                 <Input placeholder="Project City / مدينة المشروع" value={requestForm.project_city} onChange={(v) => updateForm(setRequestForm, "project_city", v)} />
                 <Input placeholder="Project Location / Site / موقع المشروع" value={requestForm.project_location} onChange={(v) => updateForm(setRequestForm, "project_location", v)} />
                 <Input placeholder="Department" value={requestForm.department} onChange={(v) => updateForm(setRequestForm, "department", v)} />
@@ -18834,6 +18838,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <th>Request No</th>
 <th>Type</th>
 <th>Project</th>
+<th>Project No</th>
 <th>City</th>
 <th>Location</th>
 <th>Profession</th>
@@ -18859,6 +18864,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
     String(item.profession || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.nationality || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.project_name || "").toLowerCase().includes(search.toLowerCase()) ||
+    String(item.project_no || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.project_city || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.project_location || "").toLowerCase().includes(search.toLowerCase())
   )
@@ -18882,6 +18888,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 </td>
 <td><Badge value={item.recruitment_type || (isSaudiNationality(item.nationality) ? "Saudi" : "Foreign")} /></td>
 <td>{item.project_name || "-"}</td>
+<td>{item.project_no || "-"}</td>
 <td>{item.project_city || "-"}</td>
 <td>{item.project_location || "-"}</td>
 <td>{getRequestLineSummary(item, "profession")}</td>
