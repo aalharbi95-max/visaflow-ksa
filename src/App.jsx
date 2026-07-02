@@ -2932,26 +2932,10 @@ Cancel = إضافتها كوظيفة مستقلة`
       });
     }
 
-    // 2) Global agencies are available to be granted to this company.
-    // This keeps the Add User agency dropdown populated after agencies became platform-level records.
-    const { data: globalAgencies, error: globalError } = await supabase
-      .from("agencies")
-      .select("*")
-      .is("company_id", null)
-      .range(0, 5000);
-
-    if (globalError) {
-      alert(`agencies global: ${globalError.message}`);
-      return;
-    }
-
-    (globalAgencies || [])
-      .filter((agency) => String(agency?.status || "Active").toLowerCase() !== "inactive")
-      .forEach((agency) => {
-        if (agency?.id) agencyMap.set(String(agency.id), agency);
-      });
-
-    // 3) Backward compatibility for any old company-owned agency records.
+    // 2) Backward compatibility for any old company-owned agency records.
+    // Do not add global agencies here; the company Agencies List must show only agencies
+    // explicitly linked to this company or old company-owned records. This prevents
+    // unrelated platform agencies from appearing inside a client company workspace.
     const { data: companyAgencies, error: companyAgencyError } = await supabase
       .from("agencies")
       .select("*")
