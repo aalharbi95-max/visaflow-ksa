@@ -588,6 +588,23 @@ function normalize(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isLoginAllowedSubscriptionStatus(value) {
+  return ["active", "trial"].includes(normalize(value));
+}
+
+function getOperationalCompanySubscriptionStatus(value) {
+  const status = String(value || "Active").trim();
+  const normalizedStatus = normalize(status);
+
+  if (["suspended", "cancelled", "canceled", "expired", "inactive"].includes(normalizedStatus)) {
+    return status;
+  }
+
+  // Trial is a commercial plan/status in Platform Administration,
+  // but operational company login must remain Active during the trial period.
+  return "Active";
+}
+
 
 function normalizeMatchText(value) {
   return normalize(value)
@@ -9570,7 +9587,7 @@ async function handleLogin() {
       // because of RLS / policy settings. Do not block login in this case.
       // The user's company_id will still isolate all operational data through currentCompanyId.
       if (companyData) {
-        if (companyStatus !== "active" || subscriptionStatus !== "active") {
+        if (companyStatus !== "active" || !isLoginAllowedSubscriptionStatus(subscriptionStatus)) {
           alert("Company subscription is not active. Please contact the system administrator.");
           return;
         }
@@ -14705,8 +14722,8 @@ async function savePlatformClient() {
           name: platformClientForm.company_name,
           domain: platformClientForm.domain || "",
           status: "Active",
-          subscription_plan: "SaaS",
-          subscription_status: platformClientForm.subscription_status || "Active",
+          subscription_plan: platformClientForm.subscription_status === "Trial" ? "Trial" : "SaaS",
+          subscription_status: getOperationalCompanySubscriptionStatus(platformClientForm.subscription_status),
           subscription_start: platformClientForm.start_date || null,
           subscription_end: platformClientForm.end_date || null,
           max_users: Number(platformClientForm.users_count || 0) || 5,
@@ -14736,6 +14753,25 @@ async function savePlatformClient() {
     : await supabase.from("platform_clients").insert([payload]);
 
   if (result.error) return alert(result.error.message);
+
+  if (operationalCompanyId) {
+    const { error: operationalCompanyUpdateError } = await supabase
+      .from("companies")
+      .update({
+        name: platformClientForm.company_name,
+        domain: platformClientForm.domain || "",
+        status: "Active",
+        subscription_plan: platformClientForm.subscription_status === "Trial" ? "Trial" : "SaaS",
+        subscription_status: getOperationalCompanySubscriptionStatus(platformClientForm.subscription_status),
+        subscription_start: platformClientForm.start_date || null,
+        subscription_end: platformClientForm.end_date || null,
+        max_users: Number(platformClientForm.users_count || 0) || 5,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", operationalCompanyId);
+
+    if (operationalCompanyUpdateError) return alert(operationalCompanyUpdateError.message);
+  }
 
   if (!platformClientEditingId && adminEmail) {
     if (!operationalCompanyId) {
@@ -14788,6 +14824,19 @@ async function extendPlatformClient(client, months = 1) {
 
   if (error) return alert(error.message);
 
+  if (client.operational_company_id) {
+    const { error: companyError } = await supabase
+      .from("companies")
+      .update({
+        subscription_status: "Active",
+        subscription_end: newEndDate,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", client.operational_company_id);
+
+    if (companyError) return alert(companyError.message);
+  }
+
   await loadPlatformClients();
   alert(`Subscription extended until ${newEndDate}`);
 }
@@ -14820,6 +14869,19 @@ async function extendPlatformClient(client, days = 30) {
     .eq("id", client.id);
 
   if (error) return alert(error.message);
+
+  if (client.operational_company_id) {
+    const { error: companyError } = await supabase
+      .from("companies")
+      .update({
+        subscription_status: "Active",
+        subscription_end: newEndDate,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", client.operational_company_id);
+
+    if (companyError) return alert(companyError.message);
+  }
 
   await loadPlatformClients();
   alert(`Subscription extended until ${newEndDate}`);
