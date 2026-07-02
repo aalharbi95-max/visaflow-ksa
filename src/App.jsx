@@ -242,7 +242,19 @@ const ROLE_DESCRIPTIONS = {
   Viewer: "Read-only user for dashboards, notifications and reports.",
 };
 
-const VISA_STATUSES = ["Pending", "Authorized", "Under Process", "Stamped", "Arrived", "Joined", "Cancelled"];
+const VISA_STATUSES = ["Available", "Partially Allocated", "Fully Allocated", "Expired", "Cancelled"];
+function normalizeVisaBatchStatus(value) {
+  const status = String(value || "").trim();
+  const normalizedStatus = normalize(status);
+
+  if (["cancelled", "canceled"].includes(normalizedStatus)) return "Cancelled";
+  if (["expired"].includes(normalizedStatus)) return "Expired";
+  if (["fully allocated", "allocated", "stamped", "arrived", "joined"].includes(normalizedStatus)) return "Fully Allocated";
+  if (["partially allocated", "authorized", "under process"].includes(normalizedStatus)) return "Partially Allocated";
+
+  return "Available";
+}
+
 const REQUEST_STATUSES = ["Open", "Under Recruitment", "Interview Stage", "Visa Process", "Closed", "Cancelled"];
 const APPROVAL_STATUSES = ["Draft", "Pending Recruitment Approval", "Approved by Recruitment", "Rejected by Recruitment"];
 const PRIORITIES = ["Urgent", "High", "Medium", "Low", "Normal"];
@@ -378,7 +390,7 @@ const emptyVisa = {
   authorization_no: "",
   issue_date: "",
   expiry_date: "",
-  status: "Pending",
+  status: "Available",
   notes: "",
 };
 
@@ -2932,10 +2944,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       });
     }
 
-    // 2) Backward compatibility for any old company-owned agency records.
-    // Do not add global agencies here; the company Agencies List must show only agencies
-    // explicitly linked to this company or old company-owned records. This prevents
-    // unrelated platform agencies from appearing inside a client company workspace.
+    // 3) Backward compatibility for any old company-owned agency records.
     const { data: companyAgencies, error: companyAgencyError } = await supabase
       .from("agencies")
       .select("*")
@@ -4124,7 +4133,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
     .filter(Boolean)
 ).size,
   activeAgencies: agencies.filter((item) => item.status !== "Inactive").length,
-  pendingVisas: visaRecords.filter((item) => item.status === "Pending").length,
+  availableVisaBatches: visaRecords.filter((item) => normalizeVisaBatchStatus(item.status) === "Available").length,
   openRequests: requests.filter((item) => item.status === "Open").length,
   urgentRequests: requests.filter((item) => item.priority === "Urgent").length,
 };
@@ -5160,7 +5169,7 @@ const executiveDashboard = useMemo(() => {
       authorization_no: item.authorization_no || "",
       issue_date: item.issue_date || "",
       expiry_date: item.expiry_date || "",
-      status: item.status || "Pending",
+      status: normalizeVisaBatchStatus(item.status || "Available"),
       notes: item.notes || "",
     });
 
@@ -5208,7 +5217,7 @@ async function saveVisa() {
     authorization_no: visaForm.authorization_no || "",
     issue_date: visaForm.issue_date || null,
     expiry_date: visaForm.expiry_date || null,
-    status: visaForm.status || "Pending",
+    status: normalizeVisaBatchStatus(visaForm.status || "Available"),
     notes: visaForm.notes || "",
     updated_at: new Date().toISOString(),
   };
