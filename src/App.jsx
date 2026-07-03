@@ -803,16 +803,20 @@ async function triggerExternalNotification(type, data = {}) {
     created_at: new Date().toISOString(),
   };
 
-  try {
-    await supabase.from("notification_events").insert([payload]);
-  } catch (error) {
-    console.warn("notification_events log failed", error?.message || error);
+  const { data: insertedRows, error: insertError } = await supabase
+    .from("notification_events")
+    .insert([payload])
+    .select("id, company_id, agency_id, type, title, created_at");
+
+  if (insertError) {
+    console.error("notification_events insert failed", insertError.message, payload);
+    throw new Error(`Notification Center insert failed: ${insertError.message}`);
   }
 
   const webhookUrl = import.meta.env?.VITE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) {
-    console.log("External notification prepared", payload);
-    return;
+    console.log("Notification Center record created", insertedRows?.[0] || payload);
+    return { ok: true, notification: insertedRows?.[0] || null, webhook: "not_configured", payload };
   }
 
   try {
@@ -821,8 +825,10 @@ async function triggerExternalNotification(type, data = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    return { ok: true, notification: insertedRows?.[0] || null, webhook: "sent", payload };
   } catch (error) {
-    console.warn("External notification failed", error?.message || error);
+    console.warn("External notification webhook failed", error?.message || error);
+    return { ok: true, notification: insertedRows?.[0] || null, webhook: "failed", payload };
   }
 }
 
@@ -5095,13 +5101,18 @@ const executiveDashboard = useMemo(() => {
     setRequestAgencyNotificationMessage("Sending agency notifications...");
 
     try {
+      let notificationCreated = 0;
+      let emailSent = 0;
+      let emailSkipped = 0;
+      let emailFailed = 0;
+      const emailErrors = [];
+
       for (const agency of selectedAgencies) {
         const matchedLines = getAgencyMatchedLines(agency, selectedLines);
         const agencyLines = matchedLines.length > 0 ? matchedLines : selectedLines;
         const title = `New Request Sourcing Alert - ${requestAgencyNotification.request.request_no || "Request"}`;
         const message = buildAgencyRequestNotificationMessage(requestAgencyNotification.request, agencyLines, agency);
-
-        await triggerExternalNotification("NEW_REQUEST_AGENCY_ALERT", {
+        const notificationPayload = {
           company_id: currentCompanyId,
           agency_id: agency.id,
           agency_name: agency.name || "",
@@ -5123,18 +5134,53 @@ const executiveDashboard = useMemo(() => {
             salary: line.salary || "",
             notes: line.notes || "",
           })),
-        });
+        };
+
+        await triggerExternalNotification("NEW_REQUEST_AGENCY_ALERT", notificationPayload);
+        notificationCreated += 1;
+
+        if (!agency.email) {
+          emailSkipped += 1;
+          continue;
+        }
+
+        try {
+          await dispatchVisaFlowEmail({
+            type: "NEW_REQUEST_AGENCY_ALERT_EMAIL",
+            to: agency.email,
+            replyTo: getCompanyEmailRecipient("notifications"),
+            subject: title,
+            text: message,
+            html: buildEmailCardHtml(title, message.split(/\n+/).filter(Boolean), "Please login to VisaFlow Office Portal and start sourcing the requested candidates."),
+            payload: notificationPayload,
+          });
+          emailSent += 1;
+        } catch (emailError) {
+          emailFailed += 1;
+          emailErrors.push(`${agency.name || agency.email}: ${emailError.message}`);
+          console.warn("Agency notification email failed", agency.email, emailError.message);
+        }
       }
 
       await addAudit(
         requestAgencyNotification.request.id,
         "Agency Notification Sent",
-        `New request sourcing alert sent to ${selectedAgencies.length} agency/agencies for ${selectedLines.length} selected request line(s)`
+        `Notification Center: ${notificationCreated}. Emails sent: ${emailSent}. Email failed: ${emailFailed}. Email skipped: ${emailSkipped}. Selected request line(s): ${selectedLines.length}`
       );
 
       await loadNotifications();
-      setRequestAgencyNotificationMessage(`Agency notification sent to ${selectedAgencies.length} agency/agencies.`);
-      alert(`Agency notification sent to ${selectedAgencies.length} agency/agencies.`);
+      if (canViewEmailAdministration) await loadEmailLogs();
+
+      const resultMessage = [
+        `Notification Center records created: ${notificationCreated}`,
+        `Emails sent: ${emailSent}`,
+        emailSkipped ? `Emails skipped: ${emailSkipped}` : "",
+        emailFailed ? `Emails failed: ${emailFailed}` : "",
+        emailErrors.length ? `First email error: ${emailErrors[0]}` : "",
+      ].filter(Boolean).join(" | ");
+
+      setRequestAgencyNotificationMessage(resultMessage);
+      alert(resultMessage);
     } catch (error) {
       setRequestAgencyNotificationMessage(`Agency notification failed: ${error.message}`);
       alert(error.message || "Agency notification failed.");
