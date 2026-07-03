@@ -4883,6 +4883,28 @@ const executiveDashboard = useMemo(() => {
       .filter((line) => line.profession && line.quantity > 0 && !isSaudiNationality(line.nationality));
   }
 
+  function getNotificationLineKey(line, index = 0) {
+    return String(
+      line?.id ||
+      line?.request_line_id ||
+      `${line?.request_no || "line"}-${line?.line_no || index + 1}-${line?.profession || ""}-${line?.nationality || ""}-${line?.gender || ""}`
+    );
+  }
+
+  function getSelectedNotificationLines(notification = requestAgencyNotification) {
+    if (!notification?.lines?.length) return [];
+    const selectedLineKeys = new Set((notification.selectedLineKeys || []).map(String));
+    if (selectedLineKeys.size === 0) return [];
+
+    return notification.lines.filter((line, index) =>
+      selectedLineKeys.has(getNotificationLineKey(line, index))
+    );
+  }
+
+  function getNotificationLineMatchingAgencyCount(line) {
+    return getActiveAgenciesForNotification().filter((agency) => agencyMatchesRequestLine(agency, line)).length;
+  }
+
   function getNationalityMatchValues(value) {
     const raw = String(value || "").trim();
     const values = new Set();
@@ -4964,24 +4986,65 @@ const executiveDashboard = useMemo(() => {
       return alert("No foreign request lines found for agency notification.");
     }
 
+    const selectedLineKeys = lines.map((line, index) => getNotificationLineKey(line, index));
     const matchingAgencies = getMatchingAgenciesForRequestLines(lines);
 
     setRequestAgencyNotification({
       request,
       lines,
+      selectedLineKeys,
       selectedAgencyIds: matchingAgencies.map((agency) => String(agency.id)),
       createdAt: new Date().toISOString(),
     });
 
     setRequestAgencyNotificationMessage(
       matchingAgencies.length > 0
-        ? `${matchingAgencies.length} matching agenc${matchingAgencies.length === 1 ? "y" : "ies"} selected based on nationality.`
-        : "No matching agency found by nationality. Please select agencies manually."
+        ? `${lines.length} request line(s) selected and ${matchingAgencies.length} matching agenc${matchingAgencies.length === 1 ? "y" : "ies"} selected based on nationality.`
+        : `${lines.length} request line(s) selected. No matching agency found by nationality. Please select agencies manually.`
     );
 
     setTimeout(() => {
       document.getElementById("request-agency-notification-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 100);
+  }
+
+  function syncAgenciesForSelectedNotificationLines(prev, nextSelectedLineKeys) {
+    const selectedLineKeys = new Set((nextSelectedLineKeys || []).map(String));
+    const selectedLines = (prev.lines || []).filter((line, index) =>
+      selectedLineKeys.has(getNotificationLineKey(line, index))
+    );
+
+    return {
+      ...prev,
+      selectedLineKeys: Array.from(selectedLineKeys),
+      selectedAgencyIds: getMatchingAgenciesForRequestLines(selectedLines).map((agency) => String(agency.id)),
+    };
+  }
+
+  function toggleRequestAgencyNotificationLine(lineKey) {
+    setRequestAgencyNotification((prev) => {
+      if (!prev) return prev;
+      const selected = new Set((prev.selectedLineKeys || []).map(String));
+      const key = String(lineKey);
+      if (selected.has(key)) selected.delete(key);
+      else selected.add(key);
+      return syncAgenciesForSelectedNotificationLines(prev, Array.from(selected));
+    });
+  }
+
+  function selectAllRequestNotificationLines() {
+    setRequestAgencyNotification((prev) => {
+      if (!prev) return prev;
+      const allLineKeys = (prev.lines || []).map((line, index) => getNotificationLineKey(line, index));
+      return syncAgenciesForSelectedNotificationLines(prev, allLineKeys);
+    });
+  }
+
+  function clearRequestNotificationLines() {
+    setRequestAgencyNotification((prev) => {
+      if (!prev) return prev;
+      return { ...prev, selectedLineKeys: [], selectedAgencyIds: [] };
+    });
   }
 
   function toggleRequestAgencyNotificationAgency(agencyId) {
@@ -4998,9 +5061,10 @@ const executiveDashboard = useMemo(() => {
   function selectMatchingAgenciesForCurrentNotification() {
     setRequestAgencyNotification((prev) => {
       if (!prev) return prev;
+      const selectedLines = getSelectedNotificationLines(prev);
       return {
         ...prev,
-        selectedAgencyIds: getMatchingAgenciesForRequestLines(prev.lines).map((agency) => String(agency.id)),
+        selectedAgencyIds: getMatchingAgenciesForRequestLines(selectedLines).map((agency) => String(agency.id)),
       };
     });
   }
@@ -5019,6 +5083,9 @@ const executiveDashboard = useMemo(() => {
     if (!requestAgencyNotification?.request) return alert("No saved request selected for agency notification.");
     if (!canNotifyAgencies) return alert("You do not have permission to notify agencies.");
 
+    const selectedLines = getSelectedNotificationLines(requestAgencyNotification);
+    if (selectedLines.length === 0) return alert("Please select at least one profession / nationality line to notify.");
+
     const selectedAgencyIds = new Set((requestAgencyNotification.selectedAgencyIds || []).map(String));
     const selectedAgencies = getActiveAgenciesForNotification().filter((agency) => selectedAgencyIds.has(String(agency.id)));
 
@@ -5029,8 +5096,8 @@ const executiveDashboard = useMemo(() => {
 
     try {
       for (const agency of selectedAgencies) {
-        const matchedLines = getAgencyMatchedLines(agency, requestAgencyNotification.lines);
-        const agencyLines = matchedLines.length > 0 ? matchedLines : requestAgencyNotification.lines;
+        const matchedLines = getAgencyMatchedLines(agency, selectedLines);
+        const agencyLines = matchedLines.length > 0 ? matchedLines : selectedLines;
         const title = `New Request Sourcing Alert - ${requestAgencyNotification.request.request_no || "Request"}`;
         const message = buildAgencyRequestNotificationMessage(requestAgencyNotification.request, agencyLines, agency);
 
@@ -5062,7 +5129,7 @@ const executiveDashboard = useMemo(() => {
       await addAudit(
         requestAgencyNotification.request.id,
         "Agency Notification Sent",
-        `New request sourcing alert sent to ${selectedAgencies.length} agency/agencies`
+        `New request sourcing alert sent to ${selectedAgencies.length} agency/agencies for ${selectedLines.length} selected request line(s)`
       );
 
       await loadNotifications();
@@ -19120,15 +19187,15 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
             )}
 
             {requestAgencyNotification && canNotifyAgencies && (
-              <TableCard title={`Agency Notification After Request Save - ${requestAgencyNotification.request?.request_no || ""}`}>
+              <TableCard title={`Agency Notification - ${requestAgencyNotification.request?.request_no || ""}`}>
                 <div id="request-agency-notification-panel">
                   <p style={{ marginTop: 0, color: "#64748b", lineHeight: 1.7 }}>
-                    Select the agencies that should receive an early sourcing alert. Matching agencies are selected automatically based on the nationality of each request line, and each agency receives only the matching lines for its country.
+                    Select the exact professions and nationalities that should be included in this alert, then select the agencies. Matching agencies are recalculated from the selected request lines only, and each agency receives only its matching lines.
                   </p>
 
                   <div className="dashboard-grid">
                     <Stat title="Request" value={requestAgencyNotification.request?.request_no || "-"} />
-                    <Stat title="Lines" value={requestAgencyNotification.lines?.length || 0} />
+                    <Stat title="Selected Lines" value={`${getSelectedNotificationLines(requestAgencyNotification).length} / ${requestAgencyNotification.lines?.length || 0}`} />
                     <Stat title="Selected Agencies" value={(requestAgencyNotification.selectedAgencyIds || []).length} className="warning" />
                     <Stat title="Priority" value={requestAgencyNotification.request?.priority || "Normal"} />
                   </div>
@@ -19139,11 +19206,64 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                     </div>
                   )}
 
+                  <h4 style={{ margin: "18px 0 8px" }}>1) Select Professions & Nationalities to Notify</h4>
                   <div className="actions-line" style={{ marginBottom: 12 }}>
-                    <button type="button" className="light-btn" onClick={selectMatchingAgenciesForCurrentNotification} disabled={requestAgencyNotificationSending}>
+                    <button type="button" className="light-btn" onClick={selectAllRequestNotificationLines} disabled={requestAgencyNotificationSending}>
+                      Select All Lines
+                    </button>
+                    <button type="button" className="light-btn" onClick={clearRequestNotificationLines} disabled={requestAgencyNotificationSending}>
+                      Clear Lines
+                    </button>
+                  </div>
+
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Include</th>
+                        <th>#</th>
+                        <th>Profession</th>
+                        <th>Nationality</th>
+                        <th>Gender</th>
+                        <th>Qty</th>
+                        <th>Matching Agencies</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(requestAgencyNotification.lines || []).length === 0 ? (
+                        <tr><td colSpan="7">No request lines found.</td></tr>
+                      ) : (
+                        (requestAgencyNotification.lines || []).map((line, index) => {
+                          const lineKey = getNotificationLineKey(line, index);
+                          const selected = (requestAgencyNotification.selectedLineKeys || []).map(String).includes(String(lineKey));
+                          return (
+                            <tr key={lineKey}>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={() => toggleRequestAgencyNotificationLine(lineKey)}
+                                  disabled={requestAgencyNotificationSending}
+                                />
+                              </td>
+                              <td>{line.line_no || index + 1}</td>
+                              <td>{line.profession || "-"}</td>
+                              <td>{line.nationality || "-"}</td>
+                              <td>{line.gender || "-"}</td>
+                              <td>{Number(line.quantity || 0)}</td>
+                              <td>{getNotificationLineMatchingAgencyCount(line)}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+
+                  <h4 style={{ margin: "18px 0 8px" }}>2) Select Agencies</h4>
+                  <div className="actions-line" style={{ marginBottom: 12 }}>
+                    <button type="button" className="light-btn" onClick={selectMatchingAgenciesForCurrentNotification} disabled={requestAgencyNotificationSending || getSelectedNotificationLines(requestAgencyNotification).length === 0}>
                       Select Matching Agencies
                     </button>
-                    <button type="button" className="light-btn" onClick={selectAllAgenciesForCurrentNotification} disabled={requestAgencyNotificationSending}>
+                    <button type="button" className="light-btn" onClick={selectAllAgenciesForCurrentNotification} disabled={requestAgencyNotificationSending || getSelectedNotificationLines(requestAgencyNotification).length === 0}>
                       Select All Active Agencies
                     </button>
                     <button type="button" className="light-btn" onClick={() => setRequestAgencyNotification(null)} disabled={requestAgencyNotificationSending}>
@@ -19158,7 +19278,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                         <th>Agency</th>
                         <th>Country</th>
                         <th>Email</th>
-                        <th>Matching Request Lines</th>
+                        <th>Selected Matching Lines</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -19166,7 +19286,8 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                         <tr><td colSpan="5">No active agencies found.</td></tr>
                       ) : (
                         getActiveAgenciesForNotification().map((agency) => {
-                          const matchedLines = getAgencyMatchedLines(agency, requestAgencyNotification.lines || []);
+                          const selectedLines = getSelectedNotificationLines(requestAgencyNotification);
+                          const matchedLines = getAgencyMatchedLines(agency, selectedLines);
                           const selected = (requestAgencyNotification.selectedAgencyIds || []).map(String).includes(String(agency.id));
                           return (
                             <tr key={agency.id}>
@@ -19175,15 +19296,18 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                                   type="checkbox"
                                   checked={selected}
                                   onChange={() => toggleRequestAgencyNotificationAgency(agency.id)}
+                                  disabled={requestAgencyNotificationSending || selectedLines.length === 0}
                                 />
                               </td>
                               <td>{agency.name || "-"}</td>
                               <td>{agency.country || "-"}</td>
                               <td>{agency.email || "-"}</td>
                               <td>
-                                {matchedLines.length > 0
-                                  ? matchedLines.map(formatRequestLineForNotification).join(" / ")
-                                  : <span style={{ color: "#dc2626", fontWeight: 700 }}>No nationality match - manual selection</span>}
+                                {selectedLines.length === 0
+                                  ? <span style={{ color: "#dc2626", fontWeight: 700 }}>Select profession / nationality lines first</span>
+                                  : matchedLines.length > 0
+                                    ? matchedLines.map(formatRequestLineForNotification).join(" / ")
+                                    : <span style={{ color: "#dc2626", fontWeight: 700 }}>No nationality match - manual selection sends selected lines</span>}
                               </td>
                             </tr>
                           );
@@ -19193,7 +19317,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                   </table>
 
                   <div className="actions-line" style={{ marginTop: 14 }}>
-                    <button className="save-btn" onClick={sendRequestAgencyNotifications} disabled={requestAgencyNotificationSending || (requestAgencyNotification.selectedAgencyIds || []).length === 0}>
+                    <button className="save-btn" onClick={sendRequestAgencyNotifications} disabled={requestAgencyNotificationSending || getSelectedNotificationLines(requestAgencyNotification).length === 0 || (requestAgencyNotification.selectedAgencyIds || []).length === 0}>
                       {requestAgencyNotificationSending ? "Sending..." : "Send Notification to Selected Agencies"}
                     </button>
                   </div>
