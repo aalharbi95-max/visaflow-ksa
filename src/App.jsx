@@ -1581,6 +1581,7 @@ const canManageUsers =
   currentRole === "Admin" || canManagePlatformAccounts;
 const canManagePermissions = currentRole === "Admin";
 const canManageAgencies = ["Admin", "Recruitment Manager"].includes(currentRole);
+const canNotifyAgencies = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canApprovePenalties = ["Admin", "Recruitment Manager", "CEO"].includes(currentRole);
 const canViewAgenciesOnly = ["CEO", "Operations Manager"].includes(currentRole);
@@ -2225,6 +2226,9 @@ async function saveSelectedAllocations() {
   const [requestLineForm, setRequestLineForm] = useState(emptyRequestLine);
   const [requestLinesDraft, setRequestLinesDraft] = useState([]);
   const [requestEditingId, setRequestEditingId] = useState(null);
+  const [requestAgencyNotification, setRequestAgencyNotification] = useState(null);
+  const [requestAgencyNotificationSending, setRequestAgencyNotificationSending] = useState(false);
+  const [requestAgencyNotificationMessage, setRequestAgencyNotificationMessage] = useState("");
   const [visaForm, setVisaForm] = useState(emptyVisa);
   const [visaLineForm, setVisaLineForm] = useState(emptyVisaLine);
   const [visaLinesDraft, setVisaLinesDraft] = useState([]);
@@ -4862,6 +4866,216 @@ const executiveDashboard = useMemo(() => {
     return `Multiple (${unique.length})`;
   }
 
+  function getRequestNotificationLines(request, fallbackLines = []) {
+    const sourceLines = fallbackLines.length > 0 ? fallbackLines : getRequestLinesForRequest(request);
+
+    return sourceLines
+      .map((line, index) => ({
+        ...line,
+        line_no: line.line_no || index + 1,
+        profession: line.profession || "",
+        nationality: line.nationality || "",
+        gender: line.gender || "",
+        quantity: Number(line.quantity || 0),
+        salary: line.salary || "",
+        notes: line.notes || "",
+      }))
+      .filter((line) => line.profession && line.quantity > 0 && !isSaudiNationality(line.nationality));
+  }
+
+  function getNationalityMatchValues(value) {
+    const raw = String(value || "").trim();
+    const values = new Set();
+    const addValue = (item) => {
+      const normalized = normalizeMatchText(item);
+      if (normalized) values.add(normalized);
+    };
+
+    addValue(raw);
+
+    const parenthesisMatch = raw.match(/\(([^)]+)\)/);
+    if (parenthesisMatch?.[1]) addValue(parenthesisMatch[1]);
+
+    countries.forEach((country) => {
+      const countryValues = [country.name, country.nationality].filter(Boolean);
+      const matched = countryValues.some((item) => {
+        const normalizedItem = normalizeMatchText(item);
+        const normalizedRaw = normalizeMatchText(raw);
+        return normalizedItem && normalizedRaw && (normalizedRaw.includes(normalizedItem) || normalizedItem.includes(normalizedRaw));
+      });
+
+      if (matched) {
+        countryValues.forEach(addValue);
+      }
+    });
+
+    return Array.from(values);
+  }
+
+  function agencyMatchesRequestLine(agency, line) {
+    if (!agency || normalize(agency.status || "Active") === "inactive") return false;
+    if (!line || isSaudiNationality(line.nationality)) return false;
+
+    const agencyCountryValues = [agency.country, agency.office_country, agency.nationality]
+      .map((item) => normalizeMatchText(item))
+      .filter(Boolean);
+
+    if (agencyCountryValues.length === 0) return false;
+
+    const lineValues = getNationalityMatchValues(line.nationality);
+
+    return agencyCountryValues.some((agencyValue) =>
+      lineValues.some((lineValue) =>
+        agencyValue === lineValue || agencyValue.includes(lineValue) || lineValue.includes(agencyValue)
+      )
+    );
+  }
+
+  function getAgencyMatchedLines(agency, lines = []) {
+    return lines.filter((line) => agencyMatchesRequestLine(agency, line));
+  }
+
+  function getActiveAgenciesForNotification() {
+    return agencies
+      .filter((agency) => normalize(agency.status || "Active") !== "inactive")
+      .sort((a, b) => String(a.country || "").localeCompare(String(b.country || "")) || String(a.name || "").localeCompare(String(b.name || "")));
+  }
+
+  function getMatchingAgenciesForRequestLines(lines = []) {
+    return getActiveAgenciesForNotification().filter((agency) =>
+      lines.some((line) => agencyMatchesRequestLine(agency, line))
+    );
+  }
+
+  function formatRequestLineForNotification(line) {
+    return `${line.profession || "-"} | ${line.nationality || "-"} | ${line.gender || "-"} | Qty: ${Number(line.quantity || 0)}`;
+  }
+
+  function buildAgencyRequestNotificationMessage(request, lines = [], agency = {}) {
+    const lineSummary = lines.map(formatRequestLineForNotification).join("\n");
+    return `New manpower request sourcing alert. Please start searching for suitable candidates based on the following request requirements.\n\nRequest No: ${request?.request_no || "-"}\nProject: ${request?.project_name || request?.project || "-"}\nPriority: ${request?.priority || "Normal"}\nAgency: ${agency?.name || "-"}\n\nRequired Lines:\n${lineSummary || "-"}\n\nThis is an early sourcing notification only. Formal authorization and final candidate submission must follow the approved VisaFlow process.`;
+  }
+
+  function openRequestAgencyNotification(request, fallbackLines = []) {
+    if (!canNotifyAgencies) return alert("You do not have permission to notify agencies.");
+
+    const lines = getRequestNotificationLines(request, fallbackLines);
+    if (lines.length === 0) {
+      return alert("No foreign request lines found for agency notification.");
+    }
+
+    const matchingAgencies = getMatchingAgenciesForRequestLines(lines);
+
+    setRequestAgencyNotification({
+      request,
+      lines,
+      selectedAgencyIds: matchingAgencies.map((agency) => String(agency.id)),
+      createdAt: new Date().toISOString(),
+    });
+
+    setRequestAgencyNotificationMessage(
+      matchingAgencies.length > 0
+        ? `${matchingAgencies.length} matching agenc${matchingAgencies.length === 1 ? "y" : "ies"} selected based on nationality.`
+        : "No matching agency found by nationality. Please select agencies manually."
+    );
+
+    setTimeout(() => {
+      document.getElementById("request-agency-notification-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  }
+
+  function toggleRequestAgencyNotificationAgency(agencyId) {
+    setRequestAgencyNotification((prev) => {
+      if (!prev) return prev;
+      const id = String(agencyId);
+      const selected = new Set((prev.selectedAgencyIds || []).map(String));
+      if (selected.has(id)) selected.delete(id);
+      else selected.add(id);
+      return { ...prev, selectedAgencyIds: Array.from(selected) };
+    });
+  }
+
+  function selectMatchingAgenciesForCurrentNotification() {
+    setRequestAgencyNotification((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        selectedAgencyIds: getMatchingAgenciesForRequestLines(prev.lines).map((agency) => String(agency.id)),
+      };
+    });
+  }
+
+  function selectAllAgenciesForCurrentNotification() {
+    setRequestAgencyNotification((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        selectedAgencyIds: getActiveAgenciesForNotification().map((agency) => String(agency.id)),
+      };
+    });
+  }
+
+  async function sendRequestAgencyNotifications() {
+    if (!requestAgencyNotification?.request) return alert("No saved request selected for agency notification.");
+    if (!canNotifyAgencies) return alert("You do not have permission to notify agencies.");
+
+    const selectedAgencyIds = new Set((requestAgencyNotification.selectedAgencyIds || []).map(String));
+    const selectedAgencies = getActiveAgenciesForNotification().filter((agency) => selectedAgencyIds.has(String(agency.id)));
+
+    if (selectedAgencies.length === 0) return alert("Please select at least one agency.");
+
+    setRequestAgencyNotificationSending(true);
+    setRequestAgencyNotificationMessage("Sending agency notifications...");
+
+    try {
+      for (const agency of selectedAgencies) {
+        const matchedLines = getAgencyMatchedLines(agency, requestAgencyNotification.lines);
+        const agencyLines = matchedLines.length > 0 ? matchedLines : requestAgencyNotification.lines;
+        const title = `New Request Sourcing Alert - ${requestAgencyNotification.request.request_no || "Request"}`;
+        const message = buildAgencyRequestNotificationMessage(requestAgencyNotification.request, agencyLines, agency);
+
+        await triggerExternalNotification("NEW_REQUEST_AGENCY_ALERT", {
+          company_id: currentCompanyId,
+          agency_id: agency.id,
+          agency_name: agency.name || "",
+          agency_country: agency.country || "",
+          title,
+          message,
+          priority: requestAgencyNotification.request.priority || "High",
+          related_table: "requests",
+          related_id: requestAgencyNotification.request.id || "",
+          request_id: requestAgencyNotification.request.id || "",
+          request_no: requestAgencyNotification.request.request_no || "",
+          project_name: requestAgencyNotification.request.project_name || requestAgencyNotification.request.project || "",
+          lines: agencyLines.map((line) => ({
+            line_no: line.line_no || "",
+            profession: line.profession || "",
+            nationality: line.nationality || "",
+            gender: line.gender || "",
+            quantity: Number(line.quantity || 0),
+            salary: line.salary || "",
+            notes: line.notes || "",
+          })),
+        });
+      }
+
+      await addAudit(
+        requestAgencyNotification.request.id,
+        "Agency Notification Sent",
+        `New request sourcing alert sent to ${selectedAgencies.length} agency/agencies`
+      );
+
+      await loadNotifications();
+      setRequestAgencyNotificationMessage(`Agency notification sent to ${selectedAgencies.length} agency/agencies.`);
+      alert(`Agency notification sent to ${selectedAgencies.length} agency/agencies.`);
+    } catch (error) {
+      setRequestAgencyNotificationMessage(`Agency notification failed: ${error.message}`);
+      alert(error.message || "Agency notification failed.");
+    } finally {
+      setRequestAgencyNotificationSending(false);
+    }
+  }
+
   function addRequestLineToDraft() {
     if (!requestLineForm.profession || !requestLineForm.quantity) {
       return alert("Please fill Profession and Quantity for the request line.");
@@ -5046,16 +5260,35 @@ const executiveDashboard = useMemo(() => {
     const lineResult = await supabase.from("request_lines").insert(linePayload);
     if (lineResult.error) return alert(`request_lines insert: ${lineResult.error.message}`);
 
+    const wasEditingRequest = Boolean(requestEditingId);
+
     await addAudit(
       savedRequest.id,
-      requestEditingId ? "Updated" : "Created",
-      requestEditingId ? "Request header and lines were updated" : "Request header and lines were created"
+      wasEditingRequest ? "Updated" : "Created",
+      wasEditingRequest ? "Request header and lines were updated" : "Request header and lines were created"
     );
 
-    alert(requestEditingId ? "Request updated successfully" : `Request saved successfully: ${savedRequest.request_no}`);
+    const notificationLines = linesToSave.map((line, index) => ({
+      ...line,
+      request_id: savedRequest.id,
+      request_no: savedRequest.request_no,
+      line_no: index + 1,
+      quantity: Number(line.quantity || 0),
+    }));
+
+    alert(
+      wasEditingRequest
+        ? "Request updated successfully. You can now select agencies and send notification."
+        : `Request saved successfully: ${savedRequest.request_no}. You can now select agencies and send notification.`
+    );
+
     resetRequestForm();
     await loadRequests();
     await loadRequestLines();
+
+    if (canNotifyAgencies) {
+      openRequestAgencyNotification(savedRequest, notificationLines);
+    }
   }
 
   async function approveRequest(item) {
@@ -18886,6 +19119,88 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
             </FormCard>
             )}
 
+            {requestAgencyNotification && canNotifyAgencies && (
+              <TableCard title={`Agency Notification After Request Save - ${requestAgencyNotification.request?.request_no || ""}`}>
+                <div id="request-agency-notification-panel">
+                  <p style={{ marginTop: 0, color: "#64748b", lineHeight: 1.7 }}>
+                    Select the agencies that should receive an early sourcing alert. Matching agencies are selected automatically based on the nationality of each request line, and each agency receives only the matching lines for its country.
+                  </p>
+
+                  <div className="dashboard-grid">
+                    <Stat title="Request" value={requestAgencyNotification.request?.request_no || "-"} />
+                    <Stat title="Lines" value={requestAgencyNotification.lines?.length || 0} />
+                    <Stat title="Selected Agencies" value={(requestAgencyNotification.selectedAgencyIds || []).length} className="warning" />
+                    <Stat title="Priority" value={requestAgencyNotification.request?.priority || "Normal"} />
+                  </div>
+
+                  {requestAgencyNotificationMessage && (
+                    <div style={{ margin: "12px 0", padding: "10px 12px", borderRadius: 12, background: "#eef6ff", color: "#1e3a8a", fontWeight: 700 }}>
+                      {requestAgencyNotificationMessage}
+                    </div>
+                  )}
+
+                  <div className="actions-line" style={{ marginBottom: 12 }}>
+                    <button type="button" className="light-btn" onClick={selectMatchingAgenciesForCurrentNotification} disabled={requestAgencyNotificationSending}>
+                      Select Matching Agencies
+                    </button>
+                    <button type="button" className="light-btn" onClick={selectAllAgenciesForCurrentNotification} disabled={requestAgencyNotificationSending}>
+                      Select All Active Agencies
+                    </button>
+                    <button type="button" className="light-btn" onClick={() => setRequestAgencyNotification(null)} disabled={requestAgencyNotificationSending}>
+                      Close
+                    </button>
+                  </div>
+
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Send</th>
+                        <th>Agency</th>
+                        <th>Country</th>
+                        <th>Email</th>
+                        <th>Matching Request Lines</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getActiveAgenciesForNotification().length === 0 ? (
+                        <tr><td colSpan="5">No active agencies found.</td></tr>
+                      ) : (
+                        getActiveAgenciesForNotification().map((agency) => {
+                          const matchedLines = getAgencyMatchedLines(agency, requestAgencyNotification.lines || []);
+                          const selected = (requestAgencyNotification.selectedAgencyIds || []).map(String).includes(String(agency.id));
+                          return (
+                            <tr key={agency.id}>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={() => toggleRequestAgencyNotificationAgency(agency.id)}
+                                />
+                              </td>
+                              <td>{agency.name || "-"}</td>
+                              <td>{agency.country || "-"}</td>
+                              <td>{agency.email || "-"}</td>
+                              <td>
+                                {matchedLines.length > 0
+                                  ? matchedLines.map(formatRequestLineForNotification).join(" / ")
+                                  : <span style={{ color: "#dc2626", fontWeight: 700 }}>No nationality match - manual selection</span>}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+
+                  <div className="actions-line" style={{ marginTop: 14 }}>
+                    <button className="save-btn" onClick={sendRequestAgencyNotifications} disabled={requestAgencyNotificationSending || (requestAgencyNotification.selectedAgencyIds || []).length === 0}>
+                      {requestAgencyNotificationSending ? "Sending..." : "Send Notification to Selected Agencies"}
+                    </button>
+                  </div>
+                </div>
+              </TableCard>
+            )}
+
             <TableCard title="Requests List">
               <table>
          <thead>
@@ -19015,6 +19330,10 @@ item.created_at
 
   {canManageCandidates && item.status !== "Completed" && (item.approval_status === "Approved by Recruitment" || item.approval_status === "Approved") && (
     <button onClick={() => startExcelUploadFromRequest(item)}>Upload Excel</button>
+  )}
+
+  {canNotifyAgencies && !isSaudiRequest(item) && (
+    <button onClick={() => openRequestAgencyNotification(item)}>Notify Agencies</button>
   )}
 
   {canManageVisas && !isSaudiRequest(item) && <button onClick={() => createVisaFromRequest(item)}>Visa</button>}
