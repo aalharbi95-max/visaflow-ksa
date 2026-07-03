@@ -8034,6 +8034,95 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     );
   }
 
+
+
+  function normalizeAgencyNotificationLine(line = {}, index = 0, requestNo = "") {
+    return {
+      id: line.id || line.request_line_id || line.line_id || `agency-line-${requestNo || "request"}-${line.line_no || index + 1}`,
+      request_line_id: line.request_line_id || line.id || null,
+      request_no: line.request_no || requestNo || "",
+      line_no: Number(line.line_no || index + 1),
+      profession: line.profession || "",
+      nationality: line.nationality || "",
+      gender: line.gender || "",
+      quantity: Number(line.quantity || 0),
+      salary: line.salary || "",
+      notes: line.notes || "",
+      source: "agency_notification",
+    };
+  }
+
+  function getLinesFromAgencyNotification(item, requestNo = "") {
+    const data = item?.data || {};
+    return (data.lines || [])
+      .map((line, index) => normalizeAgencyNotificationLine(line, index, data.request_no || requestNo))
+      .filter((line) => line.profession && line.quantity > 0);
+  }
+
+  function agencyNotificationLineMatchesDbLine(notificationLine, dbLine) {
+    if (!notificationLine || !dbLine) return false;
+
+    if (
+      (notificationLine.request_line_id || notificationLine.id) &&
+      dbLine.id &&
+      String(notificationLine.request_line_id || notificationLine.id) === String(dbLine.id)
+    ) {
+      return true;
+    }
+
+    return (
+      isCompatibleText(notificationLine.profession, dbLine.profession) &&
+      normalize(notificationLine.nationality) === normalize(dbLine.nationality) &&
+      (!notificationLine.gender || !dbLine.gender || normalize(notificationLine.gender) === normalize(dbLine.gender))
+    );
+  }
+
+  async function getAgencyAcceptedRequestAccess(requestNo = "") {
+    if (currentRole !== "Agency" || !requestNo || !currentCompanyId || !currentUser?.agency_id) {
+      return { allowed: currentRole !== "Agency", notification: null, lines: [] };
+    }
+
+    const { data, error } = await supabase
+      .from("notification_events")
+      .select("id, company_id, agency_id, type, related_id, related_table, data, created_at")
+      .eq("company_id", currentCompanyId)
+      .eq("agency_id", currentUser.agency_id)
+      .eq("type", "NEW_REQUEST_AGENCY_ALERT")
+      .order("created_at", { ascending: false })
+      .range(0, 500);
+
+    if (error) {
+      return { allowed: false, notification: null, lines: [], error };
+    }
+
+    const matchingNotifications = (data || []).filter((item) => {
+      const payload = item.data || {};
+      return String(payload.request_no || "") === String(requestNo || "");
+    });
+
+    const acceptedNotification = matchingNotifications.find((item) => {
+      const payload = item.data || {};
+      return ["accepted", "accept"].includes(normalize(payload.response_status || payload.agency_decision));
+    });
+
+    if (!acceptedNotification) {
+      return {
+        allowed: false,
+        notification: matchingNotifications[0] || null,
+        lines: [],
+        reason: matchingNotifications.length > 0
+          ? "This request alert must be accepted by the agency before uploading candidates."
+          : "This request is not assigned to this agency notification inbox.",
+      };
+    }
+
+    return {
+      allowed: true,
+      notification: acceptedNotification,
+      lines: getLinesFromAgencyNotification(acceptedNotification, requestNo),
+    };
+  }
+
   async function handleExcelUpload(event) {
   const file = event.target.files?.[0];
   event.target.value = "";
@@ -8063,14 +8152,43 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       return alert("Please select Request No once before uploading, or upload from an assigned request/authorization card.");
     }
 
-    const { data: requestData, error: requestError } = await supabase
+    const agencyRequestAccess = currentRole === "Agency"
+      ? await getAgencyAcceptedRequestAccess(requestNo)
+      : { allowed: true, notification: null, lines: [] };
+
+    if (currentRole === "Agency" && agencyRequestAccess.error) {
+      return alert(`Agency request access check failed: ${agencyRequestAccess.error.message}`);
+    }
+
+    if (currentRole === "Agency" && !agencyRequestAccess.allowed) {
+      return alert(agencyRequestAccess.reason || "Please accept this request notification before uploading candidates.");
+    }
+
+    const { data: requestDataFromDb, error: requestError } = await supabase
       .from("requests")
       .select("id, request_no, quantity, project_name, project, approval_status, recruitment_type, profession, nationality, gender")
       .eq("request_no", requestNo)
       .eq("company_id", currentCompanyId)
-      .single();
+      .maybeSingle();
 
-    if (requestError || !requestData) return alert("Request not found.");
+    if ((requestError || !requestDataFromDb) && currentRole !== "Agency") {
+      return alert("Request not found.");
+    }
+
+    const agencyNotificationData = agencyRequestAccess.notification?.data || {};
+    const agencyNotificationLines = agencyRequestAccess.lines || [];
+    const requestData = requestDataFromDb || {
+      id: agencyNotificationData.request_id || agencyRequestAccess.notification?.related_id || null,
+      request_no: requestNo,
+      quantity: agencyNotificationLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0),
+      project_name: agencyNotificationData.project_name || agencyNotificationData.project || "",
+      project: agencyNotificationData.project_name || agencyNotificationData.project || "",
+      approval_status: "Approved by Recruitment",
+      recruitment_type: "Foreign",
+      profession: agencyNotificationLines[0]?.profession || "",
+      nationality: agencyNotificationLines[0]?.nationality || "",
+      gender: agencyNotificationLines[0]?.gender || "",
+    };
 
     if (
       requestData.approval_status !== "Approved by Recruitment" &&
@@ -8086,15 +8204,28 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       .eq("company_id", currentCompanyId)
       .order("line_no", { ascending: true });
 
-    if (lineError) return alert(`request_lines: ${lineError.message}`);
+    if (lineError && currentRole !== "Agency") return alert(`request_lines: ${lineError.message}`);
+    if (lineError && currentRole === "Agency") console.warn("request_lines agency lookup failed", lineError.message);
 
-    const requestLinesForImport =
-      dbRequestLines && dbRequestLines.length > 0
-        ? dbRequestLines
-        : getRequestLinesForRequest(requestData);
+    const dbLines = dbRequestLines || [];
+    const requestLinesForImport = currentRole === "Agency"
+      ? (
+          dbLines.length > 0 && agencyNotificationLines.length > 0
+            ? dbLines.filter((dbLine) => agencyNotificationLines.some((line) => agencyNotificationLineMatchesDbLine(line, dbLine)))
+            : agencyNotificationLines
+        )
+      : (
+          dbLines.length > 0
+            ? dbLines
+            : getRequestLinesForRequest(requestData)
+        );
 
     if (!requestLinesForImport.length) {
-      return alert("No request lines found for this request. Please create request lines first.");
+      return alert(
+        currentRole === "Agency"
+          ? "No accepted request lines were found for this agency. Please accept the request notification first."
+          : "No request lines found for this request. Please create request lines first."
+      );
     }
 
     const { data: existingCandidates, error: existingError } = await supabase
@@ -8245,7 +8376,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       payloads.push(
         withCompany(withCreateActor({
           candidate_name: candidateName,
-          request_line_id: matchedLine.id || null,
+          request_line_id: matchedLine.source === "agency_notification" ? null : (matchedLine.id || null),
           profession: matchedLine.profession || "",
           nationality: matchedLine.nationality || "",
           gender: matchedLine.gender || "",
