@@ -4984,6 +4984,186 @@ const executiveDashboard = useMemo(() => {
     return `New manpower request sourcing alert. Please start searching for suitable candidates based on the following request requirements.\n\nRequest No: ${request?.request_no || "-"}\nProject: ${request?.project_name || request?.project || "-"}\nPriority: ${request?.priority || "Normal"}\nAgency: ${agency?.name || "-"}\n\nRequired Lines:\n${lineSummary || "-"}\n\nThis is an early sourcing notification only. Formal authorization and final candidate submission must follow the approved VisaFlow process.`;
   }
 
+
+  function getAgencySlaDays(agencyName = "") {
+    const activeAgreement = agencyAgreements.find((agreement) =>
+      normalize(agreement.agency_name) === normalize(agencyName) &&
+      ["active", "pending signature", "draft"].includes(normalize(agreement.status || "Active"))
+    );
+
+    return Number(activeAgreement?.sla_days || 60);
+  }
+
+  function addDaysToIso(dateValue, days = 0) {
+    const date = new Date(dateValue || new Date());
+    date.setDate(date.getDate() + Number(days || 0));
+    return date.toISOString();
+  }
+
+  function isAgencyRequestNotification(item) {
+    return item?.type === "NEW_REQUEST_AGENCY_ALERT";
+  }
+
+  function getAgencyRequestDecision(item) {
+    const data = item?.data || {};
+    return data.response_status || data.agency_decision || "Pending";
+  }
+
+  function getAgencyRequestSlaInfo(item) {
+    const data = item?.data || {};
+    const decision = getAgencyRequestDecision(item);
+
+    if (decision !== "Accepted" || !data.sla_started_at) {
+      return {
+        running: false,
+        label: decision === "Rejected" ? "Rejected - SLA not started" : "Waiting for agency acceptance",
+      };
+    }
+
+    const startedAt = new Date(data.sla_started_at);
+    const dueAt = new Date(data.sla_due_at || addDaysToIso(data.sla_started_at, data.sla_days || 60));
+    const today = new Date();
+    const elapsedDays = Math.max(0, Math.floor((today - startedAt) / (1000 * 60 * 60 * 24)));
+    const remainingDays = Math.ceil((dueAt - today) / (1000 * 60 * 60 * 24));
+
+    return {
+      running: true,
+      slaDays: Number(data.sla_days || 60),
+      startedAt: data.sla_started_at,
+      dueAt: dueAt.toISOString(),
+      elapsedDays,
+      remainingDays,
+      label: remainingDays < 0
+        ? `SLA Overdue by ${Math.abs(remainingDays)} day(s)`
+        : `SLA Running: ${elapsedDays}/${Number(data.sla_days || 60)} day(s), ${remainingDays} remaining`,
+    };
+  }
+
+  function renderAgencyRequestDecisionCell(item) {
+    if (!isAgencyRequestNotification(item)) return <span>-</span>;
+
+    const decision = getAgencyRequestDecision(item);
+    const sla = getAgencyRequestSlaInfo(item);
+    const data = item?.data || {};
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 210 }}>
+        <div>
+          <Badge value={decision} />
+        </div>
+        <div style={{ fontSize: 12, color: sla.running ? "#0369a1" : decision === "Rejected" ? "#dc2626" : "#64748b", fontWeight: 700 }}>
+          {sla.label}
+        </div>
+        {data.responded_at && (
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            Responded: {new Date(data.responded_at).toLocaleString()}
+          </div>
+        )}
+        {data.response_notes && (
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            Note: {data.response_notes}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  async function handleAgencyRequestNotificationResponse(item, decision) {
+    if (!item?.id) return alert("Notification was not found.");
+    if (currentRole !== "Agency") return alert("Only agency users can accept or reject this request alert.");
+    if (!isAgencyRequestNotification(item)) return alert("This notification is not an agency request alert.");
+
+    const currentDecision = getAgencyRequestDecision(item);
+    if (["Accepted", "Rejected"].includes(currentDecision)) {
+      return alert(`This request alert is already ${currentDecision}.`);
+    }
+
+    let responseNotes = "";
+    if (decision === "Rejected") {
+      responseNotes = window.prompt("Rejection reason / سبب الرفض:", "Not available to source this request") || "Rejected by agency";
+    } else if (!window.confirm("Accept this request and start SLA now?")) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const existingData = item.data || {};
+    const agencyName = existingData.agency_name || item.agency_name || currentUser?.agency_name || "Agency";
+    const slaDays = decision === "Accepted" ? getAgencySlaDays(agencyName) : Number(existingData.sla_days || 60);
+    const slaDueAt = decision === "Accepted" ? addDaysToIso(now, slaDays) : existingData.sla_due_at || null;
+
+    const nextData = {
+      ...existingData,
+      response_status: decision,
+      agency_decision: decision,
+      responded_at: now,
+      responded_by_name: currentUser?.name || currentUser?.email || "Agency User",
+      responded_by_email: currentUser?.email || "",
+      response_notes: responseNotes,
+      sla_status: decision === "Accepted" ? "Running" : "Not Started",
+      sla_started_at: decision === "Accepted" ? now : null,
+      sla_days: slaDays,
+      sla_due_at: slaDueAt,
+    };
+
+    const { error } = await supabase
+      .from("notification_events")
+      .update({
+        status: "Read",
+        read_at: now,
+        data: nextData,
+      })
+      .eq("id", item.id)
+      .eq("company_id", currentCompanyId);
+
+    if (error) return alert(`Agency response failed: ${error.message}`);
+
+    const responseTitle = `${agencyName} ${decision} Request ${existingData.request_no || ""}`.trim();
+    const responseMessage = decision === "Accepted"
+      ? `${agencyName} accepted request ${existingData.request_no || "-"}. SLA started now for ${slaDays} day(s). Due date: ${new Date(slaDueAt).toLocaleDateString()}.`
+      : `${agencyName} rejected request ${existingData.request_no || "-"}. Reason: ${responseNotes}`;
+
+    try {
+      await triggerExternalNotification("AGENCY_REQUEST_RESPONSE", {
+        company_id: currentCompanyId,
+        user_id: null,
+        agency_id: null,
+        original_agency_id: item.agency_id || existingData.agency_id || currentUser?.agency_id || null,
+        agency_name: agencyName,
+        title: responseTitle,
+        message: responseMessage,
+        priority: decision === "Accepted" ? "High" : "Medium",
+        related_table: "requests",
+        related_id: existingData.request_id || item.related_id || "",
+        request_id: existingData.request_id || "",
+        request_no: existingData.request_no || "",
+        response_status: decision,
+        response_notes: responseNotes,
+        sla_started_at: nextData.sla_started_at,
+        sla_days: nextData.sla_days,
+        sla_due_at: nextData.sla_due_at,
+      });
+    } catch (notifyError) {
+      console.warn("Company response notification failed", notifyError?.message || notifyError);
+    }
+
+    try {
+      await dispatchVisaFlowEmail({
+        type: "AGENCY_REQUEST_RESPONSE_EMAIL",
+        to: getCompanyEmailRecipient("notifications"),
+        subject: responseTitle,
+        text: responseMessage,
+        html: buildEmailCardHtml(responseTitle, [responseMessage], decision === "Accepted" ? "SLA counting has started from the agency acceptance time." : "No SLA will be counted for this rejected request alert."),
+        payload: nextData,
+      });
+    } catch (emailError) {
+      console.warn("Agency response email failed", emailError?.message || emailError);
+    }
+
+    await loadNotifications();
+    if (canViewEmailAdministration) await loadEmailLogs();
+    alert(decision === "Accepted" ? "Request accepted. SLA has started." : "Request rejected.");
+  }
+
   function openRequestAgencyNotification(request, fallbackLines = []) {
     if (!canNotifyAgencies) return alert("You do not have permission to notify agencies.");
 
@@ -5125,6 +5305,15 @@ const executiveDashboard = useMemo(() => {
           request_id: requestAgencyNotification.request.id || "",
           request_no: requestAgencyNotification.request.request_no || "",
           project_name: requestAgencyNotification.request.project_name || requestAgencyNotification.request.project || "",
+          response_required: true,
+          response_status: "Pending",
+          agency_decision: "Pending",
+          sla_status: "Not Started",
+          sla_started_at: null,
+          sla_days: getAgencySlaDays(agency.name),
+          sla_due_at: null,
+          sent_at: new Date().toISOString(),
+          email_to: agency.email || "",
           lines: agencyLines.map((line) => ({
             line_no: line.line_no || "",
             profession: line.profession || "",
@@ -5151,7 +5340,7 @@ const executiveDashboard = useMemo(() => {
             replyTo: getCompanyEmailRecipient("notifications"),
             subject: title,
             text: message,
-            html: buildEmailCardHtml(title, message.split(/\n+/).filter(Boolean), "Please login to VisaFlow Office Portal and start sourcing the requested candidates."),
+            html: buildEmailCardHtml(title, message.split(/\n+/).filter(Boolean), "Please login to VisaFlow Office Portal > Notifications and Accept or Reject this request. SLA will start only after acceptance."),
             payload: notificationPayload,
           });
           emailSent += 1;
@@ -17525,6 +17714,7 @@ if (!currentUser) {
                       <th>Type</th>
                       <th>Title</th>
                       <th>Message</th>
+                      <th>Decision / SLA</th>
                       <th>Created</th>
                       <th>Actions</th>
                     </tr>
@@ -17532,7 +17722,7 @@ if (!currentUser) {
                   <tbody>
                     {filteredNotificationRows.length === 0 ? (
                       <tr>
-                        <td colSpan="7" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
+                        <td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
                           No notifications found.
                         </td>
                       </tr>
@@ -17548,9 +17738,16 @@ if (!currentUser) {
                           <td>{item.type || item.status || "Notification"}</td>
                           <td>{getNotificationTitle(item)}</td>
                           <td style={{ maxWidth: "520px", whiteSpace: "normal" }}>{getNotificationMessage(item)}</td>
+                          <td>{renderAgencyRequestDecisionCell(item)}</td>
                           <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
                           <td>
                             <div className="row-actions">
+                              {currentRole === "Agency" && isAgencyRequestNotification(item) && getAgencyRequestDecision(item) === "Pending" && (
+                                <>
+                                  <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Accepted")}>Accept</button>
+                                  <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Rejected")}>Reject</button>
+                                </>
+                              )}
                               {getNotificationStatus(item) !== "Read" && (
                                 <button className="light-btn" onClick={() => markNotificationRead(item.id)}>Read</button>
                               )}
