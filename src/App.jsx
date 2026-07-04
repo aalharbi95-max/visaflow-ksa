@@ -600,6 +600,12 @@ function normalize(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function numberOrDefault(value, fallback = 0) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
 function isLoginAllowedSubscriptionStatus(value) {
   return ["active", "trial"].includes(normalize(value));
 }
@@ -6681,8 +6687,8 @@ function editAgreement(item) {
     response_sla_hours: item.response_sla_hours || 24,
     update_frequency_days: item.update_frequency_days || 7,
     delay_penalty_type: item.delay_penalty_type || "Fixed Amount Per Delayed Day",
-    delay_penalty_amount: item.delay_penalty_amount || 0,
-    delay_penalty_after_days: item.delay_penalty_after_days || 7,
+    delay_penalty_amount: item.delay_penalty_amount ?? 0,
+    delay_penalty_after_days: item.delay_penalty_after_days ?? 7,
     financial_guarantee_required: item.financial_guarantee_required || "No",
     financial_guarantee_amount: item.financial_guarantee_amount || "",
     replacement_guarantee_days: item.replacement_guarantee_days || 90,
@@ -6842,8 +6848,8 @@ async function saveAgreement(statusOverride = "") {
     sla_days: Number(agreementForm.sla_days || 60),
     response_sla_hours: Number(agreementForm.response_sla_hours || 24),
     update_frequency_days: Number(agreementForm.update_frequency_days || 7),
-    delay_penalty_amount: Number(agreementForm.delay_penalty_amount || 0),
-    delay_penalty_after_days: Number(agreementForm.delay_penalty_after_days || 7),
+    delay_penalty_amount: numberOrDefault(agreementForm.delay_penalty_amount, 0),
+    delay_penalty_after_days: numberOrDefault(agreementForm.delay_penalty_after_days, 7),
     financial_guarantee_amount: agreementForm.financial_guarantee_amount === "" ? null : Number(agreementForm.financial_guarantee_amount || 0),
     replacement_guarantee_days: Number(agreementForm.replacement_guarantee_days || 90),
     company_signature: agreementForm.company_signature || (nextStatus === "Pending Signature" ? `Sent electronically by ${currentUser?.name || "Company User"}` : ""),
@@ -10502,15 +10508,15 @@ function getAgencyAgreementPolicy(agencyName) {
     agreement: activeAgreement,
     agreement_no: activeAgreement?.agreement_no || "Default Policy",
     has_active_agreement: Boolean(activeAgreement),
-    sla_days: Number(activeAgreement?.sla_days || 60),
-    response_sla_hours: Number(activeAgreement?.response_sla_hours || 24),
-    update_frequency_days: Number(activeAgreement?.update_frequency_days || 7),
+    sla_days: numberOrDefault(activeAgreement?.sla_days, 60),
+    response_sla_hours: numberOrDefault(activeAgreement?.response_sla_hours, 24),
+    update_frequency_days: numberOrDefault(activeAgreement?.update_frequency_days, 7),
     delay_penalty_type: activeAgreement?.delay_penalty_type || "Fixed Amount Per Delayed Day",
-    delay_penalty_amount: Number(activeAgreement?.delay_penalty_amount || 0),
-    delay_penalty_after_days: Number(activeAgreement?.delay_penalty_after_days || 7),
+    delay_penalty_amount: numberOrDefault(activeAgreement?.delay_penalty_amount, 0),
+    delay_penalty_after_days: numberOrDefault(activeAgreement?.delay_penalty_after_days, 7),
     financial_guarantee_required: activeAgreement?.financial_guarantee_required || "No",
-    financial_guarantee_amount: Number(activeAgreement?.financial_guarantee_amount || 0),
-    replacement_guarantee_days: Number(activeAgreement?.replacement_guarantee_days || 90),
+    financial_guarantee_amount: numberOrDefault(activeAgreement?.financial_guarantee_amount, 0),
+    replacement_guarantee_days: numberOrDefault(activeAgreement?.replacement_guarantee_days, 90),
   };
 }
 
@@ -10704,17 +10710,17 @@ function calculateAcceptedAgencyRequestPenaltyRows() {
       if (!assignedQty || Number.isNaN(startedAt.getTime())) return null;
 
       const notificationSlaDays = getAgencyNotificationSlaDays(alert);
-      const slaDays = Number(notificationSlaDays || policy.sla_days || 60);
+      const slaDays = numberOrDefault(notificationSlaDays, numberOrDefault(policy.sla_days, 60));
       const dueAtRaw = getAgencyNotificationSlaDueAt(alert);
       const dueAt = dueAtRaw ? new Date(dueAtRaw) : new Date(addDaysToIso(startedAtRaw, slaDays));
       const actualDays = Math.max(0, Math.floor((today - startedAt) / (1000 * 60 * 60 * 24)));
       const delayDays = Math.max(Math.floor((today - dueAt) / (1000 * 60 * 60 * 24)), 0);
-      const graceDays = Number(policy.delay_penalty_after_days || 0);
+      const graceDays = numberOrDefault(policy.delay_penalty_after_days, 0);
       const penaltyDays = Math.max(delayDays - graceDays, 0);
       const deliveredQty = getAgencyAlertCandidateRows(alert).filter(isDeliveredWorkerForSla).length;
       const delayedWorkers = Math.max(assignedQty - deliveredQty, 0);
       const fixedPenalty = String(policy.delay_penalty_type || "").toLowerCase().includes("fixed");
-      const penaltyRate = Number(policy.delay_penalty_amount || 0);
+      const penaltyRate = numberOrDefault(policy.delay_penalty_amount, 0);
       const calculatedAmount = fixedPenalty ? delayedWorkers * penaltyDays * penaltyRate : 0;
 
       if (delayDays <= 0 || penaltyDays <= 0 || delayedWorkers <= 0 || calculatedAmount <= 0) return null;
