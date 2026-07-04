@@ -3481,7 +3481,7 @@ async function loadNotifications() {
     .select("id, company_id, user_id, agency_id, type, title, message, priority, status, delivery_status, related_table, related_id, read_at, created_at, data")
     .eq("company_id", currentCompanyId)
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(1000);
 
   if (currentRole === "Agency" && currentUser?.agency_id) {
     query = query.eq("agency_id", currentUser.agency_id);
@@ -10526,6 +10526,167 @@ function getCandidateSlaDelay(candidate, agencyName = candidate?.agency) {
 }
 
 
+
+const SLA_DELIVERED_WORKER_STATUSES = [
+  "Arrived KSA",
+  "Arrived",
+  "Joined",
+];
+
+const SLA_FAILED_WORKER_STATUSES = [
+  "Rejected",
+  "Interview Failed",
+  "Medical Failed",
+  "Cancelled",
+  "KSA Medical Failed",
+  "Refused to Work",
+  "Absconded",
+];
+
+function isDeliveredWorkerForSla(candidate) {
+  if (!candidate) return false;
+  return (
+    SLA_DELIVERED_WORKER_STATUSES.includes(candidate.status) ||
+    Boolean(candidate.arrival_date) ||
+    Boolean(candidate.joining_date)
+  );
+}
+
+function isFailedWorkerForSla(candidate) {
+  if (!candidate) return false;
+  return SLA_FAILED_WORKER_STATUSES.includes(candidate.status);
+}
+
+function candidateMatchesPenaltyLine(candidate, line) {
+  if (!candidate || !line) return false;
+
+  if (candidate.request_line_id && line.id) {
+    return String(candidate.request_line_id) === String(line.id);
+  }
+
+  const professionOk = isUnifiedProfessionMatch(candidate.profession, line.profession);
+  const nationalityOk = normalize(candidate.nationality) === normalize(line.nationality);
+  const genderOk = !candidate.gender || !line.gender || normalize(candidate.gender) === normalize(line.gender);
+
+  return professionOk && nationalityOk && genderOk;
+}
+
+function getAcceptedAgencyRequestPenaltyAlerts() {
+  return (notifications || []).filter((item) => {
+    const data = item?.data || {};
+    return (
+      item?.type === "NEW_REQUEST_AGENCY_ALERT" &&
+      ["accepted", "accept"].includes(normalize(data.response_status || data.agency_decision)) &&
+      data.sla_started_at &&
+      Array.isArray(data.lines) &&
+      data.lines.length > 0
+    );
+  });
+}
+
+function getPenaltyLineSummary(lines = []) {
+  const labels = (lines || [])
+    .map((line) => `${line.profession || "-"} / ${line.nationality || "-"} / ${line.gender || "-"}`)
+    .filter(Boolean);
+  const unique = Array.from(new Set(labels));
+  if (unique.length === 0) return "Accepted request lines";
+  if (unique.length <= 2) return unique.join(" | ");
+  return `Multiple accepted lines (${unique.length})`;
+}
+
+function getAgencyAlertCandidateRows(alert) {
+  const data = alert?.data || {};
+  const alertLines = Array.isArray(data.lines) ? data.lines : [];
+  const requestNo = String(data.request_no || "").trim();
+  const agencyName = data.agency_name || "";
+
+  return (candidates || []).filter((candidate) => {
+    if (requestNo && String(candidate.request_no || "") !== requestNo) return false;
+    if (agencyName && normalize(candidate.agency) !== normalize(agencyName)) return false;
+    if (isFailedWorkerForSla(candidate)) return false;
+    return alertLines.some((line) => candidateMatchesPenaltyLine(candidate, line));
+  });
+}
+
+function getPenaltyRowUniqueKey(item = {}) {
+  if (item.candidate_id) {
+    return `candidate:${String(item.candidate_id)}:${String(item.agreement_no || "")}`;
+  }
+
+  return [
+    "agency-request",
+    normalize(item.agency_name),
+    String(item.request_no || ""),
+    String(item.agreement_no || ""),
+    normalize(item.profession),
+  ].join(":");
+}
+
+function calculateAcceptedAgencyRequestPenaltyRows() {
+  const today = new Date();
+
+  return getAcceptedAgencyRequestPenaltyAlerts()
+    .map((alert) => {
+      const data = alert.data || {};
+      const agencyName = data.agency_name || "Unassigned Agency";
+      const policy = getAgencyAgreementPolicy(agencyName);
+      const agreement = policy.agreement || null;
+      const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
+      const request = requests.find((item) => String(item.request_no || "") === String(data.request_no || ""));
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+      const assignedQty = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+
+      const startedAt = new Date(data.sla_started_at);
+      if (!assignedQty || Number.isNaN(startedAt.getTime())) return null;
+
+      const slaDays = Number(data.sla_days || policy.sla_days || 60);
+      const actualDays = Math.max(0, Math.floor((today - startedAt) / (1000 * 60 * 60 * 24)));
+      const delayDays = Math.max(actualDays - slaDays, 0);
+      const graceDays = Number(policy.delay_penalty_after_days || 0);
+      const penaltyDays = Math.max(delayDays - graceDays, 0);
+      const deliveredQty = getAgencyAlertCandidateRows(alert).filter(isDeliveredWorkerForSla).length;
+      const delayedWorkers = Math.max(assignedQty - deliveredQty, 0);
+      const fixedPenalty = String(policy.delay_penalty_type || "").toLowerCase().includes("fixed");
+      const penaltyRate = Number(policy.delay_penalty_amount || 0);
+      const calculatedAmount = fixedPenalty ? delayedWorkers * penaltyDays * penaltyRate : 0;
+
+      if (delayDays <= 0 || penaltyDays <= 0 || delayedWorkers <= 0 || calculatedAmount <= 0) return null;
+
+      return {
+        company_id: currentCompanyId,
+        penalty_no: "",
+        agreement_id: agreement?.id || null,
+        agreement_no: policy.agreement_no || "Default Policy",
+        agency_id: agency?.id || alert.agency_id || null,
+        agency_name: agencyName,
+        candidate_id: null,
+        candidate_name: `${delayedWorkers} delayed worker(s) from ${assignedQty} assigned`,
+        request_no: data.request_no || "-",
+        profession: getPenaltyLineSummary(lines),
+        project: data.project_name || request?.project_name || request?.project || "-",
+        status: "Pending Review",
+        sla_days: slaDays,
+        actual_days: actualDays,
+        delay_days: delayDays,
+        grace_days: graceDays,
+        penalty_days: penaltyDays,
+        penalty_type: policy.delay_penalty_type || "Fixed Amount Per Delayed Day",
+        penalty_rate: penaltyRate,
+        calculated_amount: calculatedAmount,
+        approved_amount: null,
+        decision_notes: `Auto calculated on delayed workers only. Assigned: ${assignedQty}, Delivered/Arrived/Joined: ${deliveredQty}, Delayed: ${delayedWorkers}. Source notification: ${alert.id || "-"}.`,
+        agency_justification: "",
+        source: "live",
+        source_notification_id: alert.id || "",
+        assigned_qty: assignedQty,
+        delivered_qty: deliveredQty,
+        delayed_workers: delayedWorkers,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0));
+}
+
 function generatePenaltyNo(indexOffset = 0) {
   const year = new Date().getFullYear();
   const prefix = `PEN-${year}-`;
@@ -10539,54 +10700,16 @@ function generatePenaltyNo(indexOffset = 0) {
 }
 
 function calculatePenaltyRegisterRows() {
-  return candidates
-    .map((candidate) => {
-      const agencyName = candidate.agency || "Unassigned Agency";
-      const sla = getCandidateSlaDelay(candidate, agencyName);
-      const policy = sla.policy || getAgencyAgreementPolicy(agencyName);
-      const agreement = policy.agreement || null;
-      const calculatedAmount = Number(sla.penaltyExposure || 0);
-      if (!sla.isDelayed || calculatedAmount <= 0) return null;
-
-      const request = requests.find((item) => String(item.request_no || "") === String(candidate.request_no || ""));
-      const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
-
-      return {
-        company_id: currentCompanyId,
-        penalty_no: "",
-        agreement_id: agreement?.id || null,
-        agreement_no: policy.agreement_no || "Default Policy",
-        agency_id: agency?.id || null,
-        agency_name: agencyName,
-        candidate_id: String(candidate.id || ""),
-        candidate_name: candidate.candidate_name || "-",
-        request_no: candidate.request_no || "-",
-        profession: candidate.profession || request?.profession || "-",
-        project: candidate.project || request?.project_name || request?.project || "-",
-        status: "Pending Review",
-        sla_days: Number(policy.sla_days || 60),
-        actual_days: Number(sla.cycleDays || 0),
-        delay_days: Number(sla.delayDays || 0),
-        grace_days: Number(policy.delay_penalty_after_days || 0),
-        penalty_days: Number(sla.penaltyDays || 0),
-        penalty_type: policy.delay_penalty_type || "Fixed Amount Per Delayed Day",
-        penalty_rate: Number(policy.delay_penalty_amount || 0),
-        calculated_amount: calculatedAmount,
-        approved_amount: null,
-        decision_notes: "",
-        agency_justification: "",
-        source: "live",
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0));
+  // Financial penalty is calculated on delayed workers only:
+  // accepted quantity assigned to the agency - delivered/arrived/joined workers after SLA + grace period.
+  return calculateAcceptedAgencyRequestPenaltyRows();
 }
 
 function getPenaltyRegisterDisplayRows() {
   const savedRows = (agencyPenalties || []).map((item) => ({ ...item, source: "saved" }));
-  const savedKeys = new Set(savedRows.map((item) => `${String(item.candidate_id || "")}-${String(item.agreement_no || "")}`));
+  const savedKeys = new Set(savedRows.map(getPenaltyRowUniqueKey));
   const liveRows = calculatePenaltyRegisterRows()
-    .filter((item) => !savedKeys.has(`${String(item.candidate_id || "")}-${String(item.agreement_no || "")}`))
+    .filter((item) => !savedKeys.has(getPenaltyRowUniqueKey(item)))
     .map((item) => ({ ...item, status: "Calculated - Not Saved", source: "live" }));
   return [...savedRows, ...liveRows].sort((a, b) => {
     const statusWeight = { "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Waived: 6 };
@@ -10602,21 +10725,24 @@ async function generatePenaltyRegister() {
   let inserted = 0;
   let updated = 0;
   for (const [index, row] of liveRows.entries()) {
-    const existing = agencyPenalties.find((item) =>
-      String(item.candidate_id || "") === String(row.candidate_id || "") &&
-      String(item.agreement_no || "") === String(row.agreement_no || "")
-    );
+    const rowKey = getPenaltyRowUniqueKey(row);
+    const existing = agencyPenalties.find((item) => getPenaltyRowUniqueKey(item) === rowKey);
 
     const payload = {
       ...row,
       penalty_no: existing?.penalty_no || generatePenaltyNo(index),
-      candidate_id: String(row.candidate_id || ""),
+      candidate_id: row.candidate_id ? String(row.candidate_id) : null,
       status: existing?.status || "Pending Review",
       approved_amount: existing?.approved_amount ?? null,
-      decision_notes: existing?.decision_notes || "",
+      decision_notes: existing?.decision_notes || row.decision_notes || "",
       updated_at: new Date().toISOString(),
     };
     delete payload.source;
+    delete payload.source_notification_id;
+    delete payload.assigned_qty;
+    delete payload.delivered_qty;
+    delete payload.delayed_workers;
+    delete payload.penalty_key;
 
     if (existing?.id) {
       if (["Approved", "Reduced", "Waived"].includes(existing.status)) continue;
@@ -18221,7 +18347,7 @@ if (!currentUser) {
                   <thead>
                     <tr>
                       <th>Date</th>
-                      <th>Candidate</th>
+                      <th>Worker / Scope</th>
                       <th>Project</th>
                       <th>Request No</th>
                       <th>Status</th>
@@ -18863,7 +18989,7 @@ if (!currentUser) {
                   <thead>
                     <tr>
                       <th>Date</th>
-                      <th>Candidate</th>
+                      <th>Worker / Scope</th>
                       <th>Project</th>
                       <th>Request No</th>
                       <th>Status</th>
@@ -22419,10 +22545,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {getPenaltyRegisterDisplayRows().length === 0 ? (
-            <tr><td colSpan="17">No labor SLA delay penalties calculated yet. Penalties are generated only for workers/candidates delayed beyond the agreed SLA.</td></tr>
+            <tr><td colSpan="17">No labor SLA delay penalties calculated yet. Penalties are generated only after an agency accepts a request, the SLA plus grace period is exceeded, and only for the delayed remaining workers.</td></tr>
           ) : (
             getPenaltyRegisterDisplayRows().map((item) => (
-              <tr key={`${item.source}-${item.id || item.candidate_id}-${item.agreement_no}`}>
+              <tr key={`${item.source}-${item.id || item.candidate_id || item.request_no}-${item.agency_name}-${item.agreement_no}-${item.profession}`}>
                 <td>{item.penalty_no || "Auto"}</td>
                 <td>{item.agency_name || "-"}</td>
                 <td>{item.agreement_no || "-"}</td>
