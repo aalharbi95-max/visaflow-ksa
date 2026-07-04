@@ -4341,12 +4341,32 @@ const cleanOperationalChanges = useMemo(
 );
 
 const mobilizationRequestRows = useMemo(() => {
+  // FINAL FIX: Interview KPI is calculated from request_lines, not total request quantity.
   const countPercent = (value, total) => (total ? Math.min(Math.round((Number(value || 0) / Number(total || 0)) * 100), 100) : 0);
+  const isNoInterviewLine = (line) => normalize(line?.interview_required) === "no interview";
+  const sumLineQty = (lines = []) => lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+
+  const getCandidateKey = (item = {}) =>
+    String(item.candidate_id || item.id || item.passport_no || item.candidate_name || "").trim();
+
+  const findInterviewCandidate = (interview, candidateRows = []) =>
+    candidateRows.find(
+      (candidate) =>
+        String(interview.candidate_id || "") === String(candidate.id || "") ||
+        String(interview.passport_no || "") === String(candidate.passport_no || "") ||
+        normalize(interview.candidate_name) === normalize(candidate.candidate_name)
+    ) || null;
 
   return requests.map((request) => {
     const requestNo = request.request_no;
-    const qty = Number(request.quantity || request.qty || 0);
+    const requestLineItems = getRequestLinesForRequest(request);
+    const qty = getRequestTotalQty(request);
     const saudiRequest = isSaudiRequest(request);
+
+    const interviewRequiredLines = requestLineItems.filter((line) => !isNoInterviewLine(line));
+    const noInterviewLines = requestLineItems.filter((line) => isNoInterviewLine(line));
+    const interviewRequiredQty = sumLineQty(interviewRequiredLines);
+    const noInterviewQty = sumLineQty(noInterviewLines);
 
     const requestCandidates = candidates.filter(
       (candidate) =>
@@ -4389,13 +4409,33 @@ const mobilizationRequestRows = useMemo(() => {
         )
     );
 
-    const interviewRequired = request.interview_required || "Required";
-    const interviewType = request.interview_type || "Online";
+    const candidateNeedsInterview = (candidate) =>
+      interviewRequiredQty > 0 && interviewRequiredLines.some((line) => candidateMatchesRequestLine(candidate, line));
 
-    const interviewPassed =
-      interviewRequired === "No Interview"
-        ? requestCandidates.length
-        : requestInterviews.filter((interview) => interview.status === "Passed").length;
+    const passedInterviewCandidateKeys = new Set();
+    requestInterviews
+      .filter((interview) => interview.status === "Passed")
+      .forEach((interview) => {
+        const relatedCandidate = findInterviewCandidate(interview, allRequestCandidates);
+        const belongsToInterviewLine = relatedCandidate
+          ? candidateNeedsInterview(relatedCandidate)
+          : interviewRequiredLines.some((line) => candidateMatchesRequestLine(interview, line));
+
+        if (!belongsToInterviewLine) return;
+        const key = getCandidateKey(relatedCandidate || interview) || `${interview.id || "interview"}-${passedInterviewCandidateKeys.size}`;
+        passedInterviewCandidateKeys.add(key);
+      });
+
+    const interviewPassed = interviewRequiredQty > 0 ? passedInterviewCandidateKeys.size : 0;
+    const interviewProgressQty = interviewRequiredQty > 0
+      ? noInterviewQty + Math.min(interviewPassed, interviewRequiredQty)
+      : qty;
+    const interviewProgressPercent = countPercent(interviewProgressQty, qty);
+    const interviewDisplayPercent = interviewRequiredQty > 0 ? countPercent(interviewPassed, interviewRequiredQty) : 100;
+    const interviewRequired = interviewRequiredQty === 0 ? "No Interview" : noInterviewQty > 0 ? "Mixed" : "Required";
+    const interviewType = interviewRequiredLines.length
+      ? Array.from(new Set(interviewRequiredLines.map((line) => line.interview_type || "Online").filter(Boolean))).join(", ")
+      : "N/A";
 
     const medicalDone = requestCandidates.filter(
       (candidate) =>
@@ -4482,13 +4522,13 @@ const mobilizationRequestRows = useMemo(() => {
     const weightedSteps = saudiRequest
       ? [
           countPercent(requestCandidates.length, qty),
-          countPercent(interviewPassed, qty),
+          interviewProgressPercent,
           countPercent(contractSigned, qty),
           countPercent(joined, qty),
         ]
       : [
           countPercent(requestCandidates.length, qty),
-          countPercent(interviewPassed, qty),
+          interviewProgressPercent,
           countPercent(medicalDone, qty),
           countPercent(visaReady, qty),
           countPercent(contractSigned, qty),
@@ -4509,15 +4549,15 @@ const mobilizationRequestRows = useMemo(() => {
     else if (contractSigned > 0) stage = "Contract Stage";
     else if (visaReady > 0 && !saudiRequest) stage = "Visa Stage";
     else if (medicalDone > 0) stage = "Medical Stage";
-    else if (interviewPassed > 0) stage = interviewRequired === "No Interview" ? "Candidate Pipeline" : "Interview Passed";
+    else if (interviewRequiredQty > 0 && interviewPassed > 0) stage = "Interview Passed";
     else if (requestCandidates.length > 0) stage = "Candidate Pipeline";
 
     return {
       request_no: requestNo,
       project_name: request.project_name || request.project || "-",
-      profession: request.profession || "-",
-      nationality: request.nationality || "-",
-      gender: request.gender || "-",
+      profession: getRequestLineSummary(request, "profession"),
+      nationality: getRequestLineSummary(request, "nationality"),
+      gender: getRequestLineSummary(request, "gender"),
       qty,
       isSaudi: saudiRequest,
       allocatedVisaQty,
@@ -4526,7 +4566,11 @@ const mobilizationRequestRows = useMemo(() => {
       rejectedCandidates: allRequestCandidates.length - requestCandidates.length,
       interviewRequired,
       interviewType,
+      interviewRequiredQty,
+      noInterviewQty,
       interviewPassed,
+      interviewDisplayPercent,
+      interviewProgressQty,
       medicalDone,
       visaReady,
       contractSigned,
@@ -4537,7 +4581,7 @@ const mobilizationRequestRows = useMemo(() => {
       remaining: remainingRecruitment,
       remainingJoining: Math.max(qty - joined, 0),
       candidatePercent: countPercent(requestCandidates.length, qty),
-      interviewPercent: interviewRequired === "No Interview" ? 100 : countPercent(interviewPassed, qty),
+      interviewPercent: interviewProgressPercent,
       medicalPercent: countPercent(medicalDone, qty),
       visaPercent: saudiRequest ? 100 : countPercent(visaReady, qty),
       contractPercent: countPercent(contractSigned, qty),
@@ -21035,7 +21079,8 @@ Save Authorization
               <b>Project:</b> {selectedMobilizationRow.project_name} |{" "}
               <b>Profession:</b> {selectedMobilizationRow.profession} |{" "}
               <b>Nationality:</b> {selectedMobilizationRow.nationality} |{" "}
-              <b>Gender:</b> {selectedMobilizationRow.gender}
+              <b>Gender:</b> {selectedMobilizationRow.gender} |{" "}
+              <b>Interview Scope:</b> Required {selectedMobilizationRow.interviewRequiredQty} / No Interview {selectedMobilizationRow.noInterviewQty}
             </div>
             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
               <span style={{ fontSize: "13px", color: "#64748b" }}>Current Stage</span>
@@ -21046,11 +21091,15 @@ Save Authorization
           <div className="dashboard-grid">
             <Stat title="Required Qty" value={selectedMobilizationRow.qty} />
             <Stat title="Candidates" value={`${selectedMobilizationRow.candidates} / ${selectedMobilizationRow.qty} (${selectedMobilizationRow.candidatePercent}%)`} />
+            <Stat title="Interview Required Qty" value={selectedMobilizationRow.interviewRequiredQty} className={selectedMobilizationRow.interviewRequiredQty > 0 ? "warning" : "passed"} />
             <Stat
-              title={selectedMobilizationRow.interviewRequired === "No Interview" ? "Interview" : "Interview Passed"}
-              value={selectedMobilizationRow.interviewRequired === "No Interview" ? "Not Required" : `${selectedMobilizationRow.interviewPassed} / ${selectedMobilizationRow.qty} (${selectedMobilizationRow.interviewPercent}%)`}
-              className={selectedMobilizationRow.interviewRequired === "No Interview" ? "warning" : "passed"}
+              title="Interview Passed (Required Lines Only)"
+              value={selectedMobilizationRow.interviewRequiredQty > 0 ? `${selectedMobilizationRow.interviewPassed} / ${selectedMobilizationRow.interviewRequiredQty} (${selectedMobilizationRow.interviewDisplayPercent}%)` : "Not Required"}
+              className={selectedMobilizationRow.interviewRequiredQty > 0 && selectedMobilizationRow.interviewPassed < selectedMobilizationRow.interviewRequiredQty ? "warning" : "passed"}
             />
+            {selectedMobilizationRow.noInterviewQty > 0 && (
+              <Stat title="No Interview Qty" value={selectedMobilizationRow.noInterviewQty} className="passed" />
+            )}
             <Stat title="Medical Done" value={`${selectedMobilizationRow.medicalDone} / ${selectedMobilizationRow.qty} (${selectedMobilizationRow.medicalPercent}%)`} className="warning" />
 
             {!selectedMobilizationRow.isSaudi && (
@@ -21213,7 +21262,7 @@ Save Authorization
                 <td>{row.nationality}</td>
                 <td>{row.qty}</td>
                 <td>{row.candidates}</td>
-                <td>{row.interviewRequired === "No Interview" ? "N/A" : row.interviewPassed}</td>
+                <td>{row.interviewRequiredQty > 0 ? `${row.interviewPassed} / ${row.interviewRequiredQty}` : "N/A"}</td>
                 <td>{row.medicalDone}</td>
                 <td>{row.isSaudi ? "N/A" : row.visaReady}</td>
                 <td>{row.contractSigned}</td>
