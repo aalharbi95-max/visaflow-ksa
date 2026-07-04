@@ -7026,6 +7026,16 @@ async function deleteAgreement(id) {
       .filter((item) => isCurrentAgencyPenaltyRecord(item));
   }
 
+  function canAgencySubmitPenaltyObjection(item = {}) {
+    const status = String(item?.status || "");
+    if (!["Approved", "Reduced"].includes(status)) return false;
+
+    // Allow only one agency objection after the company issues a final decision.
+    // Once the agency has submitted an objection/justification and the company
+    // makes a final decision again, the portal must show the decision as finalized.
+    return !Boolean(item?.agency_justification_at || item?.agency_justification);
+  }
+
   function getCandidateInterview(candidate) {
     if (!candidate) return null;
 
@@ -11001,6 +11011,10 @@ async function submitPenaltyJustification(item) {
   if (!item?.id) return;
 
   const isFinalDecision = ["Approved", "Reduced"].includes(String(item.status || ""));
+  if (isFinalDecision && !canAgencySubmitPenaltyObjection(item)) {
+    return alert("Final decision has already been issued after the agency objection. This penalty is finalized.");
+  }
+
   const promptText = isFinalDecision
     ? "Write the agency objection / اكتب اعتراض المكتب على الغرامة"
     : "Write the agency justification / اكتب مبررات المكتب";
@@ -21651,8 +21665,10 @@ Save Authorization
                         <span>Under company review</span>
                       ) : item.status === "Agency Objection Submitted" ? (
                         <span>Objection under company review</span>
-                      ) : ["Approved", "Reduced"].includes(item.status) ? (
+                      ) : canAgencySubmitPenaltyObjection(item) ? (
                         <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Objection</button>
+                      ) : ["Approved", "Reduced"].includes(item.status) ? (
+                        <span>Finalized</span>
                       ) : item.status === "Waived" ? (
                         <span>Waived</span>
                       ) : "-"}
