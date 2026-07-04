@@ -10629,12 +10629,18 @@ function getAgencyNotificationLines(item = {}) {
 }
 
 function getAcceptedAgencyRequestPenaltyAlerts() {
+  const penaltyNotificationTypes = new Set([
+    "NEW_REQUEST_AGENCY_ALERT",
+    "AGENCY_REQUEST_NOTIFICATION",
+  ]);
+
   return (notifications || []).filter((item) => {
-    const notificationType = item?.type;
+    const data = getAgencyNotificationPayload(item);
+    const notificationType = String(item?.type || data.type || "").trim();
     const accepted = ["accepted", "accept"].includes(normalize(getAgencyNotificationResponseStatus(item)));
     const hasSlaStart = Boolean(getAgencyNotificationSlaStartedAt(item));
     const hasLines = getAgencyNotificationLines(item).length > 0;
-    return notificationType === "NEW_REQUEST_AGENCY_ALERT" && accepted && hasSlaStart && hasLines;
+    return penaltyNotificationTypes.has(notificationType) && accepted && hasSlaStart && hasLines;
   });
 }
 
@@ -10688,7 +10694,10 @@ function calculateAcceptedAgencyRequestPenaltyRows() {
       const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
       const request = requests.find((item) => String(item.request_no || "") === String(requestNo || ""));
       const lines = getAgencyNotificationLines(alert);
-      const assignedQty = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+      const assignedQty = lines.reduce((sum, line) => {
+        const lineQty = Number(line.quantity ?? line.qty ?? line.allocated_qty ?? line.assigned_qty ?? 0);
+        return sum + (Number.isFinite(lineQty) ? lineQty : 0);
+      }, 0);
 
       const startedAtRaw = getAgencyNotificationSlaStartedAt(alert);
       const startedAt = new Date(startedAtRaw);
