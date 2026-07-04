@@ -10817,7 +10817,7 @@ function getPenaltyRegisterDisplayRows() {
     .filter((item) => !savedKeys.has(getPenaltyRowUniqueKey(item)))
     .map((item) => ({ ...item, status: "Calculated - Not Saved", source: "live" }));
   return [...savedRows, ...liveRows].sort((a, b) => {
-    const statusWeight = { "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Waived: 6 };
+    const statusWeight = { "Agency Objection Submitted": 0, "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Waived: 6 };
     return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) || Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0);
   });
 }
@@ -10999,17 +10999,30 @@ async function waivePenalty(item, defaultNote = "") {
 async function submitPenaltyJustification(item) {
   if (currentRole !== "Agency") return alert("Only agency users can submit justifications.");
   if (!item?.id) return;
-  const justification = window.prompt("Write the agency justification / اكتب مبررات المكتب", item.agency_justification || "");
+
+  const isFinalDecision = ["Approved", "Reduced"].includes(String(item.status || ""));
+  const promptText = isFinalDecision
+    ? "Write the agency objection / اكتب اعتراض المكتب على الغرامة"
+    : "Write the agency justification / اكتب مبررات المكتب";
+  const justification = window.prompt(promptText, item.agency_justification || "");
   if (!justification) return;
+
   const now = new Date().toISOString();
+  const nextStatus = isFinalDecision ? "Agency Objection Submitted" : "Justification Submitted";
+  const existingNotes = String(item.decision_notes || "").trim();
+  const objectionNote = isFinalDecision
+    ? `${existingNotes ? `${existingNotes}\n` : ""}Agency submitted an objection after final decision on ${new Date().toLocaleString()}.`
+    : existingNotes;
+
   const { error } = await supabase
     .from("agency_penalties")
     .update({
-      status: "Justification Submitted",
+      status: nextStatus,
       agency_justification: justification,
       agency_justification_by: currentUser?.name || currentUser?.email || "Agency User",
       agency_justification_email: currentUser?.email || "",
       agency_justification_at: now,
+      decision_notes: objectionNote,
       updated_at: now,
     })
     .eq("id", item.id);
@@ -11020,7 +11033,7 @@ async function submitPenaltyJustification(item) {
     console.warn("Penalty justification email failed", emailError?.message || emailError);
   }
   await loadAgencyPenalties();
-  alert("Justification submitted to company for review.");
+  alert(isFinalDecision ? "Objection submitted to company for review." : "Justification submitted to company for review.");
 }
 
 async function approveFinalPenalty(item, defaultNote = "") {
@@ -21636,8 +21649,10 @@ Save Authorization
                         <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Justification</button>
                       ) : item.status === "Justification Submitted" ? (
                         <span>Under company review</span>
+                      ) : item.status === "Agency Objection Submitted" ? (
+                        <span>Objection under company review</span>
                       ) : ["Approved", "Reduced"].includes(item.status) ? (
-                        <span>Finalized</span>
+                        <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Objection</button>
                       ) : item.status === "Waived" ? (
                         <span>Waived</span>
                       ) : "-"}
@@ -22672,7 +22687,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     <div className="dashboard-grid">
       <Stat title="Calculated Penalties" value={getPenaltyRegisterDisplayRows().filter((x) => x.source === "live" || x.status === "Pending Review").length} className="warning" />
       <Stat title="Sent to Agency" value={agencyPenalties.filter((x) => x.status === "Sent to Agency").length} />
-      <Stat title="Justifications" value={agencyPenalties.filter((x) => x.status === "Justification Submitted").length} className="warning" />
+      <Stat title="Justifications" value={agencyPenalties.filter((x) => ["Justification Submitted", "Agency Objection Submitted"].includes(x.status)).length} className="warning" />
       <Stat title="Approved" value={`${Number(agencyPenalties.filter((x) => ["Approved", "Reduced"].includes(x.status)).reduce((sum, x) => sum + Number(x.approved_amount || 0), 0)).toLocaleString()} SAR`} className="danger" />
       <Stat title="Waived" value={`${Number(agencyPenalties.filter((x) => x.status === "Waived").reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
     </div>
@@ -22741,10 +22756,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                       <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
                       <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
                     </>
-                  ) : item.status === "Justification Submitted" ? (
+                  ) : ["Justification Submitted", "Agency Objection Submitted"].includes(item.status) ? (
                     <>
-                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification accepted by company.")}>Accept Justification</button>
-                      <button className="danger" onClick={() => approveFinalPenalty(item, "Agency justification rejected by company. Penalty approved.")}>Reject & Approve</button>
+                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification/objection accepted by company.")}>Accept Justification</button>
+                      <button className="danger" onClick={() => approveFinalPenalty(item, "Agency justification/objection rejected by company. Penalty approved.")}>Reject & Approve</button>
                       <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
                     </>
                   ) : ["Approved", "Reduced", "Waived"].includes(item.status) ? (
