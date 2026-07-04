@@ -2860,12 +2860,13 @@ Cancel = إضافتها كوظيفة مستقلة`
       if (currentUser?.agency_id) query = query.eq("id", currentUser.agency_id);
       else if (currentUser?.agency_name) query = query.eq("name", currentUser.agency_name);
       else { setter([]); return; }
+    } else if (table === "agency_penalties") {
+      // Agency users should see penalties sent to their agency even if the agency display name changed.
+      // Fetch all non-internal penalties for the active company, then filter safely in the browser by agency_id / agency_name / email.
+      query = query.neq("status", "Pending Review");
     } else if (agencyNameFields[table]) {
       if (!currentUser?.agency_name) { setter([]); return; }
       query = query.eq(agencyNameFields[table], currentUser.agency_name);
-      if (table === "agency_penalties") {
-        query = query.neq("status", "Pending Review");
-      }
     } else if (table === "agency_score_history") {
       if (!currentUser?.agency_id) { setter([]); return; }
       query = query.eq("agency_id", currentUser.agency_id);
@@ -2879,8 +2880,14 @@ Cancel = إضافتها كوظيفة مستقلة`
     return;
   }
 
-  console.log(table, data?.length, data);
-  setter(data || []);
+  let rows = data || [];
+
+  if (currentRole === "Agency" && table === "agency_penalties") {
+    rows = rows.filter((item) => isCurrentAgencyPenaltyRecord(item));
+  }
+
+  console.log(table, rows?.length, rows);
+  setter(rows || []);
 }
 
   const loadRequests = () => loadTable("requests", setRequests);
@@ -6994,6 +7001,31 @@ async function deleteAgreement(id) {
     return candidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
   }
 
+  function isCurrentAgencyPenaltyRecord(item = {}) {
+    if (currentRole !== "Agency") return true;
+
+    const userAgencyId = String(currentUser?.agency_id || "").trim();
+    const rowAgencyId = String(item?.agency_id || "").trim();
+    if (userAgencyId && rowAgencyId && userAgencyId === rowAgencyId) return true;
+
+    const rowAgencyName = normalize(item?.agency_name || item?.agency || "");
+    const userAgencyName = normalize(currentUser?.agency_name || "");
+    const userEmail = normalize(currentUser?.email || "");
+    const userName = normalize(currentUser?.name || "");
+
+    return Boolean(
+      (rowAgencyName && userAgencyName && rowAgencyName === userAgencyName) ||
+      (rowAgencyName && userEmail && rowAgencyName === userEmail) ||
+      (rowAgencyName && userName && rowAgencyName === userName)
+    );
+  }
+
+  function getOfficeVisiblePenalties() {
+    return (agencyPenalties || [])
+      .filter((item) => String(item?.status || "") !== "Pending Review")
+      .filter((item) => isCurrentAgencyPenaltyRecord(item));
+  }
+
   function getCandidateInterview(candidate) {
     if (!candidate) return null;
 
@@ -10894,6 +10926,25 @@ async function sendPenaltyToAgency(item, amountOverride = null, noteOverride = "
     .eq("id", item.id)
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
+
+  try {
+    await triggerExternalNotification("AGENCY_PENALTY_SENT", {
+      company_id: currentCompanyId,
+      agency_id: item.agency_id || null,
+      agency_name: item.agency_name || "",
+      title: `Penalty sent to agency - ${item.penalty_no || "Penalty"}`,
+      message: `Penalty ${item.penalty_no || ""} for request ${item.request_no || "-"} has been sent to the agency for justification. Amount: ${amount.toLocaleString()} SAR`,
+      priority: "High",
+      related_table: "agency_penalties",
+      related_id: String(item.id || ""),
+      penalty_no: item.penalty_no || "",
+      request_no: item.request_no || "",
+      approved_amount: amount,
+    });
+  } catch (notificationError) {
+    console.warn("Penalty portal notification failed", notificationError?.message || notificationError);
+  }
+
   try {
     await sendPenaltyNoticeEmail({
       ...item,
@@ -21548,7 +21599,7 @@ Save Authorization
     </div>
 
 
-    {currentRole === "Agency" && agencyPenalties.filter((item) => item.status !== "Pending Review").length > 0 && (
+    {currentRole === "Agency" && (
       <TableCard title="Labor SLA Delay Penalties / الغرامات المطلوبة لتأخير العمالة">
         <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
           <table>
@@ -21567,9 +21618,9 @@ Save Authorization
               </tr>
             </thead>
             <tbody>
-              {agencyPenalties
-                .filter((item) => item.status !== "Pending Review")
-                .map((item) => (
+              {getOfficeVisiblePenalties().length === 0 ? (
+                <tr><td colSpan="10">No penalties have been sent to this agency yet.</td></tr>
+              ) : getOfficeVisiblePenalties().map((item) => (
                   <tr key={item.id}>
                     <td>{item.penalty_no || "-"}</td>
                     <td>{item.agreement_no || "-"}</td>
