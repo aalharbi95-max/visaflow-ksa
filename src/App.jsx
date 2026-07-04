@@ -10837,6 +10837,43 @@ async function generatePenaltyRegister() {
   alert(`Penalty register updated. Inserted: ${inserted}, Updated: ${updated}`);
 }
 
+async function createPenaltyRecord(item) {
+  if (!canApprovePenalties) return alert("You do not have permission to create penalty records.");
+  if (!item || item.source !== "live") return alert("This penalty record is already saved or not available for creation.");
+
+  const existing = agencyPenalties.find((row) => getPenaltyRowUniqueKey(row) === getPenaltyRowUniqueKey(item));
+  if (existing?.id) {
+    return alert(`Penalty record already exists: ${existing.penalty_no || existing.id}`);
+  }
+
+  const payload = {
+    ...item,
+    penalty_no: generatePenaltyNo(),
+    candidate_id: item.candidate_id ? String(item.candidate_id) : null,
+    status: "Pending Review",
+    approved_amount: null,
+    decision_notes: item.decision_notes || "Auto calculated from accepted agency request notification. Pending management review.",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  delete payload.source;
+  delete payload.source_notification_id;
+  delete payload.assigned_qty;
+  delete payload.delivered_qty;
+  delete payload.delayed_workers;
+  delete payload.penalty_key;
+
+  const { error } = await supabase
+    .from("agency_penalties")
+    .insert([withCompany(payload)]);
+
+  if (error) return alert(error.message);
+
+  await loadAgencyPenalties();
+  alert("Penalty record created as Pending Review.");
+}
+
 async function sendPenaltyToAgency(item, amountOverride = null, noteOverride = "") {
   if (!canApprovePenalties) return alert("You do not have permission to send penalties to agency.");
   if (!item?.id) return alert("Please generate the penalty register first.");
@@ -22640,7 +22677,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.decision_notes || "-"}</td>
                 <td className="table-actions">
                   {item.source === "live" ? (
-                    <span>Generate first</span>
+                    <button className="save-btn" onClick={() => createPenaltyRecord(item)}>Create Penalty Record</button>
                   ) : item.status === "Pending Review" ? (
                     <>
                       <button className="save-btn" onClick={() => sendPenaltyToAgency(item)}>Send to Agency</button>
