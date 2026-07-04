@@ -799,6 +799,14 @@ async function triggerExternalNotification(type, data = {}) {
     status: "Unread",
     related_table: data.related_table || "",
     related_id: data.related_id || "",
+    request_no: data.request_no || data.requestNo || "",
+    agency_name: data.agency_name || data.agency || "",
+    response_status: data.response_status || data.agency_decision || null,
+    response_at: data.response_at || data.responded_at || null,
+    rejection_reason: data.rejection_reason || data.response_notes || "",
+    sla_started_at: data.sla_started_at || null,
+    sla_days: data.sla_days || null,
+    sla_due_at: data.sla_due_at || null,
     data,
     created_at: new Date().toISOString(),
   };
@@ -806,7 +814,7 @@ async function triggerExternalNotification(type, data = {}) {
   const { data: insertedRows, error: insertError } = await supabase
     .from("notification_events")
     .insert([payload])
-    .select("id, company_id, agency_id, type, title, created_at");
+    .select("id, company_id, agency_id, agency_name, request_no, type, title, response_status, sla_started_at, sla_days, sla_due_at, created_at");
 
   if (insertError) {
     console.error("notification_events insert failed", insertError.message, payload);
@@ -3478,7 +3486,7 @@ async function loadNotifications() {
 
   let query = supabase
     .from("notification_events")
-    .select("id, company_id, user_id, agency_id, type, title, message, priority, status, delivery_status, related_table, related_id, read_at, created_at, data")
+    .select("id, company_id, user_id, agency_id, agency_name, request_no, type, title, message, priority, status, delivery_status, related_table, related_id, response_status, response_at, rejection_reason, sla_started_at, sla_days, sla_due_at, read_at, created_at, data")
     .eq("company_id", currentCompanyId)
     .order("created_at", { ascending: false })
     .limit(1000);
@@ -5050,36 +5058,39 @@ const executiveDashboard = useMemo(() => {
 
   function getAgencyRequestDecision(item) {
     const data = item?.data || {};
-    return data.response_status || data.agency_decision || "Pending";
+    return item?.response_status || data.response_status || data.agency_decision || "Pending";
   }
 
   function getAgencyRequestSlaInfo(item) {
     const data = item?.data || {};
     const decision = getAgencyRequestDecision(item);
+    const slaStartedAt = item?.sla_started_at || data.sla_started_at;
+    const slaDaysValue = Number(item?.sla_days || data.sla_days || 60);
+    const slaDueAtValue = item?.sla_due_at || data.sla_due_at || (slaStartedAt ? addDaysToIso(slaStartedAt, slaDaysValue) : null);
 
-    if (decision !== "Accepted" || !data.sla_started_at) {
+    if (decision !== "Accepted" || !slaStartedAt) {
       return {
         running: false,
         label: decision === "Rejected" ? "Rejected - SLA not started" : "Waiting for agency acceptance",
       };
     }
 
-    const startedAt = new Date(data.sla_started_at);
-    const dueAt = new Date(data.sla_due_at || addDaysToIso(data.sla_started_at, data.sla_days || 60));
+    const startedAt = new Date(slaStartedAt);
+    const dueAt = new Date(slaDueAtValue);
     const today = new Date();
     const elapsedDays = Math.max(0, Math.floor((today - startedAt) / (1000 * 60 * 60 * 24)));
     const remainingDays = Math.ceil((dueAt - today) / (1000 * 60 * 60 * 24));
 
     return {
       running: true,
-      slaDays: Number(data.sla_days || 60),
-      startedAt: data.sla_started_at,
+      slaDays: slaDaysValue,
+      startedAt: slaStartedAt,
       dueAt: dueAt.toISOString(),
       elapsedDays,
       remainingDays,
       label: remainingDays < 0
         ? `SLA Overdue by ${Math.abs(remainingDays)} day(s)`
-        : `SLA Running: ${elapsedDays}/${Number(data.sla_days || 60)} day(s), ${remainingDays} remaining`,
+        : `SLA Running: ${elapsedDays}/${slaDaysValue} day(s), ${remainingDays} remaining`,
     };
   }
 
@@ -5154,6 +5165,14 @@ const executiveDashboard = useMemo(() => {
       .update({
         status: "Read",
         read_at: now,
+        agency_name: agencyName,
+        request_no: existingData.request_no || item.request_no || "",
+        response_status: decision,
+        response_at: now,
+        rejection_reason: decision === "Rejected" ? responseNotes : "",
+        sla_started_at: nextData.sla_started_at,
+        sla_days: nextData.sla_days,
+        sla_due_at: nextData.sla_due_at,
         data: nextData,
       })
       .eq("id", item.id)
@@ -8098,8 +8117,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
   function getLinesFromAgencyNotification(item, requestNo = "") {
     const data = item?.data || {};
+    const effectiveRequestNo = getAgencyNotificationRequestNo(item) || data.request_no || requestNo;
     return (data.lines || [])
-      .map((line, index) => normalizeAgencyNotificationLine(line, index, data.request_no || requestNo))
+      .map((line, index) => normalizeAgencyNotificationLine(line, index, effectiveRequestNo))
       .filter((line) => line.profession && line.quantity > 0);
   }
 
@@ -8128,7 +8148,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     const { data, error } = await supabase
       .from("notification_events")
-      .select("id, company_id, agency_id, type, related_id, related_table, data, created_at")
+      .select("id, company_id, agency_id, agency_name, request_no, type, related_id, related_table, response_status, sla_started_at, sla_days, sla_due_at, data, created_at")
       .eq("company_id", currentCompanyId)
       .eq("agency_id", currentUser.agency_id)
       .eq("type", "NEW_REQUEST_AGENCY_ALERT")
@@ -8139,15 +8159,13 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       return { allowed: false, notification: null, lines: [], error };
     }
 
-    const matchingNotifications = (data || []).filter((item) => {
-      const payload = item.data || {};
-      return String(payload.request_no || "") === String(requestNo || "");
-    });
+    const matchingNotifications = (data || []).filter((item) =>
+      String(getAgencyNotificationRequestNo(item) || "") === String(requestNo || "")
+    );
 
-    const acceptedNotification = matchingNotifications.find((item) => {
-      const payload = item.data || {};
-      return ["accepted", "accept"].includes(normalize(payload.response_status || payload.agency_decision));
-    });
+    const acceptedNotification = matchingNotifications.find((item) =>
+      ["accepted", "accept"].includes(normalize(getAgencyNotificationResponseStatus(item)))
+    );
 
     if (!acceptedNotification) {
       return {
@@ -10571,16 +10589,52 @@ function candidateMatchesPenaltyLine(candidate, line) {
   return professionOk && nationalityOk && genderOk;
 }
 
+function getAgencyNotificationPayload(item = {}) {
+  return item?.data || {};
+}
+
+function getAgencyNotificationRequestNo(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return item?.request_no || data.request_no || data.requestNo || item?.related_id || "";
+}
+
+function getAgencyNotificationAgencyName(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return item?.agency_name || data.agency_name || data.agency || "";
+}
+
+function getAgencyNotificationResponseStatus(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return item?.response_status || data.response_status || data.agency_decision || "Pending";
+}
+
+function getAgencyNotificationSlaStartedAt(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return item?.sla_started_at || data.sla_started_at || "";
+}
+
+function getAgencyNotificationSlaDays(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return Number(item?.sla_days || data.sla_days || 0);
+}
+
+function getAgencyNotificationSlaDueAt(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return item?.sla_due_at || data.sla_due_at || "";
+}
+
+function getAgencyNotificationLines(item = {}) {
+  const data = getAgencyNotificationPayload(item);
+  return Array.isArray(data.lines) ? data.lines : [];
+}
+
 function getAcceptedAgencyRequestPenaltyAlerts() {
   return (notifications || []).filter((item) => {
-    const data = item?.data || {};
-    return (
-      item?.type === "NEW_REQUEST_AGENCY_ALERT" &&
-      ["accepted", "accept"].includes(normalize(data.response_status || data.agency_decision)) &&
-      data.sla_started_at &&
-      Array.isArray(data.lines) &&
-      data.lines.length > 0
-    );
+    const notificationType = item?.type;
+    const accepted = ["accepted", "accept"].includes(normalize(getAgencyNotificationResponseStatus(item)));
+    const hasSlaStart = Boolean(getAgencyNotificationSlaStartedAt(item));
+    const hasLines = getAgencyNotificationLines(item).length > 0;
+    return notificationType === "NEW_REQUEST_AGENCY_ALERT" && accepted && hasSlaStart && hasLines;
   });
 }
 
@@ -10595,10 +10649,9 @@ function getPenaltyLineSummary(lines = []) {
 }
 
 function getAgencyAlertCandidateRows(alert) {
-  const data = alert?.data || {};
-  const alertLines = Array.isArray(data.lines) ? data.lines : [];
-  const requestNo = String(data.request_no || "").trim();
-  const agencyName = data.agency_name || "";
+  const alertLines = getAgencyNotificationLines(alert);
+  const requestNo = String(getAgencyNotificationRequestNo(alert) || "").trim();
+  const agencyName = getAgencyNotificationAgencyName(alert) || "";
 
   return (candidates || []).filter((candidate) => {
     if (requestNo && String(candidate.request_no || "") !== requestNo) return false;
@@ -10627,21 +10680,26 @@ function calculateAcceptedAgencyRequestPenaltyRows() {
 
   return getAcceptedAgencyRequestPenaltyAlerts()
     .map((alert) => {
-      const data = alert.data || {};
-      const agencyName = data.agency_name || "Unassigned Agency";
+      const data = getAgencyNotificationPayload(alert);
+      const agencyName = getAgencyNotificationAgencyName(alert) || "Unassigned Agency";
+      const requestNo = getAgencyNotificationRequestNo(alert);
       const policy = getAgencyAgreementPolicy(agencyName);
       const agreement = policy.agreement || null;
       const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
-      const request = requests.find((item) => String(item.request_no || "") === String(data.request_no || ""));
-      const lines = Array.isArray(data.lines) ? data.lines : [];
+      const request = requests.find((item) => String(item.request_no || "") === String(requestNo || ""));
+      const lines = getAgencyNotificationLines(alert);
       const assignedQty = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
 
-      const startedAt = new Date(data.sla_started_at);
+      const startedAtRaw = getAgencyNotificationSlaStartedAt(alert);
+      const startedAt = new Date(startedAtRaw);
       if (!assignedQty || Number.isNaN(startedAt.getTime())) return null;
 
-      const slaDays = Number(data.sla_days || policy.sla_days || 60);
+      const notificationSlaDays = getAgencyNotificationSlaDays(alert);
+      const slaDays = Number(notificationSlaDays || policy.sla_days || 60);
+      const dueAtRaw = getAgencyNotificationSlaDueAt(alert);
+      const dueAt = dueAtRaw ? new Date(dueAtRaw) : new Date(addDaysToIso(startedAtRaw, slaDays));
       const actualDays = Math.max(0, Math.floor((today - startedAt) / (1000 * 60 * 60 * 24)));
-      const delayDays = Math.max(actualDays - slaDays, 0);
+      const delayDays = Math.max(Math.floor((today - dueAt) / (1000 * 60 * 60 * 24)), 0);
       const graceDays = Number(policy.delay_penalty_after_days || 0);
       const penaltyDays = Math.max(delayDays - graceDays, 0);
       const deliveredQty = getAgencyAlertCandidateRows(alert).filter(isDeliveredWorkerForSla).length;
@@ -10661,7 +10719,7 @@ function calculateAcceptedAgencyRequestPenaltyRows() {
         agency_name: agencyName,
         candidate_id: null,
         candidate_name: `${delayedWorkers} delayed worker(s) from ${assignedQty} assigned`,
-        request_no: data.request_no || "-",
+        request_no: requestNo || "-",
         profession: getPenaltyLineSummary(lines),
         project: data.project_name || request?.project_name || request?.project || "-",
         status: "Pending Review",
