@@ -13213,255 +13213,6 @@ Recruitment Follow-up Assistant`;
   return { subject, body };
 }
 
-function getAIAgentPriorityWeight(priority) {
-  const value = String(priority || "Medium");
-  if (value === "High") return 3;
-  if (value === "Medium") return 2;
-  if (value === "Low") return 1;
-  return 0;
-}
-
-function getAIAgentTodayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function getAIAgentAgencyDigestGroupKey(task = {}) {
-  return String(
-    task.agency_id ||
-    normalize(task.agency || "") ||
-    normalize(task.agency_email || "") ||
-    "unassigned-agency"
-  );
-}
-
-function groupAIAgentAgencyTasks(tasks = []) {
-  const groups = new Map();
-
-  tasks.forEach((task) => {
-    const key = getAIAgentAgencyDigestGroupKey(task);
-    if (!groups.has(key)) {
-      groups.set(key, {
-        group_key: key,
-        agency: task.agency || "Unassigned Agency",
-        agency_id: task.agency_id || null,
-        agency_email: task.agency_email || "",
-        priority: task.priority || "Medium",
-        tasks: [],
-      });
-    }
-
-    const group = groups.get(key);
-    group.tasks.push(task);
-
-    if (getAIAgentPriorityWeight(task.priority) > getAIAgentPriorityWeight(group.priority)) {
-      group.priority = task.priority || group.priority;
-    }
-
-    if (!group.agency_id && task.agency_id) group.agency_id = task.agency_id;
-    if (!group.agency_email && task.agency_email) group.agency_email = task.agency_email;
-    if ((!group.agency || group.agency === "Unassigned Agency") && task.agency) group.agency = task.agency;
-  });
-
-  return Array.from(groups.values())
-    .map((group) => ({
-      ...group,
-      tasks: group.tasks.sort((a, b) =>
-        getAIAgentPriorityWeight(b.priority) - getAIAgentPriorityWeight(a.priority) ||
-        String(a.request_no || "").localeCompare(String(b.request_no || "")) ||
-        String(a.reference || "").localeCompare(String(b.reference || ""))
-      ),
-    }))
-    .sort((a, b) =>
-      getAIAgentPriorityWeight(b.priority) - getAIAgentPriorityWeight(a.priority) ||
-      Number(b.tasks.length || 0) - Number(a.tasks.length || 0) ||
-      String(a.agency || "").localeCompare(String(b.agency || ""))
-    );
-}
-
-function getAIAgentAgencyDigestDedupeKey(group = {}, auto = true) {
-  const baseKey = [
-    "AI_AGENT_AGENCY_DAILY_DIGEST",
-    currentCompanyId || "company",
-    group.agency_id || group.group_key || group.agency || "agency",
-    getAIAgentTodayKey(),
-  ].join("|");
-
-  return auto ? baseKey : `${baseKey}|manual|${Date.now()}`;
-}
-
-function buildAIAgentAgencyDigestContent(group = {}) {
-  const tasks = group.tasks || [];
-  const subject = `[VisaFlow Daily Follow-up] ${group.agency || "Agency"} - ${tasks.length} pending item(s)`;
-
-  const tasksByRequest = new Map();
-  tasks.forEach((task) => {
-    const key = task.request_no && task.request_no !== "-" ? task.request_no : "No Request Reference";
-    if (!tasksByRequest.has(key)) tasksByRequest.set(key, []);
-    tasksByRequest.get(key).push(task);
-  });
-
-  const sections = Array.from(tasksByRequest.entries()).map(([requestNo, requestTasks]) => {
-    const requestLines = requestTasks.map((task, index) => {
-      return [
-        `${index + 1}. ${task.reference || task.title || "Pending item"}`,
-        `Type: ${task.type || "-"}`,
-        `Priority: ${task.priority || "-"}`,
-        `Reason: ${task.reason || "-"}`,
-        `Required Action: ${task.action_required || "-"}`,
-      ].join(" | ");
-    });
-
-    return `Request No: ${requestNo}
-Pending Items:
-${requestLines.join("\n")}`;
-  });
-
-  const body = `Dear ${group.agency || "Agency"} Team,
-
-VisaFlow AI Agent detected multiple pending items requiring your update.
-
-Total pending items: ${tasks.length}
-Highest priority: ${group.priority || "Medium"}
-Date: ${new Date().toLocaleDateString("en-GB")}
-
-${sections.join("\n\n")}
-
-Required action:
-Please update all pending candidates / authorization records in the Office Portal with the latest status, expected completion date, and any blockers.
-
-This daily digest replaces separate repeated follow-up messages for each candidate, so your team receives one organized update per day.
-
-Best regards,
-VisaFlow AI Agent
-Recruitment Follow-up Assistant`;
-
-  return { subject, body, sections: sections.join("\n\n") };
-}
-
-async function hasAIAgentAgencyDigestToday(group, type = "AI_AGENT_AGENCY_DAILY_DIGEST") {
-  if (!currentCompanyId || !group) return false;
-
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-
-  let query = supabase
-    .from("notification_events")
-    .select("id")
-    .eq("company_id", currentCompanyId)
-    .eq("type", type)
-    .eq("related_table", "agencies")
-    .gte("created_at", startOfDay.toISOString())
-    .limit(1);
-
-  if (group.agency_id) {
-    query = query.eq("agency_id", group.agency_id);
-  } else {
-    query = query.eq("agency_name", group.agency || "Unassigned Agency");
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    console.warn("AI Agent daily digest duplicate check failed", error.message);
-    return false;
-  }
-
-  return (data || []).length > 0;
-}
-
-async function sendAIAgentAgencyFollowUpDigest(group, options = {}) {
-  const { auto = false, sendEmail = false } = options;
-  const type = "AI_AGENT_AGENCY_DAILY_DIGEST";
-  const emailType = "AI_AGENT_AGENCY_DAILY_DIGEST_EMAIL";
-  const content = buildAIAgentAgencyDigestContent(group);
-  const actionKey = getAIAgentAgencyDigestDedupeKey(group, auto);
-
-  const lock = await acquireAIAgentActionLock({
-    actionType: type,
-    actionKey,
-    relatedTable: "agencies",
-    relatedId: group.agency_id || group.group_key || group.agency || "",
-    agencyId: group.agency_id || null,
-    title: `Daily agency follow-up digest - ${group.agency || "Agency"}`,
-    details: {
-      agency: group.agency,
-      priority: group.priority,
-      total_pending_items: group.tasks?.length || 0,
-      sendEmail,
-      auto,
-    },
-  });
-
-  if (!lock.ok) return { ok: true, skipped: true, reason: lock.reason || "Duplicate digest lock" };
-
-  const digestPayload = {
-    company_id: currentCompanyId,
-    agency_id: group.agency_id || null,
-    agency_name: group.agency || "Unassigned Agency",
-    agency_email: group.agency_email || "",
-    title: `Daily agency follow-up digest - ${group.agency || "Agency"}`,
-    message: content.body,
-    subject: content.subject,
-    priority: group.priority || "Medium",
-    related_table: "agencies",
-    related_id: group.agency_id || group.group_key || group.agency || "",
-    source: auto ? "AI Agent Auto Daily Digest" : "AI Commander / AI Agent Daily Digest",
-    delivery_channel: sendEmail ? "Notification + Email" : "Notification Only",
-    auto_generated: auto,
-    dedupe_key: actionKey,
-    total_pending_items: group.tasks?.length || 0,
-    digest_date: getAIAgentTodayKey(),
-    tasks: group.tasks || [],
-  };
-
-  await triggerExternalNotification(type, digestPayload);
-
-  if (sendEmail && group.agency_email) {
-    await dispatchVisaFlowEmail({
-      type: emailType,
-      to: group.agency_email,
-      subject: content.subject,
-      text: content.body,
-      html: buildEmailCardHtml(
-        content.subject,
-        content.body.split("\n").filter(Boolean),
-        "Please login to VisaFlow Office Portal and update all pending items listed in this daily digest."
-      ),
-      payload: {
-        agency: group.agency,
-        priority: group.priority,
-        total_pending_items: group.tasks?.length || 0,
-        auto_generated: auto,
-        dedupe_key: actionKey,
-        digest_date: getAIAgentTodayKey(),
-      },
-    });
-  }
-
-  await writeAIAgentAuditLog({
-    actionType: type,
-    actionKey,
-    status: "completed",
-    severity: group.priority === "High" ? "warning" : "info",
-    title: `Daily agency follow-up digest sent to ${group.agency || "Agency"}`,
-    targetTable: "agencies",
-    targetId: group.agency_id || group.group_key || group.agency || "",
-    agencyId: group.agency_id || null,
-    agencyName: group.agency || "",
-    requestNo: "",
-    details: {
-      agency: group.agency,
-      priority: group.priority,
-      total_pending_items: group.tasks?.length || 0,
-      sendEmail,
-      auto,
-      tasks: group.tasks || [],
-    },
-  });
-
-  return { ok: true, skipped: false, emailSkipped: Boolean(sendEmail && !group.agency_email) };
-}
-
-
 function getAIAgentAgencyFitScore(request, agencyRow) {
   const agencyName = agencyRow.agency || agencyRow.name || "";
   const requestProfession = request?.profession || getRequestLineSummary(request, "profession") || "";
@@ -13969,61 +13720,41 @@ async function processAIAgentAgencyFollowUps(options = {}) {
     return { ok: true, created: 0, skipped: 0, reason: "No tasks" };
   }
 
-  const digests = groupAIAgentAgencyTasks(tasks);
-  if (!digests.length) {
-    if (!silent) {
-      setAiAgentLog("No agency daily digest could be prepared.");
-      setAiAgentLastRun(new Date().toLocaleString());
-      alert("No agency daily digest could be prepared.");
-    }
-    return { ok: true, created: 0, skipped: 0, reason: "No digests" };
-  }
-
   setAiAgentLoading(true);
   if (!silent) setAiAgentLog("");
 
   try {
-    // Limit now means max agency digest notifications, not max individual candidates.
-    // Each digest can contain all pending candidates / authorizations for that agency.
-    const selectedDigests = digests.slice(0, limit);
+    const selectedTasks = tasks.slice(0, limit);
     let created = 0;
     let skipped = 0;
     let emailSkipped = 0;
-    let coveredItems = 0;
 
-    for (const digest of selectedDigests) {
-      if (auto && await hasAIAgentAgencyDigestToday(digest, "AI_AGENT_AGENCY_DAILY_DIGEST")) {
+    for (const task of selectedTasks) {
+      if (auto && await hasAIAgentFollowUpToday(task, "AI_AGENT_AUTO_AGENCY_FOLLOWUP")) {
         skipped += 1;
         continue;
       }
 
-      const result = await sendAIAgentAgencyFollowUpDigest(digest, { auto, sendEmail });
+      const result = await sendAIAgentAgencyFollowUpTask(task, { auto, sendEmail });
       if (result?.skipped) {
         skipped += 1;
         continue;
       }
-
       created += 1;
-      coveredItems += Number(digest.tasks?.length || 0);
       if (result?.emailSkipped) emailSkipped += 1;
     }
 
-    const summaryLines = selectedDigests.slice(0, 10).map((digest, index) => {
-      const requestCount = new Set((digest.tasks || []).map((task) => task.request_no || "No Request")).size;
-      return `${index + 1}. [${digest.priority}] ${digest.agency} - ${digest.tasks.length} pending item(s) across ${requestCount} request/reference group(s)`;
-    });
-
-    const summary = `${auto ? "AI Agent Auto Daily Digest" : "AI Agent Manual Daily Digest"} completed for ${created} agenc${created === 1 ? "y" : "ies"} covering ${coveredItems} pending item(s). ${skipped ? `${skipped} duplicate digest(s) skipped for today.` : ""}${sendEmail ? ` ${emailSkipped ? `${emailSkipped} digest(s) had no agency email.` : "Emails enabled."}` : " Notifications only."}\n\n` +
-      summaryLines.join("\n") +
-      (selectedDigests.length > 10 ? `\n...and ${selectedDigests.length - 10} more agency digest(s).` : "");
+    const summary = `${auto ? "AI Agent Auto Follow-up" : "AI Agent Manual Follow-up"} completed for ${created} item(s). ${skipped ? `${skipped} duplicate item(s) skipped for today.` : ""}${sendEmail ? ` ${emailSkipped ? `${emailSkipped} item(s) had no agency email.` : "Emails enabled."}` : " Notifications only."}\n\n` +
+      selectedTasks.slice(0, 10).map((task, index) => `${index + 1}. [${task.priority}] ${task.agency} - ${task.title}`).join("\n") +
+      (selectedTasks.length > 10 ? `\n...and ${selectedTasks.length - 10} more.` : "");
 
     setAiAgentLog(summary);
     setAiAgentLastRun(new Date().toLocaleString());
     await loadNotifications();
     if (sendEmail) await loadEmailLogs();
 
-    if (!silent) alert(`AI Agent daily digest created: ${created} agenc${created === 1 ? "y" : "ies"}.`);
-    return { ok: true, created, skipped, coveredItems };
+    if (!silent) alert(`AI Agent follow-up created: ${created} item(s).`);
+    return { ok: true, created, skipped };
   } catch (error) {
     setAiAgentLog(`AI Agent failed: ${error.message}`);
     if (!silent) alert(error.message);
@@ -14032,7 +13763,6 @@ async function processAIAgentAgencyFollowUps(options = {}) {
     setAiAgentLoading(false);
   }
 }
-
 
 async function runAIAgentAutoAgencyFollowUp({ limit = getAIAgentMaxAutoActions() } = {}) {
   return processAIAgentAgencyFollowUps({
@@ -15475,6 +15205,193 @@ function getPrimaryAdminForPlatformClient(client) {
     companyUsers.find((user) => ["super admin", "ceo"].includes(String(user.role || "").toLowerCase())) ||
     companyUsers[0]
   );
+}
+
+function getPlatformClientLoginUrl(client = {}) {
+  const cleanDomain = String(client.domain || "").trim();
+
+  if (cleanDomain && cleanDomain.includes(".")) {
+    return cleanDomain.startsWith("http://") || cleanDomain.startsWith("https://")
+      ? cleanDomain
+      : `https://${cleanDomain}`;
+  }
+
+  return "https://visaflowksa.com";
+}
+
+function buildPlatformLoginDetailsText({ client, admin, password, loginUrl }) {
+  const adminName = admin?.name || "Company Admin";
+  const companyName = client?.company_name || client?.name || "Your Company";
+
+  return `Dear ${adminName},
+
+Your VisaFlow KSA company account has been created successfully.
+
+Company:
+${companyName}
+
+Login URL:
+${loginUrl}
+
+Username:
+${admin?.email || "-"}
+
+Temporary Password:
+${password || "-"}
+
+For security reasons, please change your password after your first login.
+
+تم إنشاء حساب شركتكم في منصة VisaFlow KSA بنجاح.
+
+رابط الدخول:
+${loginUrl}
+
+اسم المستخدم:
+${admin?.email || "-"}
+
+كلمة المرور المؤقتة:
+${password || "-"}
+
+لأسباب أمنية، نأمل تغيير كلمة المرور بعد أول دخول.
+
+Best regards,
+VisaFlow KSA Platform Team`.trim();
+}
+
+function buildPlatformLoginDetailsHtml({ client, admin, password, loginUrl }) {
+  const companyName = client?.company_name || client?.name || "Your Company";
+  const adminName = admin?.name || "Company Admin";
+
+  return buildEmailCardHtml(
+    "VisaFlow KSA Login Details",
+    [
+      `Dear ${adminName},`,
+      `Your VisaFlow KSA company account has been created successfully.`,
+      `Company: ${companyName}`,
+      `Login URL: ${loginUrl}`,
+      `Username: ${admin?.email || "-"}`,
+      `Temporary Password: ${password || "-"}`,
+      `تم إنشاء حساب شركتكم في منصة VisaFlow KSA بنجاح.`,
+      `رابط الدخول: ${loginUrl}`,
+      `اسم المستخدم: ${admin?.email || "-"}`,
+      `كلمة المرور المؤقتة: ${password || "-"}`,
+      `لأسباب أمنية، نأمل تغيير كلمة المرور بعد أول دخول.`,
+    ],
+    "Security note: Please change the temporary password after the first login. / تنبيه أمني: يرجى تغيير كلمة المرور المؤقتة بعد أول دخول."
+  );
+}
+
+async function recordPlatformLoginDetailsEmailLog({ client, admin, subject, status, messageId = "", errorMessage = "" }) {
+  const logCompanyId = client?.operational_company_id || client?.company_id || null;
+  if (!logCompanyId) return;
+
+  try {
+    await supabase.from("email_logs").insert([{
+      company_id: logCompanyId,
+      type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+      status,
+      to_email: admin?.email || "",
+      subject,
+      provider: "VisaFlow Platform Dispatcher",
+      message_id: messageId || "",
+      error_message: errorMessage || "",
+      payload: {
+        source: "Platform Owner / Companies Management",
+        client_id: client?.id || "",
+        company_name: client?.company_name || "",
+        admin_user_id: admin?.id || "",
+        admin_email: admin?.email || "",
+        password_in_payload: false,
+      },
+      created_at: new Date().toISOString(),
+    }]);
+  } catch (error) {
+    console.warn("platform login email log failed", error?.message || error);
+  }
+}
+
+async function sendPlatformClientLoginDetails(client) {
+  if (!canManagePlatform) return alert("You do not have permission to send platform login details.");
+  if (!client?.id) return alert("Company record is required.");
+
+  const primaryAdmin = getPrimaryAdminForPlatformClient(client);
+  if (!primaryAdmin?.email) {
+    return alert("No Primary Admin email was found for this company. Please create or link an Admin user first.");
+  }
+
+  const storedPassword = String(primaryAdmin.password || "").trim();
+  const temporaryPassword = storedPassword || String(window.prompt("Temporary password to include in the email:", "") || "").trim();
+
+  if (!temporaryPassword) {
+    return alert("Temporary password is required to send login details.");
+  }
+
+  const loginUrl = getPlatformClientLoginUrl(client);
+  const subject = `VisaFlow KSA Login Details - ${client.company_name || "Company"}`;
+  const text = buildPlatformLoginDetailsText({
+    client,
+    admin: primaryAdmin,
+    password: temporaryPassword,
+    loginUrl,
+  });
+  const html = buildPlatformLoginDetailsHtml({
+    client,
+    admin: primaryAdmin,
+    password: temporaryPassword,
+    loginUrl,
+  });
+
+  const confirmed = window.confirm(
+    `Send login details to ${primaryAdmin.email}?\n\nCompany: ${client.company_name || "-"}\nLogin URL: ${loginUrl}`
+  );
+  if (!confirmed) return;
+
+  try {
+    const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
+      body: {
+        type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+        company_id: client.operational_company_id || client.company_id || null,
+        to: [primaryAdmin.email],
+        subject,
+        text,
+        html,
+        payload: {
+          source: "Platform Owner / Companies Management",
+          client_id: client.id || "",
+          company_name: client.company_name || "",
+          admin_user_id: primaryAdmin.id || "",
+          admin_email: primaryAdmin.email || "",
+          login_url: loginUrl,
+          password_in_payload: false,
+          triggered_by: currentUser?.email || currentUser?.name || "Platform Owner",
+          triggered_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    if (error) throw new Error(error.message || "Email dispatcher failed");
+    if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
+
+    await recordPlatformLoginDetailsEmailLog({
+      client,
+      admin: primaryAdmin,
+      subject,
+      status: "Sent",
+      messageId: data?.messageId || data?.id || "",
+    });
+
+    if (canViewEmailAdministration) await loadEmailLogs();
+    alert(`Login details sent to ${primaryAdmin.email}`);
+  } catch (error) {
+    await recordPlatformLoginDetailsEmailLog({
+      client,
+      admin: primaryAdmin,
+      subject,
+      status: "Failed",
+      errorMessage: error.message || "Email dispatcher failed",
+    });
+    alert(`Login details email failed: ${error.message}`);
+  }
 }
 
 function openPlatformClientUsers(client) {
@@ -24781,6 +24698,7 @@ onClick={() => setActiveReport("activityLog")}>
                   <button onClick={() => extendPlatformClient(item, 1)}>Extend 30d</button>
 <button onClick={() => extendPlatformClient(item, 12)}>Extend 1y</button>
                   <button onClick={() => createSubscriptionInvoiceForClient(item)}>Invoice</button>
+                  <button onClick={() => sendPlatformClientLoginDetails(item)}>Send Login</button>
                   <button onClick={() => openPlatformClientUsers(item)}>Users</button>
                   <button onClick={() => openCompanyRequestsReport(item)}>Report</button>
                   <button className="danger" onClick={() => deletePlatformClient(item.id)}>Delete</button>
