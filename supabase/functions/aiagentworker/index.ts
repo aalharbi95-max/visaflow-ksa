@@ -666,78 +666,246 @@ function getAgencyFollowUpTasks(settings: AgentSettings, ctx: any) {
   return Array.from(unique.values()).sort((a, b) => ({ High: 2, Medium: 1, Low: 0 }[b.priority] || 0) - ({ High: 2, Medium: 1, Low: 0 }[a.priority] || 0));
 }
 
-async function processAgencyFollowUps(supabase: any, settings: AgentSettings, runId: string, ctx: any, remainingBudget: number) {
-  const mode = normalize(settings.mode || "auto_notify_manager");
-  if (!settings.auto_followup_agencies || !["auto_followup_agencies", "full_auto"].includes(mode)) return { created: 0, skipped: 0, errors: 0, emailSkipped: 0 };
 
-  const tasks = getAgencyFollowUpTasks(settings, ctx).slice(0, remainingBudget);
-  let created = 0, skipped = 0, errors = 0, emailSkipped = 0;
+function getPriorityWeight(priority: unknown) {
+  const value = String(priority || "Medium");
+  if (value === "High" || value === "Urgent") return 3;
+  if (value === "Medium") return 2;
+  if (value === "Low") return 1;
+  return 0;
+}
+
+function groupAgencyFollowUpTasks(settings: AgentSettings, tasks: Row[]) {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const groups = new Map<string, Row>();
 
   for (const task of tasks) {
+    const agencyName = firstText(task.agency, task.agency_name, "Unassigned Agency");
+    const agencyKey = String(task.agency_id || normalize(agencyName) || "unassigned-agency");
+    const key = `${settings.company_id}|${agencyKey}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        agency: agencyName,
+        agency_id: task.agency_id || null,
+        agency_email: firstText(task.agency_email),
+        related_table: "agencies",
+        related_id: String(task.agency_id || agencyKey),
+        highest_priority: task.priority || "Medium",
+        tasks: [],
+        request_nos: [],
+        dedupe_key: `AI_AGENT_AGENCY_DAILY_DIGEST|${settings.company_id}|${agencyKey}|${todayKey}`,
+      });
+    }
+
+    const group = groups.get(key);
+    group.tasks.push(task);
+
+    if (!group.agency_email && task.agency_email) {
+      group.agency_email = task.agency_email;
+    }
+
+    if (getPriorityWeight(task.priority) > getPriorityWeight(group.highest_priority)) {
+      group.highest_priority = task.priority || "Medium";
+    }
+
+    const requestNo = firstText(task.request_no);
+    if (requestNo && requestNo !== "-" && !group.request_nos.includes(requestNo)) {
+      group.request_nos.push(requestNo);
+    }
+  }
+
+  return Array.from(groups.values()).sort((a, b) => {
+    const priorityDiff = getPriorityWeight(b.highest_priority) - getPriorityWeight(a.highest_priority);
+    if (priorityDiff) return priorityDiff;
+    return safeNumber(b.tasks?.length, 0) - safeNumber(a.tasks?.length, 0);
+  });
+}
+
+function buildAgencyDigestEmail(digest: Row) {
+  const tasks = (digest.tasks || []) as Row[];
+  const requestNos = (digest.request_nos || []) as string[];
+  const requestSummary = requestNos.length ? requestNos.join(", ") : "-";
+  const shownTasks = tasks.slice(0, 60);
+  const hiddenCount = Math.max(0, tasks.length - shownTasks.length);
+
+  const tasksByRequest = new Map<string, Row[]>();
+  for (const task of shownTasks) {
+    const requestNo = firstText(task.request_no, "-");
+    if (!tasksByRequest.has(requestNo)) tasksByRequest.set(requestNo, []);
+    tasksByRequest.get(requestNo)?.push(task);
+  }
+
+  const sections = Array.from(tasksByRequest.entries()).map(([requestNo, requestTasks]) => {
+    const lines = requestTasks.map((task, index) =>
+      `${index + 1}. [${task.type || "Follow-up"}] ${task.reference || task.title || "-"} | Priority: ${task.priority || "Medium"}\n   Reason: ${task.reason || "-"}\n   Required Action: ${task.action_required || "-"}`
+    ).join("\n\n");
+
+    return `Request No: ${requestNo}\n${lines}`;
+  }).join("\n\n----------------------------------------\n\n");
+
+  const subject = `[VisaFlow Daily Follow-up] ${digest.agency || "Agency"} - ${tasks.length} pending item(s)`;
+  const body = `Dear ${digest.agency || "Agency"} Team,
+
+VisaFlow AI Agent detected pending updates that require your action.
+
+Daily Digest Summary:
+Agency: ${digest.agency || "-"}
+Total Pending Items: ${tasks.length}
+Highest Priority: ${digest.highest_priority || "Medium"}
+Request(s): ${requestSummary}
+
+Pending Items:
+${sections || "-"}
+
+${hiddenCount ? `Additional hidden items: ${hiddenCount}. Please open VisaFlow Office Portal to review all pending items.\n\n` : ""}Required Action:
+Please update candidate status, latest stage, expected next date, and blockers from the Office Portal. If an item is delayed, add the reason and expected completion date.
+
+Best regards,
+VisaFlow AI Agent
+Recruitment Follow-up Assistant`;
+
+  return { subject, body };
+}
+
+async function notificationHasDedupeColumn(supabase: any, settings: AgentSettings, dedupeKey: string) {
+  const { data, error } = await supabase
+    .from("notification_events")
+    .select("id")
+    .eq("company_id", settings.company_id)
+    .eq("dedupe_key", dedupeKey)
+    .limit(1);
+
+  if (error) {
+    console.warn("AI Agent digest dedupe_key check failed. Falling back to date-based duplicate check:", error.message);
+    return { supported: false, duplicate: false };
+  }
+
+  return { supported: true, duplicate: (data || []).length > 0 };
+}
+
+async function processAgencyFollowUps(supabase: any, settings: AgentSettings, runId: string, ctx: any, remainingBudget: number) {
+  const mode = normalize(settings.mode || "auto_notify_manager");
+  if (!settings.auto_followup_agencies || !["auto_followup_agencies", "full_auto"].includes(mode)) {
+    return { created: 0, skipped: 0, errors: 0, emailSkipped: 0, groupedTasks: 0 };
+  }
+
+  const allTasks = getAgencyFollowUpTasks(settings, ctx);
+  const allDigests = groupAgencyFollowUpTasks(settings, allTasks);
+  const digests = allDigests.slice(0, remainingBudget);
+
+  let created = 0, skipped = Math.max(0, allDigests.length - digests.length), errors = 0, emailSkipped = 0;
+  const groupedTasks = allTasks.length;
+
+  for (const digest of digests) {
     if (created >= remainingBudget) break;
     if (!(await underHourlyRateLimit(supabase, settings))) { skipped++; break; }
 
-    const actionType = "AI_AGENT_AUTO_AGENCY_FOLLOWUP";
-    const actionKey = `${task.type}|${task.agency_id || task.agency}|${task.related_table}|${task.related_id}`;
+    const actionType = "AI_AGENT_AGENCY_DAILY_DIGEST";
+    const actionKey = digest.dedupe_key;
+    const email = buildAgencyDigestEmail(digest);
+    const requestNoForHeader = digest.request_nos?.length === 1 ? digest.request_nos[0] : digest.request_nos?.length > 1 ? "Multiple" : "-";
+
     try {
       const locked = await acquireLock(supabase, settings, runId, {
         actionKey,
         actionType,
-        relatedTable: task.related_table,
-        relatedId: task.related_id,
-        agencyId: task.agency_id || null,
-        title: task.title,
-        details: { agency: task.agency, request_no: task.request_no, priority: task.priority, send_email: !!settings.allow_auto_agency_emails },
+        relatedTable: "agencies",
+        relatedId: digest.related_id,
+        agencyId: digest.agency_id || null,
+        title: email.subject,
+        details: {
+          agency: digest.agency,
+          pending_items: digest.tasks?.length || 0,
+          request_nos: digest.request_nos || [],
+          priority: digest.highest_priority,
+          send_email: !!settings.allow_auto_agency_emails,
+        },
       });
       if (!locked) { skipped++; continue; }
 
-      // Do not repeat the same follow-up notification during the same day.
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      const { data: duplicate } = await supabase
-        .from("notification_events")
-        .select("id")
-        .eq("company_id", settings.company_id)
-        .eq("type", actionType)
-        .eq("related_table", task.related_table)
-        .eq("related_id", task.related_id)
-        .gte("created_at", start.toISOString())
-        .limit(1);
-      if ((duplicate || []).length) {
+      const dedupeCheck = await notificationHasDedupeColumn(supabase, settings, digest.dedupe_key);
+
+      if (dedupeCheck.duplicate) {
         skipped++;
-        await releaseLock(supabase, settings.company_id, actionKey, "skipped", "daily_duplicate");
+        await releaseLock(supabase, settings.company_id, actionKey, "skipped", "daily_digest_duplicate");
         continue;
       }
 
-      const email = buildAgencyEmail(task);
-      await supabase.from("notification_events").insert([{
+      if (!dedupeCheck.supported) {
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+
+        let fallbackDuplicateQuery = supabase
+          .from("notification_events")
+          .select("id")
+          .eq("company_id", settings.company_id)
+          .eq("type", actionType)
+          .eq("related_table", "agencies")
+          .eq("related_id", digest.related_id)
+          .gte("created_at", start.toISOString())
+          .limit(1);
+
+        const { data: fallbackDuplicate } = await fallbackDuplicateQuery;
+        if ((fallbackDuplicate || []).length) {
+          skipped++;
+          await releaseLock(supabase, settings.company_id, actionKey, "skipped", "daily_digest_duplicate");
+          continue;
+        }
+      }
+
+      const notificationRow: Row = {
         company_id: settings.company_id,
-        agency_id: task.agency_id || null,
+        agency_id: digest.agency_id || null,
+        agency_name: digest.agency || "",
         type: actionType,
-        title: task.title,
+        title: `Daily agency follow-up digest - ${digest.agency || "Agency"}`,
         message: email.body,
-        priority: task.priority || "Medium",
+        priority: digest.highest_priority || "Medium",
         status: "Unread",
-        related_table: task.related_table,
-        related_id: task.related_id,
+        related_table: "agencies",
+        related_id: digest.related_id,
+        request_no: requestNoForHeader,
         data: {
-          source: "AI Agent Worker / Agency Follow-up",
+          source: "AI Agent Worker / Agency Daily Digest",
           delivery_channel: settings.allow_auto_agency_emails ? "Notification + Email" : "Notification Only",
           auto_generated: true,
-          task,
+          digest: true,
+          total_pending_items: digest.tasks?.length || 0,
+          agency: digest.agency,
+          agency_id: digest.agency_id || null,
+          agency_email: digest.agency_email || "",
+          request_nos: digest.request_nos || [],
+          highest_priority: digest.highest_priority || "Medium",
+          tasks: digest.tasks || [],
         },
-      }]);
+      };
+
+      if (dedupeCheck.supported) {
+        notificationRow.dedupe_key = digest.dedupe_key;
+      }
+
+      const { error: insertError } = await supabase.from("notification_events").insert([notificationRow]);
+      if (insertError) throw insertError;
 
       if (settings.allow_auto_agency_emails) {
-        if (task.agency_email) {
+        if (digest.agency_email) {
           const agencyEmailResult = await sendViaDispatcher(supabase, {
             company_id: settings.company_id,
-            type: actionType,
-            to: task.agency_email,
+            type: "AI_AGENT_AGENCY_DAILY_DIGEST_EMAIL",
+            to: digest.agency_email,
             subject: email.subject,
             text: email.body,
-            html: buildEmailCardHtml(email.subject, email.body.split("\n"), "This follow-up was generated by VisaFlow AI Recruitment Agent."),
-            payload: { agency: task.agency, request_no: task.request_no, reference: task.reference, priority: task.priority, auto_generated: true },
+            html: buildEmailCardHtml(email.subject, email.body.split("\n"), "This is one daily digest that groups all pending updates for your office."),
+            payload: {
+              agency: digest.agency,
+              agency_id: digest.agency_id || null,
+              request_nos: digest.request_nos || [],
+              pending_items: digest.tasks?.length || 0,
+              highest_priority: digest.highest_priority || "Medium",
+              auto_generated: true,
+              digest: true,
+            },
           });
           if (!agencyEmailResult?.ok) emailSkipped++;
         } else {
@@ -751,14 +919,20 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
         actionType,
         actionKey,
         status: "completed",
-        severity: task.priority === "High" ? "warning" : "info",
-        title: task.title,
-        targetTable: task.related_table,
-        targetId: task.related_id,
-        agencyId: task.agency_id || null,
-        agencyName: task.agency,
-        requestNo: task.request_no,
-        details: { task, email_sent: !!settings.allow_auto_agency_emails && !!task.agency_email, email_skipped: !!settings.allow_auto_agency_emails && !task.agency_email },
+        severity: digest.highest_priority === "High" ? "warning" : "info",
+        title: `Daily agency follow-up digest - ${digest.agency || "Agency"}`,
+        targetTable: "agencies",
+        targetId: digest.related_id,
+        agencyId: digest.agency_id || null,
+        agencyName: digest.agency,
+        requestNo: requestNoForHeader,
+        details: {
+          digest: true,
+          pending_items: digest.tasks?.length || 0,
+          request_nos: digest.request_nos || [],
+          email_sent: !!settings.allow_auto_agency_emails && !!digest.agency_email,
+          email_skipped: !!settings.allow_auto_agency_emails && !digest.agency_email,
+        },
       });
       await releaseLock(supabase, settings.company_id, actionKey, "completed");
       created++;
@@ -772,19 +946,19 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
         actionKey,
         status: "failed",
         severity: "error",
-        title: `Agency follow-up failed: ${task.title}`,
-        targetTable: task.related_table,
-        targetId: task.related_id,
-        agencyId: task.agency_id || null,
-        agencyName: task.agency,
-        requestNo: task.request_no,
+        title: `Agency daily digest failed: ${digest.agency || "Agency"}`,
+        targetTable: "agencies",
+        targetId: digest.related_id,
+        agencyId: digest.agency_id || null,
+        agencyName: digest.agency,
+        requestNo: requestNoForHeader,
         errorMessage: message,
       });
       await releaseLock(supabase, settings.company_id, actionKey, "failed", message);
     }
   }
 
-  return { created, skipped, errors, emailSkipped };
+  return { created, skipped, errors, emailSkipped, groupedTasks };
 }
 
 async function loadCompanyContext(supabase: any, companyId: string) {
