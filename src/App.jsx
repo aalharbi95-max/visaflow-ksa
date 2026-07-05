@@ -15207,15 +15207,10 @@ function getPrimaryAdminForPlatformClient(client) {
   );
 }
 
-function getPlatformClientLoginUrl(client = {}) {
-  const cleanDomain = String(client.domain || "").trim();
-
-  if (cleanDomain && cleanDomain.includes(".")) {
-    return cleanDomain.startsWith("http://") || cleanDomain.startsWith("https://")
-      ? cleanDomain
-      : `https://${cleanDomain}`;
-  }
-
+function getPlatformClientLoginUrl() {
+  // Login details must always point to the VisaFlow platform login page.
+  // The client domain field is for company profile / custom domain tracking only,
+  // and must not be used as the login URL in customer emails.
   return "https://visaflowksa.com";
 }
 
