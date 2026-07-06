@@ -20,6 +20,7 @@ const PAGES = [
   "Candidates",
   "Interviews",
   "Mobilization",
+  "Onboarding & Validation",
   "Employees",
   "Demobilization",
   "Workforce Marketplace",
@@ -68,7 +69,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Mobilization & Workforce",
     icon: "👷",
-    pages: ["Mobilization", "Employees", "Demobilization", "Workforce Marketplace"],
+    pages: ["Mobilization", "Onboarding & Validation", "Employees", "Demobilization", "Workforce Marketplace"],
   },
   {
     title: "Compliance & Localization",
@@ -334,6 +335,9 @@ const INTERVIEW_SCHEDULE_APPROVED_STATUS = "Waiting";
 const MEDICAL_STATUSES = ["Pending", "Fit", "Unfit", "Re-Medical"];
 const MOBILIZATION_VISA_STATUSES = ["Pending", "Stamped", "Ready"];
 const MOBILIZATION_STATUSES = ["New", "Medical", "Visa Ready", "Ticket Issued", "Arrived KSA", "Joined", "Cancelled"];
+const ONBOARDING_CHECK_STATUSES = ["Pending", "Passed", "Concern", "Failed", "Not Applicable"];
+const ONBOARDING_FINAL_RESULTS = ["Under Monitoring", "Passed Validation", "Failed Validation", "Extended Monitoring", "Replacement Required"];
+const ONBOARDING_ISSUE_TYPES = ["", "Poor Performance", "Attendance Issue", "Behavior Issue", "Safety Issue", "KSA Medical Failed", "Refused to Work", "Absconded", "Replacement Required", "Other"];
 const DEMOBILIZATION_STATUSES = ["Available", "Suggested", "Reassigned", "Exit", "Hold", "Cancelled"];
 const EMPLOYEE_STATUSES = ["Active", "On Leave", "Transferred", "Demobilized", "Final Exit"];
 const DEMOBILIZATION_REASONS = ["Project End", "Contract End", "Replacement", "Performance", "Client Request", "Cost Optimization", "Other"];
@@ -440,6 +444,28 @@ arrival_date: "",
   notes: "",
 };
 
+
+const emptyOnboardingValidation = {
+  day_30_status: "Pending",
+  day_30_score: "",
+  day_30_notes: "",
+  day_60_status: "Pending",
+  day_60_score: "",
+  day_60_notes: "",
+  day_90_status: "Pending",
+  day_90_score: "",
+  day_90_notes: "",
+  attendance_score: "",
+  behavior_score: "",
+  productivity_score: "",
+  supervisor_score: "",
+  safety_score: "",
+  final_result: "Under Monitoring",
+  replacement_required: "No",
+  issue_type: "",
+  issue_notes: "",
+  notes: "",
+};
 
 const emptyCandidateTechnicalProfile = {
   qualification: "",
@@ -1131,6 +1157,7 @@ const [educationInstitutions, setEducationInstitutions] = useState([]);
 const [candidateTechnicalForm, setCandidateTechnicalForm] = useState(emptyCandidateTechnicalProfile);
 const [interviews, setInterviews] = useState([]);
 const [mobilizations, setMobilizations] = useState([]);
+const [onboardingValidations, setOnboardingValidations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
 const [employees, setEmployees] = useState([]);
 const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]);
@@ -1141,6 +1168,10 @@ const [demobilizationEditingId, setDemobilizationEditingId] = useState(null);
 const [demobilizationForm, setDemobilizationForm] = useState(emptyDemobilization);
 const [demobAiSuggestion, setDemobAiSuggestion] = useState(null);
 const [mobilizationEditingId, setMobilizationEditingId] = useState(null);
+const [onboardingEditingId, setOnboardingEditingId] = useState(null);
+const [onboardingValidationForm, setOnboardingValidationForm] = useState(emptyOnboardingValidation);
+const [onboardingFilter, setOnboardingFilter] = useState("All");
+const [onboardingSearch, setOnboardingSearch] = useState("");
 const [mobilizationForm, setMobilizationForm] = useState({
   candidate_id: "",
   request_no: "",
@@ -1459,6 +1490,7 @@ const ROLE_PAGES = {
     "AI Report Studio",
     "Dashboard",
     "Recruitment Performance",
+    "Onboarding & Validation",
     "Agency Ranking",
     "Agency Performance",
     "Penalty Register",
@@ -1477,6 +1509,7 @@ const ROLE_PAGES = {
     "Requests",
     "RequestDetails",
     "Mobilization",
+    "Onboarding & Validation",
     "Employees",
     "Demobilization",
     "Workforce Marketplace",
@@ -1493,6 +1526,7 @@ const ROLE_PAGES = {
     "Requests",
     "RequestDetails",
     "Mobilization",
+    "Onboarding & Validation",
     "Employees",
     "Demobilization",
     "Local Content",
@@ -1518,6 +1552,7 @@ const ROLE_PAGES = {
     "Authorization",
     "Cancellation Register",
     "Mobilization",
+    "Onboarding & Validation",
     "Employees",
     "Demobilization",
     "Workforce Marketplace",
@@ -1545,6 +1580,7 @@ const ROLE_PAGES = {
     "Visa Inventory",
     "Authorization",
     "Mobilization",
+    "Onboarding & Validation",
     "Notifications",
   ],
 
@@ -1622,6 +1658,8 @@ const canManageInterviewResults = canManageInterviews;
 const canScheduleInterviews = canManageInterviewResults || currentRole === "Agency" || hasAction("scheduleInterview");
 const canApproveInterviewSchedule = canManageInterviewResults;
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
+const canViewOnboardingValidation = ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
+const canManageOnboardingValidation = ["Admin", "Operations Manager", "Project Manager", "Recruitment Manager"].includes(currentRole);
 const canManageDemobilization = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageEmployees = ["Admin", "Operations Manager", "Project Manager"].includes(currentRole);
 const canManageMarketplace = ["Admin", "Recruitment Manager", "Operations Manager"].includes(currentRole);
@@ -2777,6 +2815,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadAIAgentSettings(),
       loadAuditLogs(),
       loadMobilizations(),
+      loadOnboardingValidations(),
       loadEmployees(),
       loadDemobilizations(),
       loadMarketplaceRequests(),
@@ -3271,6 +3310,28 @@ async function loadProfessionAliases() {
   const loadCandidates = () => loadTable("candidates", setCandidates);
   const loadInterviews = () => loadTable("interviews", setInterviews);
   const loadMobilizations = () => loadTable("mobilizations", setMobilizations);
+  async function loadOnboardingValidations() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setOnboardingValidations([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("onboarding_validations")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("validation_due_date", { ascending: true })
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("onboarding_validations:", error.message);
+      setOnboardingValidations([]);
+      return [];
+    }
+
+    setOnboardingValidations(data || []);
+    return data || [];
+  }
   const loadEmployees = () => loadTable("employees", setEmployees);
   const loadDemobilizations = () => loadTable("demobilizations", setDemobilizations);
   const loadMarketplaceRequests = () => loadTable("marketplace_requests", setMarketplaceRequests);
@@ -4628,6 +4689,197 @@ const selectedMobilizationRow =
 const selectedMobilizationCandidates = selectedMobilizationRow
   ? candidates.filter((candidate) => String(candidate.request_no || "") === String(selectedMobilizationRow.request_no || ""))
   : [];
+
+function getOnboardingDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getOnboardingElapsedDays(item = {}) {
+  const startDate = getOnboardingDate(item.validation_start_date || item.joining_date || item.arrival_date);
+  if (!startDate) return 0;
+  return Math.max(0, Math.floor((new Date() - startDate) / (1000 * 60 * 60 * 24)));
+}
+
+function getOnboardingRemainingDays(item = {}) {
+  const dueDate = getOnboardingDate(item.validation_due_date);
+  if (!dueDate) return 0;
+  return Math.ceil((dueDate - new Date()) / (1000 * 60 * 60 * 24));
+}
+
+function getOnboardingProgressPercent(item = {}) {
+  return Math.max(0, Math.min(100, Math.round((getOnboardingElapsedDays(item) / 90) * 100)));
+}
+
+function getOnboardingStage(item = {}) {
+  if (["Passed Validation", "Failed Validation", "Replacement Required"].includes(item.final_result)) return item.final_result;
+  const elapsed = getOnboardingElapsedDays(item);
+  if (elapsed >= 90) return "Final Validation Due";
+  if (elapsed >= 60) return "Day 90 Pending";
+  if (elapsed >= 30) return "Day 60 Pending";
+  return "Day 30 Pending";
+}
+
+function calculateOnboardingFinalScore(form = onboardingValidationForm) {
+  const coreScores = [
+    form.attendance_score,
+    form.behavior_score,
+    form.productivity_score,
+    form.supervisor_score,
+    form.safety_score,
+  ].map((value) => Number(value || 0));
+
+  const checkpointScores = [
+    form.day_30_score,
+    form.day_60_score,
+    form.day_90_score,
+  ].map((value) => Number(value || 0)).filter((value) => value > 0);
+
+  const coreAverage = coreScores.length ? coreScores.reduce((sum, value) => sum + value, 0) / coreScores.length : 0;
+  const checkpointAverage = checkpointScores.length ? checkpointScores.reduce((sum, value) => sum + value, 0) / checkpointScores.length : 0;
+  const score = checkpointAverage ? (coreAverage * 0.7 + checkpointAverage * 0.3) : coreAverage;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function deriveOnboardingFinalResult(form = onboardingValidationForm, finalScore = calculateOnboardingFinalScore(form)) {
+  if (form.replacement_required === "Yes") return "Replacement Required";
+  if (form.final_result && form.final_result !== "Under Monitoring") return form.final_result;
+  if (form.day_90_status === "Failed") return "Failed Validation";
+  if (form.day_90_status === "Passed" && finalScore >= 70) return "Passed Validation";
+  if (finalScore > 0 && finalScore < 50) return "Extended Monitoring";
+  return "Under Monitoring";
+}
+
+function getOnboardingAgencyImpact(source = {}, form = onboardingValidationForm, finalScore = calculateOnboardingFinalScore(form)) {
+  if (!source.agency_impact_eligible) {
+    return { agency_impact_type: "Not Applicable", agency_impact_score: 0 };
+  }
+
+  const finalResult = deriveOnboardingFinalResult(form, finalScore);
+  const issueType = form.issue_type || "";
+
+  if (["Replacement Required", "Failed Validation"].includes(finalResult) || ["KSA Medical Failed", "Refused to Work", "Absconded", "Replacement Required"].includes(issueType)) {
+    return { agency_impact_type: "Negative", agency_impact_score: issueType === "Absconded" ? -20 : -10 };
+  }
+
+  if (finalResult === "Passed Validation" && finalScore >= 85) return { agency_impact_type: "Positive", agency_impact_score: 10 };
+  if (finalResult === "Passed Validation" && finalScore >= 70) return { agency_impact_type: "Positive", agency_impact_score: 5 };
+
+  return { agency_impact_type: "Neutral", agency_impact_score: 0 };
+}
+
+function editOnboardingValidation(item) {
+  setOnboardingEditingId(item.id);
+  setOnboardingValidationForm({
+    day_30_status: item.day_30_status || "Pending",
+    day_30_score: item.day_30_score || "",
+    day_30_notes: item.day_30_notes || "",
+    day_60_status: item.day_60_status || "Pending",
+    day_60_score: item.day_60_score || "",
+    day_60_notes: item.day_60_notes || "",
+    day_90_status: item.day_90_status || "Pending",
+    day_90_score: item.day_90_score || "",
+    day_90_notes: item.day_90_notes || "",
+    attendance_score: item.attendance_score || "",
+    behavior_score: item.behavior_score || "",
+    productivity_score: item.productivity_score || "",
+    supervisor_score: item.supervisor_score || "",
+    safety_score: item.safety_score || "",
+    final_result: item.final_result || "Under Monitoring",
+    replacement_required: item.replacement_required ? "Yes" : "No",
+    issue_type: item.issue_type || "",
+    issue_notes: item.issue_notes || "",
+    notes: item.notes || "",
+  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetOnboardingValidationForm() {
+  setOnboardingEditingId(null);
+  setOnboardingValidationForm(emptyOnboardingValidation);
+}
+
+async function saveOnboardingValidation() {
+  if (!canManageOnboardingValidation) return alert("You do not have permission to update onboarding validation.");
+  if (!onboardingEditingId) return alert("Please select a worker validation record first.");
+
+  const currentRecord = onboardingValidations.find((item) => String(item.id || "") === String(onboardingEditingId || ""));
+  if (!currentRecord) return alert("Onboarding validation record was not found.");
+
+  const finalScore = calculateOnboardingFinalScore(onboardingValidationForm);
+  const finalResult = deriveOnboardingFinalResult(onboardingValidationForm, finalScore);
+  const agencyImpact = getOnboardingAgencyImpact(currentRecord, onboardingValidationForm, finalScore);
+  const now = new Date().toISOString();
+
+  const payload = {
+    day_30_status: onboardingValidationForm.day_30_status || "Pending",
+    day_30_score: Number(onboardingValidationForm.day_30_score || 0),
+    day_30_notes: onboardingValidationForm.day_30_notes || "",
+    day_30_checked_at: onboardingValidationForm.day_30_status !== "Pending" ? (currentRecord.day_30_checked_at || now) : currentRecord.day_30_checked_at,
+    day_30_checked_by: onboardingValidationForm.day_30_status !== "Pending" ? (currentUser?.name || currentUser?.email || "System") : currentRecord.day_30_checked_by,
+    day_60_status: onboardingValidationForm.day_60_status || "Pending",
+    day_60_score: Number(onboardingValidationForm.day_60_score || 0),
+    day_60_notes: onboardingValidationForm.day_60_notes || "",
+    day_60_checked_at: onboardingValidationForm.day_60_status !== "Pending" ? (currentRecord.day_60_checked_at || now) : currentRecord.day_60_checked_at,
+    day_60_checked_by: onboardingValidationForm.day_60_status !== "Pending" ? (currentUser?.name || currentUser?.email || "System") : currentRecord.day_60_checked_by,
+    day_90_status: onboardingValidationForm.day_90_status || "Pending",
+    day_90_score: Number(onboardingValidationForm.day_90_score || 0),
+    day_90_notes: onboardingValidationForm.day_90_notes || "",
+    day_90_checked_at: onboardingValidationForm.day_90_status !== "Pending" ? (currentRecord.day_90_checked_at || now) : currentRecord.day_90_checked_at,
+    day_90_checked_by: onboardingValidationForm.day_90_status !== "Pending" ? (currentUser?.name || currentUser?.email || "System") : currentRecord.day_90_checked_by,
+    attendance_score: Number(onboardingValidationForm.attendance_score || 0),
+    behavior_score: Number(onboardingValidationForm.behavior_score || 0),
+    productivity_score: Number(onboardingValidationForm.productivity_score || 0),
+    supervisor_score: Number(onboardingValidationForm.supervisor_score || 0),
+    safety_score: Number(onboardingValidationForm.safety_score || 0),
+    final_score: finalScore,
+    final_result: finalResult,
+    agency_impact_eligible: Boolean(currentRecord.agency_impact_eligible),
+    validation_scope: currentRecord.agency_impact_eligible ? "Worker + Agency Impact" : "Worker Only",
+    agency_impact_type: agencyImpact.agency_impact_type,
+    agency_impact_score: agencyImpact.agency_impact_score,
+    replacement_required: onboardingValidationForm.replacement_required === "Yes",
+    issue_type: onboardingValidationForm.issue_type || "",
+    issue_notes: onboardingValidationForm.issue_notes || "",
+    status: finalResult === "Under Monitoring" ? "Active Monitoring" : "Completed",
+    notes: onboardingValidationForm.notes || "",
+    updated_at: now,
+  };
+
+  const { error } = await supabase
+    .from("onboarding_validations")
+    .update(payload)
+    .eq("id", onboardingEditingId)
+    .eq("company_id", currentCompanyId);
+
+  if (error) return alert(error.message);
+  resetOnboardingValidationForm();
+  await loadOnboardingValidations();
+  alert("Onboarding validation updated. Agency impact will be reflected in Agency Performance when applicable.");
+}
+
+const filteredOnboardingValidations = useMemo(() => {
+  const keyword = normalize(onboardingSearch);
+  return onboardingValidations.filter((item) => {
+    const matchesFilter = onboardingFilter === "All" || item.final_result === onboardingFilter || item.status === onboardingFilter || item.validation_scope === onboardingFilter;
+    const searchable = [item.candidate_name, item.request_no, item.passport_no, item.agency_name, item.profession, item.nationality, item.project, item.final_result, item.validation_scope]
+      .join(" ")
+      .toLowerCase();
+    return matchesFilter && (!keyword || searchable.includes(keyword));
+  });
+}, [onboardingValidations, onboardingFilter, onboardingSearch]);
+
+const onboardingValidationStats = useMemo(() => ({
+  total: onboardingValidations.length,
+  active: onboardingValidations.filter((item) => item.status === "Active Monitoring").length,
+  due: onboardingValidations.filter((item) => getOnboardingRemainingDays(item) <= 0 && item.final_result === "Under Monitoring").length,
+  passed: onboardingValidations.filter((item) => item.final_result === "Passed Validation").length,
+  failed: onboardingValidations.filter((item) => ["Failed Validation", "Replacement Required"].includes(item.final_result)).length,
+  agencyImpact: onboardingValidations.filter((item) => item.agency_impact_eligible).length,
+  workerOnly: onboardingValidations.filter((item) => !item.agency_impact_eligible).length,
+}), [onboardingValidations]);
 
 const executiveDashboard = useMemo(() => {
   const excludedCandidateStatuses = [
@@ -11563,7 +11815,15 @@ function calculateAgencyPerformanceRows() {
 
       const agreementScore = signedAgreement ? 100 : 0;
 
-      const totalScore = Math.round(
+      const validationRows = onboardingValidations.filter((validation) =>
+        validation.agency_impact_eligible && normalize(validation.agency_name) === normalize(agencyName)
+      );
+      const rawValidationImpactScore = validationRows.reduce((sum, validation) => sum + Number(validation.agency_impact_score || 0), 0);
+      const validationImpactScore = Math.max(-20, Math.min(10, rawValidationImpactScore));
+      const validationPassed = validationRows.filter((validation) => validation.final_result === "Passed Validation").length;
+      const validationFailed = validationRows.filter((validation) => ["Failed Validation", "Replacement Required"].includes(validation.final_result)).length;
+
+      const baseTotalScore = Math.round(
         slaScore * 0.30 +
         responseScore * 0.10 +
         qualityScore * 0.20 +
@@ -11572,6 +11832,8 @@ function calculateAgencyPerformanceRows() {
         updateScore * 0.10 +
         agreementScore * 0.05
       );
+
+      const totalScore = Math.max(0, Math.min(100, baseTotalScore + validationImpactScore));
 
       const rank = getAgencyRank(totalScore);
       let recommendation = "Keep monitoring and maintain current allocation level.";
@@ -11608,6 +11870,11 @@ function calculateAgencyPerformanceRows() {
         penalty_exposure: penaltyExposure,
         stale_candidates: staleCandidates.length,
         stale_penalty: staleUpdateDeduction,
+        validation_count: validationRows.length,
+        validation_passed: validationPassed,
+        validation_failed: validationFailed,
+        validation_impact_score: validationImpactScore,
+        base_total_score: baseTotalScore,
         sla_score: slaScore,
         response_score: responseScore,
         quality_score: qualityScore,
@@ -18130,6 +18397,7 @@ function exportCurrentPage() {
   if (activePage === "Permissions") return exportRowsToExcel(CLIENT_ROLE_OPTIONS.map((role) => ({ role, performance_category: getRolePerformanceCategory(role), included_in_recruitment_performance: isRecruitmentPerformanceRole(role) ? "Yes" : "No", description: ROLE_DESCRIPTIONS[role], pages: (ROLE_PAGES[role] || []).join(", "), actions: (ACTION_PERMISSIONS[role] || []).join(", ") })), "VisaFlow_Permissions", "Permissions");
   if (activePage === "Interviews") return exportRowsToExcel(interviews, "VisaFlow_Interviews", "Interviews");
   if (activePage === "Mobilization") return exportRowsToExcel(mobilizationRequestRows, "VisaFlow_Mobilization_Overview", "Mobilization");
+  if (activePage === "Onboarding & Validation") return exportRowsToExcel(filteredOnboardingValidations, "VisaFlow_Onboarding_Validation", "Onboarding Validation");
   if (activePage === "Employees") return exportRowsToExcel(employees, "VisaFlow_Employees", "Employees");
   if (activePage === "Demobilization") return exportRowsToExcel(demobilizations, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
@@ -22058,6 +22326,107 @@ Save Authorization
 
 
 
+{activePage === "Onboarding & Validation" && canViewOnboardingValidation && (
+  <>
+    <div className="dashboard-grid">
+      <Stat title="Workers Under Monitoring" value={onboardingValidationStats.active} />
+      <Stat title="Final Validation Due" value={onboardingValidationStats.due} className={onboardingValidationStats.due ? "warning" : "passed"} />
+      <Stat title="Passed Validation" value={onboardingValidationStats.passed} className="passed" />
+      <Stat title="Failed / Replacement" value={onboardingValidationStats.failed} className={onboardingValidationStats.failed ? "danger" : "passed"} />
+      <Stat title="Agency Impact Eligible" value={onboardingValidationStats.agencyImpact} />
+      <Stat title="Worker Only" value={onboardingValidationStats.workerOnly} />
+    </div>
+
+    {onboardingEditingId && (
+      <FormCard title="Update 90-Day Worker Validation">
+        <div className="helper-text">
+          Worker validation is always tracked. Agency impact is applied only when the worker has an agency linked to the record.
+        </div>
+        <div className="form-grid">
+          <Select value={onboardingValidationForm.day_30_status} onChange={(v) => updateForm(setOnboardingValidationForm, "day_30_status", v)} placeholder="Day 30 Status" options={ONBOARDING_CHECK_STATUSES} />
+          <Input type="number" placeholder="Day 30 Score" value={onboardingValidationForm.day_30_score} onChange={(v) => updateForm(setOnboardingValidationForm, "day_30_score", v)} />
+          <Select value={onboardingValidationForm.day_60_status} onChange={(v) => updateForm(setOnboardingValidationForm, "day_60_status", v)} placeholder="Day 60 Status" options={ONBOARDING_CHECK_STATUSES} />
+          <Input type="number" placeholder="Day 60 Score" value={onboardingValidationForm.day_60_score} onChange={(v) => updateForm(setOnboardingValidationForm, "day_60_score", v)} />
+          <Select value={onboardingValidationForm.day_90_status} onChange={(v) => updateForm(setOnboardingValidationForm, "day_90_status", v)} placeholder="Day 90 Status" options={ONBOARDING_CHECK_STATUSES} />
+          <Input type="number" placeholder="Day 90 Score" value={onboardingValidationForm.day_90_score} onChange={(v) => updateForm(setOnboardingValidationForm, "day_90_score", v)} />
+          <Input type="number" placeholder="Attendance Score" value={onboardingValidationForm.attendance_score} onChange={(v) => updateForm(setOnboardingValidationForm, "attendance_score", v)} />
+          <Input type="number" placeholder="Behavior Score" value={onboardingValidationForm.behavior_score} onChange={(v) => updateForm(setOnboardingValidationForm, "behavior_score", v)} />
+          <Input type="number" placeholder="Productivity Score" value={onboardingValidationForm.productivity_score} onChange={(v) => updateForm(setOnboardingValidationForm, "productivity_score", v)} />
+          <Input type="number" placeholder="Supervisor Score" value={onboardingValidationForm.supervisor_score} onChange={(v) => updateForm(setOnboardingValidationForm, "supervisor_score", v)} />
+          <Input type="number" placeholder="Safety Score" value={onboardingValidationForm.safety_score} onChange={(v) => updateForm(setOnboardingValidationForm, "safety_score", v)} />
+          <Select value={onboardingValidationForm.final_result} onChange={(v) => updateForm(setOnboardingValidationForm, "final_result", v)} placeholder="Final Result" options={ONBOARDING_FINAL_RESULTS} />
+          <Select value={onboardingValidationForm.replacement_required} onChange={(v) => updateForm(setOnboardingValidationForm, "replacement_required", v)} placeholder="Replacement Required" options={["No", "Yes"]} />
+          <Select value={onboardingValidationForm.issue_type} onChange={(v) => updateForm(setOnboardingValidationForm, "issue_type", v)} placeholder="Issue Type" options={ONBOARDING_ISSUE_TYPES} />
+        </div>
+        <textarea rows="2" placeholder="Day 30 Notes" value={onboardingValidationForm.day_30_notes} onChange={(e) => updateForm(setOnboardingValidationForm, "day_30_notes", e.target.value)} />
+        <textarea rows="2" placeholder="Day 60 Notes" value={onboardingValidationForm.day_60_notes} onChange={(e) => updateForm(setOnboardingValidationForm, "day_60_notes", e.target.value)} />
+        <textarea rows="2" placeholder="Day 90 Notes" value={onboardingValidationForm.day_90_notes} onChange={(e) => updateForm(setOnboardingValidationForm, "day_90_notes", e.target.value)} />
+        <textarea rows="2" placeholder="Issue Notes" value={onboardingValidationForm.issue_notes} onChange={(e) => updateForm(setOnboardingValidationForm, "issue_notes", e.target.value)} />
+        <textarea rows="2" placeholder="General Notes" value={onboardingValidationForm.notes} onChange={(e) => updateForm(setOnboardingValidationForm, "notes", e.target.value)} />
+        <div className="helper-text">
+          Calculated Final Score: <b>{calculateOnboardingFinalScore(onboardingValidationForm)}%</b> | Expected Result: <b>{deriveOnboardingFinalResult(onboardingValidationForm, calculateOnboardingFinalScore(onboardingValidationForm))}</b>
+        </div>
+        <div className="actions-line">
+          <button className="save-btn" onClick={saveOnboardingValidation}>Save Validation</button>
+          <button className="light-btn" onClick={resetOnboardingValidationForm}>Cancel</button>
+        </div>
+      </FormCard>
+    )}
+
+    <TableCard title="Onboarding & Validation - 90 Day Worker Monitoring">
+      <div className="actions-line">
+        <Input placeholder="Search worker, request, agency, profession" value={onboardingSearch} onChange={setOnboardingSearch} />
+        <Select value={onboardingFilter} onChange={setOnboardingFilter} placeholder="Filter" options={["All", "Active Monitoring", "Worker Only", "Worker + Agency Impact", ...ONBOARDING_FINAL_RESULTS]} />
+        <button className="light-btn" onClick={loadOnboardingValidations}>Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Worker</th>
+            <th>Request</th>
+            <th>Agency</th>
+            <th>Scope</th>
+            <th>Start</th>
+            <th>Due</th>
+            <th>Progress</th>
+            <th>Stage</th>
+            <th>Final Score</th>
+            <th>Final Result</th>
+            <th>Agency Impact</th>
+            <th>Issue</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredOnboardingValidations.length === 0 ? (
+            <tr><td colSpan="13">No onboarding validation records found</td></tr>
+          ) : (
+            filteredOnboardingValidations.map((item) => (
+              <tr key={item.id}>
+                <td><b>{item.candidate_name || "-"}</b><div style={{ fontSize: 12, color: "#64748b" }}>{item.profession || "-"} | {item.nationality || "-"}</div></td>
+                <td>{item.request_no || "-"}</td>
+                <td>{item.agency_name || "-"}</td>
+                <td><Badge value={item.validation_scope || (item.agency_impact_eligible ? "Worker + Agency Impact" : "Worker Only")} /></td>
+                <td>{item.validation_start_date || "-"}</td>
+                <td>{item.validation_due_date || "-"}<div style={{ fontSize: 12, color: getOnboardingRemainingDays(item) < 0 ? "#dc2626" : "#64748b" }}>{getOnboardingRemainingDays(item)} day(s)</div></td>
+                <td>{getOnboardingProgressPercent(item)}%</td>
+                <td><Badge value={getOnboardingStage(item)} /></td>
+                <td><b>{Number(item.final_score || 0)}%</b></td>
+                <td><Badge value={item.final_result || "Under Monitoring"} /></td>
+                <td>{item.agency_impact_eligible ? <><Badge value={item.agency_impact_type || "Neutral"} /><div style={{ fontSize: 12 }}>{Number(item.agency_impact_score || 0)} pts</div></> : <Badge value="Not Applicable" />}</td>
+                <td>{item.issue_type || "-"}</td>
+                <td className="table-actions">
+                  {canManageOnboardingValidation ? <button onClick={() => editOnboardingValidation(item)}>Update</button> : <span>-</span>}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </TableCard>
+  </>
+)}
+
 {activePage === "Office Portal" && (
   <>
     <div className="dashboard-grid">
@@ -22953,13 +23322,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Stale Updates</th>
             <th>Update KPI Deduction</th>
             <th>Agreement 5%</th>
+            <th>90-Day Validation Impact</th>
+            <th>Base Score</th>
             <th>Total</th>
             <th>Class</th>
           </tr>
         </thead>
         <tbody>
           {calculateAgencyPerformanceRows().length === 0 ? (
-            <tr><td colSpan="18">No agency performance data yet</td></tr>
+            <tr><td colSpan="20">No agency performance data yet</td></tr>
           ) : (
             calculateAgencyPerformanceRows().map((item, index) => (
               <tr key={item.agency_name}>
@@ -22979,6 +23350,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.stale_candidates || 0}</td>
                 <td>{item.stale_penalty || 0} pts</td>
                 <td>{item.agreement_score}%</td>
+                <td>{item.validation_count ? `${item.validation_impact_score || 0} pts (${item.validation_count})` : "-"}</td>
+                <td>{item.base_total_score ?? "-"}</td>
                 <td><b>{item.total_score}%</b></td>
                 <td><Badge value={item.rank} /></td>
               </tr>
@@ -22996,6 +23369,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Agreement SLA</th>
             <th>Delayed</th>
             <th>SLA Penalty Exposure</th>
+            <th>Validation Impact</th>
             <th>Total Score</th>
             <th>Class</th>
             <th>Recommendation</th>
@@ -23003,7 +23377,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
         <tbody>
           {calculateAgencyPerformanceRows().length === 0 ? (
-            <tr><td colSpan="7">No recommendations yet</td></tr>
+            <tr><td colSpan="8">No recommendations yet</td></tr>
           ) : (
             calculateAgencyPerformanceRows().map((item) => (
               <tr key={item.agency_name}>
@@ -23011,6 +23385,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.agreement_sla_days || 60} days</td>
                 <td>{item.delayed_candidates || 0}</td>
                 <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
+                <td>{item.validation_count ? `${item.validation_impact_score || 0} pts` : "-"}</td>
                 <td><b>{item.total_score}%</b></td>
                 <td><Badge value={item.rank} /></td>
                 <td>{item.recommendation}</td>
