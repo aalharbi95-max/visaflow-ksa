@@ -10527,6 +10527,105 @@ function getAgencyAssignedWorkProfile(agencyName = "") {
   };
 }
 
+
+function buildAgencyAssignedWorkRows() {
+  const agencyNames = Array.from(
+    new Set([
+      ...agencies.map((agency) => agency.name).filter(Boolean),
+      ...candidates.map((candidate) => candidate.agency).filter(Boolean),
+      ...visaAuthorizations.map((authorization) => authorization.agency).filter(Boolean),
+      ...notifications.map((item) => getAgencyNotificationAgencyName(item)).filter(Boolean),
+    ])
+  );
+
+  const finalCandidateStatuses = [
+    "Joined",
+    "Rejected",
+    "Interview Failed",
+    "Medical Failed",
+    "Cancelled",
+    "KSA Medical Failed",
+    "Refused to Work",
+    "Absconded",
+  ];
+
+  return agencyNames
+    .map((agencyName) => {
+      const agency = agencies.find((item) => normalize(item.name) === normalize(agencyName));
+      const workProfile = getAgencyAssignedWorkProfile(agencyName);
+      const {
+        agencyCandidates,
+        agencyInterviews,
+        activeAuthorizations,
+        acceptedRequestAlerts,
+        activeRequestNos,
+        authorizedQty,
+        hasAssignedWork,
+        performanceStatus,
+      } = workProfile;
+
+      const requestDetails = activeRequestNos.map((requestNo) => {
+        const request = requests.find((item) => String(item.request_no || "") === String(requestNo || ""));
+        const requestCandidates = agencyCandidates.filter((candidate) => String(candidate.request_no || "") === String(requestNo || ""));
+        const requestAuthorizations = activeAuthorizations.filter((authorization) => String(authorization.request_no || "") === String(requestNo || ""));
+        const requestAuthQty = requestAuthorizations.reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
+        const joinedCount = requestCandidates.filter((candidate) => candidate.status === "Joined").length;
+        const openCandidateCount = requestCandidates.filter((candidate) => !finalCandidateStatuses.includes(candidate.status)).length;
+        const lines = request ? getRequestLinesForRequest(request) : [];
+        const lineSummary = lines.length
+          ? lines.map((line) => `${line.profession || "-"}/${line.nationality || "-"}/${line.gender || "-"} Qty ${Number(line.quantity || 0)}`).join("; ")
+          : [request?.profession, request?.nationality, request?.gender].filter(Boolean).join(" / ") || "No request line details";
+
+        return [
+          requestNo,
+          request?.project_name || request?.project || "No project",
+          lineSummary,
+          `Auth Qty: ${requestAuthQty}`,
+          `Candidates: ${requestCandidates.length}`,
+          `Open: ${openCandidateCount}`,
+          `Joined: ${joinedCount}`,
+        ].join(" | ");
+      });
+
+      const latestUpdate = [
+        ...agencyCandidates.map((candidate) => candidate.updated_at || candidate.created_at),
+        ...activeAuthorizations.map((authorization) => authorization.updated_at || authorization.created_at),
+        ...acceptedRequestAlerts.map((item) => item.response_at || item.created_at),
+      ]
+        .filter(Boolean)
+        .sort((a, b) => new Date(b) - new Date(a))[0] || "";
+
+      const openCandidates = agencyCandidates.filter((candidate) => !finalCandidateStatuses.includes(candidate.status)).length;
+      const joined = agencyCandidates.filter((candidate) => candidate.status === "Joined").length;
+      const delayed = agencyCandidates.filter((candidate) => getCandidateSlaDelay(candidate, agencyName).isDelayed).length;
+
+      return {
+        agency_id: agency?.id || null,
+        agency_name: agencyName,
+        country: agency?.country || agency?.office_country || "-",
+        performanceStatus,
+        hasAssignedWork,
+        request_count: activeRequestNos.length,
+        request_nos: activeRequestNos.join(", ") || "-",
+        authorizations: activeAuthorizations.length,
+        authorizedQty,
+        acceptedRequests: acceptedRequestAlerts.length,
+        candidates: agencyCandidates.length,
+        openCandidates,
+        interviews: agencyInterviews.length,
+        joined,
+        delayed,
+        latestUpdate,
+        workDetails: requestDetails.length ? requestDetails.join("\n") : "No active request, authorization, candidate, or accepted sourcing alert assigned.",
+      };
+    })
+    .sort((a, b) => {
+      const assignedDiff = Number(b.hasAssignedWork) - Number(a.hasAssignedWork);
+      if (assignedDiff) return assignedDiff;
+      return String(a.agency_name || "").localeCompare(String(b.agency_name || ""));
+    });
+}
+
 function isAgencyScorecardRiskItem(row = {}) {
   return Boolean(row?.hasAssignedWork) && ["High", "Medium"].includes(row?.risk);
 }
@@ -11518,6 +11617,8 @@ function calculateAgencyPerformanceRows() {
         agreement_score: agreementScore,
         total_score: totalScore,
         rank,
+        hasAssignedWork: true,
+        performance_status: workProfile.performanceStatus,
         recommendation,
       };
     })
@@ -22734,6 +22835,54 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Delayed by Agreement" value={calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.delayed_candidates || 0), 0)} className={calculateAgencyPerformanceRows().some((x) => Number(x.delayed_candidates || 0) > 0) ? "danger" : "passed"} />
       <Stat title="SLA Penalty Exposure" value={`${Number(calculateAgencyPerformanceRows().reduce((sum, x) => sum + Number(x.penalty_exposure || 0), 0)).toLocaleString()} SAR`} className={calculateAgencyPerformanceRows().some((x) => Number(x.penalty_exposure || 0) > 0) ? "warning" : "passed"} />
     </div>
+
+    <TableCard title="Agency Assigned Work Overview">
+      <div className="actions-line" style={{ marginBottom: "14px" }}>
+        <button className="light-btn" onClick={loadAll}>Refresh Data</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Agency</th>
+            <th>Country</th>
+            <th>Assignment Status</th>
+            <th>Requests</th>
+            <th>Authorizations</th>
+            <th>Auth Qty</th>
+            <th>Candidates</th>
+            <th>Open Candidates</th>
+            <th>Interviews</th>
+            <th>Joined</th>
+            <th>Delayed</th>
+            <th>Latest Update</th>
+            <th>Work Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {buildAgencyAssignedWorkRows().length === 0 ? (
+            <tr><td colSpan="13">No agencies found</td></tr>
+          ) : (
+            buildAgencyAssignedWorkRows().map((item) => (
+              <tr key={`assigned-work-${item.agency_name}`}>
+                <td><b>{item.agency_name}</b></td>
+                <td>{item.country || "-"}</td>
+                <td><Badge value={item.performanceStatus} /></td>
+                <td>{item.request_count}</td>
+                <td>{item.authorizations}</td>
+                <td>{item.authorizedQty}</td>
+                <td>{item.candidates}</td>
+                <td>{item.openCandidates}</td>
+                <td>{item.interviews}</td>
+                <td>{item.joined}</td>
+                <td>{item.delayed}</td>
+                <td>{item.latestUpdate ? new Date(item.latestUpdate).toLocaleDateString("en-GB") : "-"}</td>
+                <td style={{ minWidth: 420, whiteSpace: "pre-line", lineHeight: 1.7 }}>{item.workDetails}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </TableCard>
 
     <TableCard title="Update Compliance Alerts (KPI Only)">
       <div className="actions-line" style={{ marginBottom: "14px" }}>
