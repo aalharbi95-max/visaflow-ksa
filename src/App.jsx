@@ -42,6 +42,7 @@ const PAGES = [
   "Reports",
  "Platform Dashboard",
 "Platform Intelligence",
+"Client Usage Monitor",
 "Companies Management",
 "Platform Users",
 "Subscription Invoices",
@@ -91,6 +92,7 @@ const SIDEBAR_GROUPS = [
     icon: "👑",
     pages: [
   "Platform Dashboard",
+  "Client Usage Monitor",
   "Companies Management",
   "Platform Users",
   "Subscription Invoices",
@@ -1343,6 +1345,9 @@ const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
 const [systemRestoreRequests, setSystemRestoreRequests] = useState([]);
 const [systemActivityLogs, setSystemActivityLogs] = useState([]);
+const [platformUsageRows, setPlatformUsageRows] = useState([]);
+const [platformUsageLoading, setPlatformUsageLoading] = useState(false);
+const [platformUsageMessage, setPlatformUsageMessage] = useState("");
 const [localContentSettings, setLocalContentSettings] = useState({
   saudi_labor_weight: 100,
   non_saudi_labor_weight: 54,
@@ -1450,6 +1455,7 @@ function isPlatformRole(role) {
 const PLATFORM_PAGES = [
   "Platform Dashboard",
   "Platform Intelligence",
+  "Client Usage Monitor",
   "Companies Management",
   "Platform Users",
   "Subscription Invoices",
@@ -2832,6 +2838,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadSystemBackups(),
       loadSystemRestoreRequests(),
       loadSystemActivityLogs(),
+      loadPlatformUsageSummary(),
       loadLocalContentSettings(),
       loadLocalContentProjectTargets(),
     ]);
@@ -3368,6 +3375,212 @@ async function loadProfessionAliases() {
   const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
   const loadSystemRestoreRequests = () =>
     isPlatformOwner ? loadPlatformTable("system_restore_requests", setSystemRestoreRequests) : setSystemRestoreRequests([]);
+
+  async function loadPlatformUsageSummary() {
+    if (!canManagePlatform) {
+      setPlatformUsageRows([]);
+      setPlatformUsageMessage("");
+      return [];
+    }
+
+    setPlatformUsageLoading(true);
+    setPlatformUsageMessage("Loading aggregated client usage...");
+
+    const errors = [];
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const fetchRows = async (label, table, columns, limit = 10000) => {
+      try {
+        const { data, error } = await supabase
+          .from(table)
+          .select(columns)
+          .range(0, limit - 1);
+
+        if (error) throw error;
+        return data || [];
+      } catch (error) {
+        errors.push(`${label}: ${error.message || error}`);
+        return [];
+      }
+    };
+
+    const getClientCompanyId = (client) => String(client?.operational_company_id || client?.company_id || "").trim();
+    const getRowCompanyId = (row) => String(row?.company_id || "").trim();
+    const isThisMonth = (value) => value && new Date(value) >= monthStart;
+    const isLast7Days = (value) => value && new Date(value) >= sevenDaysAgo;
+
+    const updateLastActivity = (summary, dateValue) => {
+      if (!dateValue) return;
+      const date = new Date(dateValue);
+      if (Number.isNaN(date.getTime())) return;
+      if (!summary.last_activity || date > new Date(summary.last_activity)) {
+        summary.last_activity = date.toISOString();
+      }
+    };
+
+    const clientRows = platformClients.length
+      ? platformClients
+      : await fetchRows(
+          "platform_clients",
+          "platform_clients",
+          "id, company_name, domain, subscription_status, users_count, start_date, end_date, monthly_amount, operational_company_id, company_id, created_at"
+        );
+
+    const [
+      userRows,
+      requestRows,
+      candidateRows,
+      authorizationRows,
+      onboardingRows,
+      notificationRows,
+      emailRows,
+      activityRows,
+    ] = await Promise.all([
+      fetchRows("users", "users", "company_id, status, role, last_login, created_at"),
+      fetchRows("requests", "requests", "company_id, created_at"),
+      fetchRows("candidates", "candidates", "company_id, created_at, status"),
+      fetchRows("visa_authorizations", "visa_authorizations", "company_id, created_at, status"),
+      fetchRows("onboarding_validations", "onboarding_validations", "company_id, created_at, status, agency_impact_eligible"),
+      fetchRows("notification_events", "notification_events", "company_id, created_at, type"),
+      fetchRows("email_logs", "email_logs", "company_id, created_at, type, status"),
+      fetchRows("system_activity_logs", "system_activity_logs", "company_id, created_at, module_name, action_type, source", 20000),
+    ]);
+
+    const summaries = new Map();
+
+    const ensureSummary = (companyId, client = null) => {
+      const key = String(companyId || getClientCompanyId(client) || client?.id || "unlinked");
+      if (!summaries.has(key)) {
+        summaries.set(key, {
+          company_id: String(companyId || getClientCompanyId(client) || ""),
+          company_name: client?.company_name || (companyId ? `Unlinked Company ${String(companyId).slice(0, 8)}` : "Unlinked Company"),
+          domain: client?.domain || "-",
+          subscription_status: client?.subscription_status || "Not Linked",
+          license_type: client?.monthly_amount ? "Paid" : String(client?.subscription_status || "Trial"),
+          users_total: 0,
+          active_users: 0,
+          last_user_login: "",
+          requests_created: 0,
+          candidates_added: 0,
+          authorizations: 0,
+          onboarding_records: 0,
+          notifications_sent: 0,
+          emails_sent: 0,
+          platform_actions: 0,
+          actions_this_month: 0,
+          actions_last_7_days: 0,
+          ai_actions_this_month: 0,
+          modules_used: new Set(),
+          last_activity: "",
+          usage_level: "No Activity",
+          privacy_scope: "Aggregated counts only",
+        });
+      }
+      return summaries.get(key);
+    };
+
+    (clientRows || []).forEach((client) => ensureSummary(getClientCompanyId(client), client));
+
+    const addCount = (rows, field, options = {}) => {
+      rows.forEach((row) => {
+        const companyId = getRowCompanyId(row);
+        if (!companyId) return;
+        const summary = ensureSummary(companyId, getPlatformClientByCompanyId(companyId));
+        summary[field] = Number(summary[field] || 0) + 1;
+        updateLastActivity(summary, row.created_at || row.last_login);
+        if (options.moduleField && row[options.moduleField]) summary.modules_used.add(String(row[options.moduleField]));
+      });
+    };
+
+    userRows.forEach((row) => {
+      const companyId = getRowCompanyId(row);
+      if (!companyId) return;
+      const summary = ensureSummary(companyId, getPlatformClientByCompanyId(companyId));
+      summary.users_total += 1;
+      if (String(row.status || "Active").toLowerCase() === "active") summary.active_users += 1;
+      updateLastActivity(summary, row.last_login || row.created_at);
+      if (row.last_login && (!summary.last_user_login || new Date(row.last_login) > new Date(summary.last_user_login))) {
+        summary.last_user_login = new Date(row.last_login).toISOString();
+      }
+    });
+
+    addCount(requestRows, "requests_created");
+    addCount(candidateRows, "candidates_added");
+    addCount(authorizationRows, "authorizations");
+    addCount(onboardingRows, "onboarding_records");
+    addCount(notificationRows, "notifications_sent");
+
+    emailRows.forEach((row) => {
+      const companyId = getRowCompanyId(row);
+      if (!companyId) return;
+      const summary = ensureSummary(companyId, getPlatformClientByCompanyId(companyId));
+      if (String(row.status || "").toLowerCase() === "sent") summary.emails_sent += 1;
+      updateLastActivity(summary, row.created_at);
+    });
+
+    activityRows.forEach((row) => {
+      const companyId = getRowCompanyId(row);
+      if (!companyId) return;
+      const summary = ensureSummary(companyId, getPlatformClientByCompanyId(companyId));
+      summary.platform_actions += 1;
+      if (isThisMonth(row.created_at)) summary.actions_this_month += 1;
+      if (isLast7Days(row.created_at)) summary.actions_last_7_days += 1;
+      if (row.module_name) summary.modules_used.add(String(row.module_name));
+
+      const actionText = [row.module_name, row.action_type, row.source].join(" ").toLowerCase();
+      if (isThisMonth(row.created_at) && actionText.includes("ai")) summary.ai_actions_this_month += 1;
+      updateLastActivity(summary, row.created_at);
+    });
+
+    notificationRows.forEach((row) => {
+      const companyId = getRowCompanyId(row);
+      if (!companyId) return;
+      const summary = ensureSummary(companyId, getPlatformClientByCompanyId(companyId));
+      const typeText = String(row.type || "").toLowerCase();
+      if (isThisMonth(row.created_at) && typeText.includes("ai")) summary.ai_actions_this_month += 1;
+    });
+
+    const rows = Array.from(summaries.values()).map((summary) => {
+      const totalOperationalRecords =
+        Number(summary.requests_created || 0) +
+        Number(summary.candidates_added || 0) +
+        Number(summary.authorizations || 0) +
+        Number(summary.onboarding_records || 0) +
+        Number(summary.notifications_sent || 0) +
+        Number(summary.emails_sent || 0);
+
+      const activityWeight = Number(summary.actions_this_month || 0) + totalOperationalRecords;
+      let usageLevel = "No Activity";
+      if (activityWeight >= 100) usageLevel = "Heavy Usage";
+      else if (activityWeight >= 25) usageLevel = "Active";
+      else if (activityWeight > 0) usageLevel = "Light Usage";
+
+      const days_since_activity = summary.last_activity
+        ? Math.max(0, Math.floor((now - new Date(summary.last_activity)) / (1000 * 60 * 60 * 24)))
+        : null;
+
+      return {
+        ...summary,
+        total_operational_records: totalOperationalRecords,
+        modules_used_count: summary.modules_used.size,
+        modules_used: Array.from(summary.modules_used).slice(0, 8).join(", ") || "-",
+        usage_level: usageLevel,
+        days_since_activity,
+      };
+    }).sort((a, b) => Number(b.actions_this_month || 0) - Number(a.actions_this_month || 0));
+
+    setPlatformUsageRows(rows);
+    setPlatformUsageMessage(
+      errors.length
+        ? `Loaded aggregated usage with ${errors.length} warning(s): ${errors.slice(0, 2).join(" / ")}`
+        : `Loaded aggregated usage for ${rows.length} company record(s). No candidate, passport, request detail, or message body is displayed.`
+    );
+    setPlatformUsageLoading(false);
+    return rows;
+  }
 
   async function loadSystemActivityLogs() {
     if (!currentUser) {
@@ -3975,6 +4188,11 @@ useEffect(() => {
 
   loadAll();
 }, [currentUser?.id, currentCompanyId]);
+
+useEffect(() => {
+  if (!currentUser || activePage !== "Client Usage Monitor" || !canManagePlatform) return;
+  loadPlatformUsageSummary();
+}, [activePage, currentUser?.id, platformClients.length]);
 
 useEffect(() => {
   if (!currentUser || activePage !== "Reports") return;
@@ -16392,6 +16610,30 @@ const platformDashboard = useMemo(() => {
   };
 }, [platformClients, subscriptionInvoices, supportTickets, systemBackups]);
 
+const platformUsageOverview = useMemo(() => {
+  const totalCompanies = platformUsageRows.length;
+  const heavyUsage = platformUsageRows.filter((row) => row.usage_level === "Heavy Usage").length;
+  const activeUsage = platformUsageRows.filter((row) => ["Heavy Usage", "Active"].includes(row.usage_level)).length;
+  const lightUsage = platformUsageRows.filter((row) => row.usage_level === "Light Usage").length;
+  const noActivity = platformUsageRows.filter((row) => row.usage_level === "No Activity").length;
+  const trialCompanies = platformUsageRows.filter((row) => String(row.subscription_status || "").toLowerCase() === "trial").length;
+  const actionsThisMonth = platformUsageRows.reduce((sum, row) => sum + Number(row.actions_this_month || 0), 0);
+  const aiActionsThisMonth = platformUsageRows.reduce((sum, row) => sum + Number(row.ai_actions_this_month || 0), 0);
+  const mostActiveClient = [...platformUsageRows].sort((a, b) => Number(b.actions_this_month || 0) - Number(a.actions_this_month || 0))[0];
+
+  return {
+    totalCompanies,
+    heavyUsage,
+    activeUsage,
+    lightUsage,
+    noActivity,
+    trialCompanies,
+    actionsThisMonth,
+    aiActionsThisMonth,
+    mostActiveClientName: mostActiveClient?.company_name || "-",
+  };
+}, [platformUsageRows]);
+
 function resetPlatformClientForm() {
   setPlatformClientForm(emptyPlatformClient);
   setPlatformClientEditingId(null);
@@ -18425,6 +18667,7 @@ function exportCurrentPage() {
   }
   if (activePage === "AI Report Studio") return exportAIReportStudio();
   if (activePage === "Platform Dashboard") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Clients", "Platform Clients");
+  if (activePage === "Client Usage Monitor") return exportRowsToExcel(platformUsageRows, "VisaFlow_Client_Usage_Monitor", "Client Usage Monitor");
   if (activePage === "Companies Management") return exportRowsToExcel(platformClients, "VisaFlow_Platform_Companies", "Companies");
   if (activePage === "Subscription Invoices") return exportRowsToExcel(subscriptionInvoices, "VisaFlow_Subscription_Invoices", "Invoices");
   if (activePage === "Backup Center") return exportRowsToExcel(systemBackups, "VisaFlow_System_Backups", "Backups");
@@ -25132,6 +25375,125 @@ onClick={() => setActiveReport("activityLog")}>
           </>
         )}
 
+
+{activePage === "Client Usage Monitor" && canManagePlatform && (
+  <div className="page-section">
+    <div className="executive-hero" style={{ marginBottom: 18 }}>
+      <div>
+        <p className="eyebrow">Platform Administration</p>
+        <h1>Client Usage Monitor</h1>
+        <p>Monitor how licensed companies use VisaFlow through aggregated activity indicators only. This page does not show candidate names, passports, request details, message bodies, or client confidential records.</p>
+      </div>
+      <div className="hero-actions">
+        <button onClick={loadPlatformUsageSummary} disabled={platformUsageLoading}>{platformUsageLoading ? "Loading..." : "Refresh Usage"}</button>
+        <button onClick={() => exportRowsToExcel(platformUsageRows, "VisaFlow_Client_Usage_Monitor", "Client Usage Monitor")}>Export Summary</button>
+        <button onClick={() => setActivePage("Companies Management")}>Companies</button>
+      </div>
+    </div>
+
+    <div className="stats-grid">
+      <div className="stat-card"><h3>Tracked Companies</h3><strong>{platformUsageOverview.totalCompanies}</strong><span>Licensed or linked clients</span></div>
+      <div className="stat-card"><h3>Active Usage</h3><strong>{platformUsageOverview.activeUsage}</strong><span>Active or heavy this month</span></div>
+      <div className="stat-card"><h3>Trial Companies</h3><strong>{platformUsageOverview.trialCompanies}</strong><span>Free / trial clients</span></div>
+      <div className="stat-card"><h3>Actions This Month</h3><strong>{Number(platformUsageOverview.actionsThisMonth || 0).toLocaleString()}</strong><span>Aggregated platform actions</span></div>
+      <div className="stat-card"><h3>AI Usage</h3><strong>{Number(platformUsageOverview.aiActionsThisMonth || 0).toLocaleString()}</strong><span>AI-related actions this month</span></div>
+      <div className="stat-card"><h3>Most Active Client</h3><strong style={{ fontSize: 18 }}>{platformUsageOverview.mostActiveClientName}</strong><span>By current month activity</span></div>
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <h2>Privacy-Safe Monitoring</h2>
+      <p style={{ color: "#64748b", lineHeight: 1.7, marginBottom: 0 }}>
+        This page is designed for the Platform Owner to understand adoption, trial engagement, and renewal risk without opening client operational details. All numbers below are aggregated by company only.
+      </p>
+      {platformUsageMessage && <p style={{ color: platformUsageMessage.includes("warning") ? "#b45309" : "#047857", marginTop: 10 }}>{platformUsageMessage}</p>}
+    </div>
+
+    <div className="table-card">
+      <h2>Company Usage Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Company</th>
+            <th>Plan / Status</th>
+            <th>Users</th>
+            <th>Last Activity</th>
+            <th>Actions This Month</th>
+            <th>7 Days</th>
+            <th>Requests</th>
+            <th>Candidates</th>
+            <th>Authorizations</th>
+            <th>Onboarding</th>
+            <th>Notifications</th>
+            <th>AI Usage</th>
+            <th>Usage Level</th>
+            <th>Privacy</th>
+          </tr>
+        </thead>
+        <tbody>
+          {platformUsageRows.length === 0 ? (
+            <tr><td colSpan="14">No usage summary loaded yet. Click Refresh Usage.</td></tr>
+          ) : platformUsageRows.map((row) => (
+            <tr key={row.company_id || row.company_name}>
+              <td>
+                <strong>{row.company_name || "-"}</strong>
+                <div style={{ fontSize: 11, color: "#64748b" }}>{row.domain || "-"}</div>
+              </td>
+              <td><Badge value={row.subscription_status || "Not Linked"} /></td>
+              <td>{Number(row.active_users || 0)} / {Number(row.users_total || 0)}</td>
+              <td>
+                {row.last_activity ? new Date(row.last_activity).toLocaleString() : "-"}
+                {row.days_since_activity !== null && row.days_since_activity !== undefined && (
+                  <div style={{ fontSize: 11, color: "#64748b" }}>{row.days_since_activity} day(s) ago</div>
+                )}
+              </td>
+              <td><strong>{Number(row.actions_this_month || 0).toLocaleString()}</strong></td>
+              <td>{Number(row.actions_last_7_days || 0).toLocaleString()}</td>
+              <td>{Number(row.requests_created || 0).toLocaleString()}</td>
+              <td>{Number(row.candidates_added || 0).toLocaleString()}</td>
+              <td>{Number(row.authorizations || 0).toLocaleString()}</td>
+              <td>{Number(row.onboarding_records || 0).toLocaleString()}</td>
+              <td>{Number(row.notifications_sent || 0).toLocaleString()}</td>
+              <td>{Number(row.ai_actions_this_month || 0).toLocaleString()}</td>
+              <td><Badge value={row.usage_level || "No Activity"} /></td>
+              <td>{row.privacy_scope || "Aggregated counts only"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <div className="table-card">
+      <h2>Module Adoption Snapshot</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Company</th>
+            <th>Modules Used</th>
+            <th>Total Operational Records</th>
+            <th>Emails Sent</th>
+            <th>Last User Login</th>
+          </tr>
+        </thead>
+        <tbody>
+          {platformUsageRows.length === 0 ? (
+            <tr><td colSpan="5">No module usage yet</td></tr>
+          ) : platformUsageRows.map((row) => (
+            <tr key={`modules-${row.company_id || row.company_name}`}>
+              <td>{row.company_name || "-"}</td>
+              <td>
+                <strong>{Number(row.modules_used_count || 0)}</strong>
+                <div style={{ fontSize: 11, color: "#64748b" }}>{row.modules_used || "-"}</div>
+              </td>
+              <td>{Number(row.total_operational_records || 0).toLocaleString()}</td>
+              <td>{Number(row.emails_sent || 0).toLocaleString()}</td>
+              <td>{row.last_user_login ? new Date(row.last_user_login).toLocaleString() : "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
 
 {activePage === "Platform Dashboard" && canManagePlatform && (
   <div className="page-section">
