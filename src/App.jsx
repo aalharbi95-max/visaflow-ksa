@@ -10453,6 +10453,84 @@ function executiveAlertClass(value) {
 }
 
 
+function getAgencyAssignedWorkProfile(agencyName = "") {
+  const normalizedAgency = normalize(agencyName);
+
+  const emptyProfile = {
+    agencyCandidates: [],
+    agencyInterviews: [],
+    agencyAuthorizations: [],
+    activeAuthorizations: [],
+    acceptedRequestAlerts: [],
+    activeRequestNos: [],
+    authorizedQty: 0,
+    hasCandidateActivity: false,
+    hasActiveAuthorization: false,
+    hasAcceptedRequestAlert: false,
+    hasAssignedWork: false,
+    performanceStatus: "No Assigned Work",
+  };
+
+  if (!normalizedAgency) return emptyProfile;
+
+  const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalizedAgency);
+  const agencyInterviews = interviews.filter((interview) => normalize(interview.agency) === normalizedAgency);
+  const agencyAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalizedAgency);
+  const activeAuthorizations = agencyAuthorizations.filter((authorization) => {
+    const status = normalize(authorization.status || "Open");
+    return !["cancelled", "canceled", "closed", "completed"].includes(status);
+  });
+
+  const acceptedRequestAlerts = (notifications || []).filter((item) => {
+    const data = getAgencyNotificationPayload(item);
+    const notificationType = String(item?.type || data.type || "").trim();
+    const isAgencyRequestAlert = ["NEW_REQUEST_AGENCY_ALERT", "AGENCY_REQUEST_NOTIFICATION"].includes(notificationType);
+    const agencyMatches = normalize(getAgencyNotificationAgencyName(item)) === normalizedAgency;
+    const response = normalize(getAgencyNotificationResponseStatus(item));
+
+    return isAgencyRequestAlert && agencyMatches && ["accepted", "accept"].includes(response);
+  });
+
+  const authorizedQty = activeAuthorizations.reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
+  const hasCandidateActivity = agencyCandidates.length > 0 || agencyInterviews.length > 0;
+  const hasActiveAuthorization = activeAuthorizations.some(
+    (authorization) =>
+      Number(authorization.allocated_qty || 0) > 0 ||
+      Boolean(authorization.request_no) ||
+      Boolean(authorization.authorization_no) ||
+      Boolean(authorization.visa_no)
+  );
+  const hasAcceptedRequestAlert = acceptedRequestAlerts.length > 0;
+  const hasAssignedWork = hasCandidateActivity || hasActiveAuthorization || hasAcceptedRequestAlert;
+
+  const activeRequestNos = Array.from(
+    new Set([
+      ...agencyCandidates.map((candidate) => candidate.request_no),
+      ...activeAuthorizations.map((authorization) => authorization.request_no),
+      ...acceptedRequestAlerts.map((alert) => getAgencyNotificationRequestNo(alert)),
+    ].map((value) => String(value || "").trim()).filter((value) => value && value !== "-"))
+  );
+
+  return {
+    agencyCandidates,
+    agencyInterviews,
+    agencyAuthorizations,
+    activeAuthorizations,
+    acceptedRequestAlerts,
+    activeRequestNos,
+    authorizedQty,
+    hasCandidateActivity,
+    hasActiveAuthorization,
+    hasAcceptedRequestAlert,
+    hasAssignedWork,
+    performanceStatus: hasAssignedWork ? "Active Assignment" : "No Assigned Work",
+  };
+}
+
+function isAgencyScorecardRiskItem(row = {}) {
+  return Boolean(row?.hasAssignedWork) && ["High", "Medium"].includes(row?.risk);
+}
+
 function buildAgencyScorecard() {
   const agencyNames = Array.from(
     new Set([
@@ -10464,10 +10542,42 @@ function buildAgencyScorecard() {
 
   return agencyNames
     .map((agencyName) => {
-      const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
-      const agencyInterviews = interviews.filter((interview) => normalize(interview.agency) === normalize(agencyName));
-      const agencyAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName));
-      const activeAuthorizations = agencyAuthorizations.filter((authorization) => authorization.status !== "Cancelled");
+      const workProfile = getAgencyAssignedWorkProfile(agencyName);
+      const {
+        agencyCandidates,
+        agencyInterviews,
+        activeAuthorizations,
+        acceptedRequestAlerts,
+        activeRequestNos,
+        authorizedQty,
+        hasAssignedWork,
+        performanceStatus,
+      } = workProfile;
+
+      if (!hasAssignedWork) {
+        return {
+          agency: agencyName,
+          candidates: 0,
+          authorizedQty: 0,
+          assignedRequests: 0,
+          acceptedRequests: 0,
+          submittedPercent: null,
+          passedInterviews: 0,
+          rejectedInterviews: 0,
+          arrived: 0,
+          joined: 0,
+          failed: 0,
+          successRate: null,
+          failRate: null,
+          score: null,
+          risk: "N/A",
+          hasAssignedWork: false,
+          performanceStatus,
+          activeRequestNos: [],
+          recommendation: "No active assignment. Do not calculate score or send performance follow-up.",
+        };
+      }
+
       const passedInterviews = agencyInterviews.filter((interview) => interview.status === "Passed").length;
       const rejectedInterviews = agencyInterviews.filter((interview) => ["Rejected", "Interview Failed"].includes(interview.status)).length;
       const joinedCandidates = agencyCandidates.filter((candidate) => candidate.status === "Joined").length;
@@ -10475,7 +10585,6 @@ function buildAgencyScorecard() {
       const failedCandidates = agencyCandidates.filter((candidate) =>
         ["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "KSA Medical Failed", "Refused to Work", "Absconded"].includes(candidate.status)
       ).length;
-      const authorizedQty = activeAuthorizations.reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
       const submissionRate = authorizedQty ? Math.round((agencyCandidates.length / authorizedQty) * 100) : agencyCandidates.length ? 100 : 0;
       const successRate = agencyCandidates.length ? Math.round(((joinedCandidates + arrivedCandidates) / agencyCandidates.length) * 100) : 0;
       const failRate = agencyCandidates.length ? Math.round((failedCandidates / agencyCandidates.length) * 100) : 0;
@@ -10503,6 +10612,8 @@ function buildAgencyScorecard() {
         agency: agencyName,
         candidates: agencyCandidates.length,
         authorizedQty,
+        assignedRequests: activeRequestNos.length,
+        acceptedRequests: acceptedRequestAlerts.length,
         submittedPercent: submissionRate,
         passedInterviews,
         rejectedInterviews,
@@ -10513,11 +10624,17 @@ function buildAgencyScorecard() {
         failRate,
         score,
         risk,
+        hasAssignedWork: true,
+        performanceStatus,
+        activeRequestNos,
       };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      const assignedDiff = Number(b.hasAssignedWork) - Number(a.hasAssignedWork);
+      if (assignedDiff) return assignedDiff;
+      return Number(b.score || 0) - Number(a.score || 0);
+    });
 }
-
 
 function getAgencyRank(totalScore) {
   const score = Number(totalScore || 0);
@@ -11258,8 +11375,50 @@ function calculateAgencyPerformanceRows() {
       const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
       const agencyInterviews = interviews.filter((interview) => normalize(interview.agency) === normalize(agencyName));
       const agencyAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName));
-      const activeAuthorizations = agencyAuthorizations.filter((authorization) => authorization.status !== "Cancelled");
+      const activeAuthorizations = agencyAuthorizations.filter((authorization) => !["cancelled", "canceled", "closed", "completed"].includes(normalize(authorization.status || "Open")));
       const signedAgreement = Boolean(activeAgreement);
+
+      const workProfile = getAgencyAssignedWorkProfile(agencyName);
+      if (!workProfile.hasAssignedWork) {
+        return {
+          agency_id: agency?.id || null,
+          agency_name: agencyName,
+          agreement_no: agreementPolicy.agreement_no,
+          has_active_agreement: signedAgreement,
+          agreement_sla_days: agreementPolicy.sla_days,
+          update_frequency_days: agreementPolicy.update_frequency_days,
+          delay_penalty_type: agreementPolicy.delay_penalty_type,
+          delay_penalty_amount: agreementPolicy.delay_penalty_amount,
+          delay_penalty_after_days: agreementPolicy.delay_penalty_after_days,
+          financial_guarantee_required: agreementPolicy.financial_guarantee_required,
+          financial_guarantee_amount: agreementPolicy.financial_guarantee_amount,
+          authorizedQty: 0,
+          submittedPercent: null,
+          candidates: 0,
+          passedInterviews: 0,
+          rejectedInterviews: 0,
+          arrived: 0,
+          joined: 0,
+          failed: 0,
+          delayed_candidates: 0,
+          average_delay_days: 0,
+          penalty_exposure: 0,
+          stale_candidates: 0,
+          stale_penalty: 0,
+          sla_score: null,
+          response_score: null,
+          quality_score: null,
+          rejection_score: null,
+          mobilization_score: null,
+          update_score: null,
+          agreement_score: signedAgreement ? 100 : 0,
+          total_score: null,
+          rank: "Not Evaluated",
+          hasAssignedWork: false,
+          performance_status: "No Assigned Work",
+          recommendation: "No active assignment for this agency. Score is not calculated and AI Agent performance follow-up is blocked.",
+        };
+      }
 
       const totalInterviewed = agencyInterviews.length;
       const passedInterviews = agencyInterviews.filter((interview) => interview.status === "Passed").length;
@@ -11367,7 +11526,7 @@ function calculateAgencyPerformanceRows() {
 async function saveAgencyPerformanceSnapshot() {
   if (!canManageAgencyAgreements) return alert("You do not have permission to calculate agency performance.");
 
-  const rows = calculateAgencyPerformanceRows().filter((row) => row.agency_id);
+  const rows = calculateAgencyPerformanceRows().filter((row) => row.agency_id && row.hasAssignedWork);
   if (!rows.length) return alert("No agency performance data to save.");
 
   const historyPayload = rows.map((row) => ({
@@ -12215,7 +12374,7 @@ function buildAICommanderDecisionContext() {
   const visaGapLines = requestHealth.filter((row) => !row.isSaudi && Number(row.visaGap || 0) > 0);
   const authorizationGapLines = requestHealth.filter((row) => !row.isSaudi && Number(row.authorizationGap || 0) > 0);
   const candidateGapLines = requestHealth.filter((row) => Number(row.candidateGap || 0) > 0);
-  const agencyRiskRows = agencyScorecard.filter((row) => row.risk !== "Low");
+  const agencyRiskRows = agencyScorecard.filter(isAgencyScorecardRiskItem);
   const riskScore =
     reports.lateItems.length +
     visaGapLines.length +
@@ -12240,7 +12399,7 @@ function buildLocalAICommanderAnswer(question = "", mode = aiCommanderMode, lang
   const context = buildAICommanderDecisionContext();
   const topRiskLines = context.highRiskLines.slice(0, 5);
   const topAgencies = context.agencyScorecard.slice(0, 4);
-  const weakAgencies = [...context.agencyScorecard].filter((agency) => agency.risk !== "Low").slice(-4).reverse();
+  const weakAgencies = [...context.agencyScorecard].filter(isAgencyScorecardRiskItem).slice(-4).reverse();
   const isArabic = language !== "English";
   const sourceNote = isArabic
     ? "مصدر الأرقام: محرك VisaFlow VIE حسب request_lines، وليس من ملخص الطلب العام."
@@ -13155,10 +13314,10 @@ function getAIAgentAgencyTasks() {
     };
   });
 
-  const agencyRiskTasks = buildAgencyScorecard()
-    .filter((row) => row.risk !== "Low")
+  const agencyRiskTasks = buildAgencyScorecard().filter(isAgencyScorecardRiskItem)
     .map((row) => {
       const agency = agencyContact(row.agency);
+      const requestSummary = row.activeRequestNos?.length ? ` Related request(s): ${row.activeRequestNos.join(", ")}.` : "";
       return {
         type: "Agency Performance Follow-up",
         priority: row.risk === "High" ? "High" : "Medium",
@@ -13166,12 +13325,12 @@ function getAIAgentAgencyTasks() {
         agency_id: agency.id || null,
         agency_email: agency.email || "",
         reference: `Agency score ${row.score}`,
-        request_no: "-",
+        request_no: "",
         related_table: "agencies",
         related_id: String(agency.id || ""),
         title: `Agency performance follow-up: ${row.agency}`,
-        reason: `Agency risk level is ${row.risk}. Score: ${row.score}. Success rate: ${row.successRate}%. Fail rate: ${row.failRate}%.`,
-        action_required: "Confirm corrective action plan, pending candidates, and expected delivery dates.",
+        reason: `Agency risk level is ${row.risk}. Score: ${row.score}. Success rate: ${row.successRate}%. Fail rate: ${row.failRate}%.${requestSummary}`,
+        action_required: "Confirm corrective action plan, pending candidates, blockers, and expected delivery dates.",
       };
     });
 
@@ -13189,22 +13348,27 @@ function getAIAgentAgencyTasks() {
 
 function buildAIAgentAgencyEmail(task) {
   const subject = `[VisaFlow Follow-up] ${task.title}`;
+  const requestNo = String(task.request_no || "").trim();
+  const requestNoLine = requestNo && requestNo !== "-" ? `Request No: ${requestNo}\n` : "";
+  const referenceLine = task.reference ? `Reference: ${task.reference}\n` : "";
+  const portalInstruction = task.type === "Agency Performance Follow-up"
+    ? "Please submit the corrective action plan from the Office Portal, including pending candidates, latest updates, blockers, and expected delivery dates."
+    : "Please update the candidate / authorization record in the Office Portal or reply with the latest status, expected completion date, and any blockers.";
+
   const body = `Dear ${task.agency} Team,
 
 VisaFlow AI Agent detected an item requiring your immediate update.
 
 Follow-up Type: ${task.type}
 Priority: ${task.priority}
-Reference: ${task.reference || "-"}
-Request No: ${task.request_no || "-"}
-
+${referenceLine}${requestNoLine}
 Reason:
 ${task.reason}
 
 Required Action:
 ${task.action_required}
 
-Please update the candidate / authorization record in the Office Portal or reply with the latest status, expected completion date, and any blockers.
+${portalInstruction}
 
 Best regards,
 VisaFlow AI Agent
@@ -13319,7 +13483,7 @@ function buildAIAgentManagerBrief() {
   const followUpTasks = getAIAgentAgencyTasks();
   const highPriorityFollowUps = followUpTasks.filter((task) => task.priority === "High");
   const staleAlerts = getAgencySlaEscalationAlerts();
-  const riskyAgencies = buildAgencyScorecard().filter((row) => row.risk !== "Low");
+  const riskyAgencies = buildAgencyScorecard().filter(isAgencyScorecardRiskItem);
 
   return {
     assignmentRecommendations,
@@ -16672,13 +16836,15 @@ function getLocalizedProject(value, language = reportStudioForm.language) {
 function buildAIReportStudioDataset() {
   const requestHealth = filterReportStudioRowsByProject(buildRequestHealthRows(), ["project"]);
   const mobilizationRows = filterReportStudioRowsByProject(mobilizationRequestRows, ["project_name"]);
-  const agencyRows = calculateAgencyPerformanceRows().map((row) => ({
-    ...row,
-    agency: row.agency_name,
-    score: row.total_score,
-    risk: row.rank === "Under Review" ? "High" : row.rank === "Silver" ? "Medium" : "Low",
-    failRate: row.candidates ? Math.round((Number(row.failed || 0) / Number(row.candidates || 1)) * 100) : 0,
-  }));
+  const agencyRows = calculateAgencyPerformanceRows()
+    .filter((row) => row.hasAssignedWork)
+    .map((row) => ({
+      ...row,
+      agency: row.agency_name,
+      score: row.total_score,
+      risk: row.rank === "Under Review" ? "High" : row.rank === "Silver" ? "Medium" : "Low",
+      failRate: row.candidates ? Math.round((Number(row.failed || 0) / Number(row.candidates || 1)) * 100) : 0,
+    }));
   const forecast = buildRecruitmentForecast();
   const recentOperationalChanges = getReportStudioRecentActivityLogs(requestHealth);
 
@@ -16749,7 +16915,7 @@ function buildAIReportStudioNarrative() {
   const language = data.language;
   const topRisks = data.request_health.filter((row) => row.riskLevel === "High").slice(0, 5);
   const topAgencies = data.agencies.slice(0, 5);
-  const weakAgencies = data.agencies.filter((agency) => agency.risk !== "Low").slice(0, 5);
+  const weakAgencies = data.agencies.filter((agency) => ["High", "Medium"].includes(agency.risk)).slice(0, 5);
   const reportName = getLocalizedReportName(data, language);
 
   if (isReportArabic(language)) {
@@ -18771,7 +18937,7 @@ if (!currentUser) {
                   <Stat title="Assignment Recommendations" value={getAIAgentRequestAssignmentRecommendations().length} className={getAIAgentRequestAssignmentRecommendations().length ? "warning" : "passed"} />
                   <Stat title="Open Follow-ups" value={getAIAgentAgencyTasks().length} className={getAIAgentAgencyTasks().length ? "warning" : "passed"} />
                   <Stat title="High Priority" value={getAIAgentAgencyTasks().filter((task) => task.priority === "High").length} className={executiveAlertClass(getAIAgentAgencyTasks().filter((task) => task.priority === "High").length)} />
-                  <Stat title="Risk Agencies" value={buildAgencyScorecard().filter((row) => row.risk !== "Low").length} className={executiveAlertClass(buildAgencyScorecard().filter((row) => row.risk !== "Low").length)} />
+                  <Stat title="Risk Agencies" value={buildAgencyScorecard().filter(isAgencyScorecardRiskItem).length} className={executiveAlertClass(buildAgencyScorecard().filter(isAgencyScorecardRiskItem).length)} />
                 </div>
               </div>
             </TableCard>
@@ -18951,7 +19117,7 @@ if (!currentUser) {
                     </tr>
                     <tr>
                       <td>Agency performance risk items</td>
-                      <td>{buildAgencyScorecard().filter((row) => row.risk !== "Low").length}</td>
+                      <td>{buildAgencyScorecard().filter(isAgencyScorecardRiskItem).length}</td>
                       <td><button className="new-btn" onClick={() => setActivePage("Agency Performance")}>Open Performance</button></td>
                     </tr>
                   </tbody>
@@ -19001,7 +19167,7 @@ if (!currentUser) {
                       {[
                         ["SLA Risk", reports.lateItems.length],
                         ["Line Visa Gaps", buildRequestHealthRows().filter((x) => !x.isSaudi && x.visaGap > 0).length],
-                        ["Agency Risk", buildAgencyScorecard().filter((x) => x.risk !== "Low").length],
+                        ["Agency Risk", buildAgencyScorecard().filter(isAgencyScorecardRiskItem).length],
                         ["High-Risk Requests", buildRequestHealthRows().filter((x) => x.riskLevel === "High").length],
                         ["Arrivals 30D", executiveDashboard.arrivalsNext30Days.length],
                       ].map(([label, value]) => (
@@ -19065,7 +19231,7 @@ if (!currentUser) {
                 <Stat title="Open Follow-ups" value={getAIAgentAgencyTasks().length} className={getAIAgentAgencyTasks().length ? "warning" : "passed"} />
                 <Stat title="SLA Candidate Delays" value={getAgencySlaEscalationAlerts().length} className={executiveAlertClass(getAgencySlaEscalationAlerts().length)} />
                 <Stat title="Auths Without Candidates" value={reports.authorizationsWithoutCandidates.length} className={executiveAlertClass(reports.authorizationsWithoutCandidates.length)} />
-                <Stat title="Agency Risk" value={buildAgencyScorecard().filter((x) => x.risk !== "Low").length} className={executiveAlertClass(buildAgencyScorecard().filter((x) => x.risk !== "Low").length)} />
+                <Stat title="Agency Risk" value={buildAgencyScorecard().filter(isAgencyScorecardRiskItem).length} className={executiveAlertClass(buildAgencyScorecard().filter(isAgencyScorecardRiskItem).length)} />
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "14px", alignItems: "center", marginBottom: "16px" }}>
