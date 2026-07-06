@@ -350,6 +350,7 @@ const OFFER_STATUSES = ["Pending", "Sent", "Accepted", "Rejected", "Joined"];
 const emptyRequest = {
   recruitment_type: "Foreign",
   request_type: "",
+  request_date: "",
   project_name: "",
   project_no: "",
   project_city: "",
@@ -6001,6 +6002,7 @@ const executiveDashboard = useMemo(() => {
     setRequestForm({
       recruitment_type: item.recruitment_type || (isSaudiNationality(item.nationality) ? "Saudi" : "Foreign"),
       request_type: item.request_type || "",
+      request_date: item.request_date || "",
       project_name: item.project_name || "",
       project_no: item.project_no || "",
       project_city: item.project_city || "",
@@ -6061,6 +6063,7 @@ const executiveDashboard = useMemo(() => {
       salary: firstLine.salary || requestForm.salary || "",
       interview_required: firstLine.interview_required || requestForm.interview_required || "Required",
       interview_type: firstLine.interview_type || requestForm.interview_type || "Online",
+      request_date: requestForm.request_date || null,
       project_start: requestForm.project_start || null,
       request_no: requestEditingId ? undefined : await generateRequestNo(),
       approval_status: requestEditingId ? undefined : "Pending Recruitment Approval",
@@ -20540,6 +20543,7 @@ if (!currentUser) {
 
   <div className="dashboard-grid">
     <Stat title="Request No" value={selectedRequest.request_no} />
+    <Stat title="Request Date" value={selectedRequest.request_date ? new Date(selectedRequest.request_date).toLocaleDateString("en-GB") : "-"} />
     <Stat title="Project No" value={selectedRequest.project_no || "-"} />
     <Stat title="Profession" value={getRequestLineSummary(selectedRequest, "profession")} />
     <Stat title="Nationality" value={getRequestLineSummary(selectedRequest, "nationality")} />
@@ -20731,6 +20735,16 @@ mobile: c.mobile || "",
               <div className="form-grid">
                 <Select value={requestForm.recruitment_type || "Foreign"} onChange={(v) => updateForm(setRequestForm, "recruitment_type", v)} placeholder="Recruitment Type" options={RECRUITMENT_TYPES} />
                 <Select value={requestForm.request_type} onChange={(v) => updateForm(setRequestForm, "request_type", v)} placeholder="Request Type" options={["Project Recruitment", "Administration Recruitment", "Replacement", "Mobilization"]} />
+                <div>
+                  <label>Request Date</label>
+                  <Input
+                    type="date"
+                    placeholder="Request Date"
+                    value={requestForm.request_date || ""}
+                    onChange={(v) => updateForm(setRequestForm, "request_date", v)}
+                  />
+                  <small style={{ color: "#64748b" }}>Actual client request date. Created Date remains automatic.</small>
+                </div>
                 <Input placeholder="Project Name" value={requestForm.project_name} onChange={(v) => updateForm(setRequestForm, "project_name", v)} />
                 <Input placeholder="Project No / رقم المشروع (Cost Center Ref)" value={requestForm.project_no} onChange={(v) => updateForm(setRequestForm, "project_no", v)} />
                 <Input placeholder="Project City / مدينة المشروع" value={requestForm.project_city} onChange={(v) => updateForm(setRequestForm, "project_city", v)} />
@@ -21034,6 +21048,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <th>Qty</th>
 <th>Remaining</th>
 <th>Candidates</th>
+<th>Request Date</th>
 <th>Project Start</th>
 <th>Created</th>
 <th>Priority</th>
@@ -21052,7 +21067,8 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
     String(item.project_name || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.project_no || "").toLowerCase().includes(search.toLowerCase()) ||
     String(item.project_city || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.project_location || "").toLowerCase().includes(search.toLowerCase())
+    String(item.project_location || "").toLowerCase().includes(search.toLowerCase()) ||
+    String(item.request_date || "").toLowerCase().includes(search.toLowerCase())
   )
   .map((item) => (
                     <tr key={item.id}>
@@ -21111,6 +21127,13 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
   }
 </td>
 
+<td>
+{
+item.request_date
+? new Date(item.request_date).toLocaleDateString("en-GB")
+: "-"
+}
+</td>
 
 <td>
 {
