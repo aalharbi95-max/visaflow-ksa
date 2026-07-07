@@ -8018,7 +8018,7 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
 
     const savedCandidateId = candidateEditingId || result.data?.id;
 
-    if (savedCandidateId) {
+    if (savedCandidateId && currentRole !== "Agency") {
       if (professionIntelligence.enabled) {
         const selectedInstitution = getInstitutionById(candidateTechnicalForm.institution_id);
         const requestLineId = matchedCandidateLine?.id && Number.isFinite(Number(matchedCandidateLine.id))
@@ -8337,6 +8337,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   }
 
   function buildCandidateTechnicalProfilePayload(candidate, technicalMeta) {
+    // Agency users can submit/update candidates, but Candidate Intelligence profile records
+    // remain company-controlled to avoid RLS errors and to keep final technical review internal.
+    if (currentRole === "Agency") return null;
     if (!candidate?.id || !technicalMeta?.intelligence?.enabled) return null;
 
     const profileForm = technicalMeta.profileForm || emptyCandidateTechnicalProfile;
