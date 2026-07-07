@@ -5955,7 +5955,7 @@ function isDuplicateRequestNoError(error) {
       {
         ...requestLineForm,
         quantity: Number(requestLineForm.quantity || 0),
-        salary: requestLineForm.salary || requestForm.salary || "",
+        salary: requestLineForm.salary || "",
         interview_required: requestLineForm.interview_required || "Required",
         interview_type:
           requestLineForm.interview_required === "No Interview"
@@ -5994,7 +5994,7 @@ function isDuplicateRequestNoError(error) {
           nationality: requestForm.nationality || "",
           gender: requestForm.gender || "",
           quantity: Number(requestForm.quantity || 0),
-          salary: requestForm.salary || "",
+          salary: "",
           interview_required: requestForm.interview_required || "Required",
           interview_type:
             requestForm.interview_required === "No Interview"
@@ -6032,7 +6032,7 @@ function isDuplicateRequestNoError(error) {
       quantity: item.quantity || lines[0]?.quantity || "",
       nationality: item.nationality || lines[0]?.nationality || "",
       gender: item.gender || lines[0]?.gender || "",
-      salary: item.salary || lines[0]?.salary || "",
+      salary: "",
       priority: item.priority || "Normal",
       status: item.status || "Open",
       requested_by: item.requested_by || "",
@@ -6080,7 +6080,7 @@ function isDuplicateRequestNoError(error) {
       quantity: totalQuantity,
       nationality: firstLine.nationality || requestForm.nationality || "",
       gender: firstLine.gender || requestForm.gender || "",
-      salary: firstLine.salary || requestForm.salary || "",
+      salary: firstLine.salary || "",
       interview_required: firstLine.interview_required || requestForm.interview_required || "Required",
       interview_type: firstLine.interview_type || requestForm.interview_type || "Online",
       request_date: requestForm.request_date || null,
@@ -20821,7 +20821,6 @@ mobile: c.mobile || "",
                 <Input placeholder="Project City / مدينة المشروع" value={requestForm.project_city} onChange={(v) => updateForm(setRequestForm, "project_city", v)} />
                 <Input placeholder="Project Location / Site / موقع المشروع" value={requestForm.project_location} onChange={(v) => updateForm(setRequestForm, "project_location", v)} />
                 <Input placeholder="Department" value={requestForm.department} onChange={(v) => updateForm(setRequestForm, "department", v)} />
-                <Input placeholder="Salary Budget / Default Salary" value={requestForm.salary} onChange={(v) => updateForm(setRequestForm, "salary", v)} />
                 <Select value={requestForm.priority} onChange={(v) => updateForm(setRequestForm, "priority", v)} placeholder="Priority" options={PRIORITIES} />
                 <Select value={requestForm.status} onChange={(v) => updateForm(setRequestForm, "status", v)} placeholder="Status" options={REQUEST_STATUSES} />
                 <Input placeholder="Requested By" value={requestForm.requested_by} onChange={(v) => updateForm(setRequestForm, "requested_by", v)} />
@@ -20874,7 +20873,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                     onChange={(v) => updateForm(setRequestLineForm, "quantity", v)}
                   />
                   <Input
-                    placeholder="Salary / Line Budget"
+                    placeholder="Line Monthly Salary"
                     value={requestLineForm.salary}
                     onChange={(v) => updateForm(setRequestLineForm, "salary", v)}
                   />
@@ -20919,7 +20918,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                       <th>Nationality</th>
                       <th>Gender</th>
                       <th>Qty</th>
-                      <th>Salary</th>
+                      <th>Line Salary</th>
                       <th>Interview</th>
                       <th>Action</th>
                     </tr>
@@ -21115,7 +21114,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <th>Profession</th>
 <th>Nationality</th>
 <th>Gender</th>
-<th>Salary</th>
+<th>Line Salary</th>
 <th>Qty</th>
 <th>Remaining</th>
 <th>Candidates</th>
