@@ -145,8 +145,9 @@ const ROLE_OPTIONS = [
   "Viewer",
 ];
 
-// Client-facing roles only. Platform Owner remains a hidden system role for SaaS owner login.
-const CLIENT_ROLE_OPTIONS = ROLE_OPTIONS.filter((role) => role !== "Platform Owner");
+// Client-facing roles only. Platform roles must never appear inside company Users Management.
+const PLATFORM_ROLE_OPTIONS = ["Platform Owner", "Platform Accounts User", "Platform Support User"];
+const CLIENT_ROLE_OPTIONS = ROLE_OPTIONS.filter((role) => !PLATFORM_ROLE_OPTIONS.includes(role));
 
 const RECRUITMENT_PERFORMANCE_ROLES = [
   "Recruitment Manager",
@@ -1682,6 +1683,41 @@ const canExport = hasAction("export") || ["Admin", "CEO", "Operations Manager", 
 const canViewLocalContent = ["Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Manager"].includes(currentRole);
 const canManageLocalContent = ["Admin", "Operations Manager", "Recruitment Manager"].includes(currentRole);
 const canManageMasterData = currentRole === "Admin" || isPlatformOwner;
+
+const canEditPlatformUsers = canManagePlatformAccounts;
+
+function getDefaultUserForm() {
+  return {
+    name: "",
+    email: "",
+    password: "",
+    role: canEditPlatformUsers && activePage === "Platform Users" ? "Platform Accounts User" : "Viewer",
+    status: "Active",
+    agency_id: "",
+    agency_name: "",
+  };
+}
+
+function resetUserEditingState() {
+  setUserEditingId(null);
+  setUserForm(getDefaultUserForm());
+}
+
+function canCurrentUserEditTargetUser(targetUser = {}) {
+  if (!targetUser?.id) return true;
+
+  const targetRole = normalizeUserRole(targetUser.role);
+
+  if (isPlatformRole(targetRole)) {
+    return canEditPlatformUsers;
+  }
+
+  if (canEditPlatformUsers) return true;
+
+  if (targetRole === "Agency") return true;
+
+  return Boolean(currentCompanyId) && String(targetUser.company_id || "") === String(currentCompanyId);
+}
 
 const getUniqueAgencyWorkspaces = (rows = []) => {
   const map = new Map();
@@ -6776,7 +6812,25 @@ async function saveUser() {
 
   const effectiveRole = savingPlatformUser
     ? (isPlatformRole(userForm.role) ? userForm.role : "Platform Accounts User")
-    : (userForm.role || "Viewer");
+    : (isPlatformRole(userForm.role) ? "Viewer" : (userForm.role || "Viewer"));
+
+  if (!savingPlatformUser && isPlatformRole(userForm.role)) {
+    return alert("Platform roles can only be managed from Platform Users by a platform account.");
+  }
+
+  if (userEditingId) {
+    const { data: targetUser, error: targetUserError } = await supabase
+      .from("users")
+      .select("id, role, company_id, agency_id, agency_name")
+      .eq("id", userEditingId)
+      .maybeSingle();
+
+    if (targetUserError) return alert(targetUserError.message);
+    if (!targetUser) return alert("User was not found.");
+    if (!canCurrentUserEditTargetUser(targetUser)) {
+      return alert("You cannot edit this user from the current workspace.");
+    }
+  }
 
   const cleanEmail = userForm.email.trim().toLowerCase();
   const selectedAgency = effectiveRole === "Agency"
@@ -6896,17 +6950,7 @@ async function saveUser() {
 
     if (userAccessError) return alert(userAccessError.message);
 
-    setUserForm({
-      name: "",
-      email: "",
-      password: "",
-      role: savingPlatformUser ? "Platform Accounts User" : "Viewer",
-      status: "Active",
-      agency_id: "",
-      agency_name: "",
-    });
-
-    setUserEditingId(null);
+    resetUserEditingState();
     await loadUsers();
     await loadAgencies();
     alert("Agency user access has been saved for this company.");
@@ -6935,17 +6979,7 @@ async function saveUser() {
 
   if (result.error) return alert(result.error.message);
 
-  setUserForm({
-    name: "",
-    email: "",
-    password: "",
-    role: savingPlatformUser ? "Platform Accounts User" : "Viewer",
-    status: "Active",
-    agency_id: "",
-    agency_name: "",
-  });
-
-  setUserEditingId(null);
+  resetUserEditingState();
   await loadUsers();
 }
 
@@ -7036,11 +7070,22 @@ async function saveAgency() {
   alert(linkedExistingAgency ? "Existing agency has been linked to this company." : agencyEditingId ? "Agency updated successfully." : "Agency saved and linked to this company.");
 }
   function editUser(user) {
+  if (!canCurrentUserEditTargetUser(user)) {
+    alert("You cannot edit this user from the current workspace.");
+    return;
+  }
+
+  const targetRole = normalizeUserRole(user.role);
+  if (!canEditPlatformUsers && isPlatformRole(targetRole)) {
+    alert("Platform users can only be managed by platform accounts.");
+    return;
+  }
+
   setUserForm({
     name: user.name || "",
     email: user.email || "",
-    password: user.password || "",
-    role: user.role || "Viewer",
+    password: "",
+    role: (!canEditPlatformUsers && isPlatformRole(targetRole)) ? "Viewer" : (targetRole || "Viewer"),
     status: user.status || "Active",
     agency_id: user.agency_id || "",
     agency_name: user.agency_name || "",
@@ -7052,6 +7097,23 @@ async function saveAgency() {
 
 async function deleteUser(id) {
   if (!canManageUsers) return alert("You do not have permission to delete users.");
+
+  const { data: targetUser, error: targetUserError } = await supabase
+    .from("users")
+    .select("id, role, company_id, agency_id, agency_name")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (targetUserError) return alert(targetUserError.message);
+  if (!targetUser) return alert("User was not found.");
+  if (!canCurrentUserEditTargetUser(targetUser)) {
+    return alert("You cannot delete this user from the current workspace.");
+  }
+
+  if (!canEditPlatformUsers && normalizeUserRole(targetUser.role) === "Agency") {
+    return alert("Agency users are shared portal accounts. Disable or remove access instead of deleting globally.");
+  }
+
   if (!window.confirm("Delete this user?")) return;
 
   const { error } = await supabase
@@ -10958,6 +11020,7 @@ async function handleLogin() {
   }
 
   setLoginLoading(true);
+  resetUserEditingState();
 
   try {
     // Migration-safe login:
@@ -10965,7 +11028,7 @@ async function handleLogin() {
     // 2) If the user is not linked yet, keep the old custom login temporarily.
     const { data: existingUser, error: existingUserError } = await supabase
       .from("users")
-      .select("id, email, auth_user_id")
+      .select("id, email, role, auth_user_id")
       .eq("email", email)
       .maybeSingle();
 
@@ -10977,6 +11040,13 @@ async function handleLogin() {
 
     if (!existingUser) {
       alert("Invalid email or password");
+      return;
+    }
+
+    // Security: platform roles must never use the temporary legacy-password fallback.
+    // This prevents any company Admin from creating a legacy Platform user and entering the owner area.
+    if (!existingUser.auth_user_id && isPlatformRole(existingUser.role)) {
+      alert("Platform users must login through secure Supabase Auth. Please contact the platform owner.");
       return;
     }
 
@@ -11020,7 +11090,17 @@ async function handleLogin() {
         return;
       }
 
+      if (isPlatformRole(legacyUser.role)) {
+        alert("Platform users must login through secure Supabase Auth. Please contact the platform owner.");
+        return;
+      }
+
       userData = legacyUser;
+    }
+
+    if (isPlatformRole(userData?.role) && !userData?.auth_user_id) {
+      alert("Platform users must be linked to Supabase Auth before login.");
+      return;
     }
 
     const userStatus = String(userData.status || "").trim().toLowerCase();
@@ -11140,6 +11220,7 @@ async function handleLogout() {
   setActiveAgencyCompanyId("");
   setActiveAgencyCompanyName("");
   setCurrentUser(null);
+  resetUserEditingState();
   setLoginForm({ email: "", password: "" });
   setChangePasswordOpen(false);
   resetChangePasswordForm();
@@ -24667,7 +24748,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         />
 
         <Input
-          placeholder="Password"
+          type="password"
+          placeholder={userEditingId ? "New Password (leave blank to keep current)" : "Password"}
           value={userForm?.password || ""}
           onChange={(v) =>
             setUserForm((p) => ({ ...p, password: v }))
@@ -24724,18 +24806,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 {userEditingId && (
   <button
     className="light-btn"
-    onClick={() => {
-      setUserEditingId(null);
-      setUserForm({
-        name: "",
-        email: "",
-        password: "",
-        role: "Viewer",
-        status: "Active",
-        agency_id: "",
-        agency_name: "",
-      });
-    }}
+    onClick={resetUserEditingState}
   >
     Cancel
   </button>
@@ -24757,7 +24828,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
 
         <tbody>
-          {(users || []).map((user) => (
+          {(users || []).filter((user) => !isPlatformRole(user.role)).map((user) => (
             <tr key={user.id}>
               <td>{user.name}</td>
               <td>{user.email}</td>
@@ -26251,7 +26322,7 @@ onClick={() => setActiveReport("activityLog")}>
 
         <input
           type="password"
-          placeholder="Password"
+          placeholder={userEditingId ? "New Password (leave blank to keep current)" : "Password"}
           value={userForm.password}
           onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
         />
@@ -26280,18 +26351,7 @@ onClick={() => setActiveReport("activityLog")}>
         {userEditingId && (
           <button
             type="button"
-            onClick={() => {
-              setUserEditingId(null);
-              setUserForm({
-                name: "",
-                email: "",
-                password: "",
-                role: "Platform Accounts User",
-                status: "Active",
-                agency_id: "",
-                agency_name: "",
-              });
-            }}
+            onClick={resetUserEditingState}
           >
             Cancel Edit
           </button>
