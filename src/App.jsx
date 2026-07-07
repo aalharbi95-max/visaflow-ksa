@@ -1292,6 +1292,8 @@ const [resetEmail, setResetEmail] = useState("");
 const [resetMessage, setResetMessage] = useState("");
 const [resetLoading, setResetLoading] = useState(false);
 const [loginLanguage, setLoginLanguage] = useState("EN");
+const [loginLogoFailed, setLoginLogoFailed] = useState(false);
+const [ssoInfoOpen, setSsoInfoOpen] = useState(false);
 const [showLoginPassword, setShowLoginPassword] = useState(false);
 const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 const [changePasswordForm, setChangePasswordForm] = useState({
@@ -19009,6 +19011,51 @@ function exportCurrentPage() {
 }
 
 if (!currentUser) {
+  const showMicrosoftSso = false; // Feature flag: enable only after real Microsoft SSO implementation.
+
+  const loginFeatures = [
+    {
+      icon: "🤖",
+      title: "AI Commander & Agent",
+      text: "Executive insights, follow-ups, and workflow automation.",
+    },
+    {
+      icon: "📋",
+      title: "Recruitment Requests",
+      text: "Control manpower demand, approvals, and request lines.",
+    },
+    {
+      icon: "🛂",
+      title: "Visa Lifecycle",
+      text: "Manage inventory, allocation, authorization, and cancellations.",
+    },
+    {
+      icon: "👥",
+      title: "Candidate Intelligence",
+      text: "Track candidates, interviews, AI scores, and decisions.",
+    },
+    {
+      icon: "✈️",
+      title: "Mobilization & Joining",
+      text: "Follow medical, visa, tickets, arrivals, and joining status.",
+    },
+    {
+      icon: "🏢",
+      title: "Agency SLA Control",
+      text: "Measure agency performance, penalties, and response discipline.",
+    },
+    {
+      icon: "🇸🇦",
+      title: "Local Content",
+      text: "Track Saudization and workforce localization indicators.",
+    },
+    {
+      icon: "👑",
+      title: "Multi-Tenant SaaS Admin",
+      text: "Manage clients, subscriptions, users, support, and usage.",
+    },
+  ];
+
   return (
     <main className="vf-login-shell">
       <section className="vf-login-left">
@@ -19018,88 +19065,68 @@ if (!currentUser) {
 
         <div className="vf-left-content">
           <header className="vf-brand-row">
-            <img
-              src="/visaflow-logo.png"
-              alt="VisaFlow KSA"
-              style={{
-                width: "280px",
-                maxWidth: "100%",
-                height: "auto",
-                display: "block",
-                borderRadius: "24px",
-                boxShadow: "0 24px 70px rgba(0, 0, 0, 0.22)",
-                background: "rgba(255, 255, 255, 0.96)",
-              }}
-            />
+            {!loginLogoFailed ? (
+              <img
+                src="/visaflow-logo.png"
+                alt="VisaFlow KSA"
+                className="vf-login-hero-logo"
+                onError={() => setLoginLogoFailed(true)}
+              />
+            ) : (
+              <div className="vf-login-logo-fallback" aria-label="VisaFlow KSA">
+                <span>VF</span>
+                <strong>VisaFlow KSA</strong>
+              </div>
+            )}
           </header>
 
           <div className="vf-platform-badge">
             <span>🛡</span>
-            End-to-End Recruitment & Visa Management Platform
+            Enterprise Recruitment, Visa & Workforce Operations Platform
           </div>
 
           <section className="vf-hero-copy">
             <h1>
-              Recruit. Mobilize.
+              Control recruitment.
               <br />
-              Manage. <strong>Succeed.</strong>
+              Govern visas. <strong>Mobilize faster.</strong>
             </h1>
             <p>
-              A unified platform to manage recruitment requests, visas, candidates,
-              interviews, mobilization, Saudi hiring, and workforce operations —
-              all in one secure place.
+              VisaFlow KSA helps organizations manage manpower requests, agencies,
+              visas, candidates, interviews, mobilization, workforce movement,
+              local content, and executive reporting from one secure workspace.
             </p>
           </section>
 
-          <section className="vf-feature-cards" aria-label="VisaFlow features">
-            <article>
-              <div className="vf-feature-icon">👥</div>
-              <h3>Smart Recruitment</h3>
-              <p>AI ranking, candidate matching & tracking</p>
-            </article>
-
-            <article>
-              <div className="vf-feature-icon">🛂</div>
-              <h3>Visa & Authorization</h3>
-              <p>Inventory, allocation & authorization control</p>
-            </article>
-
-            <article>
-              <div className="vf-feature-icon">✈️</div>
-              <h3>Mobilization</h3>
-              <p>Travel, arrival & joining management</p>
-            </article>
-
-            <article>
-              <div className="vf-feature-icon">📊</div>
-              <h3>Executive Insights</h3>
-              <p>Dashboards, reports & performance visibility</p>
-            </article>
+          <section className="vf-feature-cards vf-feature-cards-expanded" aria-label="VisaFlow platform capabilities">
+            {loginFeatures.map((feature) => (
+              <article key={feature.title}>
+                <div className="vf-feature-icon">{feature.icon}</div>
+                <h3>{feature.title}</h3>
+                <p>{feature.text}</p>
+              </article>
+            ))}
           </section>
 
-          <section className="vf-compliance-strip">
+          <section className="vf-login-trust-strip" aria-label="Platform trust notes">
             <div>
-              <span>رؤية</span>
-              <strong>2030</strong>
+              <span>Scope</span>
+              <strong>Recruitment · Visa · Workforce</strong>
             </div>
             <div>
-              <span>QIWA</span>
-              <strong>قوى</strong>
+              <span>Architecture</span>
+              <strong>Multi-tenant SaaS</strong>
             </div>
             <div>
-              <span>MUSANED</span>
-              <strong>مساند</strong>
-            </div>
-            <div>
-              <span>JADARAT</span>
-              <strong>جدارات</strong>
+              <span>Security</span>
+              <strong>Role-based access</strong>
             </div>
           </section>
         </div>
       </section>
 
       <section className="vf-login-right">
-        <div className="vf-language-switch" aria-label="Language switch">
+        <div className="vf-login-language">
           <button
             type="button"
             className={loginLanguage === "EN" ? "active" : ""}
@@ -19112,36 +19139,41 @@ if (!currentUser) {
             className={loginLanguage === "AR" ? "active" : ""}
             onClick={() => setLoginLanguage("AR")}
           >
-            العربية
+            عربي
           </button>
         </div>
 
         <div className="vf-login-card">
           <div className="vf-login-logo">
-            <img
-              src="/visaflow-logo.png"
-              alt="VisaFlow KSA"
-              style={{
-                width: "150px",
-                maxWidth: "100%",
-                height: "auto",
-                display: "block",
-                margin: "0 auto",
-                borderRadius: "16px",
-              }}
-            />
+            {!loginLogoFailed ? (
+              <img
+                src="/visaflow-logo.png"
+                alt="VisaFlow KSA"
+                className="vf-login-card-logo"
+                onError={() => setLoginLogoFailed(true)}
+              />
+            ) : (
+              <div className="vf-login-card-logo-fallback">
+                <span>VF</span>
+                <strong>VisaFlow KSA</strong>
+              </div>
+            )}
           </div>
 
-          <h2>Welcome Back!</h2>
-          <p className="vf-login-subtitle">Sign in to access your VisaFlow dashboard</p>
+          <h2>{loginLanguage === "AR" ? "تسجيل الدخول" : "Welcome Back"}</h2>
+          <p className="vf-login-subtitle">
+            {loginLanguage === "AR"
+              ? "ادخل إلى مساحة عمل شركتك لإدارة عمليات الاستقدام والتأشيرات والقوى العاملة."
+              : "Sign in to manage recruitment, visas, agencies, mobilization, and workforce operations."}
+          </p>
 
           <div className="vf-form-group">
-            <label>Email Address</label>
+            <label>{loginLanguage === "AR" ? "البريد الإلكتروني" : "Email Address"}</label>
             <div className="vf-input-box">
               <span className="vf-input-icon">✉</span>
               <input
                 type="email"
-                placeholder="Enter your email"
+                placeholder={loginLanguage === "AR" ? "example@company.com" : "Enter your email"}
                 value={loginForm.email}
                 onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
                 onKeyDown={(e) => e.key === "Enter" && handleLogin()}
@@ -19151,12 +19183,12 @@ if (!currentUser) {
           </div>
 
           <div className="vf-form-group">
-            <label>Password</label>
+            <label>{loginLanguage === "AR" ? "كلمة المرور" : "Password"}</label>
             <div className="vf-input-box">
               <span className="vf-input-icon">🔒</span>
               <input
                 type={showLoginPassword ? "text" : "password"}
-                placeholder="Enter your password"
+                placeholder={loginLanguage === "AR" ? "كلمة المرور" : "Enter your password"}
                 value={loginForm.password}
                 onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
                 onKeyDown={(e) => e.key === "Enter" && handleLogin()}
@@ -19180,7 +19212,7 @@ if (!currentUser) {
                 checked={rememberMe}
                 onChange={(e) => setRememberMe(e.target.checked)}
               />
-              <span>Remember Me</span>
+              <span>{loginLanguage === "AR" ? "تذكرني" : "Remember Me"}</span>
             </label>
 
             <button
@@ -19192,7 +19224,7 @@ if (!currentUser) {
                 setForgotPasswordOpen(true);
               }}
             >
-              Forgot Password?
+              {loginLanguage === "AR" ? "نسيت كلمة المرور؟" : "Forgot Password?"}
             </button>
           </div>
 
@@ -19202,45 +19234,79 @@ if (!currentUser) {
             onClick={handleLogin}
             disabled={loginLoading}
           >
-            {loginLoading ? "Signing in..." : "🔐 Sign In"}
+            {loginLoading
+              ? loginLanguage === "AR"
+                ? "جاري تسجيل الدخول..."
+                : "Signing in..."
+              : loginLanguage === "AR"
+                ? "🔐 دخول"
+                : "🔐 Sign In"}
           </button>
 
-          <div className="vf-divider">
-            <span />
-            <em>or</em>
-            <span />
-          </div>
+          {showMicrosoftSso && (
+            <>
+              <div className="vf-divider">
+                <span />
+                <em>{loginLanguage === "AR" ? "أو" : "or"}</em>
+                <span />
+              </div>
 
-          <button
-            type="button"
-            className="vf-microsoft-login"
-            onClick={() => alert("Microsoft SSO can be connected after domain setup.")}
-          >
-            <span className="vf-ms-mark">
-              <i />
-              <i />
-              <i />
-              <i />
-            </span>
-            Sign in with Microsoft
-          </button>
+              <button
+                type="button"
+                className="vf-microsoft-login"
+                onClick={() => setSsoInfoOpen(true)}
+              >
+                <span className="vf-ms-mark">
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                {loginLanguage === "AR" ? "الدخول عبر Microsoft" : "Sign in with Microsoft"}
+              </button>
+            </>
+          )}
 
-          <p className="vf-secure-note">🛡 Your data is secure and encrypted</p>
+          <p className="vf-secure-note">
+            🛡 {loginLanguage === "AR"
+              ? "منصة آمنة بصلاحيات حسب الدور والشركة"
+              : "Secure workspace with company and role-based access"}
+          </p>
         </div>
 
         <div className="vf-login-footer">
           VisaFlow KSA · Enterprise Edition · Version 1.0.0
         </div>
 
+        {ssoInfoOpen && (
+          <div className="vf-reset-overlay">
+            <div className="vf-reset-modal">
+              <h3>Microsoft SSO</h3>
+              <p>
+                Microsoft SSO is planned for enterprise domain setup and will be enabled after configuration.
+              </p>
+              <div className="vf-reset-actions">
+                <button type="button" onClick={() => setSsoInfoOpen(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {forgotPasswordOpen && (
           <div className="vf-reset-overlay">
             <div className="vf-reset-modal">
-              <h3>Forgot Password</h3>
-              <p>Enter your email and the system administrator will be notified.</p>
+              <h3>{loginLanguage === "AR" ? "نسيت كلمة المرور" : "Forgot Password"}</h3>
+              <p>
+                {loginLanguage === "AR"
+                  ? "أدخل بريدك الإلكتروني وسيتم إشعار مسؤول النظام."
+                  : "Enter your email and the system administrator will be notified."}
+              </p>
 
               <input
                 type="email"
-                placeholder="Enter your email"
+                placeholder={loginLanguage === "AR" ? "أدخل بريدك الإلكتروني" : "Enter your email"}
                 value={resetEmail}
                 onChange={(e) => setResetEmail(e.target.value)}
               />
@@ -19253,14 +19319,20 @@ if (!currentUser) {
                   onClick={handleForgotPasswordSubmit}
                   disabled={resetLoading}
                 >
-                  {resetLoading ? "Sending..." : "Send Request"}
+                  {resetLoading
+                    ? loginLanguage === "AR"
+                      ? "جاري الإرسال..."
+                      : "Sending..."
+                    : loginLanguage === "AR"
+                      ? "إرسال الطلب"
+                      : "Send Request"}
                 </button>
                 <button
                   type="button"
                   className="secondary"
                   onClick={() => setForgotPasswordOpen(false)}
                 >
-                  Close
+                  {loginLanguage === "AR" ? "إغلاق" : "Close"}
                 </button>
               </div>
             </div>
