@@ -1292,6 +1292,14 @@ const [resetMessage, setResetMessage] = useState("");
 const [resetLoading, setResetLoading] = useState(false);
 const [loginLanguage, setLoginLanguage] = useState("EN");
 const [showLoginPassword, setShowLoginPassword] = useState(false);
+const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+const [changePasswordForm, setChangePasswordForm] = useState({
+  current_password: "",
+  new_password: "",
+  confirm_password: "",
+});
+const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+const [changePasswordMessage, setChangePasswordMessage] = useState("");
 const [aiQuestion, setAiQuestion] = useState("اعطني ملخص تنفيذي عن أهم مخاطر التوظيف اليوم");
 const [aiAnswer, setAiAnswer] = useState("");
 const [aiLoading, setAiLoading] = useState(false);
@@ -10843,6 +10851,103 @@ async function handleForgotPasswordSubmit() {
   }
 }
 
+function resetChangePasswordForm() {
+  setChangePasswordForm({
+    current_password: "",
+    new_password: "",
+    confirm_password: "",
+  });
+  setChangePasswordMessage("");
+}
+
+function openChangePasswordModal() {
+  resetChangePasswordForm();
+  setChangePasswordOpen(true);
+}
+
+async function handleChangePasswordSubmit() {
+  const currentPassword = String(changePasswordForm.current_password || "").trim();
+  const newPassword = String(changePasswordForm.new_password || "").trim();
+  const confirmPassword = String(changePasswordForm.confirm_password || "").trim();
+
+  if (!currentUser?.id || !currentUser?.email) {
+    setChangePasswordMessage("Login session is missing. Please logout and login again.");
+    return;
+  }
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    setChangePasswordMessage("Please fill current password, new password, and confirmation.");
+    return;
+  }
+
+  if (newPassword.length < 8) {
+    setChangePasswordMessage("New password must be at least 8 characters.");
+    return;
+  }
+
+  if (newPassword !== confirmPassword) {
+    setChangePasswordMessage("New password and confirmation do not match.");
+    return;
+  }
+
+  if (currentPassword === newPassword) {
+    setChangePasswordMessage("New password must be different from the current password.");
+    return;
+  }
+
+  setChangePasswordLoading(true);
+  setChangePasswordMessage("");
+
+  try {
+    if (currentUser.auth_user_id) {
+      const { error: verifyError } = await supabase.auth.signInWithPassword({
+        email: String(currentUser.email || "").trim().toLowerCase(),
+        password: currentPassword,
+      });
+
+      if (verifyError) {
+        throw new Error("Current password is incorrect.");
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (updateError) throw updateError;
+    } else {
+      const { data: legacyUser, error: legacyError } = await supabase
+        .from("users")
+        .select("id")
+        .eq("id", currentUser.id)
+        .eq("email", currentUser.email)
+        .eq("password", currentPassword)
+        .maybeSingle();
+
+      if (legacyError) throw legacyError;
+      if (!legacyUser) throw new Error("Current password is incorrect.");
+
+      const { error: updateError } = await supabase
+        .from("users")
+        .update({ password: newPassword })
+        .eq("id", currentUser.id)
+        .eq("email", currentUser.email);
+
+      if (updateError) throw updateError;
+    }
+
+    setChangePasswordForm({
+      current_password: "",
+      new_password: "",
+      confirm_password: "",
+    });
+    setChangePasswordMessage("Password changed successfully. Please use the new password next time you login.");
+  } catch (error) {
+    setChangePasswordMessage(error?.message || "Unable to change password.");
+  } finally {
+    setChangePasswordLoading(false);
+  }
+}
+
 async function handleLogin() {
   const email = loginForm.email.trim().toLowerCase();
   const password = loginForm.password.trim();
@@ -11036,6 +11141,8 @@ async function handleLogout() {
   setActiveAgencyCompanyName("");
   setCurrentUser(null);
   setLoginForm({ email: "", password: "" });
+  setChangePasswordOpen(false);
+  resetChangePasswordForm();
   setActivePage("Dashboard");
 }
 
@@ -19127,9 +19234,69 @@ if (!currentUser) {
               </div>
             )}
 
-            <button type="button" className="light-btn" onClick={handleLogout} style={{ marginTop: "18px" }}>
-              Logout
-            </button>
+            <div className="actions-line" style={{ marginTop: "18px", justifyContent: "center" }}>
+              <button type="button" className="new-btn" onClick={openChangePasswordModal}>
+                Change Password
+              </button>
+              <button type="button" className="light-btn" onClick={handleLogout}>
+                Logout
+              </button>
+            </div>
+
+            {changePasswordOpen && (
+              <div className="vf-reset-overlay">
+                <div className="vf-reset-modal">
+                  <h3>Change Password</h3>
+                  <p>Update your account password. You must enter your current password first.</p>
+
+                  <input
+                    type="password"
+                    placeholder="Current password"
+                    value={changePasswordForm.current_password}
+                    onChange={(e) => setChangePasswordForm((prev) => ({ ...prev, current_password: e.target.value }))}
+                    autoComplete="current-password"
+                  />
+
+                  <input
+                    type="password"
+                    placeholder="New password"
+                    value={changePasswordForm.new_password}
+                    onChange={(e) => setChangePasswordForm((prev) => ({ ...prev, new_password: e.target.value }))}
+                    autoComplete="new-password"
+                  />
+
+                  <input
+                    type="password"
+                    placeholder="Confirm new password"
+                    value={changePasswordForm.confirm_password}
+                    onChange={(e) => setChangePasswordForm((prev) => ({ ...prev, confirm_password: e.target.value }))}
+                    autoComplete="new-password"
+                  />
+
+                  {changePasswordMessage && <div className="vf-reset-message">{changePasswordMessage}</div>}
+
+                  <div className="vf-reset-actions">
+                    <button
+                      type="button"
+                      onClick={handleChangePasswordSubmit}
+                      disabled={changePasswordLoading}
+                    >
+                      {changePasswordLoading ? "Saving..." : "Save New Password"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setChangePasswordOpen(false);
+                        resetChangePasswordForm();
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       </main>
@@ -19177,6 +19344,13 @@ if (!currentUser) {
             </select>
           </div>
         )}
+        <button
+  className="light-btn"
+  style={{ marginTop: "10px", width: "100%" }}
+  onClick={openChangePasswordModal}
+>
+  Change Password
+</button>
         <button
   className="save-btn"
   style={{ marginTop: "10px", width: "100%" }}
@@ -19264,10 +19438,66 @@ if (!currentUser) {
               <button className="new-btn" onClick={() => setActivePage("Notifications")}>🔔 {unreadNotificationsCount}</button>
               {canExport && <button className="new-btn" onClick={exportCurrentPage}>Export Excel</button>}
               <button className="new-btn" onClick={loadAll}>Refresh</button>
+              <button className="light-btn" onClick={openChangePasswordModal}>Change Password</button>
               <button className="light-btn" onClick={handleLogout}>Logout</button>
             </div>
           )}
         </div>
+
+        {changePasswordOpen && (
+          <div className="vf-reset-overlay">
+            <div className="vf-reset-modal">
+              <h3>Change Password</h3>
+              <p>Update your account password. You must enter your current password first.</p>
+
+              <input
+                type="password"
+                placeholder="Current password"
+                value={changePasswordForm.current_password}
+                onChange={(e) => setChangePasswordForm((prev) => ({ ...prev, current_password: e.target.value }))}
+                autoComplete="current-password"
+              />
+
+              <input
+                type="password"
+                placeholder="New password"
+                value={changePasswordForm.new_password}
+                onChange={(e) => setChangePasswordForm((prev) => ({ ...prev, new_password: e.target.value }))}
+                autoComplete="new-password"
+              />
+
+              <input
+                type="password"
+                placeholder="Confirm new password"
+                value={changePasswordForm.confirm_password}
+                onChange={(e) => setChangePasswordForm((prev) => ({ ...prev, confirm_password: e.target.value }))}
+                autoComplete="new-password"
+              />
+
+              {changePasswordMessage && <div className="vf-reset-message">{changePasswordMessage}</div>}
+
+              <div className="vf-reset-actions">
+                <button
+                  type="button"
+                  onClick={handleChangePasswordSubmit}
+                  disabled={changePasswordLoading}
+                >
+                  {changePasswordLoading ? "Saving..." : "Save New Password"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setChangePasswordOpen(false);
+                    resetChangePasswordForm();
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {activePage === "Notifications" && (
           <>
