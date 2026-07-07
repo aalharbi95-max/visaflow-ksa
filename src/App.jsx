@@ -5326,27 +5326,47 @@ const executiveDashboard = useMemo(() => {
  async function generateRequestNo() {
   const year = new Date().getFullYear();
 
+  // IMPORTANT:
+  // The database has a unique constraint on requests.request_no.
+  // Therefore the next number must be generated from all visible request numbers,
+  // not only from the current company, otherwise another company may already own
+  // the same REQ-year-number and Supabase will reject the save.
   const { data, error } = await supabase
     .from("requests")
     .select("request_no")
-    .eq("company_id", currentCompanyId)
-    .order("created_at", { ascending: false })
-    .limit(1);
+    .like("request_no", `REQ-${year}-%`)
+    .range(0, 10000);
 
-  if (error || !data || data.length === 0) {
-    return `REQ-${year}-0001`;
+  if (error) {
+    console.warn("generateRequestNo failed:", error.message);
+    throw new Error(`Could not generate request number: ${error.message}`);
   }
 
-  const lastRequestNo = data[0].request_no || "";
+  const maxNumber = (data || []).reduce((max, row) => {
+    const requestNo = String(row.request_no || "").trim();
+    const match = requestNo.match(new RegExp(`^REQ-${year}-(\\d+)$`));
+    if (!match) return max;
 
-  const lastNumber = parseInt(
-    lastRequestNo.split("-")[2] || "0",
-    10
-  );
+    const value = Number(match[1] || 0);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
 
-  const nextNumber = String(lastNumber + 1).padStart(4, "0");
+  return `REQ-${year}-${String(maxNumber + 1).padStart(4, "0")}`;
+}
 
-  return `REQ-${year}-${nextNumber}`;
+function isDuplicateRequestNoError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const details = String(error?.details || "").toLowerCase();
+  const constraint = String(error?.constraint || "").toLowerCase();
+
+  return (
+    error?.code === "23505" &&
+    (
+      message.includes("request") ||
+      details.includes("request") ||
+      constraint.includes("requests_request_no_unique")
+    )
+  ) || message.includes("requests_request_no_unique");
 }
 
   async function addAudit(requestId, action, details) {
@@ -6065,7 +6085,7 @@ const executiveDashboard = useMemo(() => {
       interview_type: firstLine.interview_type || requestForm.interview_type || "Online",
       request_date: requestForm.request_date || null,
       project_start: requestForm.project_start || null,
-      request_no: requestEditingId ? undefined : await generateRequestNo(),
+      request_no: requestEditingId ? undefined : "",
       approval_status: requestEditingId ? undefined : "Pending Recruitment Approval",
       request_status: requestEditingId ? undefined : "Draft",
       updated_at: new Date().toISOString(),
@@ -6073,11 +6093,62 @@ const executiveDashboard = useMemo(() => {
 
     Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
 
-    const result = requestEditingId
-      ? await supabase.from("requests").update(withUpdateActor(payload)).eq("id", requestEditingId).select().single()
-      : await supabase.from("requests").insert([withCompany(withCreateActor(payload))]).select().single();
+    let result = null;
 
-    if (result.error) return alert(result.error.message);
+    if (requestEditingId) {
+      result = await supabase
+        .from("requests")
+        .update(withUpdateActor(payload))
+        .eq("id", requestEditingId)
+        .select()
+        .single();
+    } else {
+      // Retry a few times in case two users save at the same moment
+      // or an old generated number already exists.
+      let lastDuplicateError = null;
+
+      for (let attempt = 1; attempt <= 7; attempt += 1) {
+        const nextRequestNo = await generateRequestNo();
+        const createPayload = {
+          ...payload,
+          request_no: nextRequestNo,
+        };
+
+        const insertResult = await supabase
+          .from("requests")
+          .insert([withCompany(withCreateActor(createPayload))])
+          .select()
+          .single();
+
+        if (!insertResult.error) {
+          result = insertResult;
+          break;
+        }
+
+        if (!isDuplicateRequestNoError(insertResult.error)) {
+          result = insertResult;
+          break;
+        }
+
+        lastDuplicateError = insertResult.error;
+        console.warn(`Duplicate request number ${nextRequestNo}. Retrying request save...`, insertResult.error.message);
+      }
+
+      if (!result) {
+        result = {
+          data: null,
+          error: lastDuplicateError || { message: "Could not generate a unique request number. Please try again." },
+        };
+      }
+    }
+
+    if (result.error) {
+      if (isDuplicateRequestNoError(result.error)) {
+        return alert("Request number already exists. Please click Save Request again to generate the next available number.");
+      }
+
+      return alert(result.error.message);
+    }
 
     const savedRequest = result.data;
 
