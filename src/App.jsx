@@ -10855,20 +10855,71 @@ async function handleLogin() {
   setLoginLoading(true);
 
   try {
-    const { data: userData, error: userError } = await supabase
+    // Migration-safe login:
+    // 1) If the user is already linked to Supabase Auth, require Supabase Auth password.
+    // 2) If the user is not linked yet, keep the old custom login temporarily.
+    const { data: existingUser, error: existingUserError } = await supabase
       .from("users")
-      .select("id, name, email, role, agency_id, agency_name, status, company_id")
+      .select("id, email, auth_user_id")
       .eq("email", email)
-      .eq("password", password)
       .maybeSingle();
 
-    if (userError || !userData) {
+    if (existingUserError) {
+      console.warn("Login user lookup failed:", existingUserError.message);
+      alert("Login failed. Please try again.");
+      return;
+    }
+
+    if (!existingUser) {
       alert("Invalid email or password");
       return;
     }
 
+    let userData = null;
+
+    if (existingUser.auth_user_id) {
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError || !authData?.user?.id) {
+        console.warn("Supabase Auth login failed:", authError?.message || authError);
+        alert("Invalid email or password");
+        return;
+      }
+
+      const { data: linkedUser, error: linkedUserError } = await supabase
+        .from("users")
+        .select("id, name, email, role, agency_id, agency_name, status, is_active, company_id, auth_user_id")
+        .eq("auth_user_id", authData.user.id)
+        .maybeSingle();
+
+      if (linkedUserError || !linkedUser) {
+        await supabase.auth.signOut();
+        alert("This authenticated account is not linked to a VisaFlow user.");
+        return;
+      }
+
+      userData = linkedUser;
+    } else {
+      const { data: legacyUser, error: legacyUserError } = await supabase
+        .from("users")
+        .select("id, name, email, role, agency_id, agency_name, status, is_active, company_id, auth_user_id")
+        .eq("email", email)
+        .eq("password", password)
+        .maybeSingle();
+
+      if (legacyUserError || !legacyUser) {
+        alert("Invalid email or password");
+        return;
+      }
+
+      userData = legacyUser;
+    }
+
     const userStatus = String(userData.status || "").trim().toLowerCase();
-    if (userStatus !== "active") {
+    if (userStatus !== "active" || userData.is_active === false) {
       alert("This user is not active");
       return;
     }
@@ -10952,6 +11003,16 @@ async function handleLogin() {
     localStorage.removeItem("visaflow_user");
     sessionStorage.removeItem("visaflow_user");
     storage.setItem("visaflow_user", JSON.stringify(loggedUser));
+
+    try {
+      await supabase
+        .from("users")
+        .update({ last_login: new Date().toISOString() })
+        .eq("id", loggedUser.id);
+    } catch (lastLoginError) {
+      console.warn("last_login update failed", lastLoginError?.message || lastLoginError);
+    }
+
     setCurrentUser(loggedUser);
     setActivePage((ROLE_PAGES[loggedUser.role] || ROLE_PAGES.Viewer)[0]);
   } finally {
@@ -10959,7 +11020,13 @@ async function handleLogin() {
   }
 }
 
-function handleLogout() {
+async function handleLogout() {
+  try {
+    await supabase.auth.signOut();
+  } catch (error) {
+    console.warn("Supabase sign out failed", error?.message || error);
+  }
+
   localStorage.removeItem("visaflow_user");
   sessionStorage.removeItem("visaflow_user");
   sessionStorage.removeItem("visaflow_agency_company_id");
@@ -10971,6 +11038,7 @@ function handleLogout() {
   setLoginForm({ email: "", password: "" });
   setActivePage("Dashboard");
 }
+
 
 function exportRowsToExcel(rows, fileName, sheetName = "Data") {
   if (!rows || rows.length === 0) {
