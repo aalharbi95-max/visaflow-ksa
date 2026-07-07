@@ -19064,22 +19064,6 @@ if (!currentUser) {
         <div className="vf-grid-layer" />
 
         <div className="vf-left-content">
-          <header className="vf-brand-row">
-            {!loginLogoFailed ? (
-              <img
-                src="/visaflow-logo.png"
-                alt="VisaFlow KSA"
-                className="vf-login-hero-logo"
-                onError={() => setLoginLogoFailed(true)}
-              />
-            ) : (
-              <div className="vf-login-logo-fallback" aria-label="VisaFlow KSA">
-                <span>VF</span>
-                <strong>VisaFlow KSA</strong>
-              </div>
-            )}
-          </header>
-
           <div className="vf-platform-badge">
             <span>🛡</span>
             Enterprise Recruitment, Visa & Workforce Operations Platform
