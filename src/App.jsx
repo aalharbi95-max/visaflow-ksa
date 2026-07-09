@@ -378,8 +378,6 @@ const emptyRequestLine = {
   gender: "",
   quantity: "",
   salary: "",
-  civil_id_no: "",
-  civil_id_expiry_date: "",
   interview_required: "Required",
   interview_type: "Online",
   notes: "",
@@ -431,6 +429,8 @@ const emptyCandidate = {
   project: "",
   request_no: "",
   passport_no: "",
+  civil_id_no: "",
+  civil_id_expiry_date: "",
   mobile: "",
   status: "New",
   medical_status: "Pending",
@@ -512,6 +512,8 @@ const CANDIDATE_UPLOAD_HEADERS = [
   "Gender",
   "Agency",
   "Passport No",
+  "Civil ID No",
+  "Civil ID Expiry Date",
   "Mobile",
   "Email",
   "Status",
@@ -549,7 +551,6 @@ const CANDIDATE_UPLOAD_REQUIRED_HEADERS = [
   "Profession",
   "Nationality",
   "Gender",
-  "Passport No",
 ];
 
 const emptyOfficeBulkUpdate = {
@@ -6062,12 +6063,6 @@ function isDuplicateRequestNoError(error) {
       return alert("Please fill Profession and Quantity for the request line.");
     }
 
-    if (isSaudiNationality(requestLineForm.nationality)) {
-      if (!String(requestLineForm.civil_id_no || "").trim() || !requestLineForm.civil_id_expiry_date) {
-        return alert("For Saudi request lines, Civil ID No and Civil ID Expiry Date are required.");
-      }
-    }
-
     setRequestLinesDraft((prev) => [
       ...prev,
       {
@@ -6099,8 +6094,6 @@ function isDuplicateRequestNoError(error) {
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || "",
-        civil_id_no: isSaudiNationality(line.nationality) ? String(line.civil_id_no || "").trim() : "",
-        civil_id_expiry_date: isSaudiNationality(line.nationality) ? (line.civil_id_expiry_date || null) : null,
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_required === "No Interview" ? "N/A" : line.interview_type || "Online",
         notes: line.notes || "",
@@ -6115,8 +6108,6 @@ function isDuplicateRequestNoError(error) {
           gender: requestForm.gender || "",
           quantity: Number(requestForm.quantity || 0),
           salary: "",
-          civil_id_no: isSaudiNationality(requestForm.nationality) ? String(requestLineForm.civil_id_no || requestForm.civil_id_no || "").trim() : "",
-          civil_id_expiry_date: isSaudiNationality(requestForm.nationality) ? (requestLineForm.civil_id_expiry_date || requestForm.civil_id_expiry_date || null) : null,
           interview_required: requestForm.interview_required || "Required",
           interview_type:
             requestForm.interview_required === "No Interview"
@@ -6171,8 +6162,6 @@ function isDuplicateRequestNoError(error) {
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || "",
-        civil_id_no: line.civil_id_no || "",
-        civil_id_expiry_date: line.civil_id_expiry_date || "",
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_type || "Online",
         notes: line.notes || "",
@@ -6191,15 +6180,6 @@ function isDuplicateRequestNoError(error) {
 
     if (!requestForm.request_type || linesToSave.length === 0) {
       alert("Please fill Request Type and add at least one request line.");
-      return;
-    }
-
-    const missingSaudiIdLine = linesToSave.find(
-      (line) => isSaudiNationality(line.nationality) && (!String(line.civil_id_no || "").trim() || !line.civil_id_expiry_date)
-    );
-
-    if (missingSaudiIdLine) {
-      alert(`Saudi request line requires Civil ID No and Civil ID Expiry Date: ${missingSaudiIdLine.profession || "Profession"} / ${missingSaudiIdLine.nationality || "Saudi"}`);
       return;
     }
 
@@ -6306,8 +6286,6 @@ function isDuplicateRequestNoError(error) {
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || null,
-        civil_id_no: isSaudiNationality(line.nationality) ? String(line.civil_id_no || "").trim() : null,
-        civil_id_expiry_date: isSaudiNationality(line.nationality) ? (line.civil_id_expiry_date || null) : null,
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_required === "No Interview" ? "N/A" : line.interview_type || "Online",
         notes: line.notes || "",
@@ -8001,6 +7979,8 @@ async function deleteAgreement(id) {
       project: item.project || "",
       request_no: item.request_no || "",
       passport_no: item.passport_no || "",
+      civil_id_no: item.civil_id_no || "",
+      civil_id_expiry_date: item.civil_id_expiry_date || "",
       mobile: item.mobile || "",
       email: item.email || "",
       medical_status: item.medical_status || "Pending",
@@ -8104,6 +8084,12 @@ let autoStatus = candidateForm.status;
 const selectedCandidateRequest = requests.find((r) => String(r.request_no || "") === String(candidateForm.request_no || ""));
 const saudiCandidateFlow = isSaudiRequest(selectedCandidateRequest) || isSaudiNationality(candidateForm.nationality);
 
+if (saudiCandidateFlow) {
+  if (!String(candidateForm.civil_id_no || "").trim() || !candidateForm.civil_id_expiry_date) {
+    return alert("Saudi candidate requires Civil ID No and Civil ID Expiry Date. Please enter them in the Candidates form.");
+  }
+}
+
 if (saudiCandidateFlow && candidateForm.joining_date) {
   autoStatus = "Joined";
 } else if (candidateForm.arrival_date) {
@@ -8127,6 +8113,9 @@ const payload = {
   profession: matchedCandidateLine?.profession || candidateForm.profession || "",
   nationality: matchedCandidateLine?.nationality || candidateForm.nationality || "",
   gender: matchedCandidateLine?.gender || candidateForm.gender || "",
+  passport_no: saudiCandidateFlow ? "" : (candidateForm.passport_no || ""),
+  civil_id_no: saudiCandidateFlow ? String(candidateForm.civil_id_no || "").trim() : "",
+  civil_id_expiry_date: saudiCandidateFlow ? (candidateForm.civil_id_expiry_date || null) : null,
   agency: currentRole === "Agency" ? (currentUser?.agency_name || candidateForm.agency || "") : candidateForm.agency,
   notes: candidateForm.notes || "",
   status: autoStatus,
@@ -8345,8 +8334,13 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       },
       {
         "Field": "Passport No",
-        "Required": "Recommended",
-        "Notes": "Used to prevent duplicate candidates.",
+        "Required": "Recommended for foreign candidates",
+        "Notes": "Used to prevent duplicate foreign candidates.",
+      },
+      {
+        "Field": "Civil ID No / Civil ID Expiry Date",
+        "Required": "Required for Saudi candidates",
+        "Notes": "For Saudi Hiring candidates, enter the Saudi Civil ID / National ID number and the ID card expiry date. This belongs to the worker/candidate record, not the manpower request.",
       },
       {
         "Field": "Candidate Intelligence Fields",
@@ -8728,8 +8722,16 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         filePassports.add(passportNo);
       }
 
-      const ticketNo = getRowValue(row, ["Ticket No", "Ticket", "ticket_no"]);
-      const flightDate = parseExcelDateValue(row["Flight Date"] || row["flight_date"] || row["تاريخ الرحلة"]);
+      const civilIdNo = getRowValue(row, ["Civil ID No", "Civil ID", "National ID", "Saudi ID", "civil_id_no", "رقم السجل المدني", "رقم الهوية"]);
+      const civilIdExpiryDate = parseExcelDateValue(row["Civil ID Expiry Date"] || row["Civil ID Expiry"] || row["National ID Expiry"] || row["civil_id_expiry_date"] || row["تاريخ انتهاء بطاقة السجل المدني"] || row["تاريخ انتهاء الهوية"]);
+
+      if (isSaudiNationality(rowNationality) && (!String(civilIdNo || "").trim() || !civilIdExpiryDate)) {
+        errors.push(`Row ${rowNo} / ${candidateName}: Saudi candidate requires Civil ID No and Civil ID Expiry Date.`);
+        continue;
+      }
+
+      const ticketNo = isSaudiNationality(rowNationality) ? "" : getRowValue(row, ["Ticket No", "Ticket", "ticket_no"]);
+      const flightDate = isSaudiNationality(rowNationality) ? null : parseExcelDateValue(row["Flight Date"] || row["flight_date"] || row["تاريخ الرحلة"]);
       const arrivalDate = parseExcelDateValue(row["Arrival Date"] || row["arrival_date"] || row["تاريخ الوصول"]);
       const medicalDate = parseExcelDateValue(row["Medical Date"] || row["medical_date"] || row["تاريخ الفحص"]);
       const rawMedicalStatus = getRowValue(row, ["Medical Status", "medical_status", "حالة الفحص"]);
@@ -8760,7 +8762,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || "Agency Talent Pool",
           request_no: "",
           agency: agencyName,
-          passport_no: passportNo,
+          passport_no: isSaudiNationality(rowNationality) ? "" : passportNo,
+          civil_id_no: isSaudiNationality(rowNationality) ? String(civilIdNo || "").trim() : "",
+          civil_id_expiry_date: isSaudiNationality(rowNationality) ? civilIdExpiryDate : null,
           mobile: getRowValue(row, ["Mobile", "Phone", "mobile", "الجوال"]),
           email: getRowValue(row, ["Email", "email", "البريد"]),
           notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
@@ -9167,8 +9171,16 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         filePassports.add(passportNo);
       }
 
-      const ticketNo = getRowValue(row, ["Ticket No", "Ticket", "ticket_no"]);
-      const flightDate = parseExcelDateValue(row["Flight Date"] || row["flight_date"] || row["تاريخ الرحلة"]);
+      const civilIdNo = getRowValue(row, ["Civil ID No", "Civil ID", "National ID", "Saudi ID", "civil_id_no", "رقم السجل المدني", "رقم الهوية"]);
+      const civilIdExpiryDate = parseExcelDateValue(row["Civil ID Expiry Date"] || row["Civil ID Expiry"] || row["National ID Expiry"] || row["civil_id_expiry_date"] || row["تاريخ انتهاء بطاقة السجل المدني"] || row["تاريخ انتهاء الهوية"]);
+
+      if (isSaudiNationality(matchedLine.nationality) && (!String(civilIdNo || "").trim() || !civilIdExpiryDate)) {
+        errors.push(`Row ${rowNo} / ${candidateName}: Saudi candidate requires Civil ID No and Civil ID Expiry Date.`);
+        continue;
+      }
+
+      const ticketNo = isSaudiNationality(matchedLine.nationality) ? "" : getRowValue(row, ["Ticket No", "Ticket", "ticket_no"]);
+      const flightDate = isSaudiNationality(matchedLine.nationality) ? null : parseExcelDateValue(row["Flight Date"] || row["flight_date"] || row["تاريخ الرحلة"]);
       const arrivalDate = parseExcelDateValue(row["Arrival Date"] || row["arrival_date"] || row["تاريخ الوصول"]);
       const medicalDate = parseExcelDateValue(row["Medical Date"] || row["medical_date"] || row["تاريخ الفحص"]);
       const rawMedicalStatus = getRowValue(row, ["Medical Status", "medical_status", "حالة الفحص"]);
@@ -9201,7 +9213,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           project: requestData.project_name || requestData.project || "",
           request_no: requestData.request_no || requestNo,
           agency: currentRole === "Agency" ? (currentUser?.agency_name || "") : getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
-          passport_no: passportNo,
+          passport_no: isSaudiNationality(matchedLine.nationality) ? "" : passportNo,
+          civil_id_no: isSaudiNationality(matchedLine.nationality) ? String(civilIdNo || "").trim() : "",
+          civil_id_expiry_date: isSaudiNationality(matchedLine.nationality) ? civilIdExpiryDate : null,
           mobile: getRowValue(row, ["Mobile", "Phone", "mobile", "الجوال"]),
           email: getRowValue(row, ["Email", "email", "البريد"]),
           notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
@@ -10946,6 +10960,8 @@ async function createVisaFromRequest(item) {
     gender: firstLine.gender || item.gender || "",
     project: item.project_name || item.project || "",
     request_no: item.request_no || "",
+    civil_id_no: "",
+    civil_id_expiry_date: "",
     source: isSaudiLine ? "Jadarat" : "",
     offer_status: "Pending",
     ticket_no: isSaudiLine ? "" : emptyCandidate.ticket_no,
@@ -21373,8 +21389,6 @@ if (!currentUser) {
           <th>Nationality</th>
           <th>Gender</th>
           <th>Qty</th>
-          <th>Civil ID No</th>
-          <th>ID Expiry</th>
           <th>Interview</th>
           <th>Notes</th>
         </tr>
@@ -21387,8 +21401,6 @@ if (!currentUser) {
             <td>{line.nationality || "-"}</td>
             <td>{line.gender || "-"}</td>
             <td>{line.quantity || 0}</td>
-            <td>{isSaudiNationality(line.nationality) ? line.civil_id_no || "Missing" : "N/A"}</td>
-            <td>{isSaudiNationality(line.nationality) ? line.civil_id_expiry_date || "Missing" : "N/A"}</td>
             <td>{line.interview_required === "No Interview" ? "No Interview" : line.interview_type || "Online"}</td>
             <td>{line.notes || "-"}</td>
           </tr>
@@ -21613,14 +21625,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                   />
                   <Select
                     value={requestLineForm.nationality}
-                    onChange={(v) =>
-                      setRequestLineForm((prev) => ({
-                        ...prev,
-                        nationality: v,
-                        civil_id_no: isSaudiNationality(v) ? prev.civil_id_no || "" : "",
-                        civil_id_expiry_date: isSaudiNationality(v) ? prev.civil_id_expiry_date || "" : "",
-                      }))
-                    }
+                    onChange={(v) => updateForm(setRequestLineForm, "nationality", v)}
                     placeholder="Nationality"
                     searchable
                     options={countries.map((c) =>
@@ -21644,24 +21649,6 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                     value={requestLineForm.salary}
                     onChange={(v) => updateForm(setRequestLineForm, "salary", v)}
                   />
-                  {isSaudiNationality(requestLineForm.nationality) && (
-                    <>
-                      <Input
-                        placeholder="Civil ID No / رقم السجل المدني"
-                        value={requestLineForm.civil_id_no || ""}
-                        onChange={(v) => updateForm(setRequestLineForm, "civil_id_no", v)}
-                      />
-                      <div>
-                        <label>Civil ID Expiry Date / تاريخ انتهاء بطاقة السجل المدني</label>
-                        <Input
-                          type="date"
-                          placeholder="Civil ID Expiry Date"
-                          value={requestLineForm.civil_id_expiry_date || ""}
-                          onChange={(v) => updateForm(setRequestLineForm, "civil_id_expiry_date", v)}
-                        />
-                      </div>
-                    </>
-                  )}
                   <Select
                     value={requestLineForm.interview_required || "Required"}
                     onChange={(v) =>
@@ -21704,8 +21691,6 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                       <th>Gender</th>
                       <th>Qty</th>
                       <th>Line Salary</th>
-                      <th>Civil ID No</th>
-                      <th>ID Expiry</th>
                       <th>Interview</th>
                       <th>Action</th>
                     </tr>
@@ -21713,7 +21698,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                   <tbody>
                     {requestLinesDraft.length === 0 ? (
                       <tr>
-                        <td colSpan="10">No lines added yet.</td>
+                        <td colSpan="8">No lines added yet.</td>
                       </tr>
                     ) : (
                       requestLinesDraft.map((line, index) => (
@@ -21724,8 +21709,6 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                           <td><Badge value={line.gender || "-"} /></td>
                           <td>{line.quantity || 0}</td>
                           <td>{line.salary || "-"}</td>
-                          <td>{isSaudiNationality(line.nationality) ? line.civil_id_no || "Missing" : "N/A"}</td>
-                          <td>{isSaudiNationality(line.nationality) ? line.civil_id_expiry_date || "Missing" : "N/A"}</td>
                           <td>{line.interview_required === "No Interview" ? "No Interview" : line.interview_type || "Online"}</td>
                           <td>
                             <button type="button" className="danger" onClick={() => removeRequestLineFromDraft(index)}>
@@ -22118,6 +22101,8 @@ item.created_at
                     <th>Request No</th>
                     <th>Name</th>
                     <th>Profession</th>
+                    <th>Civil ID</th>
+                    <th>ID Expiry</th>
                     <th>Source</th>
                     <th>Offer</th>
                     <th>Joining Date</th>
@@ -22131,6 +22116,8 @@ item.created_at
                       <td>{item.request_no || "-"}</td>
                       <td>{item.candidate_name || "-"}</td>
                       <td>{item.profession || "-"}</td>
+                      <td>{item.civil_id_no || "Missing"}</td>
+                      <td>{item.civil_id_expiry_date || "Missing"}</td>
                       <td>{item.source || "-"}</td>
                       <td><Badge value={item.offer_status || "Pending"} /></td>
                       <td>{item.joining_date || "-"}</td>
@@ -22828,7 +22815,14 @@ Save Authorization
 />
 <Select
   value={candidateForm.nationality}
-  onChange={(v) => updateForm(setCandidateForm, "nationality", v)}
+  onChange={(v) =>
+    setCandidateForm((prev) => ({
+      ...prev,
+      nationality: v,
+      civil_id_no: isSaudiNationality(v) ? prev.civil_id_no || "" : "",
+      civil_id_expiry_date: isSaudiNationality(v) ? prev.civil_id_expiry_date || "" : "",
+    }))
+  }
   placeholder="Search nationality..."
   searchable
   options={countries.map((c) => `${c.nationality} (${c.name})`)}
@@ -22857,6 +22851,8 @@ Save Authorization
         profession: req.profession || "",
         nationality: req.nationality || "",
         gender: req.gender || "",
+        civil_id_no: isSaudiRequest(req) ? prev.civil_id_no || "" : "",
+        civil_id_expiry_date: isSaudiRequest(req) ? prev.civil_id_expiry_date || "" : "",
         source: isSaudiRequest(req) ? (prev.source || "Jadarat") : prev.source || "",
         offer_status: prev.offer_status || "Pending",
       }));
@@ -22865,7 +22861,10 @@ Save Authorization
   placeholder="Search Request No..."
   searchable
   options={requests.map((r) => r.request_no)}
-/><Input placeholder="Passport No" value={candidateForm.passport_no} onChange={(v) => updateForm(setCandidateForm, "passport_no", v)} />                
+/>
+{!isSaudiCandidate(candidateForm, requests) && (
+  <Input placeholder="Passport No" value={candidateForm.passport_no} onChange={(v) => updateForm(setCandidateForm, "passport_no", v)} />
+)}
                 <Input placeholder="Mobile" value={candidateForm.mobile} onChange={(v) => updateForm(setCandidateForm, "mobile", v)} />
                 <Input
   placeholder="Email"
@@ -22874,6 +22873,20 @@ Save Authorization
 />
 {isSaudiCandidate(candidateForm, requests) && (
   <>
+    <Input
+      placeholder="Civil ID No / رقم السجل المدني"
+      value={candidateForm.civil_id_no || ""}
+      onChange={(v) => updateForm(setCandidateForm, "civil_id_no", v)}
+    />
+    <div>
+      <label>Civil ID Expiry Date / تاريخ انتهاء بطاقة السجل المدني</label>
+      <Input
+        type="date"
+        placeholder="Civil ID Expiry Date"
+        value={candidateForm.civil_id_expiry_date || ""}
+        onChange={(v) => updateForm(setCandidateForm, "civil_id_expiry_date", v)}
+      />
+    </div>
     <Select value={candidateForm.source || ""} onChange={(v) => updateForm(setCandidateForm, "source", v)} placeholder="Saudi Source" options={SAUDI_SOURCES} />
     <Select value={candidateForm.offer_status || "Pending"} onChange={(v) => updateForm(setCandidateForm, "offer_status", v)} placeholder="Offer Status" options={OFFER_STATUSES} />
     <Input type="date" placeholder="Joining Date" value={candidateForm.joining_date || ""} onChange={(v) => updateForm(setCandidateForm, "joining_date", v)} />
@@ -23023,7 +23036,8 @@ Save Authorization
         <th>Gender</th>
         <th>Agency</th>
         <th>Project</th>
-        <th>Passport</th>
+        <th>Passport / Civil ID</th>
+        <th>ID Expiry</th>
         <th>Email</th>
         <th>Medical Status</th>
 <th>Medical Date</th>
@@ -23053,7 +23067,8 @@ Save Authorization
           <td><Badge value={item.gender} /></td>
           <td>{item.agency}</td>
           <td>{item.project}</td>
-          <td>{item.passport_no}</td>
+          <td>{isSaudiCandidate(item, requests) ? item.civil_id_no || "Missing" : item.passport_no || "-"}</td>
+          <td>{isSaudiCandidate(item, requests) ? item.civil_id_expiry_date || "Missing" : "N/A"}</td>
           <td>{item.email}</td>
           <td>{item.medical_status}</td>
 <td>{item.medical_date}</td>
@@ -23699,7 +23714,14 @@ Save Authorization
 />
 <Select
 value={candidateForm.nationality}
-onChange={(v) => updateForm(setCandidateForm, "nationality", v)}
+onChange={(v) =>
+  setCandidateForm((prev) => ({
+    ...prev,
+    nationality: v,
+    civil_id_no: isSaudiNationality(v) ? prev.civil_id_no || "" : "",
+    civil_id_expiry_date: isSaudiNationality(v) ? prev.civil_id_expiry_date || "" : "",
+  }))
+}
 placeholder="Nationality"
 options={countries.map((c) => c.nationality || c.name)}
 />
@@ -23714,7 +23736,27 @@ options={countries.map((c) => c.nationality || c.name)}
 />
         <Input placeholder="Project" value={candidateForm.project} onChange={(v) => updateForm(setCandidateForm, "project", v)} />
         <Input placeholder="Request No" value={candidateForm.request_no} onChange={(v) => updateForm(setCandidateForm, "request_no", v)} />
-        <Input placeholder="Passport No" value={candidateForm.passport_no} onChange={(v) => updateForm(setCandidateForm, "passport_no", v)} />
+        {!isSaudiCandidate(candidateForm, requests) && (
+          <Input placeholder="Passport No" value={candidateForm.passport_no} onChange={(v) => updateForm(setCandidateForm, "passport_no", v)} />
+        )}
+        {isSaudiCandidate(candidateForm, requests) && (
+          <>
+            <Input
+              placeholder="Civil ID No / رقم السجل المدني"
+              value={candidateForm.civil_id_no || ""}
+              onChange={(v) => updateForm(setCandidateForm, "civil_id_no", v)}
+            />
+            <div>
+              <label>Civil ID Expiry Date / تاريخ انتهاء بطاقة السجل المدني</label>
+              <Input
+                type="date"
+                placeholder="Civil ID Expiry Date"
+                value={candidateForm.civil_id_expiry_date || ""}
+                onChange={(v) => updateForm(setCandidateForm, "civil_id_expiry_date", v)}
+              />
+            </div>
+          </>
+        )}
         <Input placeholder="Mobile" value={candidateForm.mobile} onChange={(v) => updateForm(setCandidateForm, "mobile", v)} />
         <Input      
   placeholder="Email"
