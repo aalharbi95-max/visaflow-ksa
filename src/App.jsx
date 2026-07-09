@@ -2260,6 +2260,70 @@ function getRequestAllocationSummary(requestNo) {
   };
 }
 
+function getRequestLinkedVisaAllocationRows(requestNo = "") {
+  const targetRequestNo = String(requestNo || "").trim();
+  if (!targetRequestNo) return [];
+
+  return visaAllocations
+    .filter((allocation) => String(allocation.request_no || "") === targetRequestNo)
+    .map((allocation) => {
+      const visaLine = visaInventoryLines.find(
+        (line) => String(line.id || "") === String(allocation.visa_batch_line_id || "")
+      );
+
+      const batch = visaRecords.find((visa) => String(visa.visa_no || "") === String(allocation.visa_no || ""));
+
+      return {
+        ...allocation,
+        visa_no: allocation.visa_no || visaLine?.visa_no || batch?.visa_no || "-",
+        profession: visaLine?.profession || allocation.profession || batch?.profession || "-",
+        nationality: visaLine?.nationality || allocation.nationality || batch?.nationality || "-",
+        gender: visaLine?.gender || allocation.gender || batch?.gender || "-",
+        allocated_qty: Number(allocation.allocated_qty || 0),
+        batch_status: batch?.status || visaLine?.status || "-",
+      };
+    })
+    .sort((a, b) =>
+      String(a.profession || "").localeCompare(String(b.profession || "")) ||
+      String(a.nationality || "").localeCompare(String(b.nationality || "")) ||
+      String(a.gender || "").localeCompare(String(b.gender || ""))
+    );
+}
+
+function getRequestLinkedAuthorizationRows(requestNo = "") {
+  const targetRequestNo = String(requestNo || "").trim();
+  if (!targetRequestNo) return [];
+
+  const requestAllocations = getRequestLinkedVisaAllocationRows(targetRequestNo);
+  const allocationIds = new Set(requestAllocations.map((allocation) => String(allocation.id || "")).filter(Boolean));
+  const visaBatchLineIds = new Set(requestAllocations.map((allocation) => String(allocation.visa_batch_line_id || "")).filter(Boolean));
+  const visaNos = new Set(requestAllocations.map((allocation) => String(allocation.visa_no || "")).filter(Boolean));
+
+  return visaAuthorizations
+    .filter((authorization) => {
+      if (String(authorization.request_no || "") === targetRequestNo) return true;
+      if (authorization.visa_allocation_id && allocationIds.has(String(authorization.visa_allocation_id))) return true;
+      if (authorization.visa_batch_line_id && visaBatchLineIds.has(String(authorization.visa_batch_line_id))) return true;
+      if (authorization.visa_no && visaNos.has(String(authorization.visa_no))) return true;
+      return false;
+    })
+    .map((authorization) => {
+      const allocation = requestAllocations.find(
+        (item) =>
+          String(item.id || "") === String(authorization.visa_allocation_id || "") ||
+          String(item.visa_batch_line_id || "") === String(authorization.visa_batch_line_id || "") ||
+          String(item.visa_no || "") === String(authorization.visa_no || "")
+      );
+
+      return {
+        ...authorization,
+        profession: authorization.profession || allocation?.profession || "-",
+        nationality: authorization.nationality || allocation?.nationality || "-",
+        gender: authorization.gender || allocation?.gender || "-",
+      };
+    });
+}
+
 function getAllocationLineCurrentQty(lineId) {
   return Number(allocationDraft[String(lineId)] || 0);
 }
@@ -12781,6 +12845,93 @@ function buildRequestHealthRows() {
 }
 
 
+function buildRequestVisaCoverageFacts(lines = []) {
+  const safeLines = Array.isArray(lines) ? lines : [];
+
+  const facts = safeLines.reduce((acc, line) => {
+    const requiredQty = Number(line?.requested_qty || 0);
+    const allocatedQty = Number(line?.allocatedVisaQty || 0);
+    const authorizedQty = Number(line?.authorizedQty || 0);
+
+    acc.totalManpowerDemand += requiredQty;
+
+    if (line?.isSaudi) {
+      acc.saudiLocalDemand += requiredQty;
+      acc.saudiLocalLines += 1;
+      return acc;
+    }
+
+    acc.visaRequiredDemand += requiredQty;
+    acc.nonSaudiLines += 1;
+    acc.allocatedVisas += allocatedQty;
+    acc.authorizedQty += authorizedQty;
+    acc.visaGap += Math.max(requiredQty - allocatedQty, 0);
+    acc.visaSurplus += Math.max(allocatedQty - requiredQty, 0);
+    acc.authorizationGap += Math.max(allocatedQty - authorizedQty, 0);
+
+    return acc;
+  }, {
+    totalManpowerDemand: 0,
+    visaRequiredDemand: 0,
+    saudiLocalDemand: 0,
+    allocatedVisas: 0,
+    authorizedQty: 0,
+    visaGap: 0,
+    visaSurplus: 0,
+    authorizationGap: 0,
+    nonSaudiLines: 0,
+    saudiLocalLines: 0,
+  });
+
+  facts.coverageStatus =
+    facts.visaRequiredDemand === 0
+      ? "No Visa Required"
+      : facts.visaGap > 0
+        ? "Partially Covered"
+        : facts.visaSurplus > 0
+          ? "Covered With Surplus"
+          : "Fully Covered";
+
+  facts.executiveRule =
+    "Visa coverage compares allocated visas against visa-required non-Saudi demand only. Saudi/local manpower is part of total manpower demand but must never be counted as a missing visa.";
+
+  return facts;
+}
+
+function getSelectedRequestVisaCoverageFacts(requestNo = "") {
+  const targetRequestNo = String(requestNo || selectedRequest?.request_no || "").trim();
+  if (!targetRequestNo) return null;
+
+  const lines = buildOperationalRequestLineRows().filter(
+    (line) => String(line.request_no || "") === targetRequestNo
+  );
+
+  if (!lines.length) return null;
+
+  return {
+    request_no: targetRequestNo,
+    ...buildRequestVisaCoverageFacts(lines),
+    lines: lines.map((line) => ({
+      line_no: line.line_no,
+      profession: line.profession,
+      nationality: line.nationality,
+      gender: line.gender,
+      requested_qty: line.requested_qty,
+      isSaudi: Boolean(line.isSaudi),
+      visa_required_qty: line.isSaudi ? 0 : Number(line.requested_qty || 0),
+      allocated_visas: line.isSaudi ? 0 : Number(line.allocatedVisaQty || 0),
+      visa_gap: line.isSaudi ? 0 : Number(line.visaGap || 0),
+      visa_surplus: line.isSaudi ? 0 : Math.max(Number(line.allocatedVisaQty || 0) - Number(line.requested_qty || 0), 0),
+      coverage_note: line.isSaudi
+        ? "Saudi/local line — excluded from visa coverage because it does not require a visa."
+        : Number(line.visaGap || 0) > 0
+          ? "Visa gap"
+          : "Covered",
+    })),
+  };
+}
+
+
 function buildRecruitmentForecast() {
   const openLines = buildRequestHealthRows().filter((row) => !["Completed", "Closed", "Cancelled"].includes(row.status));
   const totalRemainingRecruitment = openLines.reduce((sum, row) => sum + Number(row.candidateGap || 0), 0);
@@ -12937,17 +13088,41 @@ function getReportStudioRecentActivityLogs(requestHealthRows = []) {
 function buildOperationalLineBriefText() {
   const lines = buildOperationalRequestLineRows();
   const totals = lines.reduce((acc, line) => {
-    acc.required += Number(line.requested_qty || 0);
-    acc.allocated += Number(line.allocatedVisaQty || 0);
-    acc.authorized += Number(line.authorizedQty || 0);
+    const requestedQty = Number(line.requested_qty || 0);
+    const allocatedQty = Number(line.allocatedVisaQty || 0);
+    const authorizedQty = Number(line.authorizedQty || 0);
+
+    acc.totalManpower += requestedQty;
+    if (line.isSaudi) {
+      acc.saudiLocal += requestedQty;
+    } else {
+      acc.visaRequired += requestedQty;
+      acc.allocated += allocatedQty;
+      acc.authorized += authorizedQty;
+      acc.visaGap += Number(line.visaGap || 0);
+      acc.visaSurplus += Math.max(allocatedQty - requestedQty, 0);
+      acc.authorizationGap += Number(line.authorizationGap || 0);
+    }
+
     acc.candidates += Number(line.candidates || 0);
     acc.joined += Number(line.joined || 0);
-    acc.visaGap += Number(line.visaGap || 0);
-    acc.authorizationGap += Number(line.authorizationGap || 0);
     acc.candidateGap += Number(line.candidateGap || 0);
     acc.joiningGap += Number(line.joiningGap || 0);
     return acc;
-  }, { required: 0, allocated: 0, authorized: 0, candidates: 0, joined: 0, visaGap: 0, authorizationGap: 0, candidateGap: 0, joiningGap: 0 });
+  }, {
+    totalManpower: 0,
+    visaRequired: 0,
+    saudiLocal: 0,
+    allocated: 0,
+    authorized: 0,
+    candidates: 0,
+    joined: 0,
+    visaGap: 0,
+    visaSurplus: 0,
+    authorizationGap: 0,
+    candidateGap: 0,
+    joiningGap: 0,
+  });
 
   const grouped = lines.reduce((acc, line) => {
     const key = line.request_no || "-";
@@ -12967,9 +13142,11 @@ function buildOperationalLineBriefText() {
           `Profession: ${line.profession}`,
           `Nationality: ${line.nationality}`,
           `Gender: ${line.gender}`,
-          `Required: ${line.requested_qty}`,
-          `Allocated Visas: ${line.allocatedVisaQty}`,
-          `Authorized: ${line.authorizedQty}`,
+          `Manpower Required: ${line.requested_qty}`,
+          `Visa Required: ${line.isSaudi ? 0 : line.requested_qty}`,
+          line.isSaudi ? "Saudi/local line excluded from visa coverage" : `Allocated Visas: ${line.allocatedVisaQty}`,
+          line.isSaudi ? "Visa Gap: 0" : `Visa Gap: ${line.visaGap}`,
+          `Authorized: ${line.isSaudi ? 0 : line.authorizedQty}`,
           `Candidates: ${line.candidates}`,
           `Interview Passed: ${line.interviewPassed}`,
           `Medical: ${line.medicalDone}`,
@@ -12978,8 +13155,7 @@ function buildOperationalLineBriefText() {
           `Arrived: ${line.arrived}`,
           `Joined: ${line.joined}`,
           `Candidate Gap: ${line.candidateGap}`,
-          `Visa Gap: ${line.visaGap}`,
-          `Authorization Gap: ${line.authorizationGap}`,
+          `Authorization Gap: ${line.isSaudi ? 0 : line.authorizationGap}`,
           `Joining Gap: ${line.joiningGap}`,
           `Progress: ${line.progress}%`,
           `Risk: ${line.riskLevel}`,
@@ -12995,7 +13171,7 @@ function buildOperationalLineBriefText() {
   return [
     "AUTHORITATIVE VisaFlow Request-Line Brief",
     "IMPORTANT: This brief is already calculated by VisaFlow Intelligence Engine. Do not recalculate, regroup, or use request headers.",
-    `Totals from request lines only: Required ${totals.required}, Allocated Visas ${totals.allocated}, Authorized ${totals.authorized}, Candidates ${totals.candidates}, Joined ${totals.joined}, Visa Gap ${totals.visaGap}, Authorization Gap ${totals.authorizationGap}, Candidate Gap ${totals.candidateGap}, Joining Gap ${totals.joiningGap}`,
+    `Totals from request lines only: Total Manpower ${totals.totalManpower}, Saudi/Local ${totals.saudiLocal}, Visa-Required ${totals.visaRequired}, Allocated Visas ${totals.allocated}, Visa Gap ${totals.visaGap}, Visa Surplus ${totals.visaSurplus}, Authorized ${totals.authorized}, Authorization Gap ${totals.authorizationGap}, Candidates ${totals.candidates}, Joined ${totals.joined}, Candidate Gap ${totals.candidateGap}, Joining Gap ${totals.joiningGap}`,
     "",
     ...sections,
   ].join("\n");
@@ -13008,12 +13184,29 @@ function buildAICommanderSnapshot() {
   const forecast = buildRecruitmentForecast();
 
   const totalsFromLines = operationalLines.reduce((acc, line) => {
-    acc.total_required += Number(line.requested_qty || 0);
-    acc.allocated_visas += Number(line.allocatedVisaQty || 0);
-    acc.authorized_qty += Number(line.authorizedQty || 0);
+    const requestedQty = Number(line.requested_qty || 0);
+    const allocatedQty = Number(line.allocatedVisaQty || 0);
+    const authorizedQty = Number(line.authorizedQty || 0);
+
+    acc.total_required += requestedQty;
+    acc.total_manpower_demand += requestedQty;
+
+    if (line.isSaudi) {
+      acc.saudi_local_demand += requestedQty;
+      acc.saudi_local_lines += 1;
+    } else {
+      acc.visa_required_demand += requestedQty;
+      acc.non_saudi_lines += 1;
+      acc.allocated_visas += allocatedQty;
+      acc.authorized_qty += authorizedQty;
+      acc.visa_gap += Number(line.visaGap || 0);
+      acc.visa_surplus += Math.max(allocatedQty - requestedQty, 0);
+      acc.authorization_gap += Number(line.authorizationGap || 0);
+    }
+
     acc.candidates += Number(line.candidates || 0);
-    acc.covered_candidates += Math.min(Number(line.candidates || 0), Number(line.requested_qty || 0));
-    acc.extra_candidates += Math.max(Number(line.candidates || 0) - Number(line.requested_qty || 0), 0);
+    acc.covered_candidates += Math.min(Number(line.candidates || 0), requestedQty);
+    acc.extra_candidates += Math.max(Number(line.candidates || 0) - requestedQty, 0);
     acc.interview_passed += Number(line.interviewPassed || 0);
     acc.medical_done += Number(line.medicalDone || 0);
     acc.visa_ready += Number(line.visaReady || 0);
@@ -13022,14 +13215,15 @@ function buildAICommanderSnapshot() {
     acc.joined += Number(line.joined || 0);
     acc.candidate_gap += Number(line.candidateGap || 0);
     acc.joining_gap += Number(line.joiningGap || 0);
-    if (!line.isSaudi) {
-      acc.visa_gap += Number(line.visaGap || 0);
-      acc.authorization_gap += Number(line.authorizationGap || 0);
-    }
     if (line.riskLevel === "High") acc.high_risk_lines += 1;
     return acc;
   }, {
     total_required: 0,
+    total_manpower_demand: 0,
+    visa_required_demand: 0,
+    saudi_local_demand: 0,
+    non_saudi_lines: 0,
+    saudi_local_lines: 0,
     allocated_visas: 0,
     authorized_qty: 0,
     candidates: 0,
@@ -13042,6 +13236,7 @@ function buildAICommanderSnapshot() {
     arrived: 0,
     joined: 0,
     visa_gap: 0,
+    visa_surplus: 0,
     authorization_gap: 0,
     candidate_gap: 0,
     joining_gap: 0,
@@ -13051,6 +13246,8 @@ function buildAICommanderSnapshot() {
   totalsFromLines.progress_percent = totalsFromLines.total_required
     ? Math.min(Math.round((totalsFromLines.covered_candidates / totalsFromLines.total_required) * 100), 100)
     : 0;
+
+  const visaCoverageFacts = buildRequestVisaCoverageFacts(operationalLines);
 
   const visaShortage = operationalLines
     .filter((line) => !line.isSaudi && line.visaGap > 0)
@@ -13110,8 +13307,15 @@ function buildAICommanderSnapshot() {
       rule_1: "Each operational_request_line is a separate demand: profession + nationality + gender + requested_qty.",
       rule_2: "Visa allocation, authorization, candidates, interviews and mobilization must be interpreted per operational_request_line.",
       rule_3: "When reporting one request, list every line separately before any summary.",
+      visa_rule_1: "Total manpower demand includes Saudi/local and non-Saudi request lines.",
+      visa_rule_2: "Visa-required demand excludes Saudi/local lines. Saudi nationals must never be counted as missing visas.",
+      visa_rule_3: "When comparing visas, compare allocated_visas only against visa_required_demand, not against total_manpower_demand.",
+      visa_rule_4: "Describe Saudi/local lines as excluded from visa coverage because they do not require visas; do not describe them as unlinked or missing visas.",
+      visa_rule_5: "Remaining visa inventory is unallocated inventory, not unlinked request demand.",
     },
     line_totals: totalsFromLines,
+    visa_coverage_summary: visaCoverageFacts,
+    selected_request_visa_coverage: selectedRequest?.request_no ? getSelectedRequestVisaCoverageFacts(selectedRequest.request_no) : null,
     operational_request_lines: operationalLines,
     critical_alerts_by_line: {
       visa_shortage_by_request_line: visaShortage,
@@ -13177,22 +13381,42 @@ function buildLockedVIEReport(question = "") {
   const operationalLines = buildOperationalRequestLineRows();
   const activeLines = operationalLines.filter((line) => !["Cancelled"].includes(line.status));
   const totals = activeLines.reduce((acc, line) => {
-    acc.required += Number(line.requested_qty || 0);
-    acc.allocated += Number(line.allocatedVisaQty || 0);
-    acc.authorized += Number(line.authorizedQty || 0);
+    const requestedQty = Number(line.requested_qty || 0);
+    const allocatedQty = Number(line.allocatedVisaQty || 0);
+    const authorizedQty = Number(line.authorizedQty || 0);
+
+    acc.required += requestedQty;
+    acc.totalManpower += requestedQty;
+
+    if (line.isSaudi) {
+      acc.saudiLocal += requestedQty;
+      acc.saudiLocalLines += 1;
+    } else {
+      acc.visaRequired += requestedQty;
+      acc.nonSaudiLines += 1;
+      acc.allocated += allocatedQty;
+      acc.authorized += authorizedQty;
+      acc.visaGap += Number(line.visaGap || 0);
+      acc.visaSurplus += Math.max(allocatedQty - requestedQty, 0);
+      acc.authorizationGap += Number(line.authorizationGap || 0);
+    }
+
     acc.candidates += Number(line.candidates || 0);
     acc.interviewPassed += Number(line.interviewPassed || 0);
     acc.medicalDone += Number(line.medicalDone || 0);
     acc.arrived += Number(line.arrived || 0);
     acc.joined += Number(line.joined || 0);
     acc.candidateGap += Number(line.candidateGap || 0);
-    acc.visaGap += Number(line.visaGap || 0);
-    acc.authorizationGap += Number(line.authorizationGap || 0);
     acc.joiningGap += Number(line.joiningGap || 0);
     if (line.riskLevel === "High") acc.highRisk += 1;
     return acc;
   }, {
     required: 0,
+    totalManpower: 0,
+    visaRequired: 0,
+    saudiLocal: 0,
+    nonSaudiLines: 0,
+    saudiLocalLines: 0,
     allocated: 0,
     authorized: 0,
     candidates: 0,
@@ -13202,10 +13426,15 @@ function buildLockedVIEReport(question = "") {
     joined: 0,
     candidateGap: 0,
     visaGap: 0,
+    visaSurplus: 0,
     authorizationGap: 0,
     joiningGap: 0,
     highRisk: 0,
   });
+
+  const selectedRequestCoverage = selectedRequest?.request_no
+    ? getSelectedRequestVisaCoverageFacts(selectedRequest.request_no)
+    : null;
 
   const requestGroups = activeLines.reduce((map, line) => {
     const key = line.request_no || "-";
@@ -13224,7 +13453,9 @@ function buildLockedVIEReport(question = "") {
     const lineRows = request.lines
       .sort((a, b) => Number(a.line_no || 0) - Number(b.line_no || 0))
       .map((line) =>
-        `Line ${line.line_no}: ${line.profession} | ${line.nationality} | ${line.gender} | Required ${line.requested_qty} | Allocated ${line.allocatedVisaQty} | Authorized ${line.authorizedQty} | Candidates ${line.candidates} | Interview Passed ${line.interviewPassed} | Medical ${line.medicalDone} | Arrived ${line.arrived} | Joined ${line.joined} | Bottleneck: ${line.bottleneck} | Risk: ${line.riskLevel}`
+        line.isSaudi
+          ? `Line ${line.line_no}: ${line.profession} | ${line.nationality} | ${line.gender} | Manpower Required ${line.requested_qty} | Visa Required 0 | Saudi/local line excluded from visa coverage | Candidates ${line.candidates} | Interview Passed ${line.interviewPassed} | Arrived ${line.arrived} | Joined ${line.joined} | Bottleneck: ${line.bottleneck} | Risk: ${line.riskLevel}`
+          : `Line ${line.line_no}: ${line.profession} | ${line.nationality} | ${line.gender} | Manpower Required ${line.requested_qty} | Visa Required ${line.requested_qty} | Allocated ${line.allocatedVisaQty} | Visa Gap ${line.visaGap} | Authorized ${line.authorizedQty} | Candidates ${line.candidates} | Interview Passed ${line.interviewPassed} | Medical ${line.medicalDone} | Arrived ${line.arrived} | Joined ${line.joined} | Bottleneck: ${line.bottleneck} | Risk: ${line.riskLevel}`
       )
       .join("\n");
 
@@ -13244,29 +13475,43 @@ function buildLockedVIEReport(question = "") {
     `- ${agency.agency}: Candidates ${agency.candidates}, Authorized ${agency.authorizedQty}, Success ${agency.successRate}%, Risk ${agency.risk}, Score ${agency.score}`
   ).join("\n") || "- No agency data available.";
 
-  const progress = totals.required ? Math.round((totals.candidates / totals.required) * 100) : 0;
-  const joinedProgress = totals.required ? Math.round((totals.joined / totals.required) * 100) : 0;
+  const progress = totals.totalManpower ? Math.round((totals.candidates / totals.totalManpower) * 100) : 0;
+  const joinedProgress = totals.totalManpower ? Math.round((totals.joined / totals.totalManpower) * 100) : 0;
+  const visaCoverageStatus =
+    totals.visaRequired === 0
+      ? "No Visa Required"
+      : totals.visaGap > 0
+        ? "Partially Covered"
+        : totals.visaSurplus > 0
+          ? "Covered With Surplus"
+          : "Fully Covered";
 
   return [
     "🔒 VisaFlow Locked Request-Line Report",
     "",
     "This report is generated by VisaFlow VIE from request_lines only. Request header profession/quantity is ignored.",
+    "Visa coverage rule: compare allocated visas against visa-required non-Saudi demand only. Saudi/local lines are manpower demand but not visa demand.",
     question ? `Question: ${question}` : "",
     "",
     "Executive Totals",
-    `- Total required: ${totals.required}`,
-    `- Active candidates: ${totals.candidates} (${progress}%)`,
-    `- Allocated visas: ${totals.allocated}`,
+    `- Total manpower demand: ${totals.totalManpower}`,
+    `- Saudi/local manpower not requiring visas: ${totals.saudiLocal}`,
+    `- Visa-required manpower (non-Saudi only): ${totals.visaRequired}`,
+    `- Allocated/linked visas for visa-required lines: ${totals.allocated}`,
+    `- Visa coverage status: ${visaCoverageStatus}`,
+    `- Visa gap: ${totals.visaGap}`,
+    `- Visa surplus: ${totals.visaSurplus}`,
     `- Authorized quantity: ${totals.authorized}`,
+    `- Active candidates: ${totals.candidates} (${progress}%)`,
     `- Interview passed: ${totals.interviewPassed}`,
     `- Medical done: ${totals.medicalDone}`,
     `- Arrived: ${totals.arrived}`,
     `- Joined: ${totals.joined} (${joinedProgress}%)`,
-    `- Visa allocation gap: ${totals.visaGap}`,
     `- Authorization gap: ${totals.authorizationGap}`,
     `- Candidate gap: ${totals.candidateGap}`,
     `- Joining gap: ${totals.joiningGap}`,
     `- High-risk lines: ${totals.highRisk}`,
+    selectedRequestCoverage ? `- Selected request ${selectedRequestCoverage.request_no}: total manpower ${selectedRequestCoverage.totalManpowerDemand}, visa-required ${selectedRequestCoverage.visaRequiredDemand}, Saudi/local ${selectedRequestCoverage.saudiLocalDemand}, allocated ${selectedRequestCoverage.allocatedVisas}, visa gap ${selectedRequestCoverage.visaGap}, status ${selectedRequestCoverage.coverageStatus}` : "",
     "",
     "Request Line Breakdown",
     requestSections || "No request lines available.",
@@ -13280,7 +13525,8 @@ function buildLockedVIEReport(question = "") {
     "Recommended Actions",
     "1. Do not evaluate any request as one profession when it has multiple request lines.",
     "2. Follow each line separately by profession, nationality, gender, quantity, authorization, candidate pipeline, and joining.",
-    "3. Use the bottleneck shown for each line as the next operational action.",
+    "3. For visa analysis, use visa-required demand only and exclude Saudi/local lines from visa gaps.",
+    "4. Use the bottleneck shown for each line as the next operational action.",
   ].filter(Boolean).join("\n");
 }
 
@@ -13295,6 +13541,10 @@ function buildAICommanderDecisionContext() {
   const visaGapLines = requestHealth.filter((row) => !row.isSaudi && Number(row.visaGap || 0) > 0);
   const authorizationGapLines = requestHealth.filter((row) => !row.isSaudi && Number(row.authorizationGap || 0) > 0);
   const candidateGapLines = requestHealth.filter((row) => Number(row.candidateGap || 0) > 0);
+  const visaCoverage = buildRequestVisaCoverageFacts(requestHealth);
+  const selectedRequestVisaCoverage = selectedRequest?.request_no
+    ? getSelectedRequestVisaCoverageFacts(selectedRequest.request_no)
+    : null;
   const agencyRiskRows = agencyScorecard.filter(isAgencyScorecardRiskItem);
   const riskScore =
     reports.lateItems.length +
@@ -13311,6 +13561,8 @@ function buildAICommanderDecisionContext() {
     visaGapLines,
     authorizationGapLines,
     candidateGapLines,
+    visaCoverage,
+    selectedRequestVisaCoverage,
     agencyRiskRows,
     riskScore,
   };
@@ -13335,6 +13587,13 @@ function buildLocalAICommanderAnswer(question = "", mode = aiCommanderMode, lang
       `- AI Risk Score: ${context.riskScore}`,
       `- Open Requests: ${executiveDashboard.openRequests}`,
       `- Recruitment Progress: ${executiveDashboard.recruitmentProgress}%`,
+      `- Total Manpower Demand: ${context.visaCoverage.totalManpowerDemand}`,
+      `- Visa-Required Demand: ${context.visaCoverage.visaRequiredDemand}`,
+      `- Saudi/Local Demand Excluded From Visa Coverage: ${context.visaCoverage.saudiLocalDemand}`,
+      `- Allocated Visas vs Visa-Required Demand: ${context.visaCoverage.allocatedVisas} / ${context.visaCoverage.visaRequiredDemand}`,
+      `- Real Visa Gap: ${context.visaCoverage.visaGap}`,
+      `- Visa Coverage Status: ${context.visaCoverage.coverageStatus}`,
+      context.selectedRequestVisaCoverage ? `- Selected Request ${context.selectedRequestVisaCoverage.request_no}: total ${context.selectedRequestVisaCoverage.totalManpowerDemand}, visa-required ${context.selectedRequestVisaCoverage.visaRequiredDemand}, Saudi/local ${context.selectedRequestVisaCoverage.saudiLocalDemand}, allocated ${context.selectedRequestVisaCoverage.allocatedVisas}, gap ${context.selectedRequestVisaCoverage.visaGap}` : "",
       `- Remaining Recruitment Gap: ${context.forecast.totalRemainingRecruitment}`,
       `- Remaining Joining Gap: ${context.forecast.totalRemainingJoining}`,
       `- Expected Arrivals Next 30 Days: ${context.forecast.arrivingNext30}`,
@@ -13374,6 +13633,13 @@ function buildLocalAICommanderAnswer(question = "", mode = aiCommanderMode, lang
     `- مستوى المخاطر الحالي: ${riskLabel} / AI Risk Score: ${context.riskScore}`,
     `- الطلبات المفتوحة: ${executiveDashboard.openRequests}`,
     `- تقدم التوظيف: ${executiveDashboard.recruitmentProgress}%` ,
+    `- إجمالي احتياج العمالة: ${context.visaCoverage.totalManpowerDemand}`,
+    `- احتياج التأشيرات الفعلي لغير السعوديين: ${context.visaCoverage.visaRequiredDemand}`,
+    `- العمالة السعودية/المحلية المستبعدة من التأشيرات: ${context.visaCoverage.saudiLocalDemand}`,
+    `- التأشيرات المخصصة مقابل احتياج التأشيرات: ${context.visaCoverage.allocatedVisas} / ${context.visaCoverage.visaRequiredDemand}`,
+    `- فجوة التأشيرات الحقيقية: ${context.visaCoverage.visaGap}`,
+    `- حالة تغطية التأشيرات: ${context.visaCoverage.coverageStatus}`,
+    context.selectedRequestVisaCoverage ? `- الطلب المحدد ${context.selectedRequestVisaCoverage.request_no}: إجمالي ${context.selectedRequestVisaCoverage.totalManpowerDemand}، يحتاج تأشيرات ${context.selectedRequestVisaCoverage.visaRequiredDemand}، سعودي/محلي ${context.selectedRequestVisaCoverage.saudiLocalDemand}، مخصص ${context.selectedRequestVisaCoverage.allocatedVisas}، الفجوة ${context.selectedRequestVisaCoverage.visaGap}` : "",
     `- فجوة التوظيف المتبقية: ${context.forecast.totalRemainingRecruitment}`,
     `- فجوة المباشرة المتبقية: ${context.forecast.totalRemainingJoining}`,
     `- المتوقع وصولهم خلال 30 يوم: ${context.forecast.arrivingNext30}`,
@@ -13459,6 +13725,11 @@ function buildAICommanderGuardedQuestion(question = "") {
     "Never mention or expose another company's data. Never assume the user is Adel, Abu Ibrahim, or the platform owner unless the provided context says so.",
     "If the user asks who they are or which company they use, answer from the authenticated_user and tenant fields below.",
     "If the user asks for operational data, use only the snapshot/localDecisionContext supplied for the current tenant. If data is not supplied, say that the data is not available in the current context.",
+    "Visa coverage mandatory rule: total manpower demand includes all request lines, but visa-required demand excludes Saudi/local lines.",
+    "Never compare allocated visas against total manpower demand when Saudi/local lines exist. Compare allocated visas only against visa_required_demand / non-Saudi demand.",
+    "Saudi/local request lines must not be reported as missing, unlinked, or uncovered visas. Say they are excluded because they do not require visas.",
+    "Remaining visa inventory means unallocated inventory; do not call it unlinked request demand unless there is an actual request allocation link issue.",
+    "When the user asks about this/selected request, use selected_request_visa_coverage when available.",
     "Continue the same topic when the user asks a follow-up question. Use the previous conversation below only as conversation context, not as a source for other companies' data.",
     "Answer style: be conversational, executive, clear, and visually structured. Use short sections with emojis and clean headings. Avoid long paragraphs. End with 2-4 practical follow-up suggestions the user can ask next.",
     "Do not output raw JSON unless the user explicitly asks for JSON.",
@@ -21096,23 +21367,37 @@ if (!currentUser) {
       </tbody>
     </table>
   </TableCard>
-  <TableCard title="Linked Visas">
+  <TableCard title="Linked / Allocated Visas">
   <table>
     <thead>
       <tr>
         <th>Visa No</th>
-        <th>Status</th>
+        <th>Profession</th>
+        <th>Nationality</th>
+        <th>Gender</th>
+        <th>Allocated Qty</th>
+        <th>Batch Status</th>
       </tr>
     </thead>
     <tbody>
-      {visaRecords
-        .filter((v) => v.request_no === selectedRequest.request_no)
-        .map((v) => (
-          <tr key={v.id}>
+      {getRequestLinkedVisaAllocationRows(selectedRequest.request_no).length === 0 ? (
+        <tr>
+          <td colSpan="6" style={{ color: "#64748b" }}>
+            No allocated visa lines found for this request.
+          </td>
+        </tr>
+      ) : (
+        getRequestLinkedVisaAllocationRows(selectedRequest.request_no).map((v) => (
+          <tr key={v.id || `${v.visa_no}-${v.profession}-${v.nationality}-${v.gender}`}>
             <td>{v.visa_no || "-"}</td>
-            <td>{v.status || "-"}</td>
+            <td>{v.profession || "-"}</td>
+            <td>{v.nationality || "-"}</td>
+            <td>{v.gender || "-"}</td>
+            <td>{v.allocated_qty || 0}</td>
+            <td>{v.batch_status || "-"}</td>
           </tr>
-        ))}
+        ))
+      )}
     </tbody>
   </table>
 </TableCard>
@@ -21122,25 +21407,33 @@ if (!currentUser) {
       <tr>
         <th>Authorization No</th>
         <th>Agency</th>
+        <th>Profession</th>
+        <th>Nationality</th>
+        <th>Gender</th>
+        <th>Authorized Qty</th>
         <th>Status</th>
       </tr>
     </thead>
     <tbody>
-      {visaAuthorizations
-        .filter((a) =>
-  visaRecords.some(
-    (v) =>
-      v.request_no === selectedRequest.request_no &&
-      String(v.visa_no) === String(a.visa_no)
-  )
-)
-        .map((a) => (
+      {getRequestLinkedAuthorizationRows(selectedRequest.request_no).length === 0 ? (
+        <tr>
+          <td colSpan="7" style={{ color: "#64748b" }}>
+            No authorizations found for the allocated visa lines in this request.
+          </td>
+        </tr>
+      ) : (
+        getRequestLinkedAuthorizationRows(selectedRequest.request_no).map((a) => (
           <tr key={a.id}>
             <td>{a.authorization_no || "-"}</td>
             <td>{a.agency || "-"}</td>
+            <td>{a.profession || "-"}</td>
+            <td>{a.nationality || "-"}</td>
+            <td>{a.gender || "-"}</td>
+            <td>{a.allocated_qty || 0}</td>
             <td>{a.status || "-"}</td>
           </tr>
-        ))}
+        ))
+      )}
     </tbody>
   </table>
 </TableCard>
