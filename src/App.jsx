@@ -378,6 +378,8 @@ const emptyRequestLine = {
   gender: "",
   quantity: "",
   salary: "",
+  civil_id_no: "",
+  civil_id_expiry_date: "",
   interview_required: "Required",
   interview_type: "Online",
   notes: "",
@@ -6060,6 +6062,12 @@ function isDuplicateRequestNoError(error) {
       return alert("Please fill Profession and Quantity for the request line.");
     }
 
+    if (isSaudiNationality(requestLineForm.nationality)) {
+      if (!String(requestLineForm.civil_id_no || "").trim() || !requestLineForm.civil_id_expiry_date) {
+        return alert("For Saudi request lines, Civil ID No and Civil ID Expiry Date are required.");
+      }
+    }
+
     setRequestLinesDraft((prev) => [
       ...prev,
       {
@@ -6091,6 +6099,8 @@ function isDuplicateRequestNoError(error) {
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || "",
+        civil_id_no: isSaudiNationality(line.nationality) ? String(line.civil_id_no || "").trim() : "",
+        civil_id_expiry_date: isSaudiNationality(line.nationality) ? (line.civil_id_expiry_date || null) : null,
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_required === "No Interview" ? "N/A" : line.interview_type || "Online",
         notes: line.notes || "",
@@ -6105,6 +6115,8 @@ function isDuplicateRequestNoError(error) {
           gender: requestForm.gender || "",
           quantity: Number(requestForm.quantity || 0),
           salary: "",
+          civil_id_no: isSaudiNationality(requestForm.nationality) ? String(requestLineForm.civil_id_no || requestForm.civil_id_no || "").trim() : "",
+          civil_id_expiry_date: isSaudiNationality(requestForm.nationality) ? (requestLineForm.civil_id_expiry_date || requestForm.civil_id_expiry_date || null) : null,
           interview_required: requestForm.interview_required || "Required",
           interview_type:
             requestForm.interview_required === "No Interview"
@@ -6159,6 +6171,8 @@ function isDuplicateRequestNoError(error) {
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || "",
+        civil_id_no: line.civil_id_no || "",
+        civil_id_expiry_date: line.civil_id_expiry_date || "",
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_type || "Online",
         notes: line.notes || "",
@@ -6177,6 +6191,15 @@ function isDuplicateRequestNoError(error) {
 
     if (!requestForm.request_type || linesToSave.length === 0) {
       alert("Please fill Request Type and add at least one request line.");
+      return;
+    }
+
+    const missingSaudiIdLine = linesToSave.find(
+      (line) => isSaudiNationality(line.nationality) && (!String(line.civil_id_no || "").trim() || !line.civil_id_expiry_date)
+    );
+
+    if (missingSaudiIdLine) {
+      alert(`Saudi request line requires Civil ID No and Civil ID Expiry Date: ${missingSaudiIdLine.profession || "Profession"} / ${missingSaudiIdLine.nationality || "Saudi"}`);
       return;
     }
 
@@ -6283,6 +6306,8 @@ function isDuplicateRequestNoError(error) {
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || null,
+        civil_id_no: isSaudiNationality(line.nationality) ? String(line.civil_id_no || "").trim() : null,
+        civil_id_expiry_date: isSaudiNationality(line.nationality) ? (line.civil_id_expiry_date || null) : null,
         interview_required: line.interview_required || "Required",
         interview_type: line.interview_required === "No Interview" ? "N/A" : line.interview_type || "Online",
         notes: line.notes || "",
@@ -21348,6 +21373,8 @@ if (!currentUser) {
           <th>Nationality</th>
           <th>Gender</th>
           <th>Qty</th>
+          <th>Civil ID No</th>
+          <th>ID Expiry</th>
           <th>Interview</th>
           <th>Notes</th>
         </tr>
@@ -21360,6 +21387,8 @@ if (!currentUser) {
             <td>{line.nationality || "-"}</td>
             <td>{line.gender || "-"}</td>
             <td>{line.quantity || 0}</td>
+            <td>{isSaudiNationality(line.nationality) ? line.civil_id_no || "Missing" : "N/A"}</td>
+            <td>{isSaudiNationality(line.nationality) ? line.civil_id_expiry_date || "Missing" : "N/A"}</td>
             <td>{line.interview_required === "No Interview" ? "No Interview" : line.interview_type || "Online"}</td>
             <td>{line.notes || "-"}</td>
           </tr>
@@ -21584,7 +21613,14 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                   />
                   <Select
                     value={requestLineForm.nationality}
-                    onChange={(v) => updateForm(setRequestLineForm, "nationality", v)}
+                    onChange={(v) =>
+                      setRequestLineForm((prev) => ({
+                        ...prev,
+                        nationality: v,
+                        civil_id_no: isSaudiNationality(v) ? prev.civil_id_no || "" : "",
+                        civil_id_expiry_date: isSaudiNationality(v) ? prev.civil_id_expiry_date || "" : "",
+                      }))
+                    }
                     placeholder="Nationality"
                     searchable
                     options={countries.map((c) =>
@@ -21608,6 +21644,24 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                     value={requestLineForm.salary}
                     onChange={(v) => updateForm(setRequestLineForm, "salary", v)}
                   />
+                  {isSaudiNationality(requestLineForm.nationality) && (
+                    <>
+                      <Input
+                        placeholder="Civil ID No / رقم السجل المدني"
+                        value={requestLineForm.civil_id_no || ""}
+                        onChange={(v) => updateForm(setRequestLineForm, "civil_id_no", v)}
+                      />
+                      <div>
+                        <label>Civil ID Expiry Date / تاريخ انتهاء بطاقة السجل المدني</label>
+                        <Input
+                          type="date"
+                          placeholder="Civil ID Expiry Date"
+                          value={requestLineForm.civil_id_expiry_date || ""}
+                          onChange={(v) => updateForm(setRequestLineForm, "civil_id_expiry_date", v)}
+                        />
+                      </div>
+                    </>
+                  )}
                   <Select
                     value={requestLineForm.interview_required || "Required"}
                     onChange={(v) =>
@@ -21650,6 +21704,8 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                       <th>Gender</th>
                       <th>Qty</th>
                       <th>Line Salary</th>
+                      <th>Civil ID No</th>
+                      <th>ID Expiry</th>
                       <th>Interview</th>
                       <th>Action</th>
                     </tr>
@@ -21657,7 +21713,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                   <tbody>
                     {requestLinesDraft.length === 0 ? (
                       <tr>
-                        <td colSpan="8">No lines added yet.</td>
+                        <td colSpan="10">No lines added yet.</td>
                       </tr>
                     ) : (
                       requestLinesDraft.map((line, index) => (
@@ -21668,6 +21724,8 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                           <td><Badge value={line.gender || "-"} /></td>
                           <td>{line.quantity || 0}</td>
                           <td>{line.salary || "-"}</td>
+                          <td>{isSaudiNationality(line.nationality) ? line.civil_id_no || "Missing" : "N/A"}</td>
+                          <td>{isSaudiNationality(line.nationality) ? line.civil_id_expiry_date || "Missing" : "N/A"}</td>
                           <td>{line.interview_required === "No Interview" ? "No Interview" : line.interview_type || "Online"}</td>
                           <td>
                             <button type="button" className="danger" onClick={() => removeRequestLineFromDraft(index)}>
