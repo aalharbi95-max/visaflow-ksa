@@ -581,6 +581,101 @@ mobile: "",
   status: "Waiting",
 };
 
+
+const DEFAULT_AI_INTERVIEW_TEMPLATE_NAME = "VisaFlow General AI Voice Screening";
+const AI_INTERVIEW_ACTIVE_SESSION_STATUSES = [
+  "Created",
+  "Invitation Pending",
+  "Invited",
+  "Opened",
+  "Consent Pending",
+  "Ready",
+  "In Progress",
+  "Processing",
+  "Completed",
+];
+
+const DEFAULT_AI_INTERVIEW_QUESTIONS = [
+  {
+    question_order: 1,
+    question_text: "Please introduce yourself and summarize your experience relevant to this position.",
+    question_text_ar: "عرّف بنفسك ولخّص خبرتك المرتبطة بهذه الوظيفة.",
+    question_text_en: "Please introduce yourself and summarize your experience relevant to this position.",
+    question_type: "Experience",
+    competency: "Relevant Experience",
+    difficulty_level: "Basic",
+    weight: 15,
+    maximum_answer_seconds: 120,
+    expected_keywords: ["experience", "role", "responsibilities"],
+    key_points: ["Relevant experience", "Clear role history", "Main responsibilities"],
+  },
+  {
+    question_order: 2,
+    question_text: "Describe the main technical tasks you perform in this profession and how you verify the quality of your work.",
+    question_text_ar: "اشرح أهم المهام الفنية التي تنفذها في هذه المهنة وكيف تتحقق من جودة عملك.",
+    question_text_en: "Describe the main technical tasks you perform in this profession and how you verify the quality of your work.",
+    question_type: "Technical",
+    competency: "Technical Knowledge",
+    difficulty_level: "Medium",
+    weight: 25,
+    maximum_answer_seconds: 180,
+    expected_keywords: ["steps", "inspection", "quality", "tools"],
+    key_points: ["Correct work sequence", "Tools and equipment", "Quality checks"],
+  },
+  {
+    question_order: 3,
+    question_text: "What safety checks do you complete before starting work, and what would you do if you found an unsafe condition?",
+    question_text_ar: "ما فحوصات السلامة التي تنفذها قبل بدء العمل؟ وماذا تفعل عند اكتشاف حالة غير آمنة؟",
+    question_text_en: "What safety checks do you complete before starting work, and what would you do if you found an unsafe condition?",
+    question_type: "Safety",
+    competency: "Safety Awareness",
+    difficulty_level: "Medium",
+    weight: 20,
+    maximum_answer_seconds: 150,
+    expected_keywords: ["PPE", "risk", "report", "stop work"],
+    key_points: ["Personal protective equipment", "Risk assessment", "Escalation and stop-work authority"],
+  },
+  {
+    question_order: 4,
+    question_text: "Tell us about a difficult work problem you faced, the action you took, and the result.",
+    question_text_ar: "اذكر مشكلة صعبة واجهتك في العمل، وما الإجراء الذي اتخذته، وما النتيجة.",
+    question_text_en: "Tell us about a difficult work problem you faced, the action you took, and the result.",
+    question_type: "Behavioral",
+    competency: "Problem Solving",
+    difficulty_level: "Medium",
+    weight: 15,
+    maximum_answer_seconds: 180,
+    expected_keywords: ["problem", "action", "result"],
+    key_points: ["Clear problem", "Personal action", "Measurable result"],
+  },
+  {
+    question_order: 5,
+    question_text: "Explain one work procedure in English so we can understand your workplace communication level.",
+    question_text_ar: "اشرح إجراءً واحدًا من إجراءات عملك باللغة الإنجليزية لقياس مستوى التواصل في بيئة العمل.",
+    question_text_en: "Explain one work procedure in English so we can understand your workplace communication level.",
+    question_type: "Language",
+    competency: "Workplace Communication",
+    difficulty_level: "Medium",
+    weight: 10,
+    maximum_answer_seconds: 120,
+    expected_keywords: [],
+    key_points: ["Clarity", "Work vocabulary", "Ability to explain a process"],
+  },
+  {
+    question_order: 6,
+    question_text: "When can you join, are you willing to work at the assigned project location, and do you have any notice-period constraints?",
+    question_text_ar: "متى يمكنك المباشرة؟ وهل تقبل العمل في موقع المشروع المحدد؟ وهل لديك مدة إشعار أو قيود على المباشرة؟",
+    question_text_en: "When can you join, are you willing to work at the assigned project location, and do you have any notice-period constraints?",
+    question_type: "Availability",
+    competency: "Availability",
+    difficulty_level: "Basic",
+    weight: 15,
+    maximum_answer_seconds: 90,
+    expected_keywords: ["joining", "available", "notice"],
+    key_points: ["Joining date", "Location acceptance", "Notice period"],
+  },
+];
+
 const emptyDemobilization = {
   employee_name: "",
   employee_id: "",
@@ -1163,6 +1258,12 @@ const [candidateTechnicalProfiles, setCandidateTechnicalProfiles] = useState([])
 const [educationInstitutions, setEducationInstitutions] = useState([]);
 const [candidateTechnicalForm, setCandidateTechnicalForm] = useState(emptyCandidateTechnicalProfile);
 const [interviews, setInterviews] = useState([]);
+const [aiInterviewTemplates, setAIInterviewTemplates] = useState([]);
+const [aiInterviewQuestions, setAIInterviewQuestions] = useState([]);
+const [aiInterviewSessions, setAIInterviewSessions] = useState([]);
+const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
+const [aiInterviewMessage, setAIInterviewMessage] = useState("");
+const [selectedAIInterviewSessionId, setSelectedAIInterviewSessionId] = useState("");
 const [mobilizations, setMobilizations] = useState([]);
 const [onboardingValidations, setOnboardingValidations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
@@ -2929,6 +3030,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadCandidates(),
       loadCandidateTechnicalProfiles(),
       loadInterviews(),
+      loadAIInterviewTemplates(),
+      loadAIInterviewQuestions(),
+      loadAIInterviewSessions(),
       loadUsers(),
       loadCompanies(),
       loadCompanyEmailSettings(),
@@ -3430,6 +3534,75 @@ async function loadProfessionAliases() {
 
   const loadCandidates = () => loadTable("candidates", setCandidates);
   const loadInterviews = () => loadTable("interviews", setInterviews);
+
+  async function loadAIInterviewTemplates() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewTemplates([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_templates")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 500);
+
+    if (error) {
+      console.warn("ai_interview_templates:", error.message);
+      setAIInterviewTemplates([]);
+      return [];
+    }
+
+    setAIInterviewTemplates(data || []);
+    return data || [];
+  }
+
+  async function loadAIInterviewQuestions() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewQuestions([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_questions")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("question_order", { ascending: true })
+      .range(0, 2000);
+
+    if (error) {
+      console.warn("ai_interview_questions:", error.message);
+      setAIInterviewQuestions([]);
+      return [];
+    }
+
+    setAIInterviewQuestions(data || []);
+    return data || [];
+  }
+
+  async function loadAIInterviewSessions() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewSessions([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_sessions")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 2000);
+
+    if (error) {
+      console.warn("ai_interview_sessions:", error.message);
+      setAIInterviewSessions([]);
+      return [];
+    }
+
+    setAIInterviewSessions(data || []);
+    return data || [];
+  }
   const loadMobilizations = () => loadTable("mobilizations", setMobilizations);
   async function loadOnboardingValidations() {
     if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
@@ -9314,6 +9487,283 @@ ${errors.slice(0, 10).join("\n")}` : "")
     alert(`Excel upload failed: ${error.message}`);
   }
 }
+  function getAIInterviewTemplateQuestions(templateId) {
+    return aiInterviewQuestions
+      .filter((question) => String(question.template_id || "") === String(templateId || "") && question.is_active !== false)
+      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
+  }
+
+  function getAIInterviewTemplateName(templateId) {
+    return aiInterviewTemplates.find((template) => String(template.id || "") === String(templateId || ""))?.template_name || "-";
+  }
+
+  function getAIInterviewSessionForInterview(interview = {}) {
+    return aiInterviewSessions.find((session) =>
+      String(session.interview_id || "") === String(interview.id || "") &&
+      !["Cancelled", "Expired"].includes(session.status)
+    ) || aiInterviewSessions.find((session) =>
+      String(session.candidate_id || "") === String(interview.candidate_id || "") &&
+      String(session.request_no || "") === String(interview.request_no || "") &&
+      AI_INTERVIEW_ACTIVE_SESSION_STATUSES.includes(session.status)
+    ) || null;
+  }
+
+  function getAIInterviewStatusProgress(session = {}) {
+    const total = Number(session.total_questions || 0);
+    const answered = Number(session.answered_questions || 0);
+    if (!total) return "0%";
+    return `${Math.min(100, Math.round((answered / total) * 100))}%`;
+  }
+
+  async function seedDefaultAIInterviewTemplate(options = {}) {
+    if (!canManageInterviewResults) {
+      alert("You do not have permission to manage AI interview templates.");
+      return null;
+    }
+    if (!currentCompanyId) {
+      alert("Company ID is missing.");
+      return null;
+    }
+
+    const existing = aiInterviewTemplates.find((template) =>
+      template.template_name === DEFAULT_AI_INTERVIEW_TEMPLATE_NAME &&
+      Number(template.version || 1) === 1
+    );
+
+    if (existing) {
+      const existingQuestions = getAIInterviewTemplateQuestions(existing.id);
+      if (existingQuestions.length > 0) {
+        if (!options.silent) alert("Default AI interview template is already ready.");
+        return existing;
+      }
+    }
+
+    setAIInterviewLoading(true);
+    setAIInterviewMessage("Preparing the default AI voice interview template...");
+
+    try {
+      let template = existing || null;
+
+      if (!template) {
+        const { data, error } = await supabase
+          .from("ai_interview_templates")
+          .insert([withCompany({
+            template_name: DEFAULT_AI_INTERVIEW_TEMPLATE_NAME,
+            profession: "General",
+            profession_category: "General",
+            language: "Bilingual",
+            interview_mode: "Voice",
+            description: "Initial AI screening interview for experience, technical knowledge, safety, communication and availability.",
+            candidate_instructions: "Use a quiet place, allow microphone access, and answer each question clearly. The result will be reviewed by the company.",
+            duration_minutes: 15,
+            maximum_questions: DEFAULT_AI_INTERVIEW_QUESTIONS.length,
+            passing_score: 70,
+            allow_ai_follow_up: true,
+            allow_candidate_retry: false,
+            maximum_retries: 0,
+            require_microphone_test: true,
+            require_consent: true,
+            status: "Active",
+            is_active: true,
+            version: 1,
+            created_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+            updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+          })])
+          .select("*")
+          .single();
+
+        if (error) throw error;
+        template = data;
+      }
+
+      const currentQuestions = aiInterviewQuestions.filter(
+        (question) => String(question.template_id || "") === String(template.id || "")
+      );
+
+      if (currentQuestions.length === 0) {
+        const questionRows = DEFAULT_AI_INTERVIEW_QUESTIONS.map((question) => withCompany({
+          ...question,
+          template_id: template.id,
+          scoring_guide: {
+            scale: "0-100",
+            rule: "Score only job-relevant evidence stated in the answer. Do not infer protected or sensitive traits.",
+          },
+          ideal_answer: "",
+          recruiter_notes: "AI recommendation only. Final decision belongs to the company.",
+          allow_follow_up: true,
+          maximum_follow_ups: 1,
+          is_required: true,
+          is_active: true,
+          created_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+          updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+        }));
+
+        const { error: questionsError } = await supabase
+          .from("ai_interview_questions")
+          .insert(questionRows);
+
+        if (questionsError) throw questionsError;
+      }
+
+      await Promise.all([
+        loadAIInterviewTemplates(),
+        loadAIInterviewQuestions(),
+      ]);
+
+      setAIInterviewMessage("Default AI voice interview template is ready.");
+      if (!options.silent) alert("Default AI interview template and questions are ready.");
+      return template;
+    } catch (error) {
+      console.warn("AI interview template setup failed", error?.message || error);
+      setAIInterviewMessage(`AI interview setup failed: ${error?.message || error}`);
+      alert(`AI interview template setup failed: ${error?.message || error}`);
+      return null;
+    } finally {
+      setAIInterviewLoading(false);
+    }
+  }
+
+  async function resolveAIInterviewTemplate(interview = {}) {
+    const activeTemplates = aiInterviewTemplates.filter(
+      (template) => template.is_active !== false && template.status === "Active"
+    );
+
+    const professionMatch = activeTemplates.find((template) =>
+      template.profession &&
+      normalize(template.profession) !== "general" &&
+      isCompatibleText(template.profession, interview.profession)
+    );
+
+    if (professionMatch) return professionMatch;
+
+    const generalTemplate = activeTemplates.find((template) =>
+      !template.profession || normalize(template.profession) === "general"
+    );
+
+    if (generalTemplate) return generalTemplate;
+    return seedDefaultAIInterviewTemplate({ silent: true });
+  }
+
+  async function createAIInterviewSession(interview = {}) {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to create AI interviews.");
+    }
+    if (!interview?.candidate_id) {
+      return alert("This interview is not linked to a candidate.");
+    }
+
+    const existingSession = getAIInterviewSessionForInterview(interview);
+    if (existingSession) {
+      setSelectedAIInterviewSessionId(existingSession.id);
+      return alert(`An AI interview session already exists for this candidate. Status: ${existingSession.status}`);
+    }
+
+    setAIInterviewLoading(true);
+    setAIInterviewMessage(`Creating AI interview for ${interview.candidate_name || "candidate"}...`);
+
+    try {
+      const template = await resolveAIInterviewTemplate(interview);
+      if (!template?.id) throw new Error("No active AI interview template is available.");
+
+      let questions = getAIInterviewTemplateQuestions(template.id);
+      if (questions.length === 0) {
+        await loadAIInterviewQuestions();
+        questions = getAIInterviewTemplateQuestions(template.id);
+      }
+
+      const candidate = candidates.find(
+        (item) => String(item.id || "") === String(interview.candidate_id || "")
+      ) || {};
+
+      const sessionPayload = withCompany({
+        template_id: template.id,
+        candidate_id: String(interview.candidate_id || ""),
+        interview_id: String(interview.id || ""),
+        request_line_id: String(candidate.request_line_id || ""),
+        request_no: interview.request_no || candidate.request_no || "",
+        project_name: interview.project || candidate.project || "",
+        candidate_name: interview.candidate_name || candidate.candidate_name || "Candidate",
+        candidate_email: candidate.email || "",
+        candidate_mobile: interview.mobile || candidate.mobile || "",
+        passport_no: interview.passport_no || candidate.passport_no || "",
+        profession: interview.profession || candidate.profession || "",
+        nationality: interview.nationality || candidate.nationality || "",
+        agency_name: interview.agency || candidate.agency || "",
+        language: template.language || "Bilingual",
+        interview_mode: template.interview_mode || "Voice",
+        invitation_url: "",
+        status: "Created",
+        scheduled_at: interview.interview_date ? new Date(`${interview.interview_date}T09:00:00`).toISOString() : null,
+        consent_required: template.require_consent !== false,
+        total_questions: questions.length || Number(template.maximum_questions || 0),
+        ai_recommendation: "Pending Analysis",
+        review_status: "Pending Human Review",
+        human_decision: "Pending Company Review",
+        created_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+        updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+      });
+
+      const { data: createdSession, error } = await supabase
+        .from("ai_interview_sessions")
+        .insert([sessionPayload])
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      const invitationUrl = `${window.location.origin}${window.location.pathname}?ai_interview=${createdSession.access_token}`;
+      const { error: urlError } = await supabase
+        .from("ai_interview_sessions")
+        .update({ invitation_url: invitationUrl, updated_by: currentUser?.name || currentUser?.email || "VisaFlow User" })
+        .eq("id", createdSession.id)
+        .eq("company_id", currentCompanyId);
+
+      if (urlError) console.warn("AI interview invitation URL update:", urlError.message);
+
+      await loadAIInterviewSessions();
+      setSelectedAIInterviewSessionId(createdSession.id);
+      setAIInterviewMessage("AI interview session created. Candidate portal and voice engine are the next connection step.");
+      alert("AI interview session created successfully. The session is now ready for the candidate portal connection.");
+    } catch (error) {
+      console.warn("create AI interview session failed", error?.message || error);
+      setAIInterviewMessage(`AI interview session failed: ${error?.message || error}`);
+      alert(`AI interview session failed: ${error?.message || error}`);
+    } finally {
+      setAIInterviewLoading(false);
+    }
+  }
+
+  async function cancelAIInterviewSession(session = {}) {
+    if (!canManageInterviewResults) return alert("You do not have permission to cancel AI interviews.");
+    if (!session?.id) return;
+    if (!window.confirm(`Cancel AI interview for ${session.candidate_name || "candidate"}?`)) return;
+
+    const { error } = await supabase
+      .from("ai_interview_sessions")
+      .update({
+        status: "Cancelled",
+        updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+      })
+      .eq("id", session.id)
+      .eq("company_id", currentCompanyId);
+
+    if (error) return alert(error.message);
+    if (String(selectedAIInterviewSessionId) === String(session.id)) setSelectedAIInterviewSessionId("");
+    await loadAIInterviewSessions();
+  }
+
+  async function copyAIInterviewReference(session = {}) {
+    const reference = session.invitation_url || session.access_token || session.id || "";
+    if (!reference) return alert("AI interview reference is not available.");
+
+    try {
+      await navigator.clipboard.writeText(reference);
+      alert("AI interview reference copied. The public candidate portal will be activated in the next implementation step.");
+    } catch {
+      window.prompt("Copy AI interview reference:", reference);
+    }
+  }
+
   function resetInterviewForm() {
     setInterviewForm(emptyInterview);
     setInterviewEditingId(null);
@@ -19284,7 +19734,20 @@ function exportCurrentPage() {
   if (activePage === "Company Management") return exportRowsToExcel(companies, "VisaFlow_Company_Management", "Companies");
   if (activePage === "Users Management") return exportRowsToExcel(users, "VisaFlow_Users_Management", "Users");
   if (activePage === "Permissions") return exportRowsToExcel(CLIENT_ROLE_OPTIONS.map((role) => ({ role, performance_category: getRolePerformanceCategory(role), included_in_recruitment_performance: isRecruitmentPerformanceRole(role) ? "Yes" : "No", description: ROLE_DESCRIPTIONS[role], pages: (ROLE_PAGES[role] || []).join(", "), actions: (ACTION_PERMISSIONS[role] || []).join(", ") })), "VisaFlow_Permissions", "Permissions");
-  if (activePage === "Interviews") return exportRowsToExcel(interviews, "VisaFlow_Interviews", "Interviews");
+  if (activePage === "Interviews") return exportRowsToExcel(
+    interviews.map((interview) => {
+      const aiSession = getAIInterviewSessionForInterview(interview);
+      return {
+        ...interview,
+        ai_interview_status: aiSession?.status || "Not Created",
+        ai_interview_score: aiSession?.overall_score ?? "",
+        ai_recommendation: aiSession?.ai_recommendation || "",
+        ai_human_decision: aiSession?.human_decision || "",
+      };
+    }),
+    "VisaFlow_Interviews",
+    "Interviews"
+  );
   if (activePage === "Mobilization") return exportRowsToExcel(mobilizationRequestRows, "VisaFlow_Mobilization_Overview", "Mobilization");
   if (activePage === "Onboarding & Validation") return exportRowsToExcel(filteredOnboardingValidations, "VisaFlow_Onboarding_Validation", "Onboarding Validation");
   if (activePage === "Employees") return exportRowsToExcel(employees, "VisaFlow_Employees", "Employees");
@@ -21666,7 +22129,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                       value={requestLineForm.interview_type || "Online"}
                       onChange={(v) => updateForm(setRequestLineForm, "interview_type", v)}
                       placeholder="Interview Type"
-                      options={["Online", "In-person"]}
+                      options={["Online", "In-person", "AI Voice Interview"]}
                     />
                   )}
                   <Input
@@ -23144,7 +23607,7 @@ Save Authorization
                 <Select value={interviewForm.agency} onChange={(v) => updateForm(setInterviewForm, "agency", v)} placeholder="Agency" options={agencies.map((x) => x.name)} />
                 <Input placeholder="Project" value={interviewForm.project} onChange={(v) => updateForm(setInterviewForm, "project", v)} />
                 <Input type="date" placeholder="Interview Date" value={interviewForm.interview_date} onChange={(v) => updateForm(setInterviewForm, "interview_date", v)} />
-                <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person"]} />
+                <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person", "AI Voice Interview"]} />
                 <Input placeholder="Interviewers" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
                 <Select value={interviewForm.score} onChange={(v) => updateForm(setInterviewForm, "score", v)} placeholder="Score" options={["Excellent", "Good", "Average", "Weak"]} />
                 <Select value={interviewForm.status} onChange={(v) => updateForm(setInterviewForm, "status", v)} placeholder="Status" options={INTERVIEW_STATUSES} />
@@ -23153,6 +23616,39 @@ Save Authorization
               <div className="actions-line"><button className="save-btn" onClick={saveInterview}>{interviewEditingId ? "Update Interview" : "Save Interview"}</button><button className="light-btn" onClick={resetInterviewForm}>Clear</button></div>
             </FormCard>
             )}
+            <FormCard title="AI Interview Control - Phase 1">
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>AI voice interview foundation is connected to VisaFlow.</div>
+                  <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
+                    Templates, questions and candidate sessions are now managed inside the Interviews module. The public candidate voice portal and AI analysis engine will be connected in the next step.
+                  </div>
+                </div>
+                <div className="actions-line" style={{ margin: 0 }}>
+                  <button className="save-btn" disabled={aiInterviewLoading} onClick={() => seedDefaultAIInterviewTemplate()}>
+                    {aiInterviewLoading ? "Working..." : aiInterviewTemplates.length ? "Verify Default Template" : "Create Default AI Template"}
+                  </button>
+                  <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions()])}>
+                    Refresh AI Interviews
+                  </button>
+                </div>
+              </div>
+
+              <div className="dashboard-grid" style={{ marginTop: 16 }}>
+                <Stat title="AI Templates" value={aiInterviewTemplates.length} />
+                <Stat title="AI Questions" value={aiInterviewQuestions.length} />
+                <Stat title="AI Sessions" value={aiInterviewSessions.length} />
+                <Stat title="Completed" value={aiInterviewSessions.filter((session) => session.status === "Completed").length} className="passed" />
+                <Stat title="Pending Human Review" value={aiInterviewSessions.filter((session) => session.review_status === "Pending Human Review").length} className="warning" />
+              </div>
+
+              {aiInterviewMessage && (
+                <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "#f8fafc", color: "#334155", fontSize: 13 }}>
+                  {aiInterviewMessage}
+                </div>
+              )}
+            </FormCard>
+
             <TableCard title="Interview Records">
               <table>
                 <thead>
@@ -23212,6 +23708,15 @@ Save Authorization
                               {item.status === "Passed" && interviewCandidate && (
                                 <button onClick={() => openOfferEmail(interviewCandidate)}>Send Offer</button>
                               )}
+                              {getAIInterviewSessionForInterview(item) ? (
+                                <button onClick={() => setSelectedAIInterviewSessionId(getAIInterviewSessionForInterview(item)?.id || "")}>
+                                  View AI Interview
+                                </button>
+                              ) : (
+                                <button disabled={aiInterviewLoading} onClick={() => createAIInterviewSession(item)}>
+                                  Create AI Interview
+                                </button>
+                              )}
                               <button className="danger" onClick={() => deleteInterview(item.id)}>Delete</button>
                             </>
                           ) : "-"}
@@ -23222,6 +23727,87 @@ Save Authorization
                 </tbody>
               </table>
             </TableCard>
+
+            <TableCard title="AI Interview Sessions">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>Candidate</th>
+                    <th>Profession</th>
+                    <th>Template</th>
+                    <th>Mode</th>
+                    <th>Progress</th>
+                    <th>Overall Score</th>
+                    <th>AI Recommendation</th>
+                    <th>Human Decision</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aiInterviewSessions.length === 0 ? (
+                    <tr>
+                      <td colSpan="11">No AI interview sessions yet. Create a normal interview first, then click Create AI Interview.</td>
+                    </tr>
+                  ) : (
+                    aiInterviewSessions.map((session) => (
+                      <tr key={session.id} style={String(selectedAIInterviewSessionId) === String(session.id) ? { background: "#eff6ff" } : undefined}>
+                        <td>{session.created_at ? new Date(session.created_at).toLocaleString() : "-"}</td>
+                        <td>{session.candidate_name || "-"}</td>
+                        <td>{session.profession || "-"}</td>
+                        <td>{getAIInterviewTemplateName(session.template_id)}</td>
+                        <td>{session.interview_mode || "Voice"}</td>
+                        <td>{session.answered_questions || 0}/{session.total_questions || 0} ({getAIInterviewStatusProgress(session)})</td>
+                        <td>{session.overall_score ?? "Pending"}</td>
+                        <td>{session.ai_recommendation || "Pending Analysis"}</td>
+                        <td>{session.human_decision || "Pending Company Review"}</td>
+                        <td><Badge value={session.status || "Created"} /></td>
+                        <td className="table-actions">
+                          <button onClick={() => setSelectedAIInterviewSessionId(session.id)}>Review</button>
+                          <button onClick={() => copyAIInterviewReference(session)}>Copy Reference</button>
+                          {!['Completed', 'Cancelled', 'Expired'].includes(session.status) && (
+                            <button className="danger" onClick={() => cancelAIInterviewSession(session)}>Cancel</button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </TableCard>
+
+            {selectedAIInterviewSessionId && (() => {
+              const selectedSession = aiInterviewSessions.find((session) => String(session.id) === String(selectedAIInterviewSessionId));
+              if (!selectedSession) return null;
+              return (
+                <FormCard title={`AI Interview Review - ${selectedSession.candidate_name || "Candidate"}`}>
+                  <div className="dashboard-grid">
+                    <Stat title="Status" value={selectedSession.status || "Created"} />
+                    <Stat title="Answered" value={`${selectedSession.answered_questions || 0} / ${selectedSession.total_questions || 0}`} />
+                    <Stat title="Overall Score" value={selectedSession.overall_score ?? "Pending"} />
+                    <Stat title="Human Review" value={selectedSession.review_status || "Pending Human Review"} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginTop: 14 }}>
+                    <div style={{ padding: 12, border: "1px solid #e2e8f0", borderRadius: 10 }}>
+                      <b>AI Summary</b>
+                      <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_summary || "Pending AI analysis."}</p>
+                    </div>
+                    <div style={{ padding: 12, border: "1px solid #e2e8f0", borderRadius: 10 }}>
+                      <b>AI Reasoning</b>
+                      <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_reasoning || "Pending AI analysis."}</p>
+                    </div>
+                  </div>
+                  <div className="actions-line">
+                    <button className="light-btn" onClick={() => copyAIInterviewReference(selectedSession)}>Copy Session Reference</button>
+                    <button className="light-btn" onClick={() => setSelectedAIInterviewSessionId("")}>Close Review</button>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#64748b" }}>
+                    Recommendation only — the final recruitment decision remains with the company.
+                  </div>
+                </FormCard>
+              );
+            })()}
           </>
         )}
         
@@ -23837,7 +24423,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <Input placeholder="Profession" value={interviewForm.profession} onChange={(v) => updateForm(setInterviewForm, "profession", v)} />
           <Input placeholder="Passport No" value={interviewForm.passport_no} onChange={(v) => updateForm(setInterviewForm, "passport_no", v)} />
           <Input type="date" placeholder="Interview Date" value={interviewForm.interview_date} onChange={(v) => updateForm(setInterviewForm, "interview_date", v)} />
-          <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person"]} />
+          <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person", "AI Voice Interview"]} />
           <Input placeholder="Meeting Link / Interview Location" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
           <Input placeholder="Company Schedule Approval" value="Pending Company Approval" onChange={() => {}} />
         </div>
