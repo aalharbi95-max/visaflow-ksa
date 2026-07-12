@@ -190,6 +190,27 @@ td {
   border-bottom: 1px solid #e5e7eb;
 }
 
+@media (max-width: 900px) {
+  .layout {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: relative;
+    width: 100%;
+  }
+
+  .content,
+  main {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+.mini-table-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
 .mini-table-scroll {
   height: 350px;
   overflow-y: auto;
@@ -199,7 +220,6 @@ td {
 .mini-table-scroll table {
   width: 100%;
 }
-
 .timeline-box {
   display: flex;
   flex-direction: column;
@@ -249,551 +269,952 @@ td {
   font-size: 11px;
   color: #64748b;
 }
+/* Professional VisaFlow Login */
+body:has(.vf-login-shell) {
+  background: #eef3fb;
+}
 
-/* VisaFlow KSA - Enterprise Saudi Login */
-main.vf-login-shell,
 .vf-login-shell {
-  min-height: 100vh !important;
-  width: 100% !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  display: grid !important;
-  grid-template-columns: minmax(620px, 58%) minmax(460px, 42%) !important;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
   background:
-    radial-gradient(circle at 86% 16%, rgba(43,159,255,.14), transparent 26%),
-    radial-gradient(circle at 78% 86%, rgba(7,29,73,.08), transparent 30%),
-    linear-gradient(135deg, #eef4fb 0%, #f9fbff 100%) !important;
-  overflow: hidden !important;
+    radial-gradient(circle at top left, rgba(43,159,255,.22), transparent 35%),
+    linear-gradient(135deg, #eef3fb 0%, #f8fafc 100%);
 }
 
 .vf-login-left {
-  position: relative !important;
-  min-height: 100vh !important;
-  padding: 72px 78px !important;
-  display: flex !important;
-  align-items: center !important;
-  color: #fff !important;
-  overflow: hidden !important;
-  background:
-    linear-gradient(90deg, rgba(5, 20, 55, .94) 0%, rgba(7, 29, 73, .86) 48%, rgba(7, 29, 73, .50) 100%),
-    url("https://images.unsplash.com/photo-1586724237569-f3d0c1dee8c6?auto=format&fit=crop&w=1800&q=80") center/cover no-repeat !important;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(145deg, #06183d 0%, #071d49 45%, #0b3b7a 100%);
+  color: #fff;
+  padding: 70px;
+  display: flex;
+  align-items: center;
 }
 
 .vf-login-left::before {
   content: "";
   position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 75% 34%, rgba(43,159,255,.26), transparent 22%),
-    linear-gradient(180deg, transparent 0%, rgba(0,0,0,.28) 100%);
-  z-index: 0;
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  background: rgba(43,159,255,.18);
+  top: -160px;
+  right: -160px;
 }
 
 .vf-login-left::after {
-  content: "🇸🇦";
+  content: "";
   position: absolute;
-  right: 54px;
-  top: 37%;
-  font-size: 165px;
-  opacity: .10;
-  transform: rotate(-8deg);
-  z-index: 1;
-}
-
-.vf-orb,
-.vf-grid-layer {
-  position: absolute;
-  pointer-events: none;
-}
-
-.vf-orb-a {
-  width: 360px;
-  height: 360px;
+  width: 320px;
+  height: 320px;
   border-radius: 50%;
-  background: rgba(43,159,255,.16);
-  right: -120px;
-  top: -100px;
-  filter: blur(2px);
-}
-
-.vf-orb-b {
-  width: 260px;
-  height: 260px;
-  border-radius: 50%;
-  background: rgba(255,255,255,.10);
-  left: -110px;
+  background: rgba(255,255,255,.08);
   bottom: -90px;
-}
-
-.vf-grid-layer {
-  inset: 0;
-  opacity: .11;
-  background-image:
-    linear-gradient(rgba(255,255,255,.28) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.28) 1px, transparent 1px);
-  background-size: 42px 42px;
+  left: -90px;
 }
 
 .vf-left-content {
-  position: relative !important;
-  z-index: 3 !important;
-  max-width: 760px !important;
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
 }
 
 .vf-brand-row {
-  display: flex !important;
-  align-items: center !important;
-  gap: 18px !important;
-  margin-bottom: 34px !important;
-}
-
-.vf-brand-title {
-  color: #fff !important;
-  font-size: 22px !important;
-  line-height: 1 !important;
-  font-weight: 900 !important;
-  letter-spacing: .4px !important;
-}
-
-.vf-brand-title span {
-  color: #7dd3fc !important;
-}
-
-.vf-brand-subtitle {
-  margin-top: 6px !important;
-  color: rgba(255,255,255,.82) !important;
-  font-size: 14px !important;
-  font-weight: 700 !important;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 42px;
 }
 
 .vf-symbol {
-  position: relative !important;
-  display: grid !important;
-  place-items: center !important;
-  flex-shrink: 0 !important;
-  background: linear-gradient(135deg, #2b9fff 0%, #7dd3fc 100%) !important;
-  color: #061a44 !important;
-  box-shadow: 0 20px 45px rgba(43,159,255,.28) !important;
-  overflow: hidden !important;
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #2b9fff, #6ee7ff);
+  color: #071d49;
+  font-size: 24px;
+  font-weight: 900;
+  box-shadow: 0 18px 45px rgba(43,159,255,.35);
 }
 
-.vf-symbol-large {
-  width: 70px !important;
-  height: 70px !important;
-  border-radius: 22px !important;
+.vf-brand-row h2,
+.vf-brand-row p,
+.vf-login-left h1,
+.vf-login-left p {
+  color: #fff;
 }
 
-.vf-symbol-small {
-  width: 64px !important;
-  height: 64px !important;
-  border-radius: 20px !important;
+.vf-login-left h1 {
+  font-size: 54px;
+  line-height: 1.05;
+  margin: 0 0 18px;
+  letter-spacing: -1.5px;
 }
 
-.vf-plane {
-  position: absolute !important;
-  top: 13px !important;
-  left: 15px !important;
-  font-size: 19px !important;
-  line-height: 1 !important;
-}
-
-.vf-vmark {
-  position: absolute !important;
-  bottom: 7px !important;
-  font-size: 34px !important;
-  font-weight: 950 !important;
-  line-height: 1 !important;
-}
-
-.vf-globe {
-  display: none !important;
-}
-
-.vf-platform-badge {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 10px !important;
-  padding: 10px 14px !important;
-  margin-bottom: 18px !important;
-  border-radius: 999px !important;
-  background: rgba(255,255,255,.10) !important;
-  border: 1px solid rgba(255,255,255,.16) !important;
-  color: rgba(255,255,255,.90) !important;
-  font-size: 13px !important;
-  font-weight: 800 !important;
-}
-
-.vf-hero-copy h1 {
-  color: #fff !important;
-  font-size: clamp(44px, 4vw, 68px) !important;
-  line-height: 1.06 !important;
-  letter-spacing: -1.8px !important;
-  margin: 0 0 22px !important;
-}
-
-.vf-hero-copy h1 strong {
-  color: #2b9fff !important;
-}
-
-.vf-hero-copy p {
-  max-width: 680px !important;
-  color: rgba(255,255,255,.80) !important;
-  font-size: 17px !important;
-  line-height: 1.65 !important;
-  margin: 0 !important;
+.vf-login-left > div > p,
+.vf-left-content > p {
+  font-size: 17px;
+  line-height: 1.7;
+  color: rgba(255,255,255,.78);
+  max-width: 640px;
 }
 
 .vf-feature-cards {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(220px, 1fr)) !important;
-  gap: 18px 24px !important;
-  margin-top: 38px !important;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 34px;
 }
 
-.vf-feature-cards article {
-  display: grid !important;
-  grid-template-columns: 46px 1fr !important;
-  column-gap: 14px !important;
-  align-items: start !important;
-  padding: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
+.vf-feature-card {
+  background: rgba(255,255,255,.10);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 20px;
+  padding: 18px;
+  backdrop-filter: blur(12px);
 }
 
-.vf-feature-icon {
-  width: 46px !important;
-  height: 46px !important;
-  border-radius: 16px !important;
-  display: grid !important;
-  place-items: center !important;
-  background: rgba(43,159,255,.20) !important;
-  border: 1px solid rgba(125,211,252,.22) !important;
-  font-size: 20px !important;
+.vf-feature-card strong,
+.vf-feature-card h3 {
+  display: block;
+  color: #fff;
+  font-size: 16px;
+  margin-bottom: 6px;
 }
 
-.vf-feature-cards h3 {
-  color: #fff !important;
-  font-size: 17px !important;
-  margin: 2px 0 5px !important;
-}
-
-.vf-feature-cards p {
-  color: rgba(255,255,255,.68) !important;
-  font-size: 13px !important;
-  line-height: 1.4 !important;
-  margin: 0 !important;
+.vf-feature-card p {
+  color: rgba(255,255,255,.72);
+  font-size: 13px;
+  margin: 0;
 }
 
 .vf-compliance-strip {
-  display: flex !important;
-  flex-wrap: wrap !important;
-  gap: 10px !important;
-  margin-top: 36px !important;
+  margin-top: 30px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-.vf-compliance-strip div {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  padding: 9px 14px !important;
-  border-radius: 999px !important;
-  background: rgba(255,255,255,.12) !important;
-  border: 1px solid rgba(255,255,255,.16) !important;
-  color: #fff !important;
-}
-
-.vf-compliance-strip span,
-.vf-compliance-strip strong {
-  color: #fff !important;
-  font-size: 12px !important;
+.vf-compliance-strip span {
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.16);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .vf-login-right {
-  position: relative !important;
-  min-height: 100vh !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 76px 64px !important;
-  margin: 0 !important;
-  width: 100% !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 50px;
 }
 
-.vf-login-right::before {
-  content: "";
-  position: absolute;
-  width: 560px;
-  height: 560px;
-  top: 7%;
-  right: 3%;
-  border-radius: 50%;
-  background:
-    repeating-radial-gradient(circle, rgba(43,159,255,.11) 0 2px, transparent 2px 14px);
-  opacity: .65;
+.vf-login-card {
+  width: 100%;
+  max-width: 500px;
+  background: rgba(255,255,255,.92);
+  border: 1px solid rgba(203,213,225,.85);
+  border-radius: 28px;
+  padding: 36px;
+  box-shadow: 0 28px 80px rgba(7,29,73,.16);
 }
 
 .vf-language-switch {
-  position: absolute !important;
-  top: 38px !important;
-  right: 58px !important;
-  z-index: 6 !important;
-  display: flex !important;
-  gap: 10px !important;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 22px;
 }
 
 .vf-language-switch button {
-  min-width: 54px !important;
-  padding: 11px 17px !important;
-  border-radius: 16px !important;
-  background: #fff !important;
-  color: #071d49 !important;
-  box-shadow: 0 10px 28px rgba(7,29,73,.08) !important;
-  border: 1px solid #e1e8f3 !important;
+  background: #eef3fb;
+  color: #071d49;
+  border: 1px solid #d9e2f2;
+  border-radius: 12px;
+  padding: 9px 14px;
 }
 
 .vf-language-switch button.active,
 .vf-language-switch button:hover {
-  background: #071d49 !important;
-  color: #fff !important;
+  background: #071d49;
+  color: #fff;
 }
 
-.vf-login-card {
-  position: relative !important;
-  z-index: 4 !important;
-  width: 520px !important;
-  max-width: min(520px, 100%) !important;
-  padding: 44px !important;
-  border-radius: 32px !important;
-  background: rgba(255,255,255,.96) !important;
-  border: 1px solid rgba(225,232,243,.92) !important;
-  box-shadow: 0 36px 90px rgba(7,29,73,.15) !important;
+.vf-login-card h1 {
+  font-size: 30px;
+  margin-bottom: 8px;
+  color: #071d49;
 }
 
-.vf-login-logo {
-  margin-bottom: 12px !important;
-}
-
-.vf-login-card h2 {
-  color: #071d49 !important;
-  font-size: 32px !important;
-  line-height: 1.1 !important;
-  margin: 0 0 8px !important;
-  letter-spacing: -.5px !important;
-}
-
-.vf-login-subtitle {
-  color: #667085 !important;
-  margin: 0 0 28px !important;
-  font-size: 15px !important;
+.vf-login-card p {
+  color: #64748b;
+  margin-bottom: 22px;
 }
 
 .vf-form-group {
-  margin-bottom: 18px !important;
+  margin-bottom: 18px;
 }
 
 .vf-form-group label {
-  display: block !important;
-  margin-bottom: 8px !important;
-  color: #071d49 !important;
-  font-size: 14px !important;
-  font-weight: 850 !important;
+  display: block;
+  color: #071d49;
+  font-weight: 800;
+  margin-bottom: 8px;
 }
 
 .vf-input-box {
-  height: 58px !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 12px !important;
-  padding: 0 16px !important;
-  border-radius: 16px !important;
-  border: 1px solid #d8e1ee !important;
-  background: #f8fafc !important;
-  transition: .2s ease !important;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid #d8e0ed;
+  border-radius: 16px;
+  padding: 0 14px;
+  transition: .2s;
 }
 
 .vf-input-box:focus-within {
-  background: #fff !important;
-  border-color: #2b9fff !important;
-  box-shadow: 0 0 0 4px rgba(43,159,255,.12) !important;
-}
-
-.vf-input-icon {
-  color: #64748b !important;
-  font-size: 18px !important;
+  border-color: #2b9fff;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(43,159,255,.12);
 }
 
 .vf-input-box input {
-  flex: 1 !important;
-  width: 100% !important;
-  height: 100% !important;
-  min-width: 0 !important;
   border: 0 !important;
-  outline: 0 !important;
-  background: transparent !important;
   margin: 0 !important;
-  padding: 0 !important;
-  color: #071d49 !important;
+  padding: 15px 0 !important;
+  background: transparent !important;
+  outline: none;
+  width: 100%;
 }
 
 .vf-password-toggle {
   background: transparent !important;
   color: #071d49 !important;
   padding: 6px !important;
-  border-radius: 10px !important;
 }
 
 .vf-login-options {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: 16px !important;
-  margin: 12px 0 20px !important;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 10px 0 20px;
 }
 
 .vf-remember {
-  display: flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  color: #475569 !important;
-  font-size: 14px !important;
-  font-weight: 750 !important;
-  margin: 0 !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-weight: 700;
 }
 
 .vf-remember input {
-  width: auto !important;
-  margin: 0 !important;
-  accent-color: #2b9fff !important;
+  width: auto;
+  margin: 0;
 }
 
 .vf-forgot-link {
   background: transparent !important;
   color: #0b63ce !important;
   padding: 0 !important;
-  border-radius: 0 !important;
-  font-size: 13px !important;
-  font-weight: 850 !important;
+  font-weight: 800;
 }
 
 .vf-primary-login {
-  width: 100% !important;
-  height: 58px !important;
-  border-radius: 16px !important;
-  background: linear-gradient(135deg, #071d49 0%, #0b3b7a 100%) !important;
+  width: 100%;
+  background: linear-gradient(135deg, #071d49, #0b3b7a) !important;
   color: #fff !important;
-  box-shadow: 0 18px 34px rgba(7,29,73,.22) !important;
-  font-size: 16px !important;
+  border-radius: 16px;
+  padding: 15px 20px;
+  font-size: 15px;
+  box-shadow: 0 16px 34px rgba(7,29,73,.22);
 }
 
 .vf-primary-login:hover {
   transform: translateY(-1px);
 }
 
-.vf-primary-login:disabled {
-  opacity: .65;
-  cursor: not-allowed;
-}
-
 .vf-divider {
-  display: flex !important;
-  align-items: center !important;
-  gap: 12px !important;
-  margin: 24px 0 !important;
-  color: #98a2b3 !important;
-  font-size: 13px !important;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #94a3b8;
+  margin: 22px 0;
+  font-size: 13px;
 }
 
-.vf-divider span {
-  height: 1px !important;
-  flex: 1 !important;
-  background: #e4eaf2 !important;
-}
-
-.vf-divider em {
-  font-style: normal !important;
+.vf-divider::before,
+.vf-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #e2e8f0;
 }
 
 .vf-microsoft-login {
-  width: 100% !important;
-  height: 54px !important;
-  border-radius: 16px !important;
-  border: 1px solid #d8e1ee !important;
+  width: 100%;
   background: #fff !important;
   color: #071d49 !important;
-  font-size: 15px !important;
+  border: 1px solid #d8e0ed;
+  border-radius: 16px;
+  padding: 13px;
 }
 
 .vf-ms-mark {
-  display: inline-grid !important;
-  grid-template-columns: repeat(2, 8px) !important;
-  grid-template-rows: repeat(2, 8px) !important;
-  gap: 2px !important;
-  margin-right: 10px !important;
-  vertical-align: -2px !important;
+  display: inline-block;
+  margin-right: 8px;
 }
 
-.vf-ms-mark i:nth-child(1) { background: #f25022; }
-.vf-ms-mark i:nth-child(2) { background: #7fba00; }
-.vf-ms-mark i:nth-child(3) { background: #00a4ef; }
-.vf-ms-mark i:nth-child(4) { background: #ffb900; }
+.login-error,
+.vf-error {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  padding: 12px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 1000px) {
+  .vf-login-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .vf-login-left {
+    padding: 40px 26px;
+  }
+
+  .vf-login-left h1 {
+    font-size: 38px;
+  }
+
+  .vf-feature-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .vf-login-right {
+    padding: 28px 18px;
+  }
+}
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #071d49 0%, #0f3b77 50%, #f4f7fb 50%);
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 430px;
+  background: #fff;
+  border-radius: 24px;
+  padding: 34px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+}
+
+.login-logo {
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  background: #071d49;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 20px;
+  margin-bottom: 18px;
+}
+
+.login-card h1 {
+  margin-bottom: 6px;
+}
+
+.login-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.login-hint {
+  margin-top: 14px;
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
+}
+
+.user-box {
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-box strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.user-box span {
+  color: rgba(255,255,255,0.72);
+  font-size: 12px;
+}
+
+.actions-line {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.light-btn {
+  background: #e8eef8;
+  color: #071d49;
+}
+
+.primary-btn {
+  background: #071d49;
+  color: #fff;
+}
+
+.link-btn {
+  background: transparent;
+  color: #2563eb;
+  padding: 0;
+  border-radius: 0;
+  font-weight: 700;
+}
+
+.danger {
+  background: #ef4444 !important;
+  color: #fff !important;
+}
+
+.warning h1,
+.warning h3 {
+  color: #b45309;
+}
+
+.passed h1,
+.passed h3 {
+  color: #15803d;
+}
+.vf-login-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  background: #f4f7fb;
+  color: #061a44;
+}
+
+.vf-login-left {
+  background: linear-gradient(135deg, #061a44, #0b2a66);
+  color: white;
+  padding: 56px;
+  display: flex;
+  align-items: center;
+}
+
+.vf-login-right {
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.vf-login-card {
+  background: white;
+  border-radius: 24px;
+  padding: 36px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+  max-width: 520px;
+  width: 100%;
+  margin: auto;
+}
+
+.vf-form-group {
+  margin-top: 18px;
+}
+
+.vf-input-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d7deea;
+  border-radius: 14px;
+  padding: 0 14px;
+  background: #fff;
+}
+
+.vf-input-box input {
+  border: 0 !important;
+  outline: 0;
+  flex: 1;
+  height: 48px;
+  background: transparent;
+}
+
+.vf-login-options {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 18px 0;
+}
+
+.vf-primary-login,
+.vf-forgot-link,
+.vf-language-switch button {
+  background: #061a44;
+  color: white;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.vf-forgot-link {
+  padding: 8px 12px;
+}
+
+.vf-language-switch {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.vf-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vf-password-toggle {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.vf-microsoft-login {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #d7deea;
+  background: white;
+}
+
+@media (max-width: 900px) {
+  .vf-login-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .vf-login-left {
+    padding: 32px;
+  }
+
+  .vf-login-right {
+    padding: 24px;
+  }
+}
+/* VisaFlow KSA login page accuracy/content refresh */
+.vf-login-hero-logo {
+  width: 280px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 24px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.vf-login-card-logo {
+  width: 150px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  border-radius: 16px;
+}
+
+.vf-login-logo-fallback,
+.vf-login-card-logo-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+  color: #071733;
+}
+
+.vf-login-logo-fallback span,
+.vf-login-card-logo-fallback span {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #071733;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+
+.vf-login-card-logo-fallback {
+  margin: 0 auto;
+  box-shadow: none;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.vf-feature-cards-expanded {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.vf-feature-cards-expanded article {
+  min-height: 138px;
+}
+
+.vf-feature-cards-expanded h3 {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.vf-feature-cards-expanded p {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.vf-login-trust-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.vf-login-trust-strip div {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(14px);
+}
+
+.vf-login-trust-strip span {
+  display: block;
+  font-size: 11px;
+  opacity: 0.78;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vf-login-trust-strip strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+@media (max-width: 1180px) {
+  .vf-feature-cards-expanded {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vf-login-trust-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .vf-feature-cards-expanded {
+    grid-template-columns: 1fr;
+  }
+
+  .vf-login-hero-logo {
+    width: 220px;
+  }
+}
+
+
+/* === VisaFlow Login Final Overrides - keep at the very end === */
+
+/* Login page should not inherit the app sidebar spacing */
+.vf-login-shell,
+.vf-login-shell main,
+main.vf-login-shell {
+  margin-left: 0 !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+/* Final login layout */
+.vf-login-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1.08fr 0.92fr;
+  background:
+    radial-gradient(circle at top left, rgba(43,159,255,.22), transparent 35%),
+    linear-gradient(135deg, #eef3fb 0%, #f8fafc 100%);
+  color: #061a44;
+}
+
+.vf-login-left {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(145deg, #06183d 0%, #071d49 45%, #0b3b7a 100%);
+  color: #fff;
+  padding: 64px;
+  display: flex;
+  align-items: center;
+}
+
+.vf-login-left h1,
+.vf-login-left h2,
+.vf-login-left h3,
+.vf-login-left p,
+.vf-login-left strong {
+  color: #fff;
+}
+
+.vf-left-content {
+  position: relative;
+  z-index: 2;
+  max-width: 860px;
+}
+
+.vf-platform-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.18);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 22px;
+}
+
+.vf-hero-copy h1 {
+  font-size: 52px;
+  line-height: 1.05;
+  letter-spacing: -1.5px;
+  margin-bottom: 18px;
+}
+
+.vf-hero-copy p {
+  font-size: 16px;
+  line-height: 1.7;
+  color: rgba(255,255,255,.78);
+  max-width: 760px;
+}
+
+/* Expanded feature cards used by the redesigned JSX */
+.vf-feature-cards-expanded {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 32px;
+}
+
+.vf-feature-cards-expanded article {
+  min-height: 142px;
+  background: rgba(255,255,255,.10);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 20px;
+  padding: 16px;
+  backdrop-filter: blur(12px);
+}
+
+.vf-feature-icon {
+  font-size: 22px;
+  margin-bottom: 10px;
+}
+
+.vf-feature-cards-expanded h3 {
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.25;
+  margin-bottom: 6px;
+}
+
+.vf-feature-cards-expanded p {
+  color: rgba(255,255,255,.72);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* Replacement for unsupported government badges */
+.vf-login-trust-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.vf-login-trust-strip div {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(14px);
+}
+
+.vf-login-trust-strip span {
+  display: block;
+  font-size: 11px;
+  color: rgba(255,255,255,.78);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vf-login-trust-strip strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #fff;
+}
+
+/* New JSX uses vf-login-language, old CSS used vf-language-switch */
+.vf-login-language,
+.vf-language-switch {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.vf-login-language button,
+.vf-language-switch button {
+  background: #eef3fb !important;
+  color: #071d49 !important;
+  border: 1px solid #d9e2f2 !important;
+  border-radius: 12px;
+  padding: 9px 14px;
+}
+
+.vf-login-language button.active,
+.vf-login-language button:hover,
+.vf-language-switch button.active,
+.vf-language-switch button:hover {
+  background: #071d49 !important;
+  color: #fff !important;
+}
+
+/* New JSX password wrapper */
+.vf-password-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f8fafc;
+  border: 1px solid #d8e0ed;
+  border-radius: 16px;
+  padding: 0 12px;
+  margin-bottom: 14px;
+}
+
+.vf-password-field:focus-within {
+  border-color: #2b9fff;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(43,159,255,.12);
+}
+
+.vf-password-field input {
+  border: 0 !important;
+  margin: 0 !important;
+  padding: 15px 0 !important;
+  background: transparent !important;
+  outline: none;
+  flex: 1;
+}
+
+.vf-password-field button {
+  background: transparent !important;
+  color: #071d49 !important;
+  padding: 6px 8px !important;
+}
+
+/* Login card text refinements */
+.vf-login-card h2 {
+  color: #071d49;
+  font-size: 30px;
+  margin-bottom: 8px;
+}
+
+.vf-login-subtitle,
+.vf-secure-note {
+  color: #64748b;
+}
 
 .vf-secure-note {
-  text-align: center !important;
-  margin: 18px 0 0 !important;
-  color: #667085 !important;
-  font-size: 14px !important;
+  text-align: center;
+  margin-top: 16px;
+  margin-bottom: 0;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.vf-login-footer {
-  position: absolute !important;
-  bottom: 34px !important;
-  right: 64px !important;
-  z-index: 4 !important;
-  color: #475569 !important;
-  font-size: 13px !important;
-  text-align: right !important;
-}
-
+/* Modal styles used by Forgot Password and optional SSO Coming Soon */
 .vf-reset-overlay {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 1000 !important;
-  background: rgba(7, 29, 73, .35) !important;
-  backdrop-filter: blur(8px) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 24px !important;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(6px);
 }
 
 .vf-reset-modal {
-  width: 420px !important;
-  max-width: 100% !important;
-  background: #fff !important;
-  border-radius: 24px !important;
-  padding: 28px !important;
-  box-shadow: 0 32px 90px rgba(7,29,73,.22) !important;
+  width: min(460px, 100%);
+  background: #fff;
+  border-radius: 22px;
+  padding: 26px;
+  box-shadow: 0 24px 80px rgba(2, 6, 23, 0.28);
 }
 
 .vf-reset-modal h3 {
-  color: #071d49 !important;
-  margin-bottom: 8px !important;
+  color: #071d49;
+  margin-bottom: 8px;
 }
 
 .vf-reset-message {
-  margin: 12px 0 !important;
-  padding: 12px !important;
-  border-radius: 12px !important;
-  background: #eef6ff !important;
-  color: #071d49 !important;
-  font-size: 13px !important;
-  font-weight: 700 !important;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eef6ff;
+  color: #0b3b7a;
+  font-weight: 700;
 }
 
 .vf-reset-actions {
-  display: flex !important;
-  gap: 10px !important;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
 .vf-reset-actions .secondary {
@@ -801,91 +1222,1543 @@ main.vf-login-shell,
   color: #071d49 !important;
 }
 
-@media (max-width: 1120px) {
-  main.vf-login-shell,
-  .vf-login-shell {
-    grid-template-columns: 1fr !important;
-    overflow: auto !important;
+/* Logo fallbacks */
+.vf-login-hero-logo {
+  width: 280px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 24px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.vf-login-card-logo {
+  width: 150px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  border-radius: 16px;
+}
+
+.vf-login-logo-fallback,
+.vf-login-card-logo-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 20px;
+  background: rgba(255,255,255,.96);
+  color: #071733;
+}
+
+.vf-login-logo-fallback span,
+.vf-login-card-logo-fallback span {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #071733;
+  color: #fff;
+  font-weight: 900;
+}
+
+@media (max-width: 1180px) {
+  .vf-feature-cards-expanded {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .vf-login-left {
-    min-height: auto !important;
-    padding: 48px 30px !important;
-  }
-
-  .vf-login-left::after {
-    font-size: 96px !important;
-    top: 28px !important;
-    right: 32px !important;
-  }
-
-  .vf-hero-copy h1 {
-    font-size: 42px !important;
-  }
-
-  .vf-feature-cards {
-    grid-template-columns: 1fr !important;
-  }
-
-  .vf-login-right {
-    min-height: auto !important;
-    padding: 84px 20px 64px !important;
-  }
-
-  .vf-language-switch {
-    top: 22px !important;
-    right: 22px !important;
-  }
-
-  .vf-login-footer {
-    position: static !important;
-    margin: 18px auto 0 !important;
-    text-align: center !important;
+  .vf-login-trust-strip {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 900px) {
-  .layout {
-    flex-direction: column;
+  .vf-login-shell {
+    grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    position: relative;
-    width: 100%;
+  .vf-login-left {
+    padding: 36px 24px;
   }
 
-  .content,
-  main {
-    margin-left: 0;
-    width: 100%;
+  .vf-hero-copy h1 {
+    font-size: 38px;
+  }
+
+  .vf-login-right {
+    padding: 28px 18px;
   }
 }
-/* Force VisaFlow KSA official logo on launch/login page */
-.vf-brand {
-  display: block !important;
+
+@media (max-width: 720px) {
+  .vf-feature-cards-expanded {
+    grid-template-columns: 1fr;
+  }
+
+  .vf-login-hero-logo {
+    width: 220px;
+  }
+}
+/* VisaFlow Login Emergency Fix - prevents oversized logo / page overflow */
+/* Paste this at the very END of src/style.css */
+
+body:has(.vf-login-shell) {
+  background: #eef4fb !important;
+  overflow: hidden !important;
 }
 
-.vf-brand > * {
+.vf-login-shell {
+  min-height: 100vh !important;
+  height: 100vh !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.12fr) minmax(420px, 0.88fr) !important;
+  background: #eef4fb !important;
+  overflow: hidden !important;
+}
+
+.vf-login-left {
+  position: relative !important;
+  min-height: 100vh !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  padding: 56px 68px !important;
+  display: flex !important;
+  align-items: center !important;
+  background:
+    linear-gradient(rgba(6, 24, 61, 0.82), rgba(6, 24, 61, 0.88)),
+    url("/login-hero.jpg"),
+    linear-gradient(145deg, #06183d 0%, #071d49 50%, #0b3b7a 100%) !important;
+  background-size: cover !important;
+  background-position: center !important;
+}
+
+/* The uploaded logo image is too large for the left hero area.
+   Hide the left hero logo and keep the clean brand badge + login-card logo. */
+.vf-login-left .vf-brand-row {
   display: none !important;
 }
 
-.vf-brand::before {
-  content: "";
-  display: block;
-  width: 290px;
-  height: 145px;
-  background: rgba(255, 255, 255, 0.96) url("/visaflow-logo.png") center / contain no-repeat;
-  border-radius: 22px;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.25);
+.vf-left-content {
+  position: relative !important;
+  z-index: 2 !important;
+  max-width: 820px !important;
+  width: 100% !important;
 }
 
-.vf-login-logo {
-  width: 160px !important;
-  height: 90px !important;
-  background: url("/visaflow-logo.png") center / contain no-repeat !important;
+.vf-platform-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 10px 16px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: #fff !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+  margin-bottom: 24px !important;
+}
+
+.vf-hero-copy h1,
+.vf-login-left h1 {
+  color: #fff !important;
+  font-size: clamp(42px, 4.2vw, 66px) !important;
+  line-height: 1.02 !important;
+  letter-spacing: -1.8px !important;
+  margin: 0 0 20px !important;
+}
+
+.vf-hero-copy h1 strong,
+.vf-login-left h1 strong {
+  color: #2b9fff !important;
+}
+
+.vf-hero-copy p,
+.vf-login-left p {
+  color: rgba(255, 255, 255, 0.88) !important;
+  font-size: 16px !important;
+  line-height: 1.7 !important;
+  max-width: 780px !important;
+}
+
+.vf-feature-cards,
+.vf-feature-cards-expanded {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 14px !important;
+  margin-top: 26px !important;
+}
+
+.vf-feature-cards article,
+.vf-feature-cards .vf-feature-card,
+.vf-feature-cards-expanded article {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 18px !important;
+  padding: 14px 16px !important;
+  min-height: 112px !important;
+  backdrop-filter: blur(12px) !important;
+}
+
+.vf-feature-icon {
+  font-size: 18px !important;
+  margin-bottom: 8px !important;
+}
+
+.vf-feature-cards h3,
+.vf-feature-cards-expanded h3 {
+  color: #fff !important;
+  font-size: 14px !important;
+  line-height: 1.25 !important;
+  margin: 0 0 5px !important;
+}
+
+.vf-feature-cards p,
+.vf-feature-cards-expanded p {
+  color: rgba(255, 255, 255, 0.76) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  margin: 0 !important;
+}
+
+.vf-login-trust-strip {
+  display: none !important;
+}
+
+.vf-login-right {
+  min-height: 100vh !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 42px !important;
+  background:
+    radial-gradient(circle at 50% 25%, rgba(43,159,255,0.12), transparent 34%),
+    #eef4fb !important;
+}
+
+.vf-login-card {
+  width: 100% !important;
+  max-width: 470px !important;
+  margin: 0 auto !important;
+  padding: 34px !important;
+  border-radius: 28px !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(203, 213, 225, 0.9) !important;
+  box-shadow: 0 30px 90px rgba(7, 29, 73, 0.16) !important;
+}
+
+.vf-login-card-logo,
+.vf-login-card img,
+.vf-login-logo img {
+  width: 72px !important;
+  max-width: 72px !important;
+  height: auto !important;
+  max-height: 58px !important;
+  object-fit: contain !important;
+  display: block !important;
+  margin: 0 auto 18px !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.vf-login-language,
+.vf-language-switch {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+  margin-bottom: 18px !important;
+}
+
+.vf-login-language button,
+.vf-language-switch button {
+  padding: 8px 12px !important;
+  border-radius: 12px !important;
+  background: #eef3fb !important;
+  color: #071d49 !important;
+  border: 1px solid #d9e2f2 !important;
+}
+
+.vf-login-language button.active,
+.vf-language-switch button.active {
+  background: #071d49 !important;
+  color: #fff !important;
+}
+
+.vf-password-field {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.vf-password-field input {
+  padding-right: 46px !important;
+}
+
+.vf-password-field button {
+  position: absolute !important;
+  right: 10px !important;
+  width: 34px !important;
+  height: 34px !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  background: transparent !important;
+  color: #071d49 !important;
+}
+
+.vf-primary-login {
+  width: 100% !important;
+}
+
+@media (max-width: 1050px) {
+  body:has(.vf-login-shell) {
+    overflow: auto !important;
+  }
+
+  .vf-login-shell {
+    height: auto !important;
+    min-height: 100vh !important;
+    grid-template-columns: 1fr !important;
+    overflow: auto !important;
+  }
+
+  .vf-login-left,
+  .vf-login-right {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+
+  .vf-login-left {
+    padding: 34px 24px !important;
+  }
+
+  .vf-login-right {
+    padding: 26px 18px !important;
+  }
+
+  .vf-feature-cards,
+  .vf-feature-cards-expanded {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+
+/* === FINAL LOGIN HOTFIX: remove oversized left logo and stabilize layout === */
+body:has(.vf-login-shell) {
+  background: #eef4fb !important;
+  overflow: hidden !important;
+}
+
+.vf-login-shell,
+main.vf-login-shell {
+  margin-left: 0 !important;
+  width: 100% !important;
+  padding: 0 !important;
+  min-height: 100vh !important;
+  height: 100vh !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.1fr) minmax(420px, 0.9fr) !important;
+  overflow: hidden !important;
+}
+
+/* This is the real cause of the huge white block: hide the left hero logo image by class and by location. */
+.vf-login-hero-logo,
+.vf-login-left .vf-brand-row,
+.vf-login-left img,
+.vf-login-left picture,
+.vf-login-left source {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  max-width: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+.vf-login-left {
+  min-height: 100vh !important;
+  height: 100vh !important;
+  padding: 52px 66px !important;
+  overflow: hidden !important;
+  display: flex !important;
+  align-items: center !important;
+  background:
+    linear-gradient(rgba(6, 24, 61, 0.84), rgba(6, 24, 61, 0.90)),
+    linear-gradient(145deg, #06183d 0%, #071d49 52%, #0b3b7a 100%) !important;
+}
+
+.vf-left-content {
+  max-width: 850px !important;
+  width: 100% !important;
+}
+
+.vf-platform-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 10px 16px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: #fff !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+  margin-bottom: 22px !important;
+}
+
+.vf-hero-copy h1,
+.vf-login-left h1 {
+  color: #fff !important;
+  font-size: clamp(42px, 4vw, 62px) !important;
+  line-height: 1.03 !important;
+  letter-spacing: -1.6px !important;
+  margin: 0 0 18px !important;
+}
+
+.vf-hero-copy h1 strong,
+.vf-login-left h1 strong {
+  color: #2b9fff !important;
+}
+
+.vf-hero-copy p,
+.vf-login-left p {
+  color: rgba(255, 255, 255, 0.86) !important;
+  font-size: 16px !important;
+  line-height: 1.65 !important;
+  max-width: 760px !important;
+}
+
+.vf-feature-cards,
+.vf-feature-cards-expanded {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 14px !important;
+  margin-top: 24px !important;
+}
+
+.vf-feature-cards article,
+.vf-feature-cards .vf-feature-card,
+.vf-feature-cards-expanded article {
+  display: grid !important;
+  grid-template-columns: 38px 1fr !important;
+  column-gap: 12px !important;
+  align-items: start !important;
+  min-height: 92px !important;
+  padding: 14px 16px !important;
+  background: rgba(255, 255, 255, 0.10) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
   border-radius: 18px !important;
 }
 
-.vf-login-logo > * {
+.vf-feature-icon {
+  grid-row: span 2 !important;
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 12px !important;
+  display: grid !important;
+  place-items: center !important;
+  background: rgba(43, 159, 255, 0.22) !important;
+  font-size: 18px !important;
+  margin: 0 !important;
+}
+
+.vf-feature-cards h3,
+.vf-feature-cards-expanded h3 {
+  color: #fff !important;
+  font-size: 14px !important;
+  line-height: 1.25 !important;
+  margin: 0 0 5px !important;
+}
+
+.vf-feature-cards p,
+.vf-feature-cards-expanded p {
+  color: rgba(255, 255, 255, 0.76) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  margin: 0 !important;
+}
+
+.vf-login-trust-strip {
   display: none !important;
+}
+
+.vf-login-right {
+  min-height: 100vh !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 42px !important;
+  background: #eef4fb !important;
+}
+
+.vf-login-card {
+  width: 100% !important;
+  max-width: 470px !important;
+  margin: 0 auto !important;
+  padding: 34px !important;
+  border-radius: 28px !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(203, 213, 225, 0.9) !important;
+  box-shadow: 0 30px 90px rgba(7, 29, 73, 0.16) !important;
+}
+
+/* Keep only the small logo inside the login card. */
+.vf-login-card .vf-login-logo img,
+.vf-login-card-logo {
+  display: block !important;
+  width: 72px !important;
+  max-width: 72px !important;
+  height: auto !important;
+  max-height: 58px !important;
+  object-fit: contain !important;
+  margin: 0 auto 18px !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.vf-login-footer {
+  margin-top: 18px !important;
+  color: #475569 !important;
+  font-size: 12px !important;
+  text-align: center !important;
+}
+
+@media (max-width: 1050px) {
+  body:has(.vf-login-shell) { overflow: auto !important; }
+  .vf-login-shell,
+  main.vf-login-shell {
+    height: auto !important;
+    min-height: 100vh !important;
+    grid-template-columns: 1fr !important;
+    overflow: auto !important;
+  }
+  .vf-login-left,
+  .vf-login-right {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+  .vf-login-left { padding: 34px 24px !important; }
+  .vf-login-right { padding: 26px 18px !important; }
+  .vf-feature-cards,
+  .vf-feature-cards-expanded { grid-template-columns: 1fr !important; }
+}
+/* VisaFlow Login Compact Final Fix
+   Paste at the VERY END of src/style.css.
+   Purpose: remove login scroll, keep login card fully visible, and make feature cards compact. */
+
+html:has(.vf-login-shell),
+body:has(.vf-login-shell),
+#root:has(.vf-login-shell) {
+  width: 100% !important;
+  min-height: 100vh !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  background: #eef4fb !important;
+}
+
+main.vf-login-shell,
+.vf-login-shell {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  min-height: 100vh !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 58%) minmax(420px, 42%) !important;
+  background: #eef4fb !important;
+}
+
+.vf-login-left {
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+  padding: 42px 54px 34px !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.vf-left-content {
+  max-width: 820px !important;
+  width: 100% !important;
+  max-height: calc(100vh - 76px) !important;
+  overflow: hidden !important;
+}
+
+.vf-platform-badge {
+  margin-bottom: 16px !important;
+  padding: 8px 13px !important;
+  font-size: 12px !important;
+}
+
+.vf-hero-copy h1,
+.vf-login-left h1 {
+  font-size: clamp(36px, 3.5vw, 54px) !important;
+  line-height: 1.03 !important;
+  margin-bottom: 14px !important;
+  letter-spacing: -1.4px !important;
+}
+
+.vf-hero-copy p,
+.vf-login-left p {
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+  max-width: 720px !important;
+  margin-bottom: 0 !important;
+}
+
+.vf-feature-cards,
+.vf-feature-cards-expanded {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  margin-top: 20px !important;
+  max-height: 310px !important;
+  overflow: hidden !important;
+}
+
+.vf-feature-cards article,
+.vf-feature-cards .vf-feature-card,
+.vf-feature-cards-expanded article {
+  display: grid !important;
+  grid-template-columns: 38px 1fr !important;
+  grid-template-rows: auto auto !important;
+  column-gap: 10px !important;
+  row-gap: 2px !important;
+  align-items: start !important;
+  min-height: 82px !important;
+  padding: 11px 12px !important;
+  border-radius: 16px !important;
+}
+
+.vf-feature-icon {
+  grid-row: 1 / span 2 !important;
+  width: 34px !important;
+  height: 34px !important;
+  display: grid !important;
+  place-items: center !important;
+  margin: 0 !important;
+  font-size: 16px !important;
+  border-radius: 12px !important;
+  background: rgba(43,159,255,.18) !important;
+}
+
+.vf-feature-cards h3,
+.vf-feature-cards-expanded h3 {
+  font-size: 13px !important;
+  line-height: 1.18 !important;
+  margin: 0 !important;
+}
+
+.vf-feature-cards p,
+.vf-feature-cards-expanded p {
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  margin: 0 !important;
+}
+
+.vf-login-trust-strip {
+  display: none !important;
+}
+
+.vf-login-right {
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+  padding: 30px 42px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.vf-login-card {
+  width: min(100%, 460px) !important;
+  max-width: 460px !important;
+  max-height: calc(100vh - 76px) !important;
+  overflow: hidden !important;
+  padding: 28px 34px !important;
+  margin: 0 auto !important;
+  border-radius: 26px !important;
+}
+
+.vf-login-card-logo,
+.vf-login-card img,
+.vf-login-logo img {
+  width: 64px !important;
+  max-width: 64px !important;
+  max-height: 50px !important;
+  margin: 0 auto 14px !important;
+  object-fit: contain !important;
+}
+
+.vf-login-language,
+.vf-language-switch {
+  margin-bottom: 12px !important;
+}
+
+.vf-login-card h2,
+.vf-login-card h1 {
+  font-size: 27px !important;
+  margin-bottom: 6px !important;
+}
+
+.vf-login-subtitle,
+.vf-login-card p {
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+  margin-bottom: 16px !important;
+}
+
+.vf-login-form label,
+.vf-form-group label {
+  font-size: 13px !important;
+  margin-bottom: 7px !important;
+}
+
+.vf-login-form input,
+.vf-input-box input,
+.vf-password-field input {
+  height: 46px !important;
+  min-height: 46px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.vf-password-field {
+  min-height: 46px !important;
+  margin-bottom: 10px !important;
+}
+
+.vf-login-options {
+  margin: 8px 0 16px !important;
+}
+
+.vf-primary-login {
+  height: 50px !important;
+  padding: 0 18px !important;
+}
+
+.vf-secure-note {
+  margin-top: 12px !important;
+  font-size: 11px !important;
+}
+
+.vf-login-footer {
+  position: absolute !important;
+  right: 42px !important;
+  bottom: 22px !important;
+  margin: 0 !important;
+  font-size: 11px !important;
+  color: #64748b !important;
+}
+
+/* Make sure the old giant logo never appears on the left. */
+.vf-login-left img,
+.vf-login-left .vf-login-hero-logo,
+.vf-login-left .vf-brand-row {
+  display: none !important;
+}
+
+@media (max-width: 1050px) {
+  html:has(.vf-login-shell),
+  body:has(.vf-login-shell),
+  #root:has(.vf-login-shell) {
+    height: auto !important;
+    overflow: auto !important;
+  }
+
+  main.vf-login-shell,
+  .vf-login-shell {
+    height: auto !important;
+    min-height: 100vh !important;
+    grid-template-columns: 1fr !important;
+    overflow: auto !important;
+  }
+
+  .vf-login-left,
+  .vf-login-right {
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .vf-left-content,
+  .vf-login-card {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .vf-login-left {
+    padding: 30px 22px !important;
+  }
+
+  .vf-login-right {
+    padding: 24px 18px 54px !important;
+  }
+
+  .vf-feature-cards,
+  .vf-feature-cards-expanded {
+    max-height: none !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  .vf-login-footer {
+    position: static !important;
+    margin-top: 18px !important;
+    text-align: center !important;
+  }
+}
+
+/* =========================================================
+   VisaFlow AI Interview Candidate Portal - Phase 2
+   ========================================================= */
+
+html:has(.ai-candidate-shell),
+body:has(.ai-candidate-shell),
+#root:has(.ai-candidate-shell) {
+  min-height: 100%;
+  background: #eef3f9;
+}
+
+body:has(.ai-candidate-shell) {
+  overflow-x: hidden;
+}
+
+.ai-candidate-shell,
+main.ai-candidate-shell {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  min-height: 100vh !important;
+  color: #0f274f;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(43, 159, 255, 0.14), transparent 30%),
+    radial-gradient(circle at 100% 10%, rgba(7, 29, 73, 0.10), transparent 28%),
+    #eef3f9;
+}
+
+.ai-candidate-header {
+  width: 100%;
+  min-height: 82px;
+  padding: 18px clamp(20px, 5vw, 72px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  background: rgba(255, 255, 255, 0.94);
+  border-bottom: 1px solid #dbe5f1;
+  box-shadow: 0 8px 30px rgba(7, 29, 73, 0.06);
+  backdrop-filter: blur(14px);
+}
+
+.ai-candidate-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.ai-candidate-brand-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #071d49, #0b63ce);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  box-shadow: 0 12px 30px rgba(7, 29, 73, 0.20);
+}
+
+.ai-candidate-brand strong,
+.ai-candidate-brand span {
+  display: block;
+}
+
+.ai-candidate-brand strong {
+  color: #071d49;
+  font-size: 17px;
+  margin-bottom: 3px;
+}
+
+.ai-candidate-brand span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-candidate-language-switch {
+  display: flex;
+  gap: 7px;
+  padding: 5px;
+  border-radius: 14px;
+  background: #edf3fb;
+  border: 1px solid #dce6f2;
+}
+
+.ai-candidate-language-switch button {
+  min-width: 45px;
+  padding: 8px 12px;
+  background: transparent;
+  color: #37506f;
+  border-radius: 10px;
+}
+
+.ai-candidate-language-switch button.active {
+  background: #071d49;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(7, 29, 73, 0.18);
+}
+
+.ai-candidate-container {
+  width: min(1180px, calc(100% - 34px));
+  margin: 0 auto;
+  padding: 34px 0 46px;
+}
+
+.ai-candidate-identity-card {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.ai-candidate-identity-card > div {
+  min-height: 88px;
+  padding: 17px 18px;
+  border-radius: 18px;
+  background: #fff;
+  border: 1px solid #dce6f2;
+  box-shadow: 0 10px 32px rgba(7, 29, 73, 0.055);
+}
+
+.ai-candidate-identity-card span,
+.ai-candidate-identity-card strong {
+  display: block;
+}
+
+.ai-candidate-identity-card span {
+  margin-bottom: 7px;
+  color: #6b7d96;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ai-candidate-identity-card strong {
+  color: #071d49;
+  font-size: 16px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ai-candidate-message {
+  margin-bottom: 18px;
+  padding: 13px 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #0b4f9c;
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.ai-candidate-start-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 20px;
+  align-items: start;
+}
+
+.ai-candidate-main-card,
+.ai-candidate-side-card,
+.ai-candidate-interview-card,
+.ai-candidate-status-card,
+.ai-candidate-loading-card {
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #dce6f2;
+  border-radius: 26px;
+  box-shadow: 0 22px 60px rgba(7, 29, 73, 0.10);
+}
+
+.ai-candidate-main-card {
+  padding: clamp(24px, 4vw, 42px);
+}
+
+.ai-candidate-card-kicker {
+  display: inline-flex;
+  margin-bottom: 15px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: #e8f3ff;
+  color: #0b63ce;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ai-candidate-main-card h1,
+.ai-candidate-interview-card h1,
+.ai-candidate-status-card h1 {
+  color: #071d49;
+}
+
+.ai-candidate-main-card h1 {
+  margin-bottom: 12px;
+  font-size: clamp(27px, 3vw, 39px);
+  line-height: 1.12;
+}
+
+.ai-candidate-lead {
+  max-width: 820px;
+  color: #5f7088;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.ai-candidate-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 26px 0;
+}
+
+.ai-candidate-steps > div {
+  min-height: 70px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 16px;
+  background: #f5f8fc;
+  border: 1px solid #e1e8f1;
+  color: #7a8aa1;
+}
+
+.ai-candidate-steps span {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #dde6f1;
+  color: #52657e;
+  font-weight: 900;
+}
+
+.ai-candidate-steps div.active {
+  border-color: #8ec8ff;
+  background: #edf7ff;
+  color: #0b63ce;
+}
+
+.ai-candidate-steps div.active span {
+  background: #0b63ce;
+  color: #fff;
+}
+
+.ai-candidate-steps div.done {
+  border-color: #bbebd0;
+  background: #f0fdf5;
+  color: #16824b;
+}
+
+.ai-candidate-steps div.done span {
+  background: #22a967;
+  color: #fff;
+}
+
+.ai-candidate-consent-box,
+.ai-candidate-microphone-box {
+  margin-top: 17px;
+  padding: 20px;
+  border-radius: 19px;
+  border: 1px solid #dce6f2;
+  background: #f8fafc;
+}
+
+.ai-candidate-consent-box h3,
+.ai-candidate-microphone-box h3,
+.ai-candidate-side-card h3 {
+  margin-bottom: 9px;
+  color: #071d49;
+}
+
+.ai-candidate-consent-box p,
+.ai-candidate-microphone-box p {
+  color: #60738b;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.ai-candidate-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 0 17px;
+  color: #253d5d;
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.ai-candidate-checkbox-row input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 1px 0 0;
+}
+
+.ai-candidate-primary,
+.ai-candidate-secondary,
+.ai-candidate-success,
+.ai-candidate-stop-button,
+.ai-candidate-link-button {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.ai-candidate-primary {
+  background: linear-gradient(135deg, #071d49, #0b4f9c) !important;
+  color: #fff !important;
+  padding: 13px 19px;
+  box-shadow: 0 12px 28px rgba(7, 29, 73, 0.20);
+}
+
+.ai-candidate-primary:hover,
+.ai-candidate-stop-button:hover {
+  transform: translateY(-1px);
+}
+
+.ai-candidate-secondary {
+  background: #edf2f8 !important;
+  color: #17365f !important;
+  border: 1px solid #d8e2ee !important;
+}
+
+.ai-candidate-success {
+  background: #e8f8ef !important;
+  color: #137443 !important;
+  border: 1px solid #bde8ce !important;
+}
+
+.ai-candidate-start-button {
+  width: 100%;
+  margin-top: 20px;
+  padding: 16px 22px;
+  font-size: 15px;
+}
+
+.ai-candidate-side-card {
+  padding: 25px;
+  position: sticky;
+  top: 20px;
+}
+
+.ai-candidate-side-card ul {
+  margin: 0;
+  padding-inline-start: 21px;
+  color: #60738b;
+}
+
+.ai-candidate-side-card li {
+  margin-bottom: 13px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ai-candidate-interview-card {
+  padding: clamp(22px, 4vw, 40px);
+}
+
+.ai-candidate-progress-row {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.ai-candidate-progress-row span,
+.ai-candidate-progress-row strong {
+  display: block;
+}
+
+.ai-candidate-progress-row span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.ai-candidate-progress-row strong {
+  color: #071d49;
+  font-size: 15px;
+}
+
+.ai-candidate-progress-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5ecf5;
+}
+
+.ai-candidate-progress-track span {
+  height: 100%;
+  min-width: 3%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0b63ce, #2b9fff);
+  transition: width 0.25s ease;
+}
+
+.ai-candidate-question-card {
+  padding: clamp(20px, 4vw, 34px);
+  border-radius: 22px;
+  background: linear-gradient(145deg, #071d49, #0b3f83);
+  box-shadow: 0 20px 44px rgba(7, 29, 73, 0.20);
+}
+
+.ai-candidate-question-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 19px;
+}
+
+.ai-candidate-question-topline > span {
+  display: inline-flex;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ai-candidate-link-button {
+  padding: 7px 10px !important;
+  background: rgba(255, 255, 255, 0.10) !important;
+  color: #fff !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+}
+
+.ai-candidate-question-copy {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-question-ar,
+.ai-question-en {
+  color: #fff;
+  font-size: clamp(19px, 2.25vw, 29px);
+  font-weight: 800;
+  line-height: 1.55;
+}
+
+.ai-question-en {
+  color: rgba(255, 255, 255, 0.90);
+  font-size: clamp(17px, 2vw, 25px);
+}
+
+.ai-candidate-answer-limit {
+  margin-top: 20px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ai-candidate-recorder {
+  margin-top: 22px;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  border-radius: 19px;
+  border: 1px solid #dce6f2;
+  background: #f8fafc;
+}
+
+.ai-candidate-recorder.recording {
+  border-color: #f2a7a7;
+  background: #fff4f4;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.07);
+}
+
+.ai-candidate-recorder-icon {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e6effa;
+  color: #0b4f9c;
+  font-size: 20px;
+}
+
+.ai-candidate-recorder.recording .ai-candidate-recorder-icon {
+  background: #fee2e2;
+  color: #dc2626;
+  animation: ai-recording-pulse 1.25s infinite;
+}
+
+@keyframes ai-recording-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.16); }
+  50% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+}
+
+.ai-candidate-recorder strong,
+.ai-candidate-recorder span {
+  display: block;
+}
+
+.ai-candidate-recorder strong {
+  margin-bottom: 5px;
+  color: #071d49;
+  font-size: 15px;
+}
+
+.ai-candidate-recorder span {
+  color: #667891;
+  font-size: 12px;
+}
+
+.ai-candidate-audio-preview {
+  margin-top: 14px;
+  padding: 15px;
+  border-radius: 16px;
+  background: #f0f7ff;
+  border: 1px solid #cfe4fb;
+}
+
+.ai-candidate-audio-preview span {
+  display: block;
+  margin-bottom: 9px;
+  color: #174b82;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ai-candidate-audio-preview audio {
+  width: 100%;
+  height: 42px;
+}
+
+.ai-candidate-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.ai-candidate-action-row button {
+  min-width: 155px;
+  padding: 13px 18px;
+}
+
+.ai-candidate-stop-button {
+  background: #dc2626 !important;
+  color: #fff !important;
+  box-shadow: 0 12px 26px rgba(220, 38, 38, 0.18);
+}
+
+.ai-candidate-status-card,
+.ai-candidate-loading-card {
+  width: min(680px, calc(100% - 34px));
+  margin: 8vh auto;
+  padding: clamp(28px, 6vw, 58px);
+  text-align: center;
+}
+
+.ai-candidate-status-card .ai-candidate-brand-mark {
+  margin: 0 auto 22px;
+}
+
+.ai-status-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e9f9f0;
+  color: #159054;
+  font-size: 34px;
+  font-weight: 900;
+}
+
+.ai-candidate-error-card .ai-status-icon {
+  background: #feecec;
+  color: #c62828;
+}
+
+.ai-candidate-status-card h1 {
+  margin-bottom: 12px;
+  font-size: clamp(27px, 4vw, 39px);
+}
+
+.ai-candidate-status-card p {
+  max-width: 560px;
+  margin: 0 auto;
+  color: #63758d;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.ai-candidate-complete-summary {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.ai-candidate-complete-summary span {
+  padding: 10px 14px;
+  border-radius: 13px;
+  background: #f4f8fc;
+  color: #445d7c;
+  font-size: 13px;
+}
+
+.ai-candidate-loading-card {
+  display: grid;
+  place-items: center;
+}
+
+.ai-candidate-loader {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 18px;
+  border: 4px solid #dce7f3;
+  border-top-color: #0b63ce;
+  border-radius: 50%;
+  animation: ai-loader-spin 0.9s linear infinite;
+}
+
+@keyframes ai-loader-spin {
+  to { transform: rotate(360deg); }
+}
+
+.ai-candidate-footer {
+  padding: 19px 24px 28px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  color: #718198;
+  font-size: 12px;
+}
+
+.ai-candidate-footer span:first-child {
+  color: #071d49;
+  font-weight: 900;
+}
+
+@media (max-width: 900px) {
+  .ai-candidate-start-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-candidate-side-card {
+    position: static;
+  }
+
+  .ai-candidate-identity-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-candidate-progress-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 620px) {
+  .ai-candidate-header {
+    padding: 14px 16px;
+  }
+
+  .ai-candidate-brand span {
+    display: none;
+  }
+
+  .ai-candidate-container {
+    width: min(100% - 20px, 1180px);
+    padding-top: 18px;
+  }
+
+  .ai-candidate-identity-card {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .ai-candidate-identity-card > div {
+    min-height: 78px;
+    padding: 13px;
+  }
+
+  .ai-candidate-identity-card strong {
+    font-size: 14px;
+  }
+
+  .ai-candidate-main-card,
+  .ai-candidate-interview-card {
+    padding: 20px;
+    border-radius: 21px;
+  }
+
+  .ai-candidate-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-candidate-question-card {
+    padding: 20px;
+  }
+
+  .ai-candidate-question-topline {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ai-candidate-action-row {
+    flex-direction: column;
+  }
+
+  .ai-candidate-action-row button {
+    width: 100%;
+  }
+
+  .ai-candidate-footer {
+    flex-direction: column;
+    align-items: center;
+  }
 }
