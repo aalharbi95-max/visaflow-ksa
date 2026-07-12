@@ -616,6 +616,147 @@ const AI_INTERVIEW_DIFFICULTY_LEVELS = [
   "Expert",
 ];
 
+// Ready-made interview frameworks are intentionally limited to engineering roles.
+// All non-engineering roles must be generated from the company's actual job description.
+const ENGINEERING_AI_TEMPLATE_CATALOG = [
+  {
+    profession: "Civil Engineer",
+    profession_ar: "مهندس مدني",
+    focus: "Site execution, structures, QA/QC, quantities, technical coordination and safety.",
+    job_description: "Lead and verify civil construction activities across structural and infrastructure works. Review IFC drawings, specifications, method statements, concrete mix and reinforcement details; identify constructability conflicts; supervise excavation, foundations, formwork, reinforcement and concrete placement; manage RFIs, inspections, NCRs, corrective actions, quantities, variations, subcontractors, quality records and site safety. The interview must test practical calculations, engineering judgment, root-cause analysis, code awareness, documentation, cost and schedule impact, and the ability to defend decisions under realistic site pressure.",
+  },
+  {
+    profession: "Electrical Engineer",
+    profession_ar: "مهندس كهرباء",
+    focus: "Power distribution, protection, testing, fault diagnosis and electrical safety.",
+    job_description: "Design, review, execute and troubleshoot LV/MV electrical systems, distribution boards, transformers, generators, ATS, earthing, lighting and protection systems. Review single-line diagrams, load schedules, cable sizing, voltage drop, short-circuit levels, coordination and testing results. Investigate overheating, nuisance tripping, power-quality issues and unsafe conditions. Coordinate with other disciplines, control changes, manage testing and commissioning, and enforce lockout/tagout and electrical safety. Questions must require calculations, diagnostic methodology, assumptions, verification steps and escalation decisions.",
+  },
+  {
+    profession: "Mechanical Engineer",
+    profession_ar: "مهندس ميكانيكا",
+    focus: "Mechanical systems, rotating equipment, maintenance, diagnostics and reliability.",
+    job_description: "Review, operate, maintain and troubleshoot mechanical systems including pumps, compressors, piping, valves and rotating equipment. Interpret drawings, specifications, performance curves and maintenance data; diagnose vibration, cavitation, overheating, leakage and capacity loss; plan preventive and predictive maintenance; analyze failures and root causes; evaluate repair versus replacement; control permits, isolation, quality, spares, contractors and commissioning. The interview must test engineering calculations, evidence-based diagnosis, reliability judgment, safety and lifecycle-cost decisions.",
+  },
+  {
+    profession: "Architect",
+    profession_ar: "مهندس معماري",
+    focus: "Design coordination, constructability, materials, codes and site quality.",
+    job_description: "Develop and review architectural designs, specifications, finishes, material submittals, shop drawings and mockups. Coordinate architectural work with structural and MEP disciplines, resolve clashes, verify accessibility, fire/life-safety and functional requirements, assess substitutions, inspect workmanship and close defects. Control RFIs, changes, approvals and handover documentation. Questions must challenge design judgment, code interpretation, constructability, value engineering, client requirements and management of conflicting constraints.",
+  },
+  {
+    profession: "HVAC Engineer",
+    profession_ar: "مهندس تكييف وتبريد",
+    focus: "Cooling loads, psychrometrics, air and water systems, controls and troubleshooting.",
+    job_description: "Design, review, commission and troubleshoot HVAC systems including chillers, DX systems, AHUs, FCUs, ventilation, ductwork, chilled-water networks and controls. Evaluate cooling loads, psychrometric conditions, airflow, static pressure, water balance, equipment selection, energy efficiency and indoor-air quality. Diagnose poor cooling, high energy use, condensation, vibration and control instability. Coordinate TAB, BMS sequences, testing, commissioning, maintenance and safety. Questions must require calculations, diagnostic sequencing and verification of performance.",
+  },
+  {
+    profession: "MEP Engineer",
+    profession_ar: "مهندس كهروميكانيكا",
+    focus: "Multidiscipline coordination, clashes, commissioning, interfaces and handover.",
+    job_description: "Coordinate mechanical, electrical, plumbing and fire-protection systems from design review through installation, testing, commissioning and handover. Review coordinated drawings, builders' work, equipment access, load and capacity interfaces, method statements, material submittals, RFIs and site constraints. Resolve clashes without compromising performance, safety, maintainability, cost or schedule. Control inspections, testing dependencies, integrated systems testing, defects and documentation. Questions must test interface management, engineering trade-offs and complex site problem solving.",
+  },
+  {
+    profession: "Project Engineer",
+    profession_ar: "مهندس مشاريع",
+    focus: "Technical delivery, planning, cost, risk, changes and stakeholder control.",
+    job_description: "Manage technical project delivery from scope clarification and design coordination through procurement, construction, commissioning and handover. Develop work packages, track progress, resolve technical constraints, assess risks, review method statements, control RFIs, submittals, variations and claims, coordinate contractors and stakeholders, and protect quality, safety, schedule and cost. Questions must use realistic case studies requiring prioritization, evidence, decision logs, recovery actions and contractual awareness.",
+  },
+  {
+    profession: "Site Engineer",
+    profession_ar: "مهندس موقع",
+    focus: "Daily site control, drawings, inspections, productivity, quality and safety.",
+    job_description: "Control daily site execution against approved drawings, specifications, method statements and inspection plans. Plan manpower, materials, access and work fronts; conduct inspections; identify nonconformance; resolve technical issues; prepare RFIs; measure progress; coordinate subcontractors and ensure safe execution. Questions must challenge the candidate with incomplete information, conflicting drawings, failed inspections, low productivity and urgent recovery scenarios.",
+  },
+  {
+    profession: "Planning Engineer",
+    profession_ar: "مهندس تخطيط",
+    focus: "Baseline schedules, critical path, delay analysis, recovery and progress controls.",
+    job_description: "Develop and maintain resource-loaded project schedules, WBS, calendars, logic, baselines and progress measurement systems. Analyze critical and near-critical paths, float, productivity, constraints, slippage and forecast completion. Prepare look-ahead plans, recovery schedules, earned-value indicators and delay analyses; validate contractor updates and communicate schedule risk. Questions must require schedule reasoning, numerical interpretation, cause-effect analysis and defensible recovery strategies.",
+  },
+  {
+    profession: "Maintenance Engineer",
+    profession_ar: "مهندس صيانة",
+    focus: "Reliability, preventive maintenance, failure analysis, CMMS and asset strategy.",
+    job_description: "Develop and optimize preventive, predictive and corrective maintenance strategies for critical assets. Use CMMS history, condition data, failure modes, MTBF, MTTR and risk to prioritize work; investigate repeat failures; plan shutdowns; control spares, permits and contractors; verify return to service and measure reliability improvement. Questions must test root-cause analysis, maintenance optimization, risk-based decisions and technical leadership during breakdowns.",
+  },
+  {
+    profession: "Operations Engineer",
+    profession_ar: "مهندس تشغيل",
+    focus: "Operational stability, procedures, performance, incidents and continuous improvement.",
+    job_description: "Monitor and optimize operational performance, capacities, utilities, process constraints and service reliability. Develop procedures, operating limits and escalation rules; analyze deviations, incidents and recurring losses; coordinate maintenance and projects; control permits and safe transitions; and lead improvement actions using verified data. Questions must test response to abnormal conditions, trade-offs between production and risk, KPI interpretation and disciplined decision making.",
+  },
+  {
+    profession: "Quality Engineer",
+    profession_ar: "مهندس جودة",
+    focus: "ITPs, inspections, NCRs, audits, root cause and quality systems.",
+    job_description: "Develop and implement project or operational quality plans, ITPs, inspection controls, acceptance criteria and audit programs. Review submittals, test records and traceability; manage NCRs, root-cause analysis, corrective and preventive actions; assess suppliers and contractors; identify systemic trends and verify effectiveness. Questions must challenge the candidate on evidence, standards, sampling, concessions, repeated defects and independence under delivery pressure.",
+  },
+  {
+    profession: "Safety Engineer",
+    profession_ar: "مهندس سلامة",
+    focus: "Risk assessment, permits, incident investigation and critical controls.",
+    job_description: "Lead hazard identification, risk assessments, method-statement reviews, permit-to-work controls, inspections, emergency planning and incident investigations across construction or operations. Verify critical controls for lifting, confined spaces, work at height, excavation, energy isolation and hot work. Analyze leading and lagging indicators and stop unsafe work. Questions must use high-risk scenarios and test whether the candidate can identify control failure, immediate actions, root causes and sustainable prevention.",
+  },
+  {
+    profession: "Cost Engineer",
+    profession_ar: "مهندس تكاليف",
+    focus: "Estimation, cost control, forecasting, change impact and earned value.",
+    job_description: "Prepare estimates, budgets, cost breakdown structures, commitments, accruals, forecasts and variance analysis. Integrate quantities, productivity, procurement, schedule and change data; assess variations, trends and estimate-at-completion; reconcile progress and protect audit trails. Questions must require numerical reasoning, assumptions, sensitivity analysis, earned-value interpretation and challenge unsupported forecasts.",
+  },
+  {
+    profession: "Facilities Engineer",
+    profession_ar: "مهندس مرافق",
+    focus: "Asset performance, service continuity, compliance, lifecycle and contractors.",
+    job_description: "Manage building and utility assets, planned maintenance, statutory compliance, service continuity, energy performance, lifecycle planning and contractor delivery. Prioritize incidents, assess asset condition, review maintenance strategies, verify SLAs and KPIs, manage shutdowns and handovers, and balance reliability, occupant impact, safety and cost. Questions must test multidisciplinary diagnosis and risk-based facilities decisions.",
+  },
+  {
+    profession: "Fire Protection Engineer",
+    profession_ar: "مهندس مكافحة حريق",
+    focus: "Fire-water, suppression, alarms, code compliance, testing and cause/effect.",
+    job_description: "Design, review, inspect, test and commission fire-protection systems including fire-water networks, pumps, sprinklers, standpipes, suppression and fire-alarm interfaces. Interpret hydraulic calculations, zoning, cause-and-effect, testing results and code requirements; investigate pressure, flow, coverage and false-alarm issues; coordinate life-safety interfaces and documentation. Questions must require code-based reasoning, diagnostics and uncompromising safety judgment.",
+  },
+  {
+    profession: "Control Systems Engineer",
+    profession_ar: "مهندس أنظمة تحكم",
+    focus: "PLC/SCADA/BMS logic, instrumentation, networks, tuning and fault diagnosis.",
+    job_description: "Design, configure, test and troubleshoot control systems, PLCs, SCADA/BMS, instrumentation, communication networks and control loops. Review I/O, interlocks, sequences, alarms, trends and cause-and-effect; diagnose sensor, logic, network and actuator faults; manage simulation, FAT, SAT, commissioning, backups, cybersecurity boundaries and change control. Questions must test systematic diagnosis, safe bypass decisions and proof of correct operation.",
+  },
+  {
+    profession: "Industrial Engineer",
+    profession_ar: "مهندس صناعي",
+    focus: "Process analysis, capacity, productivity, quality, layout and optimization.",
+    job_description: "Analyze and improve processes using time studies, capacity models, bottleneck analysis, line balancing, layout design, quality tools, inventory logic and cost-benefit analysis. Build reliable data sets, validate assumptions, simulate alternatives and sustain improvements through controls and standard work. Questions must require quantitative reasoning, trade-off analysis and evidence that improvements will not shift risk elsewhere.",
+  },
+  {
+    profession: "Contracts Engineer",
+    profession_ar: "مهندس عقود",
+    focus: "Scope, obligations, notices, variations, claims and technical-commercial risk.",
+    job_description: "Administer engineering and construction contracts, review scope, specifications, deliverables, obligations and interfaces; maintain notices and records; assess variations, extensions of time, claims, payment support and contractor correspondence; coordinate technical, planning, cost and legal inputs. Questions must test entitlement reasoning, causation, substantiation, risk allocation and disciplined documentation without giving legal conclusions beyond authority.",
+  },
+  {
+    profession: "Engineering Manager",
+    profession_ar: "مدير هندسي",
+    focus: "Technical governance, multidisciplinary leadership, assurance and major decisions.",
+    job_description: "Lead multidisciplinary engineering teams and technical governance across design, procurement, construction, commissioning and operations. Establish design criteria, assurance gates, decision rights, change control and technical risk management; resolve major interfaces and deviations; challenge consultants and contractors; protect safety, quality, operability, maintainability, cost and schedule; develop engineers and communicate decisions to executives. Questions must use ambiguous, high-consequence cases that expose leadership, technical depth and accountability.",
+  },
+];
+
+const EMPTY_AI_INTERVIEW_GENERATION_FORM = {
+  template_name: "",
+  profession: "",
+  profession_category: "",
+  job_description: "",
+  years_experience: "",
+  qualifications: "",
+  certifications: "",
+  language: "Bilingual",
+  difficulty: "Medium",
+  question_count: 10,
+  passing_score: 70,
+  request_no: "",
+  request_line_id: "",
+};
+
 const DEFAULT_AI_INTERVIEW_QUESTIONS = [
   {
     question_order: 1,
@@ -2211,6 +2352,10 @@ const [aiInterviewQuestionForm, setAIInterviewQuestionForm] = useState({
   key_points_text: "",
   recruiter_notes: "",
 });
+const [aiInterviewWorkspaceTab, setAIInterviewWorkspaceTab] = useState("Engineering Templates");
+const [aiInterviewGenerationForm, setAIInterviewGenerationForm] = useState({ ...EMPTY_AI_INTERVIEW_GENERATION_FORM });
+const [aiInterviewGenerationLoading, setAIInterviewGenerationLoading] = useState(false);
+const [aiInterviewGenerationResult, setAIInterviewGenerationResult] = useState(null);
 const [mobilizations, setMobilizations] = useState([]);
 const [onboardingValidations, setOnboardingValidations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
@@ -10458,6 +10603,127 @@ ${errors.slice(0, 10).join("\n")}` : "")
     alert(`Excel upload failed: ${error.message}`);
   }
 }
+  function resetAIInterviewGenerationForm() {
+    setAIInterviewGenerationForm({ ...EMPTY_AI_INTERVIEW_GENERATION_FORM });
+    setAIInterviewGenerationResult(null);
+    setAIInterviewMessage("");
+  }
+
+  function getEngineeringTemplateStatus(item = {}) {
+    const matches = aiInterviewTemplates
+      .filter((template) =>
+        normalizeMatchText(template.profession) === normalizeMatchText(item.profession)
+      )
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+    const approved = matches.find((template) => template.approval_status === "Approved" && template.is_active !== false);
+    if (approved) return { label: "Approved & Active", className: "passed", template: approved };
+
+    const pending = matches.find((template) => template.approval_status === "Pending Review");
+    if (pending) return { label: "Pending Review", className: "warning", template: pending };
+
+    const rejected = matches.find((template) => template.approval_status === "Rejected");
+    if (rejected) return { label: "Rejected", className: "danger", template: rejected };
+
+    return { label: "Not Created", className: "", template: matches[0] || null };
+  }
+
+  function prepareEngineeringAIInterviewTemplate(item = {}) {
+    if (!item?.profession) return;
+
+    setAIInterviewGenerationForm({
+      ...EMPTY_AI_INTERVIEW_GENERATION_FORM,
+      template_name: `${item.profession} Advanced AI Interview`,
+      profession: item.profession,
+      profession_category: "Engineering",
+      job_description: item.job_description || "",
+      years_experience: "5+ years",
+      qualifications: `Bachelor's degree in ${item.profession.replace(" Engineer", " Engineering")} or a closely related engineering discipline`,
+      certifications: "Relevant professional certifications are preferred only when required by the company or project.",
+      language: "Bilingual",
+      difficulty: "Advanced",
+      question_count: 15,
+      passing_score: 75,
+    });
+    setAIInterviewWorkspaceTab("Generate from Job Description");
+    setAIInterviewGenerationResult(null);
+    setAIInterviewMessage(
+      `${item.profession} advanced engineering framework is ready. Review the job description, then generate the questions.`
+    );
+  }
+
+  async function generateAIInterviewTemplateFromJobDescription() {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to generate AI interview templates.");
+    }
+    if (!currentCompanyId) return alert("Company ID is missing.");
+
+    const profession = String(aiInterviewGenerationForm.profession || "").trim();
+    const jobDescription = String(aiInterviewGenerationForm.job_description || "").trim();
+    const templateName = String(aiInterviewGenerationForm.template_name || "").trim() || `${profession} AI Voice Interview`;
+    const questionCount = Math.min(15, Math.max(3, Number(aiInterviewGenerationForm.question_count || 10)));
+    const passingScore = Math.min(100, Math.max(0, Number(aiInterviewGenerationForm.passing_score || 70)));
+
+    if (!profession) return alert("Profession is required.");
+    if (jobDescription.length < 30) {
+      return alert("Job description must contain at least 30 characters.");
+    }
+
+    const isEngineeringCatalogRole = ENGINEERING_AI_TEMPLATE_CATALOG.some(
+      (item) => normalize(item.profession) === normalize(profession)
+    );
+    const professionCategory = String(aiInterviewGenerationForm.profession_category || "").trim() ||
+      (isEngineeringCatalogRole ? "Engineering" : "Other");
+
+    setAIInterviewGenerationLoading(true);
+    setAIInterviewGenerationResult(null);
+    setAIInterviewMessage("Analyzing the job description and generating the interview questions...");
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "generate-ai-interview-template",
+        {
+          body: {
+            company_id: currentCompanyId,
+            template_name: templateName,
+            profession,
+            profession_category: professionCategory,
+            job_description: jobDescription,
+            language: aiInterviewGenerationForm.language || "Bilingual",
+            difficulty: aiInterviewGenerationForm.difficulty || "Medium",
+            years_experience: String(aiInterviewGenerationForm.years_experience || "").trim(),
+            qualifications: String(aiInterviewGenerationForm.qualifications || "").trim(),
+            certifications: String(aiInterviewGenerationForm.certifications || "").trim(),
+            question_count: questionCount,
+            passing_score: passingScore,
+            request_no: String(aiInterviewGenerationForm.request_no || "").trim(),
+            request_line_id: String(aiInterviewGenerationForm.request_line_id || "").trim(),
+            created_by: getAIInterviewActorName(),
+          },
+        }
+      );
+
+      if (error) throw error;
+      if (!data?.ok) {
+        throw new Error(data?.error || `Template generation failed at ${data?.stage || "unknown stage"}.`);
+      }
+
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+      setAIInterviewGenerationResult(data);
+      setSelectedAIInterviewTemplateId(data.template_id || "");
+      setEditingAIInterviewQuestionId("");
+      setAIInterviewMessage(
+        `${data.template_name || templateName} generated with ${data.generated_question_count || questionCount} questions and saved as Pending Review.`
+      );
+    } catch (error) {
+      console.warn("AI interview job-description generation failed", error?.message || error);
+      setAIInterviewMessage(`AI template generation failed: ${error?.message || error}`);
+      alert(error?.message || "AI template generation failed.");
+    } finally {
+      setAIInterviewGenerationLoading(false);
+    }
+  }
+
   function getAIInterviewTemplateQuestions(templateId) {
     return aiInterviewQuestions
       .filter((question) => String(question.template_id || "") === String(templateId || "") && question.is_active !== false)
@@ -10972,23 +11238,17 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
   async function resolveAIInterviewTemplate(interview = {}) {
     const activeTemplates = aiInterviewTemplates.filter(
-      (template) => template.is_active !== false && template.status === "Active"
+      (template) =>
+        template.is_active !== false &&
+        template.status === "Active" &&
+        template.approval_status === "Approved" &&
+        normalize(template.profession) !== "general"
     );
 
-    const professionMatch = activeTemplates.find((template) =>
+    return activeTemplates.find((template) =>
       template.profession &&
-      normalize(template.profession) !== "general" &&
-      isCompatibleText(template.profession, interview.profession)
-    );
-
-    if (professionMatch) return professionMatch;
-
-    const generalTemplate = activeTemplates.find((template) =>
-      !template.profession || normalize(template.profession) === "general"
-    );
-
-    if (generalTemplate) return generalTemplate;
-    return seedDefaultAIInterviewTemplate({ silent: true });
+      normalizeMatchText(template.profession) === normalizeMatchText(interview.profession)
+    ) || null;
   }
 
   async function createAIInterviewSession(interview = {}) {
@@ -11010,7 +11270,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
     try {
       const template = await resolveAIInterviewTemplate(interview);
-      if (!template?.id) throw new Error("No active AI interview template is available.");
+      if (!template?.id) throw new Error("No approved active template matches this profession. Generate and approve a template from the job description first.");
 
       let questions = getAIInterviewTemplateQuestions(template.id);
       if (questions.length === 0) {
@@ -25008,8 +25268,11 @@ Save Authorization
                   </div>
                 </div>
                 <div className="actions-line" style={{ margin: 0 }}>
-                  <button className="save-btn" disabled={aiInterviewLoading} onClick={() => seedDefaultAIInterviewTemplate()}>
-                    {aiInterviewLoading ? "Working..." : aiInterviewTemplates.length ? "Verify Default Template" : "Create Default AI Template"}
+                  <button className="save-btn" onClick={() => setAIInterviewWorkspaceTab("Engineering Templates")}>
+                    Engineering Templates
+                  </button>
+                  <button className="light-btn" onClick={() => setAIInterviewWorkspaceTab("Generate from Job Description")}>
+                    Generate from Job Description
                   </button>
                   <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions(), loadAIInterviewAnswers()])}>
                     Refresh AI Interviews
@@ -25028,6 +25291,165 @@ Save Authorization
               {aiInterviewMessage && (
                 <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "#f8fafc", color: "#334155", fontSize: 13 }}>
                   {aiInterviewMessage}
+                </div>
+              )}
+            </FormCard>
+
+            <FormCard title="AI Interview Template Builder">
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+                {["Engineering Templates", "Generate from Job Description"].map((tab) => (
+                  <button
+                    key={tab}
+                    className={aiInterviewWorkspaceTab === tab ? "save-btn" : "light-btn"}
+                    onClick={() => setAIInterviewWorkspaceTab(tab)}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {aiInterviewWorkspaceTab === "Engineering Templates" && (
+                <div>
+                  <div style={{ padding: 14, borderRadius: 14, background: "#eff6ff", color: "#1e3a8a", marginBottom: 16, lineHeight: 1.65 }}>
+                    <b>Ready frameworks are limited to engineering roles.</b> Each framework prepares a difficult, scenario-based bilingual interview. Non-engineering professions must be generated from the company's actual job description.
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
+                    {ENGINEERING_AI_TEMPLATE_CATALOG.map((item) => {
+                      const status = getEngineeringTemplateStatus(item);
+                      return (
+                        <div key={item.profession} style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 16, background: "#ffffff", display: "grid", gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                            <div>
+                              <div style={{ fontWeight: 900, color: "#0f172a" }}>{item.profession}</div>
+                              <div dir="rtl" style={{ color: "#475569", marginTop: 3 }}>{item.profession_ar}</div>
+                            </div>
+                            <Badge value={status.label} />
+                          </div>
+                          <div style={{ color: "#64748b", fontSize: 13, lineHeight: 1.55 }}>{item.focus}</div>
+                          <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 800 }}>
+                            Advanced scenarios • Technical judgment • Safety • Root-cause analysis
+                          </div>
+                          <div className="actions-line" style={{ margin: 0 }}>
+                            {status.template ? (
+                              <button className="light-btn" onClick={() => openAIInterviewTemplateReview(status.template)}>
+                                Review Existing
+                              </button>
+                            ) : null}
+                            <button className="save-btn" onClick={() => prepareEngineeringAIInterviewTemplate(item)}>
+                              Prepare Advanced Template
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {aiInterviewWorkspaceTab === "Generate from Job Description" && (
+                <div>
+                  <div style={{ padding: 14, borderRadius: 14, background: "#f8fafc", color: "#334155", marginBottom: 16, lineHeight: 1.65 }}>
+                    Paste the company's real job description. The AI will analyze the duties, competencies, technical requirements, safety risks and missing information, then save a bilingual template as <b>Pending Review</b>.
+                  </div>
+
+                  <div className="form-grid">
+                    <Input
+                      placeholder="Template Name"
+                      value={aiInterviewGenerationForm.template_name}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "template_name", value)}
+                    />
+                    <Input
+                      placeholder="Profession"
+                      value={aiInterviewGenerationForm.profession}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "profession", value)}
+                    />
+                    <Select
+                      value={aiInterviewGenerationForm.profession_category}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "profession_category", value)}
+                      placeholder="Profession Category"
+                      options={["Engineering", "Technical / Skilled", "Administrative", "Finance & Accounting", "HR & Recruitment", "Operations", "IT", "Sales", "Other"]}
+                    />
+                    <Input
+                      placeholder="Required Experience"
+                      value={aiInterviewGenerationForm.years_experience}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "years_experience", value)}
+                    />
+                    <Input
+                      placeholder="Qualifications"
+                      value={aiInterviewGenerationForm.qualifications}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "qualifications", value)}
+                    />
+                    <Input
+                      placeholder="Certifications"
+                      value={aiInterviewGenerationForm.certifications}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "certifications", value)}
+                    />
+                    <Select
+                      value={aiInterviewGenerationForm.language}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "language", value)}
+                      placeholder="Interview Language"
+                      options={["Bilingual", "Arabic", "English"]}
+                    />
+                    <Select
+                      value={aiInterviewGenerationForm.difficulty}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "difficulty", value)}
+                      placeholder="Difficulty"
+                      options={["Basic", "Medium", "Advanced", "Expert"]}
+                    />
+                    <Input
+                      type="number"
+                      placeholder="Number of Questions (3-15)"
+                      value={aiInterviewGenerationForm.question_count}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "question_count", value)}
+                    />
+                    <Input
+                      type="number"
+                      placeholder="Passing Score"
+                      value={aiInterviewGenerationForm.passing_score}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "passing_score", value)}
+                    />
+                    <Select
+                      value={aiInterviewGenerationForm.request_no}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "request_no", value)}
+                      placeholder="Request No - Optional"
+                      options={Array.from(new Set(requests.map((item) => item.request_no).filter(Boolean))).sort()}
+                      searchable
+                    />
+                    <Input
+                      placeholder="Request Line ID - Optional"
+                      value={aiInterviewGenerationForm.request_line_id}
+                      onChange={(value) => updateForm(setAIInterviewGenerationForm, "request_line_id", value)}
+                    />
+                  </div>
+
+                  <textarea
+                    rows="10"
+                    placeholder="Job Description / الوصف الوظيفي"
+                    value={aiInterviewGenerationForm.job_description}
+                    onChange={(event) => updateForm(setAIInterviewGenerationForm, "job_description", event.target.value)}
+                    style={{ marginTop: 12 }}
+                  />
+
+                  <div style={{ marginTop: 10, fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
+                    Engineering frameworks automatically use Advanced difficulty and 15 challenging questions. Other professions are generated only from the job description entered here.
+                  </div>
+
+                  <div className="actions-line">
+                    <button className="save-btn" disabled={aiInterviewGenerationLoading} onClick={generateAIInterviewTemplateFromJobDescription}>
+                      {aiInterviewGenerationLoading ? "Analyzing & Generating..." : "Analyze & Generate Questions"}
+                    </button>
+                    <button className="light-btn" disabled={aiInterviewGenerationLoading} onClick={resetAIInterviewGenerationForm}>
+                      Clear Form
+                    </button>
+                  </div>
+
+                  {aiInterviewGenerationResult?.ok && (
+                    <div style={{ marginTop: 14, padding: 14, borderRadius: 14, background: "#ecfdf5", color: "#065f46", lineHeight: 1.7 }}>
+                      <b>Template generated successfully.</b><br />
+                      {aiInterviewGenerationResult.template_name} • {aiInterviewGenerationResult.generated_question_count} questions • Approval: Pending Review
+                    </div>
+                  )}
                 </div>
               )}
             </FormCard>
