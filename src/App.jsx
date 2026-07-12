@@ -4637,12 +4637,13 @@ async function loadProfessionAliases() {
       return [];
     }
 
-    // Every company can read VisaFlow global engineering templates (company_id IS NULL)
-    // together with its own private templates.
+    // Every company can read VisaFlow global engineering templates together
+    // with its own private templates. Global rows keep their original company_id
+    // for audit integrity and are identified by is_global = true.
     const { data, error } = await supabase
       .from("ai_interview_templates")
       .select("*")
-      .or(`company_id.eq.${currentCompanyId},company_id.is.null`)
+      .or(`company_id.eq.${currentCompanyId},is_global.eq.true`)
       .order("created_at", { ascending: false })
       .range(0, 1000);
 
@@ -4666,7 +4667,7 @@ async function loadProfessionAliases() {
     const { data, error } = await supabase
       .from("ai_interview_questions")
       .select("*")
-      .or(`company_id.eq.${currentCompanyId},company_id.is.null`)
+      .or(`company_id.eq.${currentCompanyId},is_global.eq.true`)
       .order("question_order", { ascending: true })
       .range(0, 5000);
 
@@ -10973,7 +10974,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   function isGlobalAIInterviewTemplate(template = {}) {
-    return Boolean(template?.id) && !template?.company_id;
+    return Boolean(template?.id) && template?.is_global === true;
   }
 
   function getEngineeringCatalogItem(profession = "") {
@@ -11267,7 +11268,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
       const { error: questionsError } = await supabase
         .from("ai_interview_questions")
         .update({
-          company_id: promoteToGlobalLibrary ? null : currentCompanyId,
+          is_global: promoteToGlobalLibrary,
           approved_by: actor,
           approved_at: now,
           is_locked: true,
@@ -11282,10 +11283,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
       const { error: templateError } = await supabase
         .from("ai_interview_templates")
         .update({
-          company_id: promoteToGlobalLibrary ? null : currentCompanyId,
-          source_type: promoteToGlobalLibrary
-            ? "VisaFlow Global Engineering Template"
-            : (template.source_type || "Job Description"),
+          is_global: promoteToGlobalLibrary,
+          source_type: template.source_type || "Job Description",
           approval_status: "Approved",
           status: "Active",
           is_active: true,
