@@ -595,6 +595,27 @@ const AI_INTERVIEW_ACTIVE_SESSION_STATUSES = [
   "Completed",
 ];
 
+const AI_INTERVIEW_QUESTION_TYPES = [
+  "Introduction",
+  "Open Question",
+  "Technical",
+  "Behavioral",
+  "Experience",
+  "Language",
+  "Availability",
+  "Salary",
+  "Safety",
+  "Closing",
+];
+
+const AI_INTERVIEW_DIFFICULTY_LEVELS = [
+  "Basic",
+  "Easy",
+  "Medium",
+  "Advanced",
+  "Expert",
+];
+
 const DEFAULT_AI_INTERVIEW_QUESTIONS = [
   {
     question_order: 1,
@@ -2177,6 +2198,19 @@ const [aiInterviewAnswers, setAIInterviewAnswers] = useState([]);
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
 const [selectedAIInterviewSessionId, setSelectedAIInterviewSessionId] = useState("");
+const [selectedAIInterviewTemplateId, setSelectedAIInterviewTemplateId] = useState("");
+const [editingAIInterviewQuestionId, setEditingAIInterviewQuestionId] = useState("");
+const [aiInterviewQuestionForm, setAIInterviewQuestionForm] = useState({
+  question_text_ar: "",
+  question_text_en: "",
+  question_type: "Technical",
+  competency: "",
+  difficulty_level: "Medium",
+  weight: 10,
+  maximum_answer_seconds: 120,
+  key_points_text: "",
+  recruiter_notes: "",
+});
 const [mobilizations, setMobilizations] = useState([]);
 const [onboardingValidations, setOnboardingValidations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
@@ -10450,6 +10484,382 @@ ${errors.slice(0, 10).join("\n")}` : "")
     const answered = Number(session.answered_questions || 0);
     if (!total) return "0%";
     return `${Math.min(100, Math.round((answered / total) * 100))}%`;
+  }
+
+
+  function getAIInterviewTemplateAllQuestions(templateId) {
+    return aiInterviewQuestions
+      .filter((question) => String(question.template_id || "") === String(templateId || ""))
+      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
+  }
+
+  function getAIInterviewTemplateWeightTotal(templateId) {
+    return getAIInterviewTemplateAllQuestions(templateId)
+      .filter((question) => question.is_active !== false)
+      .reduce((sum, question) => sum + Number(question.weight || 0), 0);
+  }
+
+  function getAIInterviewActorName() {
+    return currentUser?.name || currentUser?.full_name || currentUser?.email || "VisaFlow User";
+  }
+
+  function openAIInterviewTemplateReview(template = {}) {
+    if (!template?.id) return;
+    setSelectedAIInterviewTemplateId(template.id);
+    setSelectedAIInterviewSessionId("");
+    setEditingAIInterviewQuestionId("");
+    setAIInterviewMessage(`Reviewing ${template.template_name || "AI interview template"}.`);
+  }
+
+  function resetAIInterviewQuestionEditor() {
+    setEditingAIInterviewQuestionId("");
+    setAIInterviewQuestionForm({
+      question_text_ar: "",
+      question_text_en: "",
+      question_type: "Technical",
+      competency: "",
+      difficulty_level: "Medium",
+      weight: 10,
+      maximum_answer_seconds: 120,
+      key_points_text: "",
+      recruiter_notes: "",
+    });
+  }
+
+  function editAIInterviewQuestion(question = {}, template = {}) {
+    if (!question?.id) return;
+    if (template?.approval_status === "Approved" || template?.is_locked) {
+      return alert("Approved templates are locked. Reject or create a new version before editing.");
+    }
+
+    const keyPoints = Array.isArray(question.key_points)
+      ? question.key_points
+      : Array.isArray(question.expected_keywords)
+        ? question.expected_keywords
+        : [];
+
+    setEditingAIInterviewQuestionId(question.id);
+    setAIInterviewQuestionForm({
+      question_text_ar: question.question_text_ar || "",
+      question_text_en: question.question_text_en || question.question_text || "",
+      question_type: AI_INTERVIEW_QUESTION_TYPES.includes(question.question_type)
+        ? question.question_type
+        : "Open Question",
+      competency: question.competency || "",
+      difficulty_level: AI_INTERVIEW_DIFFICULTY_LEVELS.includes(question.difficulty_level)
+        ? question.difficulty_level
+        : "Medium",
+      weight: Number(question.weight || 0),
+      maximum_answer_seconds: Number(question.maximum_answer_seconds || 120),
+      key_points_text: keyPoints.join("\n"),
+      recruiter_notes: question.recruiter_notes || question.ai_generation_notes || "",
+    });
+  }
+
+  async function saveAIInterviewQuestionEdits() {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to edit AI interview questions.");
+    }
+
+    const question = aiInterviewQuestions.find(
+      (item) => String(item.id || "") === String(editingAIInterviewQuestionId || "")
+    );
+    if (!question) return alert("The selected AI interview question was not found.");
+
+    const template = aiInterviewTemplates.find(
+      (item) => String(item.id || "") === String(question.template_id || "")
+    );
+    if (template?.approval_status === "Approved" || template?.is_locked) {
+      return alert("Approved templates are locked and cannot be edited.");
+    }
+
+    const arabicText = String(aiInterviewQuestionForm.question_text_ar || "").trim();
+    const englishText = String(aiInterviewQuestionForm.question_text_en || "").trim();
+    const competency = String(aiInterviewQuestionForm.competency || "").trim();
+    const weight = Number(aiInterviewQuestionForm.weight || 0);
+    const maximumSeconds = Number(aiInterviewQuestionForm.maximum_answer_seconds || 0);
+
+    if (!arabicText && !englishText) return alert("Arabic or English question text is required.");
+    if (!competency) return alert("Competency is required.");
+    if (!AI_INTERVIEW_QUESTION_TYPES.includes(aiInterviewQuestionForm.question_type)) {
+      return alert("Please select a valid question type.");
+    }
+    if (!AI_INTERVIEW_DIFFICULTY_LEVELS.includes(aiInterviewQuestionForm.difficulty_level)) {
+      return alert("Please select a valid difficulty level.");
+    }
+    if (!Number.isFinite(weight) || weight <= 0 || weight > 100) {
+      return alert("Question weight must be between 1 and 100.");
+    }
+    if (!Number.isFinite(maximumSeconds) || maximumSeconds < 30 || maximumSeconds > 600) {
+      return alert("Maximum answer time must be between 30 and 600 seconds.");
+    }
+
+    const keyPoints = String(aiInterviewQuestionForm.key_points_text || "")
+      .split(/\r?\n|[،,]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 30);
+
+    const actor = getAIInterviewActorName();
+    const now = new Date().toISOString();
+
+    setAIInterviewLoading(true);
+    setAIInterviewMessage("Saving AI interview question changes...");
+
+    try {
+      const { error: questionError } = await supabase
+        .from("ai_interview_questions")
+        .update({
+          question_text: arabicText || englishText,
+          question_text_ar: arabicText,
+          question_text_en: englishText,
+          question_type: aiInterviewQuestionForm.question_type,
+          competency,
+          difficulty_level: aiInterviewQuestionForm.difficulty_level,
+          weight,
+          maximum_answer_seconds: maximumSeconds,
+          expected_keywords: keyPoints,
+          key_points: keyPoints,
+          ideal_answer: keyPoints.join(" • "),
+          recruiter_notes: String(aiInterviewQuestionForm.recruiter_notes || "").trim(),
+          approved_by: "",
+          approved_at: null,
+          is_locked: false,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("id", question.id)
+        .eq("company_id", currentCompanyId);
+
+      if (questionError) throw questionError;
+
+      const { error: templateError } = await supabase
+        .from("ai_interview_templates")
+        .update({
+          approval_status: "Pending Review",
+          is_active: false,
+          approved_by: "",
+          approved_at: null,
+          rejected_by: "",
+          rejected_at: null,
+          rejection_reason: "",
+          is_locked: false,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("id", question.template_id)
+        .eq("company_id", currentCompanyId);
+
+      if (templateError) throw templateError;
+
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+      resetAIInterviewQuestionEditor();
+      setAIInterviewMessage("AI interview question updated. The template is pending review again.");
+    } catch (error) {
+      console.warn("AI interview question update failed", error?.message || error);
+      setAIInterviewMessage(`Question update failed: ${error?.message || error}`);
+      alert(error?.message || "Question update failed.");
+    } finally {
+      setAIInterviewLoading(false);
+    }
+  }
+
+  async function deleteAIInterviewQuestion(question = {}, template = {}) {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to delete AI interview questions.");
+    }
+    if (!question?.id || !template?.id) return;
+    if (template.approval_status === "Approved" || template.is_locked) {
+      return alert("Approved templates are locked and cannot be changed.");
+    }
+    const currentTemplateQuestions = getAIInterviewTemplateAllQuestions(template.id);
+    if (currentTemplateQuestions.length <= 3) {
+      return alert("A template must keep at least 3 questions.");
+    }
+    if (!window.confirm(`Delete question ${question.question_order || ""}?`)) return;
+
+    setAIInterviewLoading(true);
+    try {
+      const { error } = await supabase
+        .from("ai_interview_questions")
+        .delete()
+        .eq("id", question.id)
+        .eq("company_id", currentCompanyId);
+
+      if (error) throw error;
+
+      const remainingCount = Math.max(
+        0,
+        getAIInterviewTemplateAllQuestions(template.id).length - 1,
+      );
+      const actor = getAIInterviewActorName();
+
+      const { error: templateError } = await supabase
+        .from("ai_interview_templates")
+        .update({
+          maximum_questions: remainingCount,
+          requested_question_count: remainingCount,
+          approval_status: "Pending Review",
+          is_active: false,
+          approved_by: "",
+          approved_at: null,
+          rejected_by: "",
+          rejected_at: null,
+          rejection_reason: "",
+          is_locked: false,
+          updated_by: actor,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", template.id)
+        .eq("company_id", currentCompanyId);
+
+      if (templateError) throw templateError;
+
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+      resetAIInterviewQuestionEditor();
+      setAIInterviewMessage("Question deleted. The template remains pending review.");
+    } catch (error) {
+      setAIInterviewMessage(`Question delete failed: ${error?.message || error}`);
+      alert(error?.message || "Question delete failed.");
+    } finally {
+      setAIInterviewLoading(false);
+    }
+  }
+
+  async function approveAndActivateAIInterviewTemplate(template = {}) {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to approve AI interview templates.");
+    }
+    if (!template?.id) return;
+
+    const questions = getAIInterviewTemplateAllQuestions(template.id)
+      .filter((question) => question.is_active !== false);
+    const totalWeight = questions.reduce(
+      (sum, question) => sum + Number(question.weight || 0),
+      0,
+    );
+
+    if (questions.length < 3) {
+      return alert("At least 3 active questions are required before approval.");
+    }
+    if (Math.abs(totalWeight - 100) > 0.01) {
+      return alert(`Question weights must total 100 before approval. Current total: ${totalWeight}`);
+    }
+    if (!window.confirm(`Approve and activate ${template.template_name || "this template"}?`)) return;
+
+    const actor = getAIInterviewActorName();
+    const now = new Date().toISOString();
+    setAIInterviewLoading(true);
+    setAIInterviewMessage("Approving and activating AI interview template...");
+
+    try {
+      const { error: templateError } = await supabase
+        .from("ai_interview_templates")
+        .update({
+          approval_status: "Approved",
+          status: "Active",
+          is_active: true,
+          approved_by: actor,
+          approved_at: now,
+          rejected_by: "",
+          rejected_at: null,
+          rejection_reason: "",
+          is_locked: true,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("id", template.id)
+        .eq("company_id", currentCompanyId);
+
+      if (templateError) throw templateError;
+
+      const { error: questionsError } = await supabase
+        .from("ai_interview_questions")
+        .update({
+          approved_by: actor,
+          approved_at: now,
+          is_locked: true,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("template_id", template.id)
+        .eq("company_id", currentCompanyId);
+
+      if (questionsError) throw questionsError;
+
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+      resetAIInterviewQuestionEditor();
+      setAIInterviewMessage(`${template.template_name || "AI interview template"} approved and activated.`);
+      alert("AI interview template approved and activated successfully.");
+    } catch (error) {
+      console.warn("AI interview template approval failed", error?.message || error);
+      setAIInterviewMessage(`Template approval failed: ${error?.message || error}`);
+      alert(error?.message || "Template approval failed.");
+    } finally {
+      setAIInterviewLoading(false);
+    }
+  }
+
+  async function rejectAIInterviewTemplate(template = {}) {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to reject AI interview templates.");
+    }
+    if (!template?.id) return;
+
+    const reason = String(
+      window.prompt("Enter the rejection reason:", template.rejection_reason || "") || ""
+    ).trim();
+    if (!reason) return alert("Rejection reason is required.");
+
+    const actor = getAIInterviewActorName();
+    const now = new Date().toISOString();
+    setAIInterviewLoading(true);
+    setAIInterviewMessage("Rejecting AI interview template...");
+
+    try {
+      const { error: templateError } = await supabase
+        .from("ai_interview_templates")
+        .update({
+          approval_status: "Rejected",
+          is_active: false,
+          rejected_by: actor,
+          rejected_at: now,
+          rejection_reason: reason,
+          approved_by: "",
+          approved_at: null,
+          is_locked: false,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("id", template.id)
+        .eq("company_id", currentCompanyId);
+
+      if (templateError) throw templateError;
+
+      const { error: questionsError } = await supabase
+        .from("ai_interview_questions")
+        .update({
+          approved_by: "",
+          approved_at: null,
+          is_locked: false,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("template_id", template.id)
+        .eq("company_id", currentCompanyId);
+
+      if (questionsError) throw questionsError;
+
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+      resetAIInterviewQuestionEditor();
+      setAIInterviewMessage(`${template.template_name || "AI interview template"} rejected.`);
+    } catch (error) {
+      console.warn("AI interview template rejection failed", error?.message || error);
+      setAIInterviewMessage(`Template rejection failed: ${error?.message || error}`);
+      alert(error?.message || "Template rejection failed.");
+    } finally {
+      setAIInterviewLoading(false);
+    }
   }
 
   async function seedDefaultAIInterviewTemplate(options = {}) {
@@ -24589,12 +24999,12 @@ Save Authorization
               <div className="actions-line"><button className="save-btn" onClick={saveInterview}>{interviewEditingId ? "Update Interview" : "Save Interview"}</button><button className="light-btn" onClick={resetInterviewForm}>Clear</button></div>
             </FormCard>
             )}
-            <FormCard title="AI Interview Control - Phase 2">
+            <FormCard title="AI Interview Control - Phase 3A">
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>AI voice interview portal is connected to VisaFlow.</div>
                   <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
-                    Templates, questions, candidate links, consent, microphone testing and recorded answers are now connected. AI transcription and scoring will be connected in the next phase.
+                    Job-description AI templates, question review and approval, candidate links, consent, microphone testing and recorded answers are connected. AI transcription and scoring will be connected in the next phase.
                   </div>
                 </div>
                 <div className="actions-line" style={{ margin: 0 }}>
@@ -24621,6 +25031,270 @@ Save Authorization
                 </div>
               )}
             </FormCard>
+
+            <TableCard title="AI Interview Templates - Review & Approval">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>Template</th>
+                    <th>Profession</th>
+                    <th>Source</th>
+                    <th>Questions</th>
+                    <th>JD Quality</th>
+                    <th>Approval</th>
+                    <th>Active</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aiInterviewTemplates.length === 0 ? (
+                    <tr>
+                      <td colSpan="9">No AI interview templates found.</td>
+                    </tr>
+                  ) : (
+                    aiInterviewTemplates.map((template) => {
+                      const templateQuestions = getAIInterviewTemplateAllQuestions(template.id);
+                      const activeQuestions = templateQuestions.filter((question) => question.is_active !== false);
+                      const isSelected = String(selectedAIInterviewTemplateId) === String(template.id);
+
+                      return (
+                        <tr key={template.id} style={isSelected ? { background: "#eff6ff" } : undefined}>
+                          <td>{template.created_at ? new Date(template.created_at).toLocaleString() : "-"}</td>
+                          <td>
+                            <b>{template.template_name || "-"}</b>
+                            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+                              {template.ai_model || "Manual / Legacy"}
+                            </div>
+                          </td>
+                          <td>{template.profession || "General"}</td>
+                          <td>{template.source_type || "Ready Template"}</td>
+                          <td>{activeQuestions.length}</td>
+                          <td>{template.job_description_quality_score ?? "-"}</td>
+                          <td><Badge value={template.approval_status || "Draft"} /></td>
+                          <td><Badge value={template.is_active ? "Active" : "Inactive"} /></td>
+                          <td className="table-actions">
+                            <button onClick={() => openAIInterviewTemplateReview(template)}>Review</button>
+                            {canManageInterviewResults && template.approval_status !== "Approved" && (
+                              <button disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(template)}>
+                                Approve & Activate
+                              </button>
+                            )}
+                            {canManageInterviewResults && template.approval_status !== "Rejected" && (
+                              <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(template)}>
+                                Reject
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </TableCard>
+
+            {selectedAIInterviewTemplateId && (() => {
+              const selectedTemplate = aiInterviewTemplates.find(
+                (template) => String(template.id || "") === String(selectedAIInterviewTemplateId || "")
+              );
+              if (!selectedTemplate) return null;
+
+              const selectedQuestions = getAIInterviewTemplateAllQuestions(selectedTemplate.id);
+              const activeSelectedQuestions = selectedQuestions.filter((question) => question.is_active !== false);
+              const totalWeight = activeSelectedQuestions.reduce(
+                (sum, question) => sum + Number(question.weight || 0),
+                0,
+              );
+              const competencies = Array.isArray(selectedTemplate.extracted_competencies)
+                ? selectedTemplate.extracted_competencies
+                : [];
+              const missingInformation = Array.isArray(selectedTemplate.missing_job_information)
+                ? selectedTemplate.missing_job_information
+                : [];
+              const templateLocked = selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked;
+
+              return (
+                <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"}`}>
+                  <div className="dashboard-grid">
+                    <Stat title="Profession" value={selectedTemplate.profession || "General"} />
+                    <Stat title="Source" value={selectedTemplate.source_type || "Ready Template"} />
+                    <Stat title="Questions" value={activeSelectedQuestions.length} />
+                    <Stat title="Weight Total" value={`${totalWeight}%`} className={Math.abs(totalWeight - 100) <= 0.01 ? "passed" : "warning"} />
+                    <Stat title="JD Quality" value={selectedTemplate.job_description_quality_score ?? "-"} />
+                    <Stat title="Approval" value={selectedTemplate.approval_status || "Draft"} />
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
+                    <div style={{ padding: 16, border: "1px solid #e2e8f0", borderRadius: 14, background: "#f8fafc" }}>
+                      <div style={{ fontWeight: 800, marginBottom: 8 }}>Job Description</div>
+                      <div style={{ whiteSpace: "pre-wrap", color: "#475569", lineHeight: 1.65, fontSize: 13 }}>
+                        {selectedTemplate.job_description || selectedTemplate.description || "No job description stored."}
+                      </div>
+                    </div>
+                    <div style={{ padding: 16, border: "1px solid #e2e8f0", borderRadius: 14, background: "#f8fafc" }}>
+                      <div style={{ fontWeight: 800, marginBottom: 8 }}>AI Competencies</div>
+                      <div style={{ color: "#475569", lineHeight: 1.65, fontSize: 13 }}>
+                        {competencies.length ? competencies.join(" • ") : "No extracted competencies."}
+                      </div>
+                    </div>
+                    <div style={{ padding: 16, border: "1px solid #e2e8f0", borderRadius: 14, background: "#fff7ed" }}>
+                      <div style={{ fontWeight: 800, marginBottom: 8 }}>Missing Job Information</div>
+                      <div style={{ color: "#7c2d12", lineHeight: 1.65, fontSize: 13 }}>
+                        {missingInformation.length ? missingInformation.join(" • ") : "No major missing information identified."}
+                      </div>
+                    </div>
+                  </div>
+
+                  {selectedTemplate.rejection_reason && (
+                    <div style={{ marginBottom: 16, padding: 12, borderRadius: 12, background: "#fef2f2", color: "#991b1b" }}>
+                      <b>Rejection reason:</b> {selectedTemplate.rejection_reason}
+                    </div>
+                  )}
+
+                  <div className="actions-line" style={{ marginBottom: 16 }}>
+                    {!templateLocked && (
+                      <button className="save-btn" disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(selectedTemplate)}>
+                        Approve & Activate
+                      </button>
+                    )}
+                    {selectedTemplate.approval_status !== "Rejected" && (
+                      <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(selectedTemplate)}>
+                        Reject Template
+                      </button>
+                    )}
+                    <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()])}>
+                      Refresh Template
+                    </button>
+                    <button className="light-btn" onClick={() => {
+                      setSelectedAIInterviewTemplateId("");
+                      resetAIInterviewQuestionEditor();
+                    }}>
+                      Close Review
+                    </button>
+                  </div>
+
+                  {editingAIInterviewQuestionId && (
+                    <div style={{ marginBottom: 18, padding: 18, border: "1px solid #bfdbfe", borderRadius: 16, background: "#eff6ff" }}>
+                      <h3 style={{ marginBottom: 14 }}>Edit AI Interview Question</h3>
+                      <div className="form-grid">
+                        <Select
+                          value={aiInterviewQuestionForm.question_type}
+                          onChange={(value) => updateForm(setAIInterviewQuestionForm, "question_type", value)}
+                          placeholder="Question Type"
+                          options={AI_INTERVIEW_QUESTION_TYPES}
+                        />
+                        <Input
+                          placeholder="Competency"
+                          value={aiInterviewQuestionForm.competency}
+                          onChange={(value) => updateForm(setAIInterviewQuestionForm, "competency", value)}
+                        />
+                        <Select
+                          value={aiInterviewQuestionForm.difficulty_level}
+                          onChange={(value) => updateForm(setAIInterviewQuestionForm, "difficulty_level", value)}
+                          placeholder="Difficulty"
+                          options={AI_INTERVIEW_DIFFICULTY_LEVELS}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Weight"
+                          value={aiInterviewQuestionForm.weight}
+                          onChange={(value) => updateForm(setAIInterviewQuestionForm, "weight", value)}
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Maximum Answer Seconds"
+                          value={aiInterviewQuestionForm.maximum_answer_seconds}
+                          onChange={(value) => updateForm(setAIInterviewQuestionForm, "maximum_answer_seconds", value)}
+                        />
+                      </div>
+                      <textarea
+                        rows="3"
+                        dir="rtl"
+                        placeholder="Arabic Question"
+                        value={aiInterviewQuestionForm.question_text_ar}
+                        onChange={(event) => updateForm(setAIInterviewQuestionForm, "question_text_ar", event.target.value)}
+                      />
+                      <textarea
+                        rows="3"
+                        dir="ltr"
+                        placeholder="English Question"
+                        value={aiInterviewQuestionForm.question_text_en}
+                        onChange={(event) => updateForm(setAIInterviewQuestionForm, "question_text_en", event.target.value)}
+                      />
+                      <textarea
+                        rows="4"
+                        placeholder="Expected key points - one point per line"
+                        value={aiInterviewQuestionForm.key_points_text}
+                        onChange={(event) => updateForm(setAIInterviewQuestionForm, "key_points_text", event.target.value)}
+                      />
+                      <textarea
+                        rows="3"
+                        placeholder="Recruiter / evaluation notes"
+                        value={aiInterviewQuestionForm.recruiter_notes}
+                        onChange={(event) => updateForm(setAIInterviewQuestionForm, "recruiter_notes", event.target.value)}
+                      />
+                      <div className="actions-line">
+                        <button className="save-btn" disabled={aiInterviewLoading} onClick={saveAIInterviewQuestionEdits}>Save Question</button>
+                        <button className="light-btn" onClick={resetAIInterviewQuestionEditor}>Cancel Editing</button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ overflowX: "auto" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>No.</th>
+                          <th>Arabic Question</th>
+                          <th>English Question</th>
+                          <th>Type</th>
+                          <th>Competency</th>
+                          <th>Difficulty</th>
+                          <th>Weight</th>
+                          <th>Max Time</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedQuestions.length === 0 ? (
+                          <tr>
+                            <td colSpan="9">No questions are linked to this template.</td>
+                          </tr>
+                        ) : (
+                          selectedQuestions.map((question) => (
+                            <tr key={question.id} style={question.is_active === false ? { opacity: 0.58 } : undefined}>
+                              <td>{question.question_order || "-"}</td>
+                              <td style={{ minWidth: 260, whiteSpace: "pre-wrap" }} dir="rtl">{question.question_text_ar || "-"}</td>
+                              <td style={{ minWidth: 260, whiteSpace: "pre-wrap" }} dir="ltr">{question.question_text_en || question.question_text || "-"}</td>
+                              <td>{question.question_type || "-"}</td>
+                              <td>{question.competency || "-"}</td>
+                              <td>{question.difficulty_level || "-"}</td>
+                              <td>{Number(question.weight || 0)}%</td>
+                              <td>{Number(question.maximum_answer_seconds || 0)}s</td>
+                              <td className="table-actions">
+                                {!templateLocked ? (
+                                  <>
+                                    <button onClick={() => editAIInterviewQuestion(question, selectedTemplate)}>Edit</button>
+                                    <button className="danger" onClick={() => deleteAIInterviewQuestion(question, selectedTemplate)}>Delete</button>
+                                  </>
+                                ) : (
+                                  <span style={{ fontSize: 12, color: "#64748b" }}>Locked after approval</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ marginTop: 12, fontSize: 12, color: "#64748b" }}>
+                    AI-generated questions are recommendations only. The company reviewer must verify job relevance, fairness, safety and scoring before activation.
+                  </div>
+                </FormCard>
+              );
+            })()}
 
             <TableCard title="Interview Records">
               <table>
