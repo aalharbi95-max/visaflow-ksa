@@ -49,6 +49,7 @@ const PAGES = [
   "Company Requests Report",
   "Backup Center",
   "Central Support",
+  "Global Engineering Templates",
 ];
 
 const SIDEBAR_GROUPS = [
@@ -99,6 +100,7 @@ const SIDEBAR_GROUPS = [
   "Company Requests Report",
   "Backup Center",
   "Central Support",
+  "Global Engineering Templates",
 ],
   },
   {
@@ -615,6 +617,8 @@ const AI_INTERVIEW_DIFFICULTY_LEVELS = [
   "Advanced",
   "Expert",
 ];
+
+const GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID = "9b3010d8-e926-4644-bacb-feace89eb5a0";
 
 // Ready-made interview frameworks are intentionally limited to engineering roles.
 // All non-engineering roles must be generated from the company's actual job description.
@@ -2673,6 +2677,7 @@ const PLATFORM_PAGES = [
   "Company Requests Report",
   "Backup Center",
   "Central Support",
+  "Global Engineering Templates",
 ];
 
 const PLATFORM_ACCOUNT_PAGES = [
@@ -2872,6 +2877,7 @@ const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePort
 const canViewEmailAdministration = currentRole !== "Agency";
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageInterviewResults = canManageInterviews;
+const isGlobalEngineeringAdminPage = activePage === "Global Engineering Templates";
 const canScheduleInterviews = canManageInterviewResults || currentRole === "Agency" || hasAction("scheduleInterview");
 const canApproveInterviewSchedule = canManageInterviewResults;
 const canManageMobilization = ["Admin", "Recruitment Manager", "Recruitment Officer", "Operations Manager", "Project Manager"].includes(currentRole);
@@ -4632,20 +4638,30 @@ async function loadProfessionAliases() {
   const loadInterviews = () => loadTable("interviews", setInterviews);
 
   async function loadAIInterviewTemplates() {
-    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+    if (currentRole === "Agency") {
       setAIInterviewTemplates([]);
       return [];
     }
 
-    // Every company can read VisaFlow global engineering templates together
-    // with its own private templates. Global rows keep their original company_id
-    // for audit integrity and are identified by is_global = true.
-    const { data, error } = await supabase
+    let query = supabase
       .from("ai_interview_templates")
       .select("*")
-      .or(`company_id.eq.${currentCompanyId},is_global.eq.true`)
       .order("created_at", { ascending: false })
-      .range(0, 1000);
+      .range(0, 2000);
+
+    if (isPlatformOwner) {
+      // Central platform library: review every engineering master, including
+      // the pending templates originally generated under the library owner company.
+      query = query.eq("profession_category", "Engineering");
+    } else if (isCurrentPlatformUser || !currentCompanyId) {
+      setAIInterviewTemplates([]);
+      return [];
+    } else {
+      // Client companies see their private templates and approved global masters.
+      query = query.or(`company_id.eq.${currentCompanyId},is_global.eq.true`);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn("ai_interview_templates:", error.message);
@@ -4653,23 +4669,40 @@ async function loadProfessionAliases() {
       return [];
     }
 
-    setAIInterviewTemplates(data || []);
-    return data || [];
+    const rows = (data || []).filter((template) => {
+      if (isPlatformOwner) return normalize(template.profession_category) === "engineering";
+      if (String(template.company_id || "") === String(currentCompanyId || "")) return true;
+      return template.is_global === true && template.approval_status === "Approved" && template.is_active === true;
+    });
+
+    setAIInterviewTemplates(rows);
+    return rows;
   }
 
   async function loadAIInterviewQuestions() {
-    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+    if (currentRole === "Agency") {
       setAIInterviewQuestions([]);
       return [];
     }
 
-    // Load questions for both the current company and the global engineering library.
-    const { data, error } = await supabase
+    let query = supabase
       .from("ai_interview_questions")
       .select("*")
-      .or(`company_id.eq.${currentCompanyId},is_global.eq.true`)
       .order("question_order", { ascending: true })
-      .range(0, 5000);
+      .range(0, 10000);
+
+    if (isPlatformOwner) {
+      query = query.or(
+        `company_id.eq.${GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID},is_global.eq.true`
+      );
+    } else if (isCurrentPlatformUser || !currentCompanyId) {
+      setAIInterviewQuestions([]);
+      return [];
+    } else {
+      query = query.or(`company_id.eq.${currentCompanyId},is_global.eq.true`);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn("ai_interview_questions:", error.message);
@@ -4677,8 +4710,9 @@ async function loadProfessionAliases() {
       return [];
     }
 
-    setAIInterviewQuestions(data || []);
-    return data || [];
+    const rows = data || [];
+    setAIInterviewQuestions(rows);
+    return rows;
   }
 
   async function loadAIInterviewSessions() {
@@ -5616,6 +5650,12 @@ useEffect(() => {
   candidates.length,
   mobilizations.length,
 ]);
+
+useEffect(() => {
+  if (!currentUser || activePage !== "Global Engineering Templates" || !isPlatformOwner) return;
+  setAIInterviewWorkspaceTab("Engineering Templates");
+  Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+}, [activePage, currentUser?.id, isPlatformOwner]);
 
 useEffect(() => {
   if (!currentUser || !currentCompanyId || isCurrentAgencyUser) return;
@@ -10675,10 +10715,13 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function generateAIInterviewTemplateFromJobDescription() {
-    if (!canManageInterviewResults) {
+    if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to generate AI interview templates.");
     }
-    if (!currentCompanyId) return alert("Company ID is missing.");
+    const targetCompanyId = isPlatformOwner
+      ? GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID
+      : currentCompanyId;
+    if (!targetCompanyId) return alert("Company ID is missing.");
 
     const profession = String(aiInterviewGenerationForm.profession || "").trim();
     const jobDescription = String(aiInterviewGenerationForm.job_description || "").trim();
@@ -10706,7 +10749,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         "generate-ai-interview-template",
         {
           body: {
-            company_id: currentCompanyId,
+            company_id: targetCompanyId,
             template_name: templateName,
             profession,
             profession_category: professionCategory,
@@ -10748,7 +10791,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
             updated_at: new Date().toISOString(),
           })
           .eq("id", data.template_id)
-          .eq("company_id", currentCompanyId);
+          .eq("company_id", targetCompanyId);
 
         if (markerError) {
           console.warn("Engineering master marker failed:", markerError.message);
@@ -10772,10 +10815,10 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function generateAllRemainingEngineeringTemplates() {
-    if (!canManageInterviewResults) {
-      return alert("You do not have permission to generate AI interview templates.");
+    if (!isPlatformOwner) {
+      return alert("Only the Platform Owner can generate global engineering templates.");
     }
-    if (!currentCompanyId) return alert("Company ID is missing.");
+    const targetCompanyId = GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID;
     if (engineeringBulkGenerationLoading) return;
 
     const remainingItems = ENGINEERING_AI_TEMPLATE_CATALOG.filter(
@@ -10847,7 +10890,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
             "generate-ai-interview-template",
             {
               body: {
-                company_id: currentCompanyId,
+                company_id: targetCompanyId,
                 template_name: form.template_name,
                 profession: form.profession,
                 profession_category: "Engineering",
@@ -10883,7 +10926,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
                 updated_at: new Date().toISOString(),
               })
               .eq("id", data.template_id)
-              .eq("company_id", currentCompanyId);
+              .eq("company_id", targetCompanyId);
 
             if (markerError) {
               console.warn(`Engineering master marker failed for ${item.profession}:`, markerError.message);
@@ -10977,6 +11020,16 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return Boolean(template?.id) && template?.is_global === true;
   }
 
+  function canManageAIInterviewTemplate(template = {}) {
+    if (!template?.id || isGlobalAIInterviewTemplate(template)) return false;
+    if (isPlatformOwner) return isEngineeringMasterTemplate(template);
+    return canManageInterviewResults && String(template.company_id || "") === String(currentCompanyId || "");
+  }
+
+  function getAIInterviewTemplateCompanyId(template = {}) {
+    return String(template?.company_id || currentCompanyId || "");
+  }
+
   function getEngineeringCatalogItem(profession = "") {
     return ENGINEERING_AI_TEMPLATE_CATALOG.find(
       (item) => normalizeMatchText(item.profession) === normalizeMatchText(profession)
@@ -11056,7 +11109,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function saveAIInterviewQuestionEdits() {
-    if (!canManageInterviewResults) {
+    if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to edit AI interview questions.");
     }
 
@@ -11131,7 +11184,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("id", question.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (questionError) throw questionError;
 
@@ -11150,7 +11203,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("id", question.template_id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (templateError) throw templateError;
 
@@ -11167,7 +11220,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function deleteAIInterviewQuestion(question = {}, template = {}) {
-    if (!canManageInterviewResults) {
+    if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to delete AI interview questions.");
     }
     if (!question?.id || !template?.id) return;
@@ -11189,7 +11242,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         .from("ai_interview_questions")
         .delete()
         .eq("id", question.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (error) throw error;
 
@@ -11216,7 +11269,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: new Date().toISOString(),
         })
         .eq("id", template.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (templateError) throw templateError;
 
@@ -11232,7 +11285,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function approveAndActivateAIInterviewTemplate(template = {}) {
-    if (!canManageInterviewResults) {
+    if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to approve AI interview templates.");
     }
     if (!template?.id) return;
@@ -11262,7 +11315,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         return alert("This VisaFlow global engineering template is already centrally approved and active.");
       }
 
-      const promoteToGlobalLibrary = isEngineeringMasterTemplate(template);
+      const promoteToGlobalLibrary = isPlatformOwner && isEngineeringMasterTemplate(template);
 
       // Questions are promoted first so the full approved master remains complete.
       const { error: questionsError } = await supabase
@@ -11276,7 +11329,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("template_id", template.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (questionsError) throw questionsError;
 
@@ -11298,7 +11351,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("id", template.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (templateError) throw templateError;
 
@@ -11321,7 +11374,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function rejectAIInterviewTemplate(template = {}) {
-    if (!canManageInterviewResults) {
+    if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to reject AI interview templates.");
     }
     if (!template?.id) return;
@@ -11355,7 +11408,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("id", template.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (templateError) throw templateError;
 
@@ -11369,7 +11422,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("template_id", template.id)
-        .eq("company_id", currentCompanyId);
+        .eq("company_id", getAIInterviewTemplateCompanyId(template));
 
       if (questionsError) throw questionsError;
 
@@ -25504,9 +25557,9 @@ Save Authorization
           </>
         )}
 
-        {activePage === "Interviews" && (
+        {["Interviews", "Global Engineering Templates"].includes(activePage) && (
           <>
-            {canScheduleInterviews && (
+            {activePage === "Interviews" && canScheduleInterviews && (
             <FormCard title={interviewEditingId ? "Edit Interview" : "Add Interview"}>
               <div className="form-grid">
                 <Input placeholder="Candidate Name" value={interviewForm.candidate_name} onChange={(v) => updateForm(setInterviewForm, "candidate_name", v)} />
@@ -25524,7 +25577,7 @@ Save Authorization
               <div className="actions-line"><button className="save-btn" onClick={saveInterview}>{interviewEditingId ? "Update Interview" : "Save Interview"}</button><button className="light-btn" onClick={resetInterviewForm}>Clear</button></div>
             </FormCard>
             )}
-            <FormCard title="AI Interview Control - Phase 3A">
+            <FormCard title={isGlobalEngineeringAdminPage ? "Global Engineering Template Administration" : "AI Interview Control - Phase 3A"}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>AI voice interview portal is connected to VisaFlow.</div>
@@ -25534,23 +25587,39 @@ Save Authorization
                 </div>
                 <div className="actions-line" style={{ margin: 0 }}>
                   <button className="save-btn" onClick={() => setAIInterviewWorkspaceTab("Engineering Templates")}>
-                    Engineering Templates
+                    {isGlobalEngineeringAdminPage ? "Global Engineering Templates" : "Engineering Templates"}
                   </button>
-                  <button className="light-btn" onClick={() => setAIInterviewWorkspaceTab("Generate from Job Description")}>
-                    Generate from Job Description
-                  </button>
-                  <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions(), loadAIInterviewAnswers()])}>
+                  {!isGlobalEngineeringAdminPage && (
+                    <button className="light-btn" onClick={() => setAIInterviewWorkspaceTab("Generate from Job Description")}>
+                      Generate from Job Description
+                    </button>
+                  )}
+                  <button className="light-btn" onClick={() => Promise.all(
+                    isGlobalEngineeringAdminPage
+                      ? [loadAIInterviewTemplates(), loadAIInterviewQuestions()]
+                      : [loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions(), loadAIInterviewAnswers()]
+                  )}>
                     Refresh AI Interviews
                   </button>
                 </div>
               </div>
 
               <div className="dashboard-grid" style={{ marginTop: 16 }}>
-                <Stat title="AI Templates" value={aiInterviewTemplates.length} />
+                <Stat title={isGlobalEngineeringAdminPage ? "Engineering Templates" : "AI Templates"} value={aiInterviewTemplates.length} />
                 <Stat title="AI Questions" value={aiInterviewQuestions.length} />
-                <Stat title="AI Sessions" value={aiInterviewSessions.length} />
-                <Stat title="Completed" value={aiInterviewSessions.filter((session) => session.status === "Completed").length} className="passed" />
-                <Stat title="Pending Human Review" value={aiInterviewSessions.filter((session) => session.review_status === "Pending Human Review").length} className="warning" />
+                {isGlobalEngineeringAdminPage ? (
+                  <>
+                    <Stat title="Global & Active" value={aiInterviewTemplates.filter((template) => template.is_global === true && template.is_active === true).length} className="passed" />
+                    <Stat title="Pending Review" value={aiInterviewTemplates.filter((template) => template.approval_status === "Pending Review").length} className="warning" />
+                    <Stat title="Remaining Catalog" value={ENGINEERING_AI_TEMPLATE_CATALOG.filter((item) => !getEngineeringTemplateStatus(item).template).length} />
+                  </>
+                ) : (
+                  <>
+                    <Stat title="AI Sessions" value={aiInterviewSessions.length} />
+                    <Stat title="Completed" value={aiInterviewSessions.filter((session) => session.status === "Completed").length} className="passed" />
+                    <Stat title="Pending Human Review" value={aiInterviewSessions.filter((session) => session.review_status === "Pending Human Review").length} className="warning" />
+                  </>
+                )}
               </div>
 
               {aiInterviewMessage && (
@@ -25568,7 +25637,9 @@ Save Authorization
                     className={aiInterviewWorkspaceTab === tab ? "save-btn" : "light-btn"}
                     onClick={() => setAIInterviewWorkspaceTab(tab)}
                   >
-                    {tab}
+                    {isGlobalEngineeringAdminPage && tab === "Generate from Job Description"
+                      ? "Create Engineering Master"
+                      : tab}
                   </button>
                 ))}
               </div>
@@ -25579,6 +25650,7 @@ Save Authorization
                     <b>VisaFlow Global Engineering Library.</b> Approved engineering master templates are shared with every client company and remain read-only. Non-engineering professions and company-specific engineering roles are generated from the company's actual job description.
                   </div>
 
+                  {isPlatformOwner && (
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", padding: 14, border: "1px solid #dbeafe", borderRadius: 14, background: "#ffffff", marginBottom: 16 }}>
                     <div>
                       <div style={{ fontWeight: 900, color: "#0f172a" }}>Bulk Engineering Template Generator</div>
@@ -25599,14 +25671,15 @@ Save Authorization
                         : "Generate All Remaining Templates"}
                     </button>
                   </div>
+                  )}
 
-                  {engineeringBulkGenerationSummary && (
+                  {isPlatformOwner && engineeringBulkGenerationSummary && (
                     <div style={{ padding: 12, borderRadius: 12, background: engineeringBulkGenerationLoading ? "#fff7ed" : "#f8fafc", color: engineeringBulkGenerationLoading ? "#9a3412" : "#334155", marginBottom: 14, lineHeight: 1.6 }}>
                       {engineeringBulkGenerationSummary}
                     </div>
                   )}
 
-                  {engineeringBulkGenerationProgress.length > 0 && (
+                  {isPlatformOwner && engineeringBulkGenerationProgress.length > 0 && (
                     <div style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 12, marginBottom: 16, background: "#f8fafc" }}>
                       <div style={{ fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Generation Progress</div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 8 }}>
@@ -25661,10 +25734,9 @@ Save Authorization
                           <div className="actions-line" style={{ margin: 0 }}>
                             {status.template ? (
                               <button className="light-btn" onClick={() => openAIInterviewTemplateReview(status.template)}>
-                                Review Existing
+                                {isPlatformOwner ? "Review Existing" : "View Global Template"}
                               </button>
-                            ) : null}
-                            {!status.template && (
+                            ) : isPlatformOwner ? (
                               <button
                                 className="save-btn"
                                 disabled={engineeringBulkGenerationLoading}
@@ -25672,6 +25744,10 @@ Save Authorization
                               >
                                 Prepare Advanced Template
                               </button>
+                            ) : (
+                              <span style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>
+                                Awaiting VisaFlow central approval
+                              </span>
                             )}
                           </div>
                         </div>
@@ -25684,7 +25760,15 @@ Save Authorization
               {aiInterviewWorkspaceTab === "Generate from Job Description" && (
                 <div>
                   <div style={{ padding: 14, borderRadius: 14, background: "#f8fafc", color: "#334155", marginBottom: 16, lineHeight: 1.65 }}>
-                    Paste the company's real job description. The AI will analyze the duties, competencies, technical requirements, safety risks and missing information, then save a bilingual template as <b>Pending Review</b>.
+                    {isGlobalEngineeringAdminPage ? (
+                      <>
+                        Create a missing <b>engineering master template</b> for the VisaFlow global library. The template remains Pending Review until you approve and publish it.
+                      </>
+                    ) : (
+                      <>
+                        Paste the company's real job description. The AI will analyze the duties, competencies, technical requirements, safety risks and missing information, then save a bilingual template as <b>Pending Review</b>.
+                      </>
+                    )}
                   </div>
 
                   <div className="form-grid">
@@ -25834,12 +25918,12 @@ Save Authorization
                           <td><Badge value={template.is_active ? "Active" : "Inactive"} /></td>
                           <td className="table-actions">
                             <button onClick={() => openAIInterviewTemplateReview(template)}>Review</button>
-                            {canManageInterviewResults && !isGlobalAIInterviewTemplate(template) && template.approval_status !== "Approved" && (
+                            {canManageAIInterviewTemplate(template) && template.approval_status !== "Approved" && (
                               <button disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(template)}>
                                 Approve & Activate
                               </button>
                             )}
-                            {canManageInterviewResults && !isGlobalAIInterviewTemplate(template) && template.approval_status !== "Rejected" && (
+                            {canManageAIInterviewTemplate(template) && template.approval_status !== "Rejected" && (
                               <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(template)}>
                                 Reject
                               </button>
@@ -25919,12 +26003,12 @@ Save Authorization
                   )}
 
                   <div className="actions-line" style={{ marginBottom: 16 }}>
-                    {!templateLocked && (
+                    {!templateLocked && canManageAIInterviewTemplate(selectedTemplate) && (
                       <button className="save-btn" disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(selectedTemplate)}>
-                        Approve & Activate
+                        {isPlatformOwner && isEngineeringMasterTemplate(selectedTemplate) ? "Approve & Publish Globally" : "Approve & Activate"}
                       </button>
                     )}
-                    {!globalTemplate && selectedTemplate.approval_status !== "Rejected" && (
+                    {canManageAIInterviewTemplate(selectedTemplate) && selectedTemplate.approval_status !== "Rejected" && (
                       <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(selectedTemplate)}>
                         Reject Template
                       </button>
@@ -25940,7 +26024,7 @@ Save Authorization
                     </button>
                   </div>
 
-                  {editingAIInterviewQuestionId && (
+                  {editingAIInterviewQuestionId && canManageAIInterviewTemplate(selectedTemplate) && (
                     <div style={{ marginBottom: 18, padding: 18, border: "1px solid #bfdbfe", borderRadius: 16, background: "#eff6ff" }}>
                       <h3 style={{ marginBottom: 14 }}>Edit AI Interview Question</h3>
                       <div className="form-grid">
@@ -26039,7 +26123,7 @@ Save Authorization
                               <td>{Number(question.weight || 0)}%</td>
                               <td>{Number(question.maximum_answer_seconds || 0)}s</td>
                               <td className="table-actions">
-                                {!templateLocked ? (
+                                {!templateLocked && canManageAIInterviewTemplate(selectedTemplate) ? (
                                   <>
                                     <button onClick={() => editAIInterviewQuestion(question, selectedTemplate)}>Edit</button>
                                     <button className="danger" onClick={() => deleteAIInterviewQuestion(question, selectedTemplate)}>Delete</button>
@@ -26062,6 +26146,8 @@ Save Authorization
               );
             })()}
 
+            {activePage === "Interviews" && (
+            <>
             <TableCard title="Interview Records">
               <table>
                 <thead>
@@ -26269,6 +26355,8 @@ Save Authorization
                 </FormCard>
               );
             })()}
+            </>
+            )}
           </>
         )}
         
