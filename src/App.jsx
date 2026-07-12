@@ -1092,6 +1092,918 @@ function normalizeAIAgentSettings(row = {}) {
 }
 
 
+const AI_INTERVIEW_AUDIO_BUCKET = "ai-interview-audio";
+
+function getAIInterviewAccessToken() {
+  try {
+    return new URLSearchParams(window.location.search).get("ai_interview") || "";
+  } catch {
+    return "";
+  }
+}
+
+function getRecordingExtension(mimeType = "") {
+  const value = String(mimeType || "").toLowerCase();
+  if (value.includes("mp4") || value.includes("m4a")) return "m4a";
+  if (value.includes("ogg")) return "ogg";
+  if (value.includes("wav")) return "wav";
+  return "webm";
+}
+
+function AIInterviewCandidatePortal({ accessToken }) {
+  const [portalLanguage, setPortalLanguage] = useState(() =>
+    String(navigator.language || "en").toLowerCase().startsWith("ar") ? "AR" : "EN"
+  );
+  const [portalLoading, setPortalLoading] = useState(true);
+  const [portalError, setPortalError] = useState("");
+  const [portalMessage, setPortalMessage] = useState("");
+  const [session, setSession] = useState(null);
+  const [template, setTemplate] = useState(null);
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [microphoneReady, setMicrophoneReady] = useState(false);
+  const [microphoneTesting, setMicrophoneTesting] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [savingAnswer, setSavingAnswer] = useState(false);
+  const [currentAnswerSaved, setCurrentAnswerSaved] = useState(false);
+  const [currentAudioUrl, setCurrentAudioUrl] = useState("");
+
+  const mediaRecorderRef = useRef(null);
+  const microphoneStreamRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null);
+  const recordingStartedAtRef = useRef(null);
+  const interviewStartedAtRef = useRef(null);
+  const questionAskedAtRef = useRef(null);
+
+  const currentQuestion = questions[currentQuestionIndex] || null;
+  const totalQuestions = questions.length || Number(session?.total_questions || 0);
+  const answeredCount = answers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
+  const skippedCount = answers.filter((answer) => answer.answer_status === "Skipped").length;
+  const progressPercent = totalQuestions
+    ? Math.min(100, Math.round(((answeredCount + skippedCount) / totalQuestions) * 100))
+    : 0;
+
+  const tr = (english, arabic) => portalLanguage === "AR" ? arabic : english;
+
+  useEffect(() => {
+    loadCandidateInterviewPortal();
+
+    return () => {
+      if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
+      if (mediaRecorderRef.current?.state === "recording") {
+        try { mediaRecorderRef.current.stop(); } catch { /* no-op */ }
+      }
+      microphoneStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+      window.speechSynthesis?.cancel?.();
+    };
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!currentQuestion || !session?.id) return;
+
+    questionAskedAtRef.current = new Date().toISOString();
+    const savedAnswer = answers.find(
+      (answer) => Number(answer.question_order || 0) === Number(currentQuestion.question_order || 0)
+    );
+
+    setCurrentAnswerSaved(Boolean(savedAnswer && ["Answered", "Analyzed", "Skipped"].includes(savedAnswer.answer_status)));
+    setCurrentAudioUrl("");
+
+    if (savedAnswer?.audio_storage_path) {
+      createCandidateSignedAudioUrl(savedAnswer.audio_storage_path).then(setCurrentAudioUrl).catch(() => setCurrentAudioUrl(""));
+    }
+  }, [currentQuestionIndex, currentQuestion?.id, answers.length, session?.id]);
+
+  async function loadCandidateInterviewPortal() {
+    if (!accessToken) {
+      setPortalError("The AI interview link is missing or invalid.");
+      setPortalLoading(false);
+      return;
+    }
+
+    setPortalLoading(true);
+    setPortalError("");
+
+    try {
+      const { data: sessionRow, error: sessionError } = await supabase
+        .from("ai_interview_sessions")
+        .select("*")
+        .eq("access_token", accessToken)
+        .maybeSingle();
+
+      if (sessionError) throw sessionError;
+      if (!sessionRow) throw new Error("This AI interview session was not found.");
+
+      const expiryDate = sessionRow.expires_at ? new Date(sessionRow.expires_at) : null;
+      if (expiryDate && expiryDate < new Date() && !["Completed", "Cancelled"].includes(sessionRow.status)) {
+        await supabase
+          .from("ai_interview_sessions")
+          .update({ status: "Expired", updated_at: new Date().toISOString() })
+          .eq("id", sessionRow.id);
+        sessionRow.status = "Expired";
+      }
+
+      const [templateResult, questionsResult, answersResult] = await Promise.all([
+        supabase
+          .from("ai_interview_templates")
+          .select("*")
+          .eq("id", sessionRow.template_id)
+          .maybeSingle(),
+        supabase
+          .from("ai_interview_questions")
+          .select("*")
+          .eq("template_id", sessionRow.template_id)
+          .eq("is_active", true)
+          .order("question_order", { ascending: true }),
+        supabase
+          .from("ai_interview_answers")
+          .select("*")
+          .eq("session_id", sessionRow.id)
+          .order("question_order", { ascending: true }),
+      ]);
+
+      if (templateResult.error) throw templateResult.error;
+      if (questionsResult.error) throw questionsResult.error;
+      if (answersResult.error) throw answersResult.error;
+
+      const questionRows = questionsResult.data || [];
+      const answerRows = answersResult.data || [];
+      let nextSession = sessionRow;
+
+      if (["Created", "Invitation Pending", "Invited"].includes(sessionRow.status)) {
+        const now = new Date().toISOString();
+        const { data: openedSession, error: openError } = await supabase
+          .from("ai_interview_sessions")
+          .update({
+            status: sessionRow.consent_required === false || sessionRow.consent_accepted ? "Ready" : "Opened",
+            first_opened_at: sessionRow.first_opened_at || now,
+            updated_at: now,
+          })
+          .eq("id", sessionRow.id)
+          .select("*")
+          .single();
+
+        if (!openError && openedSession) nextSession = openedSession;
+      }
+
+      const completedOrders = new Set(
+        answerRows
+          .filter((answer) => ["Answered", "Analyzed", "Skipped"].includes(answer.answer_status))
+          .map((answer) => Number(answer.question_order || 0))
+      );
+      const firstUnansweredIndex = questionRows.findIndex(
+        (question) => !completedOrders.has(Number(question.question_order || 0))
+      );
+
+      setSession(nextSession);
+      setTemplate(templateResult.data || null);
+      setQuestions(questionRows);
+      setAnswers(answerRows);
+      setConsentChecked(Boolean(nextSession.consent_accepted));
+      setMicrophoneReady(Boolean(nextSession.microphone_test_passed));
+      setCurrentQuestionIndex(firstUnansweredIndex >= 0 ? firstUnansweredIndex : Math.max(questionRows.length - 1, 0));
+      interviewStartedAtRef.current = nextSession.started_at ? new Date(nextSession.started_at) : null;
+    } catch (error) {
+      console.warn("AI interview portal load failed", error?.message || error);
+      setPortalError(error?.message || "The AI interview portal could not be loaded.");
+    } finally {
+      setPortalLoading(false);
+    }
+  }
+
+  async function createCandidateSignedAudioUrl(path) {
+    if (!path) return "";
+    const { data, error } = await supabase.storage
+      .from(AI_INTERVIEW_AUDIO_BUCKET)
+      .createSignedUrl(path, 60 * 60);
+    if (error) throw error;
+    return data?.signedUrl || "";
+  }
+
+  async function acceptConsent() {
+    if (!consentChecked) {
+      setPortalMessage(tr("Please accept the consent statement first.", "يرجى الموافقة على بيان التسجيل والتحليل أولًا."));
+      return;
+    }
+
+    setPortalMessage("");
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("ai_interview_sessions")
+      .update({
+        consent_accepted: true,
+        consent_accepted_at: now,
+        consent_user_agent: navigator.userAgent || "",
+        status: microphoneReady ? "Ready" : "Consent Pending",
+        updated_at: now,
+      })
+      .eq("id", session.id)
+      .eq("access_token", accessToken)
+      .select("*")
+      .single();
+
+    if (error) {
+      setPortalMessage(error.message);
+      return;
+    }
+
+    setSession(data);
+    setPortalMessage(tr("Consent saved successfully.", "تم حفظ الموافقة بنجاح."));
+  }
+
+  async function ensureMicrophoneStream() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error(tr(
+        "This browser does not support microphone recording. Please use the latest Chrome, Edge, or Safari.",
+        "هذا المتصفح لا يدعم تسجيل الميكروفون. يرجى استخدام أحدث إصدار من Chrome أو Edge أو Safari."
+      ));
+    }
+
+    const existingStream = microphoneStreamRef.current;
+    if (existingStream?.getAudioTracks?.().some((track) => track.readyState === "live")) {
+      return existingStream;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    microphoneStreamRef.current = stream;
+    return stream;
+  }
+
+  async function testMicrophone() {
+    setMicrophoneTesting(true);
+    setPortalMessage("");
+
+    try {
+      await ensureMicrophoneStream();
+      const now = new Date().toISOString();
+      const nextStatus = session.consent_required !== false && !session.consent_accepted
+        ? "Consent Pending"
+        : "Ready";
+
+      const { data, error } = await supabase
+        .from("ai_interview_sessions")
+        .update({
+          microphone_test_passed: true,
+          status: nextStatus,
+          updated_at: now,
+        })
+        .eq("id", session.id)
+        .eq("access_token", accessToken)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+      setMicrophoneReady(true);
+      setSession(data);
+      setPortalMessage(tr("Microphone access is working.", "تم التحقق من عمل الميكروفون."));
+    } catch (error) {
+      setPortalMessage(error?.message || tr("Microphone test failed.", "فشل اختبار الميكروفون."));
+    } finally {
+      setMicrophoneTesting(false);
+    }
+  }
+
+  async function startCandidateInterview() {
+    if (session.consent_required !== false && !session.consent_accepted) {
+      setPortalMessage(tr("Consent is required before starting.", "الموافقة مطلوبة قبل بدء المقابلة."));
+      return;
+    }
+    if (template?.require_microphone_test !== false && !microphoneReady) {
+      setPortalMessage(tr("Please test your microphone before starting.", "يرجى اختبار الميكروفون قبل البدء."));
+      return;
+    }
+
+    try {
+      await ensureMicrophoneStream();
+      const now = new Date().toISOString();
+      const firstQuestionOrder = Number(currentQuestion?.question_order || 1);
+      const { data, error } = await supabase
+        .from("ai_interview_sessions")
+        .update({
+          status: "In Progress",
+          started_at: session.started_at || now,
+          current_question_order: firstQuestionOrder,
+          total_questions: questions.length,
+          updated_at: now,
+        })
+        .eq("id", session.id)
+        .eq("access_token", accessToken)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+      interviewStartedAtRef.current = new Date(data.started_at || now);
+      setSession(data);
+      setPortalMessage("");
+    } catch (error) {
+      setPortalMessage(error?.message || tr("The interview could not be started.", "تعذر بدء المقابلة."));
+    }
+  }
+
+  function speakCurrentQuestion() {
+    if (!currentQuestion || !window.speechSynthesis) {
+      setPortalMessage(tr("Audio question reading is not supported in this browser.", "قراءة السؤال صوتيًا غير مدعومة في هذا المتصفح."));
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    const useArabic = portalLanguage === "AR";
+    const text = useArabic
+      ? (currentQuestion.question_text_ar || currentQuestion.question_text || currentQuestion.question_text_en)
+      : (currentQuestion.question_text_en || currentQuestion.question_text || currentQuestion.question_text_ar);
+    const utterance = new SpeechSynthesisUtterance(text || "");
+    utterance.lang = useArabic ? "ar-SA" : "en-US";
+    utterance.rate = 0.92;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function getSupportedRecordingMimeType() {
+    const options = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+    ];
+    return options.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+  }
+
+  async function startRecordingAnswer() {
+    if (!currentQuestion || isRecording || savingAnswer) return;
+    if (!window.MediaRecorder) {
+      setPortalMessage(tr("Audio recording is not supported in this browser.", "تسجيل الصوت غير مدعوم في هذا المتصفح."));
+      return;
+    }
+
+    try {
+      const stream = await ensureMicrophoneStream();
+      const mimeType = getSupportedRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      recordingChunksRef.current = [];
+      recordingStartedAtRef.current = new Date();
+      questionAskedAtRef.current = questionAskedAtRef.current || new Date().toISOString();
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size > 0) recordingChunksRef.current.push(event.data);
+      };
+
+      recorder.onerror = (event) => {
+        setPortalMessage(event?.error?.message || tr("Recording failed.", "فشل التسجيل."));
+        setIsRecording(false);
+      };
+
+      recorder.onstop = async () => {
+        if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+        setIsRecording(false);
+        await saveRecordedAnswer(recorder, currentQuestion);
+      };
+
+      recorder.start(500);
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      setCurrentAnswerSaved(false);
+      setCurrentAudioUrl("");
+      setPortalMessage("");
+
+      const maximumSeconds = Math.max(10, Number(currentQuestion.maximum_answer_seconds || 120));
+      recordingTimerRef.current = window.setInterval(() => {
+        const elapsed = Math.max(0, Math.floor((Date.now() - recordingStartedAtRef.current.getTime()) / 1000));
+        setRecordingSeconds(elapsed);
+        if (elapsed >= maximumSeconds && recorder.state === "recording") {
+          window.clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+          recorder.stop();
+        }
+      }, 500);
+    } catch (error) {
+      setPortalMessage(error?.message || tr("Microphone access was denied.", "تم رفض الوصول إلى الميكروفون."));
+      setIsRecording(false);
+    }
+  }
+
+  function stopRecordingAnswer() {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") return;
+    recorder.stop();
+  }
+
+  async function saveRecordedAnswer(recorder, question) {
+    setSavingAnswer(true);
+    setPortalMessage(tr("Saving your answer securely...", "جاري حفظ إجابتك بشكل آمن..."));
+
+    try {
+      const mimeType = recorder.mimeType || "audio/webm";
+      const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+      if (!blob.size) throw new Error(tr("No audio was recorded. Please try again.", "لم يتم تسجيل صوت. يرجى المحاولة مرة أخرى."));
+
+      const durationSeconds = Math.max(
+        1,
+        Math.round((Date.now() - (recordingStartedAtRef.current?.getTime?.() || Date.now())) / 1000)
+      );
+      const extension = getRecordingExtension(mimeType);
+      const randomPart = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const storagePath = `${session.company_id}/${session.id}/question-${question.question_order}-${randomPart}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(AI_INTERVIEW_AUDIO_BUCKET)
+        .upload(storagePath, blob, {
+          contentType: mimeType,
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) throw new Error(`Audio upload failed: ${uploadError.message}`);
+
+      await saveCandidateAnswerRecord({
+        question,
+        audioStoragePath: storagePath,
+        audioDurationSeconds: durationSeconds,
+        answerStatus: "Answered",
+        transcriptionStatus: "Pending",
+      });
+
+      const signedUrl = await createCandidateSignedAudioUrl(storagePath).catch(() => "");
+      setCurrentAudioUrl(signedUrl);
+      setCurrentAnswerSaved(true);
+      setPortalMessage(tr("Your answer was saved successfully.", "تم حفظ إجابتك بنجاح."));
+    } catch (error) {
+      console.warn("AI interview answer save failed", error?.message || error);
+      setPortalMessage(error?.message || tr("Your answer could not be saved.", "تعذر حفظ إجابتك."));
+      setCurrentAnswerSaved(false);
+    } finally {
+      recordingChunksRef.current = [];
+      setSavingAnswer(false);
+    }
+  }
+
+  async function saveCandidateAnswerRecord({
+    question,
+    audioStoragePath = "",
+    audioDurationSeconds = 0,
+    answerStatus = "Answered",
+    transcriptionStatus = "Pending",
+  }) {
+    const now = new Date().toISOString();
+    const questionOrder = Number(question.question_order || currentQuestionIndex + 1);
+    const payload = {
+      company_id: session.company_id,
+      session_id: session.id,
+      question_id: question.id || null,
+      question_order: questionOrder,
+      question_text_snapshot: question.question_text || question.question_text_en || question.question_text_ar || "Question",
+      question_type: question.question_type || "Open Question",
+      competency: question.competency || "General",
+      asked_at: questionAskedAtRef.current || now,
+      answer_started_at: recordingStartedAtRef.current?.toISOString?.() || now,
+      answer_completed_at: now,
+      answer_text: "",
+      answer_language: portalLanguage === "AR" ? "Arabic" : "English",
+      audio_storage_path: audioStoragePath,
+      audio_duration_seconds: Number(audioDurationSeconds || 0),
+      transcription_status: transcriptionStatus,
+      answer_status: answerStatus,
+      updated_at: now,
+    };
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from("ai_interview_answers")
+      .select("id")
+      .eq("session_id", session.id)
+      .eq("question_order", questionOrder)
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    let saveResult;
+    if (existingRows?.[0]?.id) {
+      saveResult = await supabase
+        .from("ai_interview_answers")
+        .update(payload)
+        .eq("id", existingRows[0].id)
+        .select("*")
+        .single();
+    } else {
+      saveResult = await supabase
+        .from("ai_interview_answers")
+        .insert([payload])
+        .select("*")
+        .single();
+    }
+
+    if (saveResult.error) throw saveResult.error;
+    await refreshCandidateInterviewProgress(questionOrder);
+    return saveResult.data;
+  }
+
+  async function refreshCandidateInterviewProgress(currentOrder = 0) {
+    const { data: answerRows, error: answersError } = await supabase
+      .from("ai_interview_answers")
+      .select("*")
+      .eq("session_id", session.id)
+      .order("question_order", { ascending: true });
+
+    if (answersError) throw answersError;
+
+    const nextAnswers = answerRows || [];
+    const nextAnsweredCount = nextAnswers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
+    const nextSkippedCount = nextAnswers.filter((answer) => answer.answer_status === "Skipped").length;
+    const now = new Date().toISOString();
+
+    const { data: sessionRow, error: sessionError } = await supabase
+      .from("ai_interview_sessions")
+      .update({
+        status: "In Progress",
+        current_question_order: Number(currentOrder || 0),
+        total_questions: questions.length,
+        answered_questions: nextAnsweredCount,
+        skipped_questions: nextSkippedCount,
+        updated_at: now,
+      })
+      .eq("id", session.id)
+      .eq("access_token", accessToken)
+      .select("*")
+      .single();
+
+    if (sessionError) throw sessionError;
+    setAnswers(nextAnswers);
+    setSession(sessionRow);
+  }
+
+  async function skipCurrentQuestion() {
+    if (!currentQuestion || isRecording || savingAnswer) return;
+    const confirmed = window.confirm(tr(
+      "Skip this question? The company will see that it was skipped.",
+      "هل تريد تخطي هذا السؤال؟ ستظهر للشركة ملاحظة بأنه تم تخطيه."
+    ));
+    if (!confirmed) return;
+
+    setSavingAnswer(true);
+    setPortalMessage(tr("Saving skipped question...", "جاري حفظ السؤال المتخطى..."));
+
+    try {
+      await saveCandidateAnswerRecord({
+        question: currentQuestion,
+        answerStatus: "Skipped",
+        transcriptionStatus: "Not Required",
+      });
+      setCurrentAnswerSaved(true);
+      setPortalMessage(tr("Question skipped.", "تم تخطي السؤال."));
+      await moveToNextQuestion();
+    } catch (error) {
+      setPortalMessage(error?.message || tr("The question could not be skipped.", "تعذر تخطي السؤال."));
+    } finally {
+      setSavingAnswer(false);
+    }
+  }
+
+  async function moveToNextQuestion() {
+    if (currentQuestionIndex >= questions.length - 1) {
+      await completeCandidateInterview();
+      return;
+    }
+
+    const nextIndex = currentQuestionIndex + 1;
+    const nextOrder = Number(questions[nextIndex]?.question_order || nextIndex + 1);
+    setCurrentQuestionIndex(nextIndex);
+    setCurrentAnswerSaved(false);
+    setCurrentAudioUrl("");
+    setRecordingSeconds(0);
+    questionAskedAtRef.current = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from("ai_interview_sessions")
+      .update({ current_question_order: nextOrder, updated_at: new Date().toISOString() })
+      .eq("id", session.id)
+      .eq("access_token", accessToken)
+      .select("*")
+      .single();
+
+    if (!error && data) setSession(data);
+  }
+
+  async function completeCandidateInterview() {
+    if (isRecording || savingAnswer) return;
+
+    setSavingAnswer(true);
+    setPortalMessage(tr("Completing your interview...", "جاري إنهاء المقابلة..."));
+
+    try {
+      const { data: answerRows, error: answerError } = await supabase
+        .from("ai_interview_answers")
+        .select("*")
+        .eq("session_id", session.id)
+        .order("question_order", { ascending: true });
+      if (answerError) throw answerError;
+
+      const finalAnswers = answerRows || [];
+      const finalAnswered = finalAnswers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
+      const finalSkipped = finalAnswers.filter((answer) => answer.answer_status === "Skipped").length;
+      const now = new Date();
+      const startedAt = interviewStartedAtRef.current || (session.started_at ? new Date(session.started_at) : now);
+      const durationSeconds = Math.max(0, Math.round((now - startedAt) / 1000));
+
+      const { data, error } = await supabase
+        .from("ai_interview_sessions")
+        .update({
+          status: "Completed",
+          completed_at: now.toISOString(),
+          current_question_order: questions.length,
+          total_questions: questions.length,
+          answered_questions: finalAnswered,
+          skipped_questions: finalSkipped,
+          interview_duration_seconds: durationSeconds,
+          review_status: "Pending Human Review",
+          ai_recommendation: "Pending Analysis",
+          updated_at: now.toISOString(),
+        })
+        .eq("id", session.id)
+        .eq("access_token", accessToken)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+      setAnswers(finalAnswers);
+      setSession(data);
+      setPortalMessage("");
+      microphoneStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+    } catch (error) {
+      setPortalMessage(error?.message || tr("The interview could not be completed.", "تعذر إنهاء المقابلة."));
+    } finally {
+      setSavingAnswer(false);
+    }
+  }
+
+  function renderQuestionText() {
+    if (!currentQuestion) return null;
+    const arabic = currentQuestion.question_text_ar || "";
+    const english = currentQuestion.question_text_en || currentQuestion.question_text || "";
+    const bilingual = String(session?.language || template?.language || "").toLowerCase() === "bilingual";
+
+    return (
+      <div className="ai-candidate-question-copy">
+        {(portalLanguage === "AR" || bilingual) && arabic && <div className="ai-question-ar" dir="rtl">{arabic}</div>}
+        {(portalLanguage === "EN" || bilingual || !arabic) && english && <div className="ai-question-en" dir="ltr">{english}</div>}
+      </div>
+    );
+  }
+
+  if (portalLoading) {
+    return (
+      <main className="ai-candidate-shell">
+        <div className="ai-candidate-loading-card">
+          <div className="ai-candidate-loader" />
+          <h2>VisaFlow AI Interview</h2>
+          <p>{tr("Loading your secure interview...", "جاري تحميل المقابلة الآمنة...")}</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (portalError || !session) {
+    return (
+      <main className="ai-candidate-shell">
+        <div className="ai-candidate-status-card ai-candidate-error-card">
+          <div className="ai-candidate-brand-mark">VF</div>
+          <h1>{tr("Interview link unavailable", "رابط المقابلة غير متاح")}</h1>
+          <p>{portalError || tr("The link is invalid.", "الرابط غير صالح.")}</p>
+        </div>
+      </main>
+    );
+  }
+
+  const lockedStatus = ["Cancelled", "Expired", "Failed"].includes(session.status);
+  const completed = session.status === "Completed";
+  const inProgress = session.status === "In Progress";
+  const consentRequired = template?.require_consent !== false && session.consent_required !== false;
+  const consentComplete = !consentRequired || session.consent_accepted;
+  const microphoneRequired = template?.require_microphone_test !== false;
+  const microphoneComplete = !microphoneRequired || microphoneReady;
+
+  return (
+    <main className="ai-candidate-shell" dir={portalLanguage === "AR" ? "rtl" : "ltr"}>
+      <header className="ai-candidate-header">
+        <div className="ai-candidate-brand">
+          <div className="ai-candidate-brand-mark">VF</div>
+          <div>
+            <strong>VisaFlow KSA</strong>
+            <span>{tr("AI Screening Interview", "المقابلة الأولية بالذكاء الاصطناعي")}</span>
+          </div>
+        </div>
+        <div className="ai-candidate-language-switch" dir="ltr">
+          <button className={portalLanguage === "EN" ? "active" : ""} onClick={() => setPortalLanguage("EN")}>EN</button>
+          <button className={portalLanguage === "AR" ? "active" : ""} onClick={() => setPortalLanguage("AR")}>AR</button>
+        </div>
+      </header>
+
+      <section className="ai-candidate-container">
+        <div className="ai-candidate-identity-card">
+          <div>
+            <span>{tr("Candidate", "المرشح")}</span>
+            <strong>{session.candidate_name || "Candidate"}</strong>
+          </div>
+          <div>
+            <span>{tr("Position", "الوظيفة")}</span>
+            <strong>{session.profession || "-"}</strong>
+          </div>
+          <div>
+            <span>{tr("Request", "رقم الطلب")}</span>
+            <strong>{session.request_no || "-"}</strong>
+          </div>
+          <div>
+            <span>{tr("Duration", "المدة")}</span>
+            <strong>{template?.duration_minutes || 15} {tr("minutes", "دقيقة")}</strong>
+          </div>
+        </div>
+
+        {portalMessage && <div className="ai-candidate-message">{portalMessage}</div>}
+
+        {lockedStatus && (
+          <div className="ai-candidate-status-card ai-candidate-error-card">
+            <div className="ai-status-icon">!</div>
+            <h1>{tr("This interview is not available", "هذه المقابلة غير متاحة")}</h1>
+            <p>{tr(`Session status: ${session.status}`, `حالة الجلسة: ${session.status}`)}</p>
+          </div>
+        )}
+
+        {completed && (
+          <div className="ai-candidate-status-card ai-candidate-complete-card">
+            <div className="ai-status-icon">✓</div>
+            <h1>{tr("Interview completed", "تم إكمال المقابلة")}</h1>
+            <p>{tr(
+              "Thank you. Your answers were submitted securely and will be reviewed by the recruitment team. The final decision remains with the company.",
+              "شكرًا لك. تم إرسال إجاباتك بشكل آمن، وسيقوم فريق التوظيف بمراجعتها. القرار النهائي يعود للشركة."
+            )}</p>
+            <div className="ai-candidate-complete-summary">
+              <span>{tr("Answered", "تمت الإجابة")}: <b>{session.answered_questions || answeredCount}</b></span>
+              <span>{tr("Skipped", "تم التخطي")}: <b>{session.skipped_questions || skippedCount}</b></span>
+              <span>{tr("Total", "الإجمالي")}: <b>{session.total_questions || totalQuestions}</b></span>
+            </div>
+          </div>
+        )}
+
+        {!lockedStatus && !completed && !inProgress && (
+          <div className="ai-candidate-start-grid">
+            <section className="ai-candidate-main-card">
+              <div className="ai-candidate-card-kicker">{tr("Before you begin", "قبل البدء")}</div>
+              <h1>{template?.template_name || tr("AI Voice Interview", "المقابلة الصوتية الذكية")}</h1>
+              <p className="ai-candidate-lead">
+                {template?.candidate_instructions || tr(
+                  "Use a quiet place, allow microphone access, and answer every question clearly.",
+                  "استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون، وأجب عن كل سؤال بوضوح."
+                )}
+              </p>
+
+              <div className="ai-candidate-steps">
+                <div className={consentComplete ? "done" : "active"}><span>1</span><b>{tr("Consent", "الموافقة")}</b></div>
+                <div className={microphoneComplete ? "done" : consentComplete ? "active" : ""}><span>2</span><b>{tr("Microphone", "الميكروفون")}</b></div>
+                <div className={consentComplete && microphoneComplete ? "active" : ""}><span>3</span><b>{tr("Start", "البدء")}</b></div>
+              </div>
+
+              {consentRequired && !session.consent_accepted && (
+                <div className="ai-candidate-consent-box">
+                  <h3>{tr("Recording and AI analysis consent", "الموافقة على التسجيل والتحليل بالذكاء الاصطناعي")}</h3>
+                  <p>{template?.consent_text || tr(
+                    "I understand that this interview may be recorded, transcribed and analyzed for recruitment evaluation. The final decision remains with the company.",
+                    "أفهم أن هذه المقابلة قد تُسجل وتُفرغ نصيًا وتُحلل لأغراض تقييم التوظيف، وأن القرار النهائي يعود للشركة."
+                  )}</p>
+                  <label className="ai-candidate-checkbox-row">
+                    <input type="checkbox" checked={consentChecked} onChange={(event) => setConsentChecked(event.target.checked)} />
+                    <span>{tr("I have read and agree.", "قرأت البيان وأوافق عليه.")}</span>
+                  </label>
+                  <button className="ai-candidate-primary" onClick={acceptConsent}>{tr("Accept and continue", "الموافقة والمتابعة")}</button>
+                </div>
+              )}
+
+              {consentComplete && (
+                <div className="ai-candidate-microphone-box">
+                  <h3>{tr("Microphone test", "اختبار الميكروفون")}</h3>
+                  <p>{tr(
+                    "The browser will request microphone permission. VisaFlow records audio only when you press Start recording.",
+                    "سيطلب المتصفح الإذن باستخدام الميكروفون. لا يبدأ VisaFlow التسجيل إلا عند الضغط على بدء التسجيل."
+                  )}</p>
+                  <button className={microphoneReady ? "ai-candidate-success" : "ai-candidate-secondary"} disabled={microphoneTesting} onClick={testMicrophone}>
+                    {microphoneTesting
+                      ? tr("Testing...", "جاري الاختبار...")
+                      : microphoneReady
+                        ? tr("✓ Microphone ready", "✓ الميكروفون جاهز")
+                        : tr("Test microphone", "اختبار الميكروفون")}
+                  </button>
+                </div>
+              )}
+
+              {consentComplete && microphoneComplete && (
+                <button className="ai-candidate-primary ai-candidate-start-button" onClick={startCandidateInterview}>
+                  {tr("Start AI interview", "بدء المقابلة الذكية")}
+                </button>
+              )}
+            </section>
+
+            <aside className="ai-candidate-side-card">
+              <h3>{tr("Interview guidance", "إرشادات المقابلة")}</h3>
+              <ul>
+                <li>{tr("Choose a quiet place with a stable internet connection.", "اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت.")}</li>
+                <li>{tr("Speak clearly and provide job-related examples.", "تحدث بوضوح واذكر أمثلة مرتبطة بالعمل.")}</li>
+                <li>{tr("Do not refresh or close the page while recording.", "لا تحدث الصفحة أو تغلقها أثناء التسجيل.")}</li>
+                <li>{tr("The company makes the final recruitment decision.", "الشركة هي صاحبة القرار النهائي في التوظيف.")}</li>
+              </ul>
+            </aside>
+          </div>
+        )}
+
+        {!lockedStatus && !completed && inProgress && currentQuestion && (
+          <section className="ai-candidate-interview-card">
+            <div className="ai-candidate-progress-row">
+              <div>
+                <span>{tr("Question", "السؤال")} {currentQuestionIndex + 1} / {questions.length}</span>
+                <strong>{currentQuestion.competency || currentQuestion.question_type || tr("General", "عام")}</strong>
+              </div>
+              <div className="ai-candidate-progress-track"><span style={{ width: `${Math.max(progressPercent, Math.round((currentQuestionIndex / Math.max(questions.length, 1)) * 100))}%` }} /></div>
+            </div>
+
+            <div className="ai-candidate-question-card">
+              <div className="ai-candidate-question-topline">
+                <span>{currentQuestion.question_type || "Question"}</span>
+                <button className="ai-candidate-link-button" onClick={speakCurrentQuestion}>🔊 {tr("Read question", "قراءة السؤال")}</button>
+              </div>
+              {renderQuestionText()}
+              <div className="ai-candidate-answer-limit">
+                {tr("Maximum answer time", "الحد الأقصى للإجابة")}: {currentQuestion.maximum_answer_seconds || 120} {tr("seconds", "ثانية")}
+              </div>
+            </div>
+
+            <div className={`ai-candidate-recorder ${isRecording ? "recording" : ""}`}>
+              <div className="ai-candidate-recorder-icon">{isRecording ? "●" : "🎙"}</div>
+              <div>
+                <strong>{isRecording
+                  ? tr("Recording your answer", "جاري تسجيل إجابتك")
+                  : currentAnswerSaved
+                    ? tr("Answer saved", "تم حفظ الإجابة")
+                    : tr("Ready to record", "جاهز للتسجيل")}</strong>
+                <span>{isRecording
+                  ? `${recordingSeconds}s / ${currentQuestion.maximum_answer_seconds || 120}s`
+                  : tr("Press Start recording when you are ready.", "اضغط بدء التسجيل عندما تكون جاهزًا.")}</span>
+              </div>
+            </div>
+
+            {currentAudioUrl && (
+              <div className="ai-candidate-audio-preview">
+                <span>{tr("Your saved answer", "إجابتك المحفوظة")}</span>
+                <audio controls src={currentAudioUrl} />
+              </div>
+            )}
+
+            <div className="ai-candidate-action-row">
+              {!isRecording && !currentAnswerSaved && (
+                <button className="ai-candidate-primary" disabled={savingAnswer} onClick={startRecordingAnswer}>
+                  🎙 {tr("Start recording", "بدء التسجيل")}
+                </button>
+              )}
+              {isRecording && (
+                <button className="ai-candidate-stop-button" onClick={stopRecordingAnswer}>
+                  ■ {tr("Stop and save", "إيقاف وحفظ")}
+                </button>
+              )}
+              {!isRecording && currentAnswerSaved && (
+                <button className="ai-candidate-primary" disabled={savingAnswer} onClick={moveToNextQuestion}>
+                  {currentQuestionIndex >= questions.length - 1
+                    ? tr("Finish interview", "إنهاء المقابلة")
+                    : tr("Next question", "السؤال التالي")}
+                </button>
+              )}
+              {!isRecording && !currentAnswerSaved && (
+                <button className="ai-candidate-secondary" disabled={savingAnswer} onClick={skipCurrentQuestion}>
+                  {tr("Skip question", "تخطي السؤال")}
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+      </section>
+
+      <footer className="ai-candidate-footer">
+        <span>VisaFlow KSA</span>
+        <span>{tr("Secure recruitment interview portal", "بوابة آمنة لمقابلات التوظيف")}</span>
+      </footer>
+    </main>
+  );
+}
+
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [loading, setLoading] = useState(false);
@@ -1261,6 +2173,7 @@ const [interviews, setInterviews] = useState([]);
 const [aiInterviewTemplates, setAIInterviewTemplates] = useState([]);
 const [aiInterviewQuestions, setAIInterviewQuestions] = useState([]);
 const [aiInterviewSessions, setAIInterviewSessions] = useState([]);
+const [aiInterviewAnswers, setAIInterviewAnswers] = useState([]);
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
 const [selectedAIInterviewSessionId, setSelectedAIInterviewSessionId] = useState("");
@@ -3033,6 +3946,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadAIInterviewTemplates(),
       loadAIInterviewQuestions(),
       loadAIInterviewSessions(),
+      loadAIInterviewAnswers(),
       loadUsers(),
       loadCompanies(),
       loadCompanyEmailSettings(),
@@ -3601,6 +4515,29 @@ async function loadProfessionAliases() {
     }
 
     setAIInterviewSessions(data || []);
+    return data || [];
+  }
+
+  async function loadAIInterviewAnswers() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewAnswers([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_answers")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("ai_interview_answers:", error.message);
+      setAIInterviewAnswers([]);
+      return [];
+    }
+
+    setAIInterviewAnswers(data || []);
     return data || [];
   }
   const loadMobilizations = () => loadTable("mobilizations", setMobilizations);
@@ -9758,10 +10695,41 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
     try {
       await navigator.clipboard.writeText(reference);
-      alert("AI interview reference copied. The public candidate portal will be activated in the next implementation step.");
+
+      if (["Created", "Invitation Pending"].includes(session.status)) {
+        const now = new Date().toISOString();
+        await supabase
+          .from("ai_interview_sessions")
+          .update({ status: "Invited", invitation_sent_at: session.invitation_sent_at || now, updated_at: now })
+          .eq("id", session.id)
+          .eq("company_id", currentCompanyId);
+        await loadAIInterviewSessions();
+      }
+
+      alert("Candidate interview link copied.");
     } catch {
-      window.prompt("Copy AI interview reference:", reference);
+      window.prompt("Copy candidate interview link:", reference);
     }
+  }
+
+  function openAIInterviewPortal(session = {}) {
+    const reference = session.invitation_url || (session.access_token
+      ? `${window.location.origin}${window.location.pathname}?ai_interview=${session.access_token}`
+      : "");
+    if (!reference) return alert("Candidate interview link is not available.");
+    window.open(reference, "_blank", "noopener,noreferrer");
+  }
+
+  async function openAIInterviewAudio(answer = {}) {
+    if (!answer.audio_storage_path) return alert("No audio recording is available for this answer.");
+
+    const { data, error } = await supabase.storage
+      .from(AI_INTERVIEW_AUDIO_BUCKET)
+      .createSignedUrl(answer.audio_storage_path, 60 * 60);
+
+    if (error) return alert(`Audio playback failed: ${error.message}`);
+    if (!data?.signedUrl) return alert("Audio link could not be created.");
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
   function resetInterviewForm() {
@@ -19785,6 +20753,11 @@ function exportCurrentPage() {
   return alert("Export is available for lists and reports pages");
 }
 
+const aiInterviewAccessToken = getAIInterviewAccessToken();
+if (aiInterviewAccessToken) {
+  return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
+}
+
 if (!currentUser) {
   const showMicrosoftSso = false; // Feature flag: enable only after real Microsoft SSO implementation.
 
@@ -23616,19 +24589,19 @@ Save Authorization
               <div className="actions-line"><button className="save-btn" onClick={saveInterview}>{interviewEditingId ? "Update Interview" : "Save Interview"}</button><button className="light-btn" onClick={resetInterviewForm}>Clear</button></div>
             </FormCard>
             )}
-            <FormCard title="AI Interview Control - Phase 1">
+            <FormCard title="AI Interview Control - Phase 2">
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>AI voice interview foundation is connected to VisaFlow.</div>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>AI voice interview portal is connected to VisaFlow.</div>
                   <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
-                    Templates, questions and candidate sessions are now managed inside the Interviews module. The public candidate voice portal and AI analysis engine will be connected in the next step.
+                    Templates, questions, candidate links, consent, microphone testing and recorded answers are now connected. AI transcription and scoring will be connected in the next phase.
                   </div>
                 </div>
                 <div className="actions-line" style={{ margin: 0 }}>
                   <button className="save-btn" disabled={aiInterviewLoading} onClick={() => seedDefaultAIInterviewTemplate()}>
                     {aiInterviewLoading ? "Working..." : aiInterviewTemplates.length ? "Verify Default Template" : "Create Default AI Template"}
                   </button>
-                  <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions()])}>
+                  <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions(), loadAIInterviewAnswers()])}>
                     Refresh AI Interviews
                   </button>
                 </div>
@@ -23765,7 +24738,8 @@ Save Authorization
                         <td><Badge value={session.status || "Created"} /></td>
                         <td className="table-actions">
                           <button onClick={() => setSelectedAIInterviewSessionId(session.id)}>Review</button>
-                          <button onClick={() => copyAIInterviewReference(session)}>Copy Reference</button>
+                          <button onClick={() => openAIInterviewPortal(session)}>Open Portal</button>
+                          <button onClick={() => copyAIInterviewReference(session)}>Copy Candidate Link</button>
                           {!['Completed', 'Cancelled', 'Expired'].includes(session.status) && (
                             <button className="danger" onClick={() => cancelAIInterviewSession(session)}>Cancel</button>
                           )}
@@ -23798,8 +24772,55 @@ Save Authorization
                       <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_reasoning || "Pending AI analysis."}</p>
                     </div>
                   </div>
+                  {(() => {
+                    const selectedAnswers = aiInterviewAnswers
+                      .filter((answer) => String(answer.session_id || "") === String(selectedSession.id || ""))
+                      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
+
+                    return (
+                      <div style={{ marginTop: 16 }}>
+                        <h3 style={{ marginBottom: 10 }}>Candidate Recorded Answers</h3>
+                        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: 420, overflowX: "auto" }}>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>#</th>
+                                <th>Question</th>
+                                <th>Competency</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th>Transcript</th>
+                                <th>Recording</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedAnswers.length === 0 ? (
+                                <tr><td colSpan="7">No candidate answers have been submitted yet.</td></tr>
+                              ) : selectedAnswers.map((answer) => (
+                                <tr key={answer.id}>
+                                  <td>{answer.question_order || "-"}</td>
+                                  <td style={{ minWidth: 260 }}>{answer.question_text_snapshot || "-"}</td>
+                                  <td>{answer.competency || answer.question_type || "-"}</td>
+                                  <td><Badge value={answer.answer_status || "Pending"} /></td>
+                                  <td>{answer.audio_duration_seconds ? `${answer.audio_duration_seconds}s` : "-"}</td>
+                                  <td style={{ minWidth: 180 }}>{answer.answer_text || (answer.answer_status === "Skipped" ? "Question skipped" : "Pending transcription")}</td>
+                                  <td>
+                                    {answer.audio_storage_path
+                                      ? <button onClick={() => openAIInterviewAudio(answer)}>Play Audio</button>
+                                      : "-"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div className="actions-line">
-                    <button className="light-btn" onClick={() => copyAIInterviewReference(selectedSession)}>Copy Session Reference</button>
+                    <button className="light-btn" onClick={() => openAIInterviewPortal(selectedSession)}>Open Candidate Portal</button>
+                    <button className="light-btn" onClick={() => copyAIInterviewReference(selectedSession)}>Copy Candidate Link</button>
+                    <button className="light-btn" onClick={() => Promise.all([loadAIInterviewSessions(), loadAIInterviewAnswers()])}>Refresh Responses</button>
                     <button className="light-btn" onClick={() => setSelectedAIInterviewSessionId("")}>Close Review</button>
                   </div>
                   <div style={{ marginTop: 8, fontSize: 12, color: "#64748b" }}>
