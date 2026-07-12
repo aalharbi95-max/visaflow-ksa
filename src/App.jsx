@@ -2356,6 +2356,9 @@ const [aiInterviewWorkspaceTab, setAIInterviewWorkspaceTab] = useState("Engineer
 const [aiInterviewGenerationForm, setAIInterviewGenerationForm] = useState({ ...EMPTY_AI_INTERVIEW_GENERATION_FORM });
 const [aiInterviewGenerationLoading, setAIInterviewGenerationLoading] = useState(false);
 const [aiInterviewGenerationResult, setAIInterviewGenerationResult] = useState(null);
+const [engineeringBulkGenerationLoading, setEngineeringBulkGenerationLoading] = useState(false);
+const [engineeringBulkGenerationProgress, setEngineeringBulkGenerationProgress] = useState([]);
+const [engineeringBulkGenerationSummary, setEngineeringBulkGenerationSummary] = useState("");
 const [mobilizations, setMobilizations] = useState([]);
 const [onboardingValidations, setOnboardingValidations] = useState([]);
 const [demobilizations, setDemobilizations] = useState([]);
@@ -10628,23 +10631,27 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return { label: "Not Created", className: "", template: matches[0] || null };
   }
 
-  function prepareEngineeringAIInterviewTemplate(item = {}) {
-    if (!item?.profession) return;
-
-    setAIInterviewGenerationForm({
+  function buildEngineeringAIInterviewGenerationForm(item = {}) {
+    return {
       ...EMPTY_AI_INTERVIEW_GENERATION_FORM,
-      template_name: `${item.profession} Advanced AI Interview`,
-      profession: item.profession,
+      template_name: `${item.profession || "Engineering"} Advanced AI Interview`,
+      profession: item.profession || "",
       profession_category: "Engineering",
       job_description: item.job_description || "",
       years_experience: "5+ years",
-      qualifications: `Bachelor's degree in ${item.profession.replace(" Engineer", " Engineering")} or a closely related engineering discipline`,
+      qualifications: `Bachelor's degree in ${String(item.profession || "Engineering").replace(" Engineer", " Engineering")} or a closely related engineering discipline`,
       certifications: "Relevant professional certifications are preferred only when required by the company or project.",
       language: "Bilingual",
       difficulty: "Advanced",
       question_count: 15,
       passing_score: 75,
-    });
+    };
+  }
+
+  function prepareEngineeringAIInterviewTemplate(item = {}) {
+    if (!item?.profession) return;
+
+    setAIInterviewGenerationForm(buildEngineeringAIInterviewGenerationForm(item));
     setAIInterviewWorkspaceTab("Generate from Job Description");
     setAIInterviewGenerationResult(null);
     setAIInterviewMessage(
@@ -10721,6 +10728,147 @@ ${errors.slice(0, 10).join("\n")}` : "")
       alert(error?.message || "AI template generation failed.");
     } finally {
       setAIInterviewGenerationLoading(false);
+    }
+  }
+
+  async function generateAllRemainingEngineeringTemplates() {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to generate AI interview templates.");
+    }
+    if (!currentCompanyId) return alert("Company ID is missing.");
+    if (engineeringBulkGenerationLoading) return;
+
+    const remainingItems = ENGINEERING_AI_TEMPLATE_CATALOG.filter(
+      (item) => !getEngineeringTemplateStatus(item).template
+    );
+
+    if (remainingItems.length === 0) {
+      setEngineeringBulkGenerationSummary("All engineering templates have already been created.");
+      return alert("All engineering templates have already been created.");
+    }
+
+    const confirmed = window.confirm(
+      `Generate ${remainingItems.length} remaining engineering templates?
+
+` +
+      "They will be generated one by one and saved as Pending Review. Keep this page open until the process finishes."
+    );
+    if (!confirmed) return;
+
+    const initialProgress = ENGINEERING_AI_TEMPLATE_CATALOG.map((item) => {
+      const existingStatus = getEngineeringTemplateStatus(item);
+      return {
+        profession: item.profession,
+        profession_ar: item.profession_ar,
+        state: existingStatus.template ? "Skipped" : "Waiting",
+        detail: existingStatus.template
+          ? existingStatus.label
+          : "Waiting to generate",
+        template_id: existingStatus.template?.id || "",
+        generated_question_count: existingStatus.template
+          ? getAIInterviewTemplateAllQuestions(existingStatus.template.id).length
+          : 0,
+      };
+    });
+
+    const updateProgress = (profession, values) => {
+      setEngineeringBulkGenerationProgress((previous) =>
+        previous.map((row) =>
+          row.profession === profession ? { ...row, ...values } : row
+        )
+      );
+    };
+
+    setEngineeringBulkGenerationProgress(initialProgress);
+    setEngineeringBulkGenerationSummary(
+      `Starting generation of ${remainingItems.length} engineering templates. Keep this page open.`
+    );
+    setEngineeringBulkGenerationLoading(true);
+    setAIInterviewGenerationResult(null);
+
+    let completedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (let index = 0; index < remainingItems.length; index += 1) {
+        const item = remainingItems[index];
+        const form = buildEngineeringAIInterviewGenerationForm(item);
+
+        updateProgress(item.profession, {
+          state: "Generating",
+          detail: `Generating ${index + 1} of ${remainingItems.length}...`,
+        });
+        setEngineeringBulkGenerationSummary(
+          `Generating ${item.profession} (${index + 1} of ${remainingItems.length}). Keep this page open.`
+        );
+
+        try {
+          const { data, error } = await supabase.functions.invoke(
+            "generate-ai-interview-template",
+            {
+              body: {
+                company_id: currentCompanyId,
+                template_name: form.template_name,
+                profession: form.profession,
+                profession_category: "Engineering",
+                job_description: form.job_description,
+                language: "Bilingual",
+                difficulty: "Advanced",
+                years_experience: "5+ years",
+                qualifications: form.qualifications,
+                certifications: form.certifications,
+                question_count: 15,
+                passing_score: 75,
+                request_no: "",
+                request_line_id: "",
+                created_by: getAIInterviewActorName(),
+              },
+            }
+          );
+
+          if (error) throw error;
+          if (!data?.ok) {
+            throw new Error(
+              data?.error ||
+                `Template generation failed at ${data?.stage || "unknown stage"}.`
+            );
+          }
+
+          completedCount += 1;
+          updateProgress(item.profession, {
+            state: "Completed",
+            detail: `${data.generated_question_count || 15} questions • Pending Review`,
+            template_id: data.template_id || "",
+            generated_question_count: Number(data.generated_question_count || 15),
+          });
+        } catch (error) {
+          failedCount += 1;
+          const message = error?.message || String(error);
+          console.warn(
+            `Bulk engineering template generation failed for ${item.profession}:`,
+            message
+          );
+          updateProgress(item.profession, {
+            state: "Failed",
+            detail: message,
+          });
+        }
+
+        if (index < remainingItems.length - 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        }
+      }
+
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+
+      const summary =
+        `Engineering template generation finished. Completed: ${completedCount}. ` +
+        `Failed: ${failedCount}. Every completed template is Pending Review and inactive until you approve it.`;
+
+      setEngineeringBulkGenerationSummary(summary);
+      setAIInterviewMessage(summary);
+    } finally {
+      setEngineeringBulkGenerationLoading(false);
     }
   }
 
@@ -25314,6 +25462,69 @@ Save Authorization
                     <b>Ready frameworks are limited to engineering roles.</b> Each framework prepares a difficult, scenario-based bilingual interview. Non-engineering professions must be generated from the company's actual job description.
                   </div>
 
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", padding: 14, border: "1px solid #dbeafe", borderRadius: 14, background: "#ffffff", marginBottom: 16 }}>
+                    <div>
+                      <div style={{ fontWeight: 900, color: "#0f172a" }}>Bulk Engineering Template Generator</div>
+                      <div style={{ color: "#64748b", fontSize: 13, marginTop: 4, lineHeight: 1.55 }}>
+                        {ENGINEERING_AI_TEMPLATE_CATALOG.filter((item) => !getEngineeringTemplateStatus(item).template).length} template(s) remaining. Templates are generated one by one and saved as Pending Review. You will review and approve each template separately.
+                      </div>
+                    </div>
+                    <button
+                      className="save-btn"
+                      disabled={
+                        engineeringBulkGenerationLoading ||
+                        ENGINEERING_AI_TEMPLATE_CATALOG.every((item) => getEngineeringTemplateStatus(item).template)
+                      }
+                      onClick={generateAllRemainingEngineeringTemplates}
+                    >
+                      {engineeringBulkGenerationLoading
+                        ? "Generating Engineering Templates..."
+                        : "Generate All Remaining Templates"}
+                    </button>
+                  </div>
+
+                  {engineeringBulkGenerationSummary && (
+                    <div style={{ padding: 12, borderRadius: 12, background: engineeringBulkGenerationLoading ? "#fff7ed" : "#f8fafc", color: engineeringBulkGenerationLoading ? "#9a3412" : "#334155", marginBottom: 14, lineHeight: 1.6 }}>
+                      {engineeringBulkGenerationSummary}
+                    </div>
+                  )}
+
+                  {engineeringBulkGenerationProgress.length > 0 && (
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 12, marginBottom: 16, background: "#f8fafc" }}>
+                      <div style={{ fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Generation Progress</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 8 }}>
+                        {engineeringBulkGenerationProgress.map((row) => {
+                          const stateColor =
+                            row.state === "Completed" ? "#166534" :
+                            row.state === "Failed" ? "#b91c1c" :
+                            row.state === "Generating" ? "#9a3412" :
+                            row.state === "Skipped" ? "#475569" :
+                            "#64748b";
+                          const stateBackground =
+                            row.state === "Completed" ? "#ecfdf5" :
+                            row.state === "Failed" ? "#fef2f2" :
+                            row.state === "Generating" ? "#fff7ed" :
+                            "#ffffff";
+
+                          return (
+                            <div key={row.profession} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10, background: stateBackground }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                                <div>
+                                  <div style={{ fontWeight: 800, color: "#0f172a" }}>{row.profession}</div>
+                                  <div dir="rtl" style={{ color: "#64748b", fontSize: 12 }}>{row.profession_ar}</div>
+                                </div>
+                                <span style={{ color: stateColor, fontWeight: 900, fontSize: 12 }}>{row.state}</span>
+                              </div>
+                              <div style={{ color: stateColor, fontSize: 12, marginTop: 6, lineHeight: 1.45, overflowWrap: "anywhere" }}>
+                                {row.detail}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
                     {ENGINEERING_AI_TEMPLATE_CATALOG.map((item) => {
                       const status = getEngineeringTemplateStatus(item);
@@ -25336,7 +25547,11 @@ Save Authorization
                                 Review Existing
                               </button>
                             ) : null}
-                            <button className="save-btn" onClick={() => prepareEngineeringAIInterviewTemplate(item)}>
+                            <button
+                              className="save-btn"
+                              disabled={engineeringBulkGenerationLoading}
+                              onClick={() => prepareEngineeringAIInterviewTemplate(item)}
+                            >
                               Prepare Advanced Template
                             </button>
                           </div>
