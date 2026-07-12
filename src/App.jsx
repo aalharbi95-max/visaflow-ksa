@@ -4637,12 +4637,14 @@ async function loadProfessionAliases() {
       return [];
     }
 
+    // Every company can read VisaFlow global engineering templates (company_id IS NULL)
+    // together with its own private templates.
     const { data, error } = await supabase
       .from("ai_interview_templates")
       .select("*")
-      .eq("company_id", currentCompanyId)
+      .or(`company_id.eq.${currentCompanyId},company_id.is.null`)
       .order("created_at", { ascending: false })
-      .range(0, 500);
+      .range(0, 1000);
 
     if (error) {
       console.warn("ai_interview_templates:", error.message);
@@ -4660,12 +4662,13 @@ async function loadProfessionAliases() {
       return [];
     }
 
+    // Load questions for both the current company and the global engineering library.
     const { data, error } = await supabase
       .from("ai_interview_questions")
       .select("*")
-      .eq("company_id", currentCompanyId)
+      .or(`company_id.eq.${currentCompanyId},company_id.is.null`)
       .order("question_order", { ascending: true })
-      .range(0, 2000);
+      .range(0, 5000);
 
     if (error) {
       console.warn("ai_interview_questions:", error.message);
@@ -10617,10 +10620,21 @@ ${errors.slice(0, 10).join("\n")}` : "")
       .filter((template) =>
         normalizeMatchText(template.profession) === normalizeMatchText(item.profession)
       )
-      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+      .sort((a, b) => {
+        const aCompanyPriority = a.company_id ? 0 : 1;
+        const bCompanyPriority = b.company_id ? 0 : 1;
+        if (aCompanyPriority !== bCompanyPriority) return aCompanyPriority - bCompanyPriority;
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      });
 
     const approved = matches.find((template) => template.approval_status === "Approved" && template.is_active !== false);
-    if (approved) return { label: "Approved & Active", className: "passed", template: approved };
+    if (approved) {
+      return {
+        label: approved.company_id ? "Approved & Active" : "Global • Approved",
+        className: "passed",
+        template: approved,
+      };
+    }
 
     const pending = matches.find((template) => template.approval_status === "Pending Review");
     if (pending) return { label: "Pending Review", className: "warning", template: pending };
@@ -10713,6 +10727,31 @@ ${errors.slice(0, 10).join("\n")}` : "")
       if (error) throw error;
       if (!data?.ok) {
         throw new Error(data?.error || `Template generation failed at ${data?.stage || "unknown stage"}.`);
+      }
+
+      const preparedCatalogItem = getEngineeringCatalogItem(profession);
+      const isPreparedEngineeringMaster = Boolean(
+        preparedCatalogItem &&
+        !String(aiInterviewGenerationForm.request_no || "").trim() &&
+        !String(aiInterviewGenerationForm.request_line_id || "").trim() &&
+        normalizeMatchText(templateName) === normalizeMatchText(`${preparedCatalogItem.profession} Advanced AI Interview`) &&
+        normalizeMatchText(jobDescription) === normalizeMatchText(preparedCatalogItem.job_description)
+      );
+
+      if (isPreparedEngineeringMaster && data.template_id) {
+        const { error: markerError } = await supabase
+          .from("ai_interview_templates")
+          .update({
+            source_type: "Engineering Master Framework",
+            updated_by: getAIInterviewActorName(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", data.template_id)
+          .eq("company_id", currentCompanyId);
+
+        if (markerError) {
+          console.warn("Engineering master marker failed:", markerError.message);
+        }
       }
 
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
@@ -10834,6 +10873,22 @@ ${errors.slice(0, 10).join("\n")}` : "")
             );
           }
 
+          if (data.template_id) {
+            const { error: markerError } = await supabase
+              .from("ai_interview_templates")
+              .update({
+                source_type: "Engineering Master Framework",
+                updated_by: getAIInterviewActorName(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", data.template_id)
+              .eq("company_id", currentCompanyId);
+
+            if (markerError) {
+              console.warn(`Engineering master marker failed for ${item.profession}:`, markerError.message);
+            }
+          }
+
           completedCount += 1;
           updateProgress(item.profession, {
             state: "Completed",
@@ -10917,6 +10972,35 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return currentUser?.name || currentUser?.full_name || currentUser?.email || "VisaFlow User";
   }
 
+  function isGlobalAIInterviewTemplate(template = {}) {
+    return Boolean(template?.id) && !template?.company_id;
+  }
+
+  function getEngineeringCatalogItem(profession = "") {
+    return ENGINEERING_AI_TEMPLATE_CATALOG.find(
+      (item) => normalizeMatchText(item.profession) === normalizeMatchText(profession)
+    ) || null;
+  }
+
+  function isEngineeringMasterTemplate(template = {}) {
+    if (!template?.id) return false;
+    const catalogItem = getEngineeringCatalogItem(template.profession);
+    if (!catalogItem) return false;
+
+    const source = normalize(template.source_type);
+    if (["engineering master framework", "visaflow global engineering template"].includes(source)) {
+      return true;
+    }
+
+    return (
+      normalize(template.profession_category) === "engineering" &&
+      !String(template.request_no || "").trim() &&
+      !String(template.request_line_id || "").trim() &&
+      normalizeMatchText(template.template_name) === normalizeMatchText(`${catalogItem.profession} Advanced AI Interview`) &&
+      normalizeMatchText(template.job_description) === normalizeMatchText(catalogItem.job_description)
+    );
+  }
+
   function openAIInterviewTemplateReview(template = {}) {
     if (!template?.id) return;
     setSelectedAIInterviewTemplateId(template.id);
@@ -10983,6 +11067,9 @@ ${errors.slice(0, 10).join("\n")}` : "")
     const template = aiInterviewTemplates.find(
       (item) => String(item.id || "") === String(question.template_id || "")
     );
+    if (isGlobalAIInterviewTemplate(template)) {
+      return alert("VisaFlow global engineering templates are read-only. Create a company copy before editing.");
+    }
     if (template?.approval_status === "Approved" || template?.is_locked) {
       return alert("Approved templates are locked and cannot be edited.");
     }
@@ -11083,6 +11170,9 @@ ${errors.slice(0, 10).join("\n")}` : "")
       return alert("You do not have permission to delete AI interview questions.");
     }
     if (!question?.id || !template?.id) return;
+    if (isGlobalAIInterviewTemplate(template)) {
+      return alert("VisaFlow global engineering templates are read-only.");
+    }
     if (template.approval_status === "Approved" || template.is_locked) {
       return alert("Approved templates are locked and cannot be changed.");
     }
@@ -11167,9 +11257,35 @@ ${errors.slice(0, 10).join("\n")}` : "")
     setAIInterviewMessage("Approving and activating AI interview template...");
 
     try {
+      if (isGlobalAIInterviewTemplate(template)) {
+        return alert("This VisaFlow global engineering template is already centrally approved and active.");
+      }
+
+      const promoteToGlobalLibrary = isEngineeringMasterTemplate(template);
+
+      // Questions are promoted first so the full approved master remains complete.
+      const { error: questionsError } = await supabase
+        .from("ai_interview_questions")
+        .update({
+          company_id: promoteToGlobalLibrary ? null : currentCompanyId,
+          approved_by: actor,
+          approved_at: now,
+          is_locked: true,
+          updated_by: actor,
+          updated_at: now,
+        })
+        .eq("template_id", template.id)
+        .eq("company_id", currentCompanyId);
+
+      if (questionsError) throw questionsError;
+
       const { error: templateError } = await supabase
         .from("ai_interview_templates")
         .update({
+          company_id: promoteToGlobalLibrary ? null : currentCompanyId,
+          source_type: promoteToGlobalLibrary
+            ? "VisaFlow Global Engineering Template"
+            : (template.source_type || "Job Description"),
           approval_status: "Approved",
           status: "Active",
           is_active: true,
@@ -11187,24 +11303,15 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
       if (templateError) throw templateError;
 
-      const { error: questionsError } = await supabase
-        .from("ai_interview_questions")
-        .update({
-          approved_by: actor,
-          approved_at: now,
-          is_locked: true,
-          updated_by: actor,
-          updated_at: now,
-        })
-        .eq("template_id", template.id)
-        .eq("company_id", currentCompanyId);
-
-      if (questionsError) throw questionsError;
-
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
       resetAIInterviewQuestionEditor();
-      setAIInterviewMessage(`${template.template_name || "AI interview template"} approved and activated.`);
-      alert("AI interview template approved and activated successfully.");
+      const approvalMessage = promoteToGlobalLibrary
+        ? `${template.template_name || "Engineering template"} approved and published to every company.`
+        : `${template.template_name || "AI interview template"} approved and activated.`;
+      setAIInterviewMessage(approvalMessage);
+      alert(promoteToGlobalLibrary
+        ? "Engineering template approved and published to all VisaFlow companies."
+        : "AI interview template approved and activated successfully.");
     } catch (error) {
       console.warn("AI interview template approval failed", error?.message || error);
       setAIInterviewMessage(`Template approval failed: ${error?.message || error}`);
@@ -11219,6 +11326,9 @@ ${errors.slice(0, 10).join("\n")}` : "")
       return alert("You do not have permission to reject AI interview templates.");
     }
     if (!template?.id) return;
+    if (isGlobalAIInterviewTemplate(template)) {
+      return alert("VisaFlow global engineering templates cannot be rejected or changed by a company.");
+    }
 
     const reason = String(
       window.prompt("Enter the rejection reason:", template.rejection_reason || "") || ""
@@ -11385,13 +11495,21 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function resolveAIInterviewTemplate(interview = {}) {
-    const activeTemplates = aiInterviewTemplates.filter(
-      (template) =>
-        template.is_active !== false &&
-        template.status === "Active" &&
-        template.approval_status === "Approved" &&
-        normalize(template.profession) !== "general"
-    );
+    const activeTemplates = aiInterviewTemplates
+      .filter(
+        (template) =>
+          template.is_active !== false &&
+          template.status === "Active" &&
+          template.approval_status === "Approved" &&
+          normalize(template.profession) !== "general"
+      )
+      .sort((a, b) => {
+        // A company's approved customized template overrides the VisaFlow global master.
+        const aPriority = String(a.company_id || "") === String(currentCompanyId || "") ? 0 : 1;
+        const bPriority = String(b.company_id || "") === String(currentCompanyId || "") ? 0 : 1;
+        if (aPriority !== bPriority) return aPriority - bPriority;
+        return new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0);
+      });
 
     return activeTemplates.find((template) =>
       template.profession &&
@@ -25459,7 +25577,7 @@ Save Authorization
               {aiInterviewWorkspaceTab === "Engineering Templates" && (
                 <div>
                   <div style={{ padding: 14, borderRadius: 14, background: "#eff6ff", color: "#1e3a8a", marginBottom: 16, lineHeight: 1.65 }}>
-                    <b>Ready frameworks are limited to engineering roles.</b> Each framework prepares a difficult, scenario-based bilingual interview. Non-engineering professions must be generated from the company's actual job description.
+                    <b>VisaFlow Global Engineering Library.</b> Approved engineering master templates are shared with every client company and remain read-only. Non-engineering professions and company-specific engineering roles are generated from the company's actual job description.
                   </div>
 
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", padding: 14, border: "1px solid #dbeafe", borderRadius: 14, background: "#ffffff", marginBottom: 16 }}>
@@ -25547,13 +25665,15 @@ Save Authorization
                                 Review Existing
                               </button>
                             ) : null}
-                            <button
-                              className="save-btn"
-                              disabled={engineeringBulkGenerationLoading}
-                              onClick={() => prepareEngineeringAIInterviewTemplate(item)}
-                            >
-                              Prepare Advanced Template
-                            </button>
+                            {!status.template && (
+                              <button
+                                className="save-btn"
+                                disabled={engineeringBulkGenerationLoading}
+                                onClick={() => prepareEngineeringAIInterviewTemplate(item)}
+                              >
+                                Prepare Advanced Template
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -25702,6 +25822,9 @@ Save Authorization
                             <b>{template.template_name || "-"}</b>
                             <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
                               {template.ai_model || "Manual / Legacy"}
+                              <span style={{ marginInlineStart: 8, fontWeight: 800, color: isGlobalAIInterviewTemplate(template) ? "#166534" : "#475569" }}>
+                                • {isGlobalAIInterviewTemplate(template) ? "VisaFlow Global" : "Company Private"}
+                              </span>
                             </div>
                           </td>
                           <td>{template.profession || "General"}</td>
@@ -25712,12 +25835,12 @@ Save Authorization
                           <td><Badge value={template.is_active ? "Active" : "Inactive"} /></td>
                           <td className="table-actions">
                             <button onClick={() => openAIInterviewTemplateReview(template)}>Review</button>
-                            {canManageInterviewResults && template.approval_status !== "Approved" && (
+                            {canManageInterviewResults && !isGlobalAIInterviewTemplate(template) && template.approval_status !== "Approved" && (
                               <button disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(template)}>
                                 Approve & Activate
                               </button>
                             )}
-                            {canManageInterviewResults && template.approval_status !== "Rejected" && (
+                            {canManageInterviewResults && !isGlobalAIInterviewTemplate(template) && template.approval_status !== "Rejected" && (
                               <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(template)}>
                                 Reject
                               </button>
@@ -25749,7 +25872,8 @@ Save Authorization
               const missingInformation = Array.isArray(selectedTemplate.missing_job_information)
                 ? selectedTemplate.missing_job_information
                 : [];
-              const templateLocked = selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked;
+              const globalTemplate = isGlobalAIInterviewTemplate(selectedTemplate);
+              const templateLocked = globalTemplate || selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked;
 
               return (
                 <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"}`}>
@@ -25789,13 +25913,19 @@ Save Authorization
                     </div>
                   )}
 
+                  {globalTemplate && (
+                    <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: "#ecfdf5", color: "#166534", fontWeight: 800 }}>
+                      VisaFlow Global Engineering Template — available to every company and locked against company-level changes.
+                    </div>
+                  )}
+
                   <div className="actions-line" style={{ marginBottom: 16 }}>
                     {!templateLocked && (
                       <button className="save-btn" disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(selectedTemplate)}>
                         Approve & Activate
                       </button>
                     )}
-                    {selectedTemplate.approval_status !== "Rejected" && (
+                    {!globalTemplate && selectedTemplate.approval_status !== "Rejected" && (
                       <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(selectedTemplate)}>
                         Reject Template
                       </button>
