@@ -2341,6 +2341,7 @@ const [aiInterviewQuestions, setAIInterviewQuestions] = useState([]);
 const [aiInterviewSessions, setAIInterviewSessions] = useState([]);
 const [aiInterviewAnswers, setAIInterviewAnswers] = useState([]);
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
+const [aiInterviewInvitationSendingId, setAIInterviewInvitationSendingId] = useState("");
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
 const [selectedAIInterviewSessionId, setSelectedAIInterviewSessionId] = useState("");
 const [selectedAIInterviewTemplateId, setSelectedAIInterviewTemplateId] = useState("");
@@ -11705,23 +11706,157 @@ ${errors.slice(0, 10).join("\n")}` : "")
     await loadAIInterviewSessions();
   }
 
+  function getAIInterviewInvitationUrl(session = {}) {
+    return session.invitation_url || (session.access_token
+      ? `${window.location.origin}${window.location.pathname}?ai_interview=${session.access_token}`
+      : "");
+  }
+
+  function isValidEmailAddress(value = "") {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+  }
+
+  async function sendAIInterviewInvitationEmail(session = {}) {
+    if (!canManageInterviewResults) {
+      return alert("You do not have permission to send AI interview invitations.");
+    }
+    if (!session?.id) return;
+    if (["Completed", "Cancelled", "Expired"].includes(session.status)) {
+      return alert(`This interview cannot be sent because its status is ${session.status}.`);
+    }
+
+    const linkedCandidate = candidates.find(
+      (candidate) => String(candidate.id || "") === String(session.candidate_id || "")
+    ) || {};
+
+    let recipient = String(session.candidate_email || linkedCandidate.email || "").trim();
+    if (!isValidEmailAddress(recipient)) {
+      recipient = String(window.prompt(
+        `Enter the candidate email for ${session.candidate_name || "this candidate"}:`,
+        recipient
+      ) || "").trim();
+    }
+
+    if (!recipient) return;
+    if (!isValidEmailAddress(recipient)) {
+      return alert("Please enter a valid candidate email address.");
+    }
+
+    const invitationUrl = getAIInterviewInvitationUrl(session);
+    if (!invitationUrl) return alert("Candidate interview link is not available.");
+
+    const template = aiInterviewTemplates.find(
+      (item) => String(item.id || "") === String(session.template_id || "")
+    ) || {};
+    const candidateName = session.candidate_name || "Candidate";
+    const profession = session.profession || "the selected position";
+    const scheduledText = session.scheduled_at
+      ? new Date(session.scheduled_at).toLocaleString()
+      : "Please complete the interview as soon as possible.";
+    const expiryText = session.expires_at
+      ? new Date(session.expires_at).toLocaleString()
+      : "The link remains available until the company closes or expires the session.";
+    const estimatedMinutes = Number(template.duration_minutes || 15);
+    const subject = `AI Interview Invitation - ${profession} / دعوة مقابلة ذكية`;
+
+    const englishLines = [
+      `Dear ${candidateName},`,
+      `You are invited to complete a secure AI voice interview for the position of ${profession}.`,
+      `Estimated duration: ${estimatedMinutes} minutes.`,
+      `Schedule: ${scheduledText}`,
+      `Link validity: ${expiryText}`,
+      "Before starting, choose a quiet place, use a stable internet connection, allow microphone access, and use the latest Chrome, Edge, or Safari browser.",
+      "Please answer each question clearly and do not refresh or close the page while recording.",
+      "The final recruitment decision remains with the company.",
+    ];
+
+    const arabicLines = [
+      `عزيزي/عزيزتي ${candidateName}،`,
+      `ندعوك لإجراء مقابلة صوتية آمنة بالذكاء الاصطناعي لوظيفة ${profession}.`,
+      `المدة التقديرية: ${estimatedMinutes} دقيقة.`,
+      "قبل البدء، اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت، واسمح باستخدام الميكروفون، واستخدم أحدث إصدار من Chrome أو Edge أو Safari.",
+      "يرجى الإجابة بوضوح وعدم تحديث الصفحة أو إغلاقها أثناء التسجيل.",
+      "القرار النهائي للتوظيف يعود إلى الشركة.",
+    ];
+
+    const textBody = [
+      ...englishLines,
+      "",
+      `Start interview: ${invitationUrl}`,
+      "",
+      ...arabicLines,
+      "",
+      `ابدأ المقابلة: ${invitationUrl}`,
+    ].join("\n");
+
+    const actionHtml = `
+      <div style="text-align:center;">
+        <a href="${invitationUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#061b49;color:#ffffff;text-decoration:none;padding:13px 22px;border-radius:10px;font-weight:700;">Start AI Interview / بدء المقابلة الذكية</a>
+        <div style="margin-top:12px;font-size:12px;color:#64748b;word-break:break-all;">${invitationUrl}</div>
+      </div>`;
+
+    setAIInterviewInvitationSendingId(session.id);
+    setAIInterviewMessage(`Sending AI interview invitation to ${recipient}...`);
+
+    try {
+      await dispatchVisaFlowEmail({
+        type: "AI_INTERVIEW_INVITATION",
+        to: recipient,
+        subject,
+        text: textBody,
+        html: buildEmailCardHtml(subject, [...englishLines, "", ...arabicLines], actionHtml),
+        replyTo: getCompanyEmailRecipient("support"),
+        payload: {
+          session_id: session.id,
+          candidate_id: session.candidate_id || "",
+          candidate_name: candidateName,
+          candidate_email: recipient,
+          profession,
+          request_no: session.request_no || "",
+          invitation_url: invitationUrl,
+          scheduled_at: session.scheduled_at || null,
+          expires_at: session.expires_at || null,
+        },
+      });
+
+      const now = new Date().toISOString();
+      const nextStatus = ["Created", "Invitation Pending"].includes(session.status)
+        ? "Invited"
+        : (session.status || "Invited");
+
+      const { error: updateError } = await supabase
+        .from("ai_interview_sessions")
+        .update({
+          candidate_email: recipient,
+          invitation_url: invitationUrl,
+          invitation_sent_at: now,
+          status: nextStatus,
+          updated_at: now,
+          updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+        })
+        .eq("id", session.id)
+        .eq("company_id", currentCompanyId);
+
+      if (updateError) throw updateError;
+
+      await Promise.all([loadAIInterviewSessions(), loadEmailLogs()]);
+      setAIInterviewMessage(`AI interview invitation sent successfully to ${recipient}.`);
+      alert(`AI interview invitation sent successfully to ${recipient}.`);
+    } catch (error) {
+      console.warn("AI interview invitation email failed", error?.message || error);
+      setAIInterviewMessage(`AI interview invitation failed: ${error?.message || error}`);
+      alert(`AI interview invitation failed: ${error?.message || error}`);
+    } finally {
+      setAIInterviewInvitationSendingId("");
+    }
+  }
+
   async function copyAIInterviewReference(session = {}) {
-    const reference = session.invitation_url || session.access_token || session.id || "";
+    const reference = getAIInterviewInvitationUrl(session) || session.id || "";
     if (!reference) return alert("AI interview reference is not available.");
 
     try {
       await navigator.clipboard.writeText(reference);
-
-      if (["Created", "Invitation Pending"].includes(session.status)) {
-        const now = new Date().toISOString();
-        await supabase
-          .from("ai_interview_sessions")
-          .update({ status: "Invited", invitation_sent_at: session.invitation_sent_at || now, updated_at: now })
-          .eq("id", session.id)
-          .eq("company_id", currentCompanyId);
-        await loadAIInterviewSessions();
-      }
-
       alert("Candidate interview link copied.");
     } catch {
       window.prompt("Copy candidate interview link:", reference);
@@ -11729,9 +11864,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   function openAIInterviewPortal(session = {}) {
-    const reference = session.invitation_url || (session.access_token
-      ? `${window.location.origin}${window.location.pathname}?ai_interview=${session.access_token}`
-      : "");
+    const reference = getAIInterviewInvitationUrl(session);
     if (!reference) return alert("Candidate interview link is not available.");
     window.open(reference, "_blank", "noopener,noreferrer");
   }
@@ -26318,6 +26451,18 @@ Save Authorization
                         <td><Badge value={session.status || "Created"} /></td>
                         <td className="table-actions">
                           <button onClick={() => setSelectedAIInterviewSessionId(session.id)}>Review</button>
+                          {!['Completed', 'Cancelled', 'Expired'].includes(session.status) && (
+                            <button
+                              disabled={String(aiInterviewInvitationSendingId) === String(session.id)}
+                              onClick={() => sendAIInterviewInvitationEmail(session)}
+                            >
+                              {String(aiInterviewInvitationSendingId) === String(session.id)
+                                ? "Sending..."
+                                : session.invitation_sent_at
+                                  ? "Resend Email"
+                                  : "Send Email"}
+                            </button>
+                          )}
                           <button onClick={() => openAIInterviewPortal(session)}>Open Portal</button>
                           <button onClick={() => copyAIInterviewReference(session)}>Copy Candidate Link</button>
                           {!['Completed', 'Cancelled', 'Expired'].includes(session.status) && (
@@ -26398,6 +26543,19 @@ Save Authorization
                     );
                   })()}
                   <div className="actions-line">
+                    {!['Completed', 'Cancelled', 'Expired'].includes(selectedSession.status) && (
+                      <button
+                        className="light-btn"
+                        disabled={String(aiInterviewInvitationSendingId) === String(selectedSession.id)}
+                        onClick={() => sendAIInterviewInvitationEmail(selectedSession)}
+                      >
+                        {String(aiInterviewInvitationSendingId) === String(selectedSession.id)
+                          ? "Sending..."
+                          : selectedSession.invitation_sent_at
+                            ? "Resend Invitation Email"
+                            : "Send Invitation Email"}
+                      </button>
+                    )}
                     <button className="light-btn" onClick={() => openAIInterviewPortal(selectedSession)}>Open Candidate Portal</button>
                     <button className="light-btn" onClick={() => copyAIInterviewReference(selectedSession)}>Copy Candidate Link</button>
                     <button className="light-btn" onClick={() => Promise.all([loadAIInterviewSessions(), loadAIInterviewAnswers()])}>Refresh Responses</button>
