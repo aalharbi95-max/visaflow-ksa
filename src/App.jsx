@@ -2344,6 +2344,7 @@ const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
 const [selectedAIInterviewSessionId, setSelectedAIInterviewSessionId] = useState("");
 const [selectedAIInterviewTemplateId, setSelectedAIInterviewTemplateId] = useState("");
+const aiInterviewTemplateReviewRef = useRef(null);
 const [editingAIInterviewQuestionId, setEditingAIInterviewQuestionId] = useState("");
 const [aiInterviewQuestionForm, setAIInterviewQuestionForm] = useState({
   question_text_ar: "",
@@ -11055,13 +11056,40 @@ ${errors.slice(0, 10).join("\n")}` : "")
     );
   }
 
+  function scrollToAIInterviewTemplateReview() {
+    window.setTimeout(() => {
+      const reviewElement =
+        aiInterviewTemplateReviewRef.current ||
+        document.getElementById("ai-interview-template-review");
+
+      reviewElement?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 120);
+  }
+
   function openAIInterviewTemplateReview(template = {}) {
     if (!template?.id) return;
     setSelectedAIInterviewTemplateId(template.id);
     setSelectedAIInterviewSessionId("");
     setEditingAIInterviewQuestionId("");
     setAIInterviewMessage(`Reviewing ${template.template_name || "AI interview template"}.`);
+
+    // Always scroll, even when the same template was already selected after generation.
+    scrollToAIInterviewTemplateReview();
   }
+
+  useEffect(() => {
+    if (!selectedAIInterviewTemplateId) return;
+
+    // The review card is rendered after the selected template/questions reach state.
+    scrollToAIInterviewTemplateReview();
+  }, [
+    selectedAIInterviewTemplateId,
+    aiInterviewTemplates.length,
+    aiInterviewQuestions.length,
+  ]);
 
   function resetAIInterviewQuestionEditor() {
     setEditingAIInterviewQuestionId("");
@@ -25866,6 +25894,26 @@ Save Authorization
                     <div style={{ marginTop: 14, padding: 14, borderRadius: 14, background: "#ecfdf5", color: "#065f46", lineHeight: 1.7 }}>
                       <b>Template generated successfully.</b><br />
                       {aiInterviewGenerationResult.template_name} • {aiInterviewGenerationResult.generated_question_count} questions • Approval: Pending Review
+                      <div className="actions-line" style={{ marginTop: 10, marginBottom: 0 }}>
+                        <button
+                          className="save-btn"
+                          onClick={() => {
+                            const generatedTemplate = aiInterviewTemplates.find(
+                              (template) => String(template.id || "") === String(aiInterviewGenerationResult.template_id || "")
+                            );
+
+                            if (generatedTemplate) {
+                              openAIInterviewTemplateReview(generatedTemplate);
+                              return;
+                            }
+
+                            setSelectedAIInterviewTemplateId(aiInterviewGenerationResult.template_id || "");
+                            scrollToAIInterviewTemplateReview();
+                          }}
+                        >
+                          Review Generated Questions
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -25959,7 +26007,12 @@ Save Authorization
               const templateLocked = globalTemplate || selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked;
 
               return (
-                <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"}`}>
+                <div
+                  id="ai-interview-template-review"
+                  ref={aiInterviewTemplateReviewRef}
+                  style={{ scrollMarginTop: 110 }}
+                >
+                  <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"}`}>
                   <div className="dashboard-grid">
                     <Stat title="Profession" value={selectedTemplate.profession || "General"} />
                     <Stat title="Source" value={selectedTemplate.source_type || "Ready Template"} />
@@ -26142,7 +26195,8 @@ Save Authorization
                   <div style={{ marginTop: 12, fontSize: 12, color: "#64748b" }}>
                     AI-generated questions are recommendations only. The company reviewer must verify job relevance, fairness, safety and scoring before activation.
                   </div>
-                </FormCard>
+                  </FormCard>
+                </div>
               );
             })()}
 
