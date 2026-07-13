@@ -1323,7 +1323,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [participationConsentChecked, setParticipationConsentChecked] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
+  const [evaluationSummaryConsentChecked, setEvaluationSummaryConsentChecked] = useState(false);
+  const [employerSharingConsentChecked, setEmployerSharingConsentChecked] = useState(false);
+  const [decliningParticipation, setDecliningParticipation] = useState(false);
   const [microphoneReady, setMicrophoneReady] = useState(false);
   const [microphoneTesting, setMicrophoneTesting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -1349,6 +1353,19 @@ function AIInterviewCandidatePortal({ accessToken }) {
     : 0;
 
   const tr = (english, arabic) => portalLanguage === "AR" ? arabic : english;
+
+  const engineeringProfession = ENGINEERING_AI_TEMPLATE_CATALOG.find(
+    (item) => normalize(item.profession) === normalize(session?.profession)
+  );
+  const portalProfessionLabel = portalLanguage === "AR"
+    ? (engineeringProfession?.profession_ar || session?.profession || "-")
+    : (session?.profession || "-");
+  const portalInterviewTitle = portalLanguage === "AR"
+    ? `تجربة المقابلة الذكية المتقدمة — ${portalProfessionLabel}`
+    : (template?.template_name_en || template?.template_name || "VisaFlow KSA AI Interview Pilot");
+  const portalInstructions = portalLanguage === "AR"
+    ? "هذه تجربة اختيارية لمنصة VisaFlow KSA. استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون، وأجب بوضوح. التقييم الناتج تجريبي ولا يمثل عرضًا وظيفيًا أو قرار توظيف نهائيًا."
+    : "This is a voluntary VisaFlow KSA product pilot. Use a quiet place, allow microphone access, and answer clearly. The resulting evaluation is experimental and is not a job offer or a final employment decision.";
 
   useEffect(() => {
     loadCandidateInterviewPortal();
@@ -1464,7 +1481,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
       setTemplate(templateResult.data || null);
       setQuestions(questionRows);
       setAnswers(answerRows);
+      setParticipationConsentChecked(Boolean(nextSession.participation_consent_accepted));
       setConsentChecked(Boolean(nextSession.consent_accepted));
+      setEvaluationSummaryConsentChecked(Boolean(nextSession.evaluation_email_consent));
+      setEmployerSharingConsentChecked(Boolean(nextSession.employer_sharing_consent));
       setMicrophoneReady(Boolean(nextSession.microphone_test_passed));
       setCurrentQuestionIndex(firstUnansweredIndex >= 0 ? firstUnansweredIndex : Math.max(questionRows.length - 1, 0));
       interviewStartedAtRef.current = nextSession.started_at ? new Date(nextSession.started_at) : null;
@@ -1486,8 +1506,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
   }
 
   async function acceptConsent() {
-    if (!consentChecked) {
-      setPortalMessage(tr("Please accept the consent statement first.", "يرجى الموافقة على بيان التسجيل والتحليل أولًا."));
+    if (!participationConsentChecked || !consentChecked) {
+      setPortalMessage(tr(
+        "Please accept both required consent statements before continuing.",
+        "يرجى الموافقة على بياني المشاركة والتسجيل الإلزاميين قبل المتابعة."
+      ));
       return;
     }
 
@@ -1496,9 +1519,17 @@ function AIInterviewCandidatePortal({ accessToken }) {
     const { data, error } = await supabase
       .from("ai_interview_sessions")
       .update({
+        participation_consent_accepted: true,
+        participation_consent_accepted_at: now,
         consent_accepted: true,
         consent_accepted_at: now,
         consent_user_agent: navigator.userAgent || "",
+        evaluation_email_consent: Boolean(evaluationSummaryConsentChecked),
+        evaluation_email_consent_at: evaluationSummaryConsentChecked ? now : null,
+        employer_sharing_consent: Boolean(employerSharingConsentChecked),
+        employer_sharing_consent_at: employerSharingConsentChecked ? now : null,
+        consent_version: "visaflow-ai-pilot-v1",
+        participation_declined_at: null,
         status: microphoneReady ? "Ready" : "Consent Pending",
         updated_at: now,
       })
@@ -1513,7 +1544,54 @@ function AIInterviewCandidatePortal({ accessToken }) {
     }
 
     setSession(data);
-    setPortalMessage(tr("Consent saved successfully.", "تم حفظ الموافقة بنجاح."));
+    setPortalMessage(tr(
+      "Your pilot participation choices were saved successfully.",
+      "تم حفظ اختيارات المشاركة في التجربة بنجاح."
+    ));
+  }
+
+  async function declineParticipation() {
+    const confirmed = window.confirm(tr(
+      "Decline this voluntary pilot? Your interview will not start.",
+      "هل تريد رفض المشاركة في هذه التجربة الاختيارية؟ لن تبدأ المقابلة."
+    ));
+    if (!confirmed) return;
+
+    setDecliningParticipation(true);
+    setPortalMessage("");
+
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("ai_interview_sessions")
+        .update({
+          status: "Cancelled",
+          participation_declined_at: now,
+          participation_consent_accepted: false,
+          employer_sharing_consent: false,
+          evaluation_email_consent: false,
+          updated_at: now,
+        })
+        .eq("id", session.id)
+        .eq("access_token", accessToken)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+      setSession(data);
+      setPortalMessage(tr(
+        "Your choice was saved. No interview recording will take place.",
+        "تم حفظ اختيارك، ولن يتم إجراء أو تسجيل المقابلة."
+      ));
+      microphoneStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+    } catch (error) {
+      setPortalMessage(error?.message || tr(
+        "Your choice could not be saved.",
+        "تعذر حفظ اختيارك."
+      ));
+    } finally {
+      setDecliningParticipation(false);
+    }
   }
 
   async function ensureMicrophoneStream() {
@@ -1987,11 +2065,14 @@ function AIInterviewCandidatePortal({ accessToken }) {
     );
   }
 
+  const declinedParticipation = session.status === "Cancelled" && Boolean(session.participation_declined_at);
   const lockedStatus = ["Cancelled", "Expired", "Failed"].includes(session.status);
   const completed = session.status === "Completed";
   const inProgress = session.status === "In Progress";
   const consentRequired = template?.require_consent !== false && session.consent_required !== false;
-  const consentComplete = !consentRequired || session.consent_accepted;
+  const participationConsentComplete = Boolean(session.participation_consent_accepted);
+  const recordingConsentComplete = Boolean(session.consent_accepted);
+  const consentComplete = !consentRequired || (participationConsentComplete && recordingConsentComplete);
   const microphoneRequired = template?.require_microphone_test !== false;
   const microphoneComplete = !microphoneRequired || microphoneReady;
 
@@ -2002,7 +2083,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
           <div className="ai-candidate-brand-mark">VF</div>
           <div>
             <strong>VisaFlow KSA</strong>
-            <span>{tr("AI Screening Interview", "المقابلة الأولية بالذكاء الاصطناعي")}</span>
+            <span>{tr("AI Interview Pilot", "تجربة المقابلة الذكية")}</span>
           </div>
         </div>
         <div className="ai-candidate-language-switch" dir="ltr">
@@ -2019,7 +2100,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
           </div>
           <div>
             <span>{tr("Position", "الوظيفة")}</span>
-            <strong>{session.profession || "-"}</strong>
+            <strong>{portalProfessionLabel}</strong>
           </div>
           <div>
             <span>{tr("Request", "رقم الطلب")}</span>
@@ -2027,17 +2108,24 @@ function AIInterviewCandidatePortal({ accessToken }) {
           </div>
           <div>
             <span>{tr("Duration", "المدة")}</span>
-            <strong>{template?.duration_minutes || 15} {tr("minutes", "دقيقة")}</strong>
+            <strong>{tr("15–20 minutes", "15–20 دقيقة")}</strong>
           </div>
         </div>
 
         {portalMessage && <div className="ai-candidate-message">{portalMessage}</div>}
 
         {lockedStatus && (
-          <div className="ai-candidate-status-card ai-candidate-error-card">
-            <div className="ai-status-icon">!</div>
-            <h1>{tr("This interview is not available", "هذه المقابلة غير متاحة")}</h1>
-            <p>{tr(`Session status: ${session.status}`, `حالة الجلسة: ${session.status}`)}</p>
+          <div className={`ai-candidate-status-card ${declinedParticipation ? "ai-candidate-complete-card" : "ai-candidate-error-card"}`}>
+            <div className="ai-status-icon">{declinedParticipation ? "✓" : "!"}</div>
+            <h1>{declinedParticipation
+              ? tr("Participation declined", "تم رفض المشاركة")
+              : tr("This interview is not available", "هذه المقابلة غير متاحة")}</h1>
+            <p>{declinedParticipation
+              ? tr(
+                  "Thank you. Your choice was recorded and no interview audio will be collected.",
+                  "شكرًا لك. تم تسجيل اختيارك، ولن يتم جمع أو تسجيل أي صوت للمقابلة."
+                )
+              : tr(`Session status: ${session.status}`, `حالة الجلسة: ${session.status}`)}</p>
           </div>
         )}
 
@@ -2046,8 +2134,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
             <div className="ai-status-icon">✓</div>
             <h1>{tr("Interview completed", "تم إكمال المقابلة")}</h1>
             <p>{tr(
-              "Thank you. Your answers were submitted securely and will be reviewed by the recruitment team. The final decision remains with the company.",
-              "شكرًا لك. تم إرسال إجاباتك بشكل آمن، وسيقوم فريق التوظيف بمراجعتها. القرار النهائي يعود للشركة."
+              "Thank you. Your answers were submitted securely for this VisaFlow KSA pilot. The AI evaluation is experimental and is not a job offer or a final employment decision. Your profile or result will be shared with partner employers only if you gave separate permission.",
+              "شكرًا لك. تم إرسال إجاباتك بشكل آمن ضمن تجربة VisaFlow KSA. التقييم الناتج تجريبي، ولا يُعد عرضًا وظيفيًا أو قرار توظيف نهائيًا. لن تتم مشاركة ملفك أو نتيجتك مع الشركات المتعاونة إلا إذا منحت موافقة منفصلة."
             )}</p>
             <div className="ai-candidate-complete-summary">
               <span>{tr("Answered", "تمت الإجابة")}: <b>{session.answered_questions || answeredCount}</b></span>
@@ -2061,13 +2149,25 @@ function AIInterviewCandidatePortal({ accessToken }) {
           <div className="ai-candidate-start-grid">
             <section className="ai-candidate-main-card">
               <div className="ai-candidate-card-kicker">{tr("Before you begin", "قبل البدء")}</div>
-              <h1>{template?.template_name || tr("AI Voice Interview", "المقابلة الصوتية الذكية")}</h1>
-              <p className="ai-candidate-lead">
-                {template?.candidate_instructions || tr(
-                  "Use a quiet place, allow microphone access, and answer every question clearly.",
-                  "استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون، وأجب عن كل سؤال بوضوح."
-                )}
-              </p>
+              <h1>{portalInterviewTitle}</h1>
+              <p className="ai-candidate-lead">{portalInstructions}</p>
+
+              <div style={{
+                margin: "14px 0 18px",
+                padding: "14px 16px",
+                borderRadius: 12,
+                background: "#fff7ed",
+                border: "1px solid #fed7aa",
+                color: "#9a3412",
+                lineHeight: 1.75,
+                fontSize: 14,
+              }}>
+                <strong>{tr("Important pilot notice", "تنبيه مهم عن التجربة")}</strong>
+                <div>{tr(
+                  "Participation is voluntary. This pilot is not a job offer or a guarantee of employment. The AI result is a recommendation for product testing only.",
+                  "المشاركة اختيارية. هذه التجربة ليست عرضًا وظيفيًا ولا ضمانًا للتوظيف. نتيجة الذكاء الاصطناعي توصية تجريبية لاختبار المنتج فقط."
+                )}</div>
+              </div>
 
               <div className="ai-candidate-steps">
                 <div className={consentComplete ? "done" : "active"}><span>1</span><b>{tr("Consent", "الموافقة")}</b></div>
@@ -2075,20 +2175,95 @@ function AIInterviewCandidatePortal({ accessToken }) {
                 <div className={consentComplete && microphoneComplete ? "active" : ""}><span>3</span><b>{tr("Start", "البدء")}</b></div>
               </div>
 
-              {consentRequired && !session.consent_accepted && (
+              {consentRequired && !consentComplete && (
                 <div className="ai-candidate-consent-box">
-                  <h3>{tr("Recording and AI analysis consent", "الموافقة على التسجيل والتحليل بالذكاء الاصطناعي")}</h3>
-                  <p>{template?.consent_text || tr(
-                    "I understand that this interview may be recorded, transcribed and analyzed for recruitment evaluation. The final decision remains with the company.",
-                    "أفهم أن هذه المقابلة قد تُسجل وتُفرغ نصيًا وتُحلل لأغراض تقييم التوظيف، وأن القرار النهائي يعود للشركة."
+                  <h3>{tr("Pilot participation and recording consent", "الموافقة على المشاركة والتسجيل")}</h3>
+                  <p>{tr(
+                    "The following two statements are required to participate. Optional choices are separate and do not affect your ability to join the pilot.",
+                    "البيانان التاليان إلزاميان للمشاركة. أما الخيارات الأخرى فهي منفصلة واختيارية ولا تؤثر على إمكانية مشاركتك في التجربة."
                   )}</p>
+
                   <label className="ai-candidate-checkbox-row">
-                    <input type="checkbox" checked={consentChecked} onChange={(event) => setConsentChecked(event.target.checked)} />
-                    <span>{tr("I have read and agree.", "قرأت البيان وأوافق عليه.")}</span>
+                    <input
+                      type="checkbox"
+                      checked={participationConsentChecked}
+                      onChange={(event) => setParticipationConsentChecked(event.target.checked)}
+                    />
+                    <span>{tr(
+                      "I voluntarily agree to participate in the VisaFlow KSA AI interview pilot. I understand that this is not a job offer or a guarantee of employment.",
+                      "أوافق طوعًا على المشاركة في تجربة المقابلة الذكية لمنصة VisaFlow KSA، وأفهم أنها ليست عرضًا وظيفيًا أو ضمانًا للتوظيف."
+                    )}</span>
                   </label>
-                  <button className="ai-candidate-primary" onClick={acceptConsent}>{tr("Accept and continue", "الموافقة والمتابعة")}</button>
+
+                  <label className="ai-candidate-checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={consentChecked}
+                      onChange={(event) => setConsentChecked(event.target.checked)}
+                    />
+                    <span>{tr(
+                      "I consent to microphone recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision.",
+                      "أوافق على تسجيل الصوت وتفريغه نصيًا وتحليل إجاباتي بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
+                    )}</span>
+                  </label>
+
+                  <div style={{
+                    marginTop: 14,
+                    padding: "14px 16px",
+                    borderRadius: 10,
+                    background: "#f8fafc",
+                    border: "1px solid #dbe4f0",
+                  }}>
+                    <strong style={{ display: "block", marginBottom: 10 }}>
+                      {tr("Optional choices — unchecked by default", "خيارات اختيارية — غير محددة مسبقًا")}
+                    </strong>
+
+                    <label className="ai-candidate-checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={evaluationSummaryConsentChecked}
+                        onChange={(event) => setEvaluationSummaryConsentChecked(event.target.checked)}
+                      />
+                      <span>{tr(
+                        "I agree to receive a brief experimental evaluation summary by email after completing the interview.",
+                        "أوافق على استلام ملخص تقييم تجريبي مختصر عبر البريد الإلكتروني بعد إكمال المقابلة."
+                      )}</span>
+                    </label>
+
+                    <label className="ai-candidate-checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={employerSharingConsentChecked}
+                        onChange={(event) => setEmployerSharingConsentChecked(event.target.checked)}
+                      />
+                      <span>{tr(
+                        "I separately agree that VisaFlow KSA may share my profile and interview result with partner employers for potential job opportunities.",
+                        "أوافق بشكل منفصل على أن تشارك VisaFlow KSA ملفي ونتيجة المقابلة مع الشركات المتعاونة للنظر في فرص وظيفية محتملة."
+                      )}</span>
+                    </label>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+                    <button
+                      className="ai-candidate-primary"
+                      onClick={acceptConsent}
+                      disabled={decliningParticipation}
+                    >
+                      {tr("I agree and continue", "أوافق وأتابع")}
+                    </button>
+                    <button
+                      className="ai-candidate-secondary"
+                      onClick={declineParticipation}
+                      disabled={decliningParticipation}
+                    >
+                      {decliningParticipation
+                        ? tr("Saving...", "جاري الحفظ...")
+                        : tr("Decline participation", "رفض المشاركة")}
+                    </button>
+                  </div>
                 </div>
               )}
+
 
               {consentComplete && (
                 <div className="ai-candidate-microphone-box">
@@ -2120,7 +2295,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
                 <li>{tr("Choose a quiet place with a stable internet connection.", "اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت.")}</li>
                 <li>{tr("Speak clearly and provide job-related examples.", "تحدث بوضوح واذكر أمثلة مرتبطة بالعمل.")}</li>
                 <li>{tr("Do not refresh or close the page while recording.", "لا تحدث الصفحة أو تغلقها أثناء التسجيل.")}</li>
-                <li>{tr("The company makes the final recruitment decision.", "الشركة هي صاحبة القرار النهائي في التوظيف.")}</li>
+                <li>{tr("This pilot evaluation is experimental and is not a job offer or a final employment decision.", "هذا التقييم تجريبي، ولا يُعد عرضًا وظيفيًا أو قرار توظيف نهائيًا.")}</li>
               </ul>
             </aside>
           </div>
@@ -2198,7 +2373,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
       <footer className="ai-candidate-footer">
         <span>VisaFlow KSA</span>
-        <span>{tr("Secure recruitment interview portal", "بوابة آمنة لمقابلات التوظيف")}</span>
+        <span>{tr("Secure AI interview pilot portal", "بوابة آمنة لتجربة المقابلة الذكية")}</span>
       </footer>
     </main>
   );
