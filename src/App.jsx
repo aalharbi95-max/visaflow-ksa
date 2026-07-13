@@ -19,6 +19,7 @@ const PAGES = [
   "Visa Allocation",
   "Candidates",
   "Interviews",
+  "AI Interview Center",
   "Mobilization",
   "Onboarding & Validation",
   "Employees",
@@ -61,7 +62,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Recruitment",
     icon: "📋",
-    pages: ["Requests", "Saudi Hiring", "Candidates", "Interviews", "Rejected Candidates"],
+    pages: ["Requests", "Saudi Hiring", "Candidates", "Interviews", "AI Interview Center", "Rejected Candidates"],
   },
   {
     title: "Visa & Authorization",
@@ -595,6 +596,40 @@ const AI_INTERVIEW_ACTIVE_SESSION_STATUSES = [
   "In Progress",
   "Processing",
   "Completed",
+];
+
+const EMPTY_AI_INTERVIEW_CAMPAIGN_FORM = {
+  campaign_name: "",
+  template_id: "",
+  request_no: "",
+  project_name: "",
+  profession: "",
+  language: "Bilingual",
+  interview_deadline: "",
+  invitation_batch_size: 20,
+  max_reminders: 3,
+  first_reminder_after_hours: 24,
+  second_reminder_after_hours: 48,
+  final_reminder_before_hours: 24,
+  notes: "",
+};
+
+const AI_INTERVIEW_CAMPAIGN_TABS = [
+  "Campaigns",
+  "Candidate Selection",
+  "Results & Ranking",
+  "Invitation Queue",
+];
+
+const AI_INTERVIEW_HUMAN_DECISIONS = [
+  "Pending Company Review",
+  "Recommended",
+  "Second Interview",
+  "Technical Interview",
+  "On Hold",
+  "Not Recommended",
+  "Accepted",
+  "Rejected",
 ];
 
 const AI_INTERVIEW_QUESTION_TYPES = [
@@ -2340,6 +2375,18 @@ const [aiInterviewTemplates, setAIInterviewTemplates] = useState([]);
 const [aiInterviewQuestions, setAIInterviewQuestions] = useState([]);
 const [aiInterviewSessions, setAIInterviewSessions] = useState([]);
 const [aiInterviewAnswers, setAIInterviewAnswers] = useState([]);
+const [aiInterviewCampaigns, setAIInterviewCampaigns] = useState([]);
+const [aiInterviewCampaignCandidates, setAIInterviewCampaignCandidates] = useState([]);
+const [aiInterviewInvitationJobs, setAIInterviewInvitationJobs] = useState([]);
+const [selectedAIInterviewCampaignId, setSelectedAIInterviewCampaignId] = useState("");
+const [aiInterviewCampaignTab, setAIInterviewCampaignTab] = useState("Campaigns");
+const [aiInterviewCampaignForm, setAIInterviewCampaignForm] = useState({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
+const [selectedCampaignCandidateIds, setSelectedCampaignCandidateIds] = useState([]);
+const [aiInterviewCandidateSearch, setAIInterviewCandidateSearch] = useState("");
+const [aiInterviewCandidateRequestFilter, setAIInterviewCandidateRequestFilter] = useState("");
+const [aiInterviewCandidateProfessionFilter, setAIInterviewCandidateProfessionFilter] = useState("");
+const [aiInterviewCampaignBusy, setAIInterviewCampaignBusy] = useState(false);
+const [aiInterviewCampaignMessage, setAIInterviewCampaignMessage] = useState("");
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewInvitationSendingId, setAIInterviewInvitationSendingId] = useState("");
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
@@ -2713,6 +2760,7 @@ const ROLE_PAGES = {
     "AI Agent",
     "AI Report Studio",
     "Dashboard",
+    "AI Interview Center",
     "Recruitment Performance",
     "Onboarding & Validation",
     "Agency Ranking",
@@ -2770,6 +2818,7 @@ const ROLE_PAGES = {
     "RequestDetails",
     "Candidates",
     "Interviews",
+    "AI Interview Center",
     "Rejected Candidates",
     "Visa Inventory",
     "Visa Allocation",
@@ -2800,6 +2849,7 @@ const ROLE_PAGES = {
     "RequestDetails",
     "Candidates",
     "Interviews",
+    "AI Interview Center",
     "Rejected Candidates",
     "Visa Inventory",
     "Authorization",
@@ -2879,6 +2929,8 @@ const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePort
 const canViewEmailAdministration = currentRole !== "Agency";
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageInterviewResults = canManageInterviews;
+const canManageAIInterviewCampaigns = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
+const canViewAIInterviewCampaigns = canManageAIInterviewCampaigns || ["CEO", "Operations Manager"].includes(currentRole);
 const isGlobalEngineeringAdminPage = activePage === "Global Engineering Templates";
 const canScheduleInterviews = canManageInterviewResults || currentRole === "Agency" || hasAction("scheduleInterview");
 const canApproveInterviewSchedule = canManageInterviewResults;
@@ -4137,6 +4189,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadAIInterviewQuestions(),
       loadAIInterviewSessions(),
       loadAIInterviewAnswers(),
+      loadAIInterviewCampaigns(),
+      loadAIInterviewCampaignCandidates(),
+      loadAIInterviewInvitationJobs(),
       loadUsers(),
       loadCompanies(),
       loadCompanyEmailSettings(),
@@ -4760,6 +4815,83 @@ async function loadProfessionAliases() {
     }
 
     setAIInterviewAnswers(data || []);
+    return data || [];
+  }
+
+
+  async function loadAIInterviewCampaigns() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewCampaigns([]);
+      setSelectedAIInterviewCampaignId("");
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_campaigns")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 1000);
+
+    if (error) {
+      console.warn("ai_interview_campaigns:", error.message);
+      setAIInterviewCampaigns([]);
+      return [];
+    }
+
+    const rows = data || [];
+    setAIInterviewCampaigns(rows);
+    setSelectedAIInterviewCampaignId((current) =>
+      current && rows.some((item) => String(item.id) === String(current))
+        ? current
+        : (rows[0]?.id || "")
+    );
+    return rows;
+  }
+
+  async function loadAIInterviewCampaignCandidates() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewCampaignCandidates([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_campaign_candidates")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: true })
+      .range(0, 10000);
+
+    if (error) {
+      console.warn("ai_interview_campaign_candidates:", error.message);
+      setAIInterviewCampaignCandidates([]);
+      return [];
+    }
+
+    setAIInterviewCampaignCandidates(data || []);
+    return data || [];
+  }
+
+  async function loadAIInterviewInvitationJobs() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAIInterviewInvitationJobs([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("ai_interview_invitation_jobs")
+      .select("*")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 10000);
+
+    if (error) {
+      console.warn("ai_interview_invitation_jobs:", error.message);
+      setAIInterviewInvitationJobs([]);
+      return [];
+    }
+
+    setAIInterviewInvitationJobs(data || []);
     return data || [];
   }
   const loadMobilizations = () => loadTable("mobilizations", setMobilizations);
@@ -21835,6 +21967,837 @@ function getReportStudioVisualModel() {
 }
 
 
+  function getSelectedAIInterviewCampaign() {
+    return aiInterviewCampaigns.find(
+      (item) => String(item.id || "") === String(selectedAIInterviewCampaignId || "")
+    ) || null;
+  }
+
+  function getCampaignCandidateRows(campaignId = selectedAIInterviewCampaignId) {
+    return aiInterviewCampaignCandidates.filter(
+      (item) => String(item.campaign_id || "") === String(campaignId || "")
+    );
+  }
+
+  function getCampaignInvitationJobs(campaignId = selectedAIInterviewCampaignId) {
+    return aiInterviewInvitationJobs.filter(
+      (item) => String(item.campaign_id || "") === String(campaignId || "")
+    );
+  }
+
+  function getAIInterviewCampaignTemplateOptions() {
+    return aiInterviewTemplates
+      .filter((template) =>
+        template.is_active === true &&
+        template.approval_status === "Approved" &&
+        template.status === "Active"
+      )
+      .sort((a, b) => String(a.template_name || "").localeCompare(String(b.template_name || "")));
+  }
+
+  function resetAIInterviewCampaignForm() {
+    setAIInterviewCampaignForm({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
+  }
+
+  function selectAIInterviewCampaign(campaignId, tab = "Candidate Selection") {
+    setSelectedAIInterviewCampaignId(campaignId || "");
+    setSelectedCampaignCandidateIds([]);
+    setAIInterviewCampaignTab(tab);
+    setAIInterviewCampaignMessage("");
+  }
+
+  async function refreshAIInterviewCenter() {
+    setAIInterviewCampaignBusy(true);
+    try {
+      await Promise.all([
+        loadAIInterviewCampaigns(),
+        loadAIInterviewCampaignCandidates(),
+        loadAIInterviewInvitationJobs(),
+        loadAIInterviewSessions(),
+        loadAIInterviewTemplates(),
+      ]);
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  async function createAIInterviewCampaign() {
+    if (!canManageAIInterviewCampaigns) {
+      return alert("You do not have permission to create AI interview campaigns.");
+    }
+    if (!currentCompanyId) return alert("Company ID is missing.");
+
+    const form = aiInterviewCampaignForm;
+    const campaignName = String(form.campaign_name || "").trim();
+    const template = aiInterviewTemplates.find(
+      (item) => String(item.id || "") === String(form.template_id || "")
+    );
+
+    if (!campaignName) return alert("Campaign name is required.");
+    if (!template?.id) return alert("Select an approved active AI interview template.");
+    if (!form.interview_deadline) return alert("Interview deadline is required.");
+
+    const deadline = new Date(form.interview_deadline);
+    if (Number.isNaN(deadline.getTime()) || deadline <= new Date()) {
+      return alert("Interview deadline must be a valid future date and time.");
+    }
+
+    setAIInterviewCampaignBusy(true);
+    setAIInterviewCampaignMessage("Creating AI interview campaign...");
+
+    try {
+      const payload = {
+        company_id: currentCompanyId,
+        campaign_name: campaignName,
+        template_id: template.id,
+        request_no: String(form.request_no || "").trim(),
+        project_name: String(form.project_name || "").trim(),
+        profession: String(form.profession || template.profession || "").trim(),
+        language: form.language || template.language || "Bilingual",
+        status: "Draft",
+        interview_deadline: deadline.toISOString(),
+        invitation_batch_size: Math.max(1, Math.min(100, Number(form.invitation_batch_size || 20))),
+        max_reminders: Math.max(0, Math.min(5, Number(form.max_reminders || 0))),
+        first_reminder_after_hours: Math.max(0, Number(form.first_reminder_after_hours || 24)),
+        second_reminder_after_hours: Math.max(0, Number(form.second_reminder_after_hours || 48)),
+        final_reminder_before_hours: Math.max(0, Number(form.final_reminder_before_hours || 24)),
+        created_by_user_id: currentUser?.id || null,
+        created_by_name: currentUser?.name || currentUser?.email || "VisaFlow User",
+        notes: String(form.notes || "").trim(),
+        settings: {
+          source: "AI Interview Center",
+          created_from: window.location.hostname,
+        },
+      };
+
+      const { data, error } = await supabase
+        .from("ai_interview_campaigns")
+        .insert([payload])
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      resetAIInterviewCampaignForm();
+      await loadAIInterviewCampaigns();
+      setSelectedAIInterviewCampaignId(data.id);
+      setAIInterviewCampaignTab("Candidate Selection");
+      setAIInterviewCampaignMessage(`Campaign ${data.campaign_name} created. Select candidates before launch.`);
+    } catch (error) {
+      console.warn("create AI interview campaign failed", error?.message || error);
+      setAIInterviewCampaignMessage(`Campaign creation failed: ${error?.message || error}`);
+      alert(error?.message || "Campaign creation failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  async function deleteAIInterviewCampaign(campaign = {}) {
+    if (!canManageAIInterviewCampaigns) return;
+    if (!campaign?.id) return;
+    if (!["Draft", "Ready", "Cancelled"].includes(campaign.status)) {
+      return alert("Only Draft, Ready or Cancelled campaigns can be deleted.");
+    }
+    if (!window.confirm(`Delete campaign ${campaign.campaign_name || ""}?`)) return;
+
+    setAIInterviewCampaignBusy(true);
+    try {
+      const { error } = await supabase
+        .from("ai_interview_campaigns")
+        .delete()
+        .eq("id", campaign.id)
+        .eq("company_id", currentCompanyId);
+      if (error) throw error;
+
+      if (String(selectedAIInterviewCampaignId) === String(campaign.id)) {
+        setSelectedAIInterviewCampaignId("");
+      }
+      await Promise.all([
+        loadAIInterviewCampaigns(),
+        loadAIInterviewCampaignCandidates(),
+        loadAIInterviewInvitationJobs(),
+      ]);
+    } catch (error) {
+      alert(error?.message || "Campaign deletion failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  function toggleCampaignCandidateSelection(candidateId) {
+    const id = String(candidateId || "");
+    setSelectedCampaignCandidateIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    );
+  }
+
+  function candidateNeedsInterview(candidate = {}) {
+    const line = requestLines.find(
+      (item) => String(item.id || "") === String(candidate.request_line_id || "")
+    );
+    const requirement = normalize(line?.interview_required || "Required");
+    return !["no interview", "not required", "no", "n/a"].includes(requirement);
+  }
+
+  async function addSelectedCandidatesToCampaign() {
+    if (!canManageAIInterviewCampaigns) return;
+    if (!selectedAIInterviewCampaignId) return alert("Select a campaign first.");
+    if (selectedCampaignCandidateIds.length === 0) return alert("Select at least one candidate.");
+
+    setAIInterviewCampaignBusy(true);
+    setAIInterviewCampaignMessage(`Adding ${selectedCampaignCandidateIds.length} candidate(s) to the campaign...`);
+
+    try {
+      const { data, error } = await supabase.rpc("add_candidates_to_ai_interview_campaign", {
+        p_campaign_id: selectedAIInterviewCampaignId,
+        p_candidate_ids: selectedCampaignCandidateIds.map(String),
+      });
+      if (error) throw error;
+
+      const result = Array.isArray(data) ? data[0] : data;
+      setSelectedCampaignCandidateIds([]);
+      await Promise.all([loadAIInterviewCampaigns(), loadAIInterviewCampaignCandidates()]);
+      setAIInterviewCampaignMessage(
+        `Candidates processed: ${result?.requested_count ?? 0}. Added: ${result?.inserted_count ?? 0}. ` +
+        `Valid: ${result?.valid_count ?? 0}. Invalid: ${result?.invalid_count ?? 0}. Duplicates: ${result?.duplicate_count ?? 0}.`
+      );
+    } catch (error) {
+      console.warn("add campaign candidates failed", error?.message || error);
+      setAIInterviewCampaignMessage(`Candidate selection failed: ${error?.message || error}`);
+      alert(error?.message || "Candidate selection failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  async function removeCampaignCandidate(campaignCandidate = {}) {
+    if (!canManageAIInterviewCampaigns || !campaignCandidate?.id) return;
+    if (!window.confirm(`Remove ${campaignCandidate.candidate_name || "candidate"} from this campaign?`)) return;
+
+    setAIInterviewCampaignBusy(true);
+    try {
+      const { error } = await supabase.rpc("remove_candidates_from_ai_interview_campaign", {
+        p_campaign_id: campaignCandidate.campaign_id,
+        p_campaign_candidate_ids: [campaignCandidate.id],
+      });
+      if (error) throw error;
+      await Promise.all([loadAIInterviewCampaigns(), loadAIInterviewCampaignCandidates()]);
+    } catch (error) {
+      alert(error?.message || "Candidate removal failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  async function revalidateSelectedAIInterviewCampaign() {
+    if (!selectedAIInterviewCampaignId) return alert("Select a campaign first.");
+    setAIInterviewCampaignBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("revalidate_ai_interview_campaign_candidates", {
+        p_campaign_id: selectedAIInterviewCampaignId,
+      });
+      if (error) throw error;
+      const result = Array.isArray(data) ? data[0] : data;
+      await Promise.all([loadAIInterviewCampaigns(), loadAIInterviewCampaignCandidates()]);
+      setAIInterviewCampaignMessage(
+        `Validation completed. Total: ${result?.total_count ?? 0}. Valid: ${result?.valid_count ?? 0}. ` +
+        `Invalid: ${result?.invalid_count ?? 0}. Duplicates: ${result?.duplicate_count ?? 0}.`
+      );
+    } catch (error) {
+      alert(error?.message || "Campaign validation failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  async function launchSelectedAIInterviewCampaign() {
+    if (!canManageAIInterviewCampaigns) return;
+    const campaign = getSelectedAIInterviewCampaign();
+    if (!campaign?.id) return alert("Select a campaign first.");
+    const rows = getCampaignCandidateRows(campaign.id);
+    const validRows = rows.filter((item) => item.validation_status === "Valid");
+    if (validRows.length === 0) return alert("Add at least one valid candidate before launch.");
+
+    if (!window.confirm(
+      `Launch ${campaign.campaign_name}?\n\n` +
+      `${validRows.length} valid candidate(s) will receive individual secure interview links automatically.`
+    )) return;
+
+    setAIInterviewCampaignBusy(true);
+    setAIInterviewCampaignMessage("Launching campaign and creating secure interview sessions...");
+
+    try {
+      const baseUrl = `${window.location.origin}${window.location.pathname}`.replace(/\/$/, "");
+      const { data, error } = await supabase.rpc("launch_ai_interview_campaign", {
+        p_campaign_id: campaign.id,
+        p_app_base_url: baseUrl,
+      });
+      if (error) throw error;
+
+      const result = Array.isArray(data) ? data[0] : data;
+      await Promise.all([
+        loadAIInterviewCampaigns(),
+        loadAIInterviewCampaignCandidates(),
+        loadAIInterviewInvitationJobs(),
+        loadAIInterviewSessions(),
+      ]);
+      setAIInterviewCampaignTab("Invitation Queue");
+      setAIInterviewCampaignMessage(
+        `Campaign launched. Sessions created: ${result?.sessions_created ?? 0}. ` +
+        `Existing sessions: ${result?.existing_sessions ?? 0}. ` +
+        `Invitations queued: ${result?.invitation_jobs_queued ?? 0}. ` +
+        `The automatic worker sends up to 20 invitations every minute.`
+      );
+    } catch (error) {
+      console.warn("launch campaign failed", error?.message || error);
+      setAIInterviewCampaignMessage(`Campaign launch failed: ${error?.message || error}`);
+      alert(error?.message || "Campaign launch failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  async function updateCampaignCandidateHumanDecision(campaignCandidate = {}, decision = "") {
+    if (!canManageAIInterviewCampaigns || !campaignCandidate?.id) return;
+    const safeDecision = AI_INTERVIEW_HUMAN_DECISIONS.includes(decision)
+      ? decision
+      : "Pending Company Review";
+
+    setAIInterviewCampaignBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const session = aiInterviewSessions.find(
+        (item) => String(item.id || "") === String(campaignCandidate.session_id || "")
+      );
+
+      if (session?.id) {
+        const { error: sessionError } = await supabase
+          .from("ai_interview_sessions")
+          .update({
+            human_decision: safeDecision,
+            review_status: safeDecision === "Pending Company Review" ? "Pending Human Review" : "Human Review Completed",
+            reviewed_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+            updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
+            updated_at: now,
+          })
+          .eq("id", session.id)
+          .eq("company_id", currentCompanyId);
+        if (sessionError) throw sessionError;
+      } else {
+        const { error: candidateError } = await supabase
+          .from("ai_interview_campaign_candidates")
+          .update({
+            human_decision: safeDecision,
+            status: safeDecision === "Pending Company Review" ? campaignCandidate.status : "Human Reviewed",
+            human_reviewed_at: safeDecision === "Pending Company Review" ? null : now,
+            updated_at: now,
+          })
+          .eq("id", campaignCandidate.id)
+          .eq("company_id", currentCompanyId);
+        if (candidateError) throw candidateError;
+      }
+
+      await Promise.all([loadAIInterviewSessions(), loadAIInterviewCampaignCandidates(), loadAIInterviewCampaigns()]);
+    } catch (error) {
+      alert(error?.message || "Human decision update failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  function renderAIInterviewCenter() {
+    const selectedCampaign = getSelectedAIInterviewCampaign();
+    const campaignRows = selectedCampaign ? getCampaignCandidateRows(selectedCampaign.id) : [];
+    const campaignJobs = selectedCampaign ? getCampaignInvitationJobs(selectedCampaign.id) : [];
+    const templateOptions = getAIInterviewCampaignTemplateOptions();
+    const selectedTemplate = templateOptions.find(
+      (item) => String(item.id || "") === String(aiInterviewCampaignForm.template_id || "")
+    );
+    const existingCandidateIds = new Set(campaignRows.map((item) => String(item.candidate_id || "")));
+    const searchText = normalize(aiInterviewCandidateSearch);
+    const eligibleCandidates = candidates
+      .filter((candidate) => candidateNeedsInterview(candidate))
+      .filter((candidate) => !existingCandidateIds.has(String(candidate.id || "")))
+      .filter((candidate) => !aiInterviewCandidateRequestFilter || String(candidate.request_no || "") === String(aiInterviewCandidateRequestFilter))
+      .filter((candidate) => !aiInterviewCandidateProfessionFilter || normalize(candidate.profession) === normalize(aiInterviewCandidateProfessionFilter))
+      .filter((candidate) => {
+        if (!searchText) return true;
+        return normalize([
+          candidate.candidate_name,
+          candidate.email,
+          candidate.mobile,
+          candidate.profession,
+          candidate.nationality,
+          candidate.request_no,
+          candidate.agency,
+        ].join(" ")).includes(searchText);
+      })
+      .sort((a, b) => String(a.candidate_name || "").localeCompare(String(b.candidate_name || "")));
+
+    const rankedRows = [...campaignRows].sort((a, b) => {
+      const aScore = a.overall_score === null || a.overall_score === undefined ? -1 : Number(a.overall_score);
+      const bScore = b.overall_score === null || b.overall_score === undefined ? -1 : Number(b.overall_score);
+      return bScore - aScore || String(a.candidate_name || "").localeCompare(String(b.candidate_name || ""));
+    });
+
+    const sentJobs = campaignJobs.filter((job) => job.status === "Sent").length;
+    const queuedJobs = campaignJobs.filter((job) => ["Queued", "Processing"].includes(job.status)).length;
+    const failedJobs = campaignJobs.filter((job) => job.status === "Failed").length;
+    const completedRows = campaignRows.filter((item) => ["Completed", "Queued for Analysis", "Transcribing", "Analyzing", "Review Ready", "Needs Human Review", "Human Reviewed"].includes(item.status));
+    const analyzedRows = campaignRows.filter((item) => item.analysis_status === "Completed");
+
+    return (
+      <>
+        <div
+          style={{
+            borderRadius: "28px",
+            padding: "24px",
+            marginBottom: "18px",
+            color: "#fff",
+            background: "linear-gradient(135deg, #061b49 0%, #123f83 58%, #0f766e 100%)",
+            boxShadow: "0 18px 54px rgba(6,27,73,.18)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "18px", alignItems: "center", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: "12px", fontWeight: 900, letterSpacing: ".08em", opacity: .78, textTransform: "uppercase" }}>VisaFlow AI Recruitment</div>
+              <h2 style={{ margin: "8px 0", fontSize: "32px" }}>AI Interview Center</h2>
+              <p style={{ margin: 0, maxWidth: "820px", lineHeight: 1.7, opacity: .9 }}>
+                Create bulk interview campaigns, invite up to hundreds of candidates, monitor completion, rank AI results, and record the company&apos;s final decision.
+              </p>
+            </div>
+            <div className="actions-line" style={{ margin: 0 }}>
+              <button className="new-btn" disabled={aiInterviewCampaignBusy} onClick={refreshAIInterviewCenter}>
+                {aiInterviewCampaignBusy ? "Working..." : "Refresh Center"}
+              </button>
+              {selectedCampaign && canManageAIInterviewCampaigns && ["Draft", "Ready", "Paused"].includes(selectedCampaign.status) && (
+                <button className="save-btn" disabled={aiInterviewCampaignBusy} onClick={launchSelectedAIInterviewCampaign}>
+                  Launch Campaign
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {aiInterviewCampaignMessage && (
+          <div style={{ padding: "12px 14px", marginBottom: "14px", borderRadius: "14px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", fontWeight: 700 }}>
+            {aiInterviewCampaignMessage}
+          </div>
+        )}
+
+        <div className="dashboard-grid" style={{ marginBottom: "16px" }}>
+          <Stat title="Campaigns" value={aiInterviewCampaigns.length} />
+          <Stat title="Active Campaigns" value={aiInterviewCampaigns.filter((item) => item.status === "Active").length} className="passed" />
+          <Stat title="Candidates in Selected Campaign" value={campaignRows.length} />
+          <Stat title="Completed Interviews" value={completedRows.length} className="passed" />
+          <Stat title="Analyzed" value={analyzedRows.length} className="passed" />
+          <Stat title="Queued Invitations" value={queuedJobs} className={queuedJobs ? "warning" : "passed"} />
+          <Stat title="Sent Invitations" value={sentJobs} className="passed" />
+          <Stat title="Failed Invitations" value={failedJobs} className={failedJobs ? "danger" : "passed"} />
+        </div>
+
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" }}>
+          {AI_INTERVIEW_CAMPAIGN_TABS.map((tab) => (
+            <button
+              key={tab}
+              className={aiInterviewCampaignTab === tab ? "save-btn" : "light-btn"}
+              onClick={() => setAIInterviewCampaignTab(tab)}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        {aiInterviewCampaignTab === "Campaigns" && (
+          <>
+            {canManageAIInterviewCampaigns && (
+              <FormCard title="Create AI Interview Campaign">
+                <div className="form-grid">
+                  <Input
+                    placeholder="Campaign Name"
+                    value={aiInterviewCampaignForm.campaign_name}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, campaign_name: value }))}
+                  />
+                  <Select
+                    value={aiInterviewCampaignForm.template_id}
+                    onChange={(value) => {
+                      const template = templateOptions.find((item) => String(item.id) === String(value));
+                      setAIInterviewCampaignForm((current) => ({
+                        ...current,
+                        template_id: value,
+                        profession: current.profession || template?.profession || "",
+                        language: template?.language || current.language || "Bilingual",
+                      }));
+                    }}
+                    placeholder="Approved AI Template"
+                    options={templateOptions.map((item) => ({ value: item.id, label: `${item.template_name} — ${item.profession || "General"}` }))}
+                  />
+                  <Select
+                    value={aiInterviewCampaignForm.request_no}
+                    onChange={(value) => {
+                      const request = requests.find((item) => String(item.request_no || "") === String(value || ""));
+                      setAIInterviewCampaignForm((current) => ({
+                        ...current,
+                        request_no: value,
+                        project_name: request?.project_name || request?.project || current.project_name,
+                        profession: request?.profession || current.profession || selectedTemplate?.profession || "",
+                      }));
+                    }}
+                    placeholder="Request No (Optional)"
+                    searchable
+                    options={requests.map((item) => item.request_no).filter(Boolean)}
+                  />
+                  <Input
+                    placeholder="Project / Department"
+                    value={aiInterviewCampaignForm.project_name}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, project_name: value }))}
+                  />
+                  <Input
+                    placeholder="Profession"
+                    value={aiInterviewCampaignForm.profession}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, profession: value }))}
+                  />
+                  <Select
+                    value={aiInterviewCampaignForm.language}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, language: value }))}
+                    placeholder="Language"
+                    options={["Arabic", "English", "Bilingual"]}
+                  />
+                  <Input
+                    type="datetime-local"
+                    placeholder="Interview Deadline"
+                    value={aiInterviewCampaignForm.interview_deadline}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, interview_deadline: value }))}
+                  />
+                  <Input
+                    type="number"
+                    placeholder="Invitations Per Worker Run"
+                    value={aiInterviewCampaignForm.invitation_batch_size}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, invitation_batch_size: value }))}
+                  />
+                  <Input
+                    type="number"
+                    placeholder="Maximum Reminders"
+                    value={aiInterviewCampaignForm.max_reminders}
+                    onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, max_reminders: value }))}
+                  />
+                </div>
+                <textarea
+                  rows="3"
+                  placeholder="Campaign Notes"
+                  value={aiInterviewCampaignForm.notes}
+                  onChange={(event) => setAIInterviewCampaignForm((current) => ({ ...current, notes: event.target.value }))}
+                />
+                <div className="actions-line">
+                  <button className="save-btn" disabled={aiInterviewCampaignBusy} onClick={createAIInterviewCampaign}>Create Campaign</button>
+                  <button className="light-btn" onClick={resetAIInterviewCampaignForm}>Clear</button>
+                </div>
+              </FormCard>
+            )}
+
+            <TableCard title="AI Interview Campaigns">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Campaign</th>
+                      <th>Profession</th>
+                      <th>Template</th>
+                      <th>Deadline</th>
+                      <th>Candidates</th>
+                      <th>Sent</th>
+                      <th>Completed</th>
+                      <th>Analyzed</th>
+                      <th>Status</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {aiInterviewCampaigns.length === 0 ? (
+                      <tr><td colSpan="10">No AI interview campaigns yet.</td></tr>
+                    ) : aiInterviewCampaigns.map((campaign) => (
+                      <tr key={campaign.id} style={String(campaign.id) === String(selectedAIInterviewCampaignId) ? { background: "#eff6ff" } : undefined}>
+                        <td><b>{campaign.campaign_name}</b><div style={{ fontSize: "12px", color: "#64748b" }}>{campaign.request_no || "No request selected"}</div></td>
+                        <td>{campaign.profession || "-"}</td>
+                        <td>{getAIInterviewTemplateName(campaign.template_id)}</td>
+                        <td>{campaign.interview_deadline ? new Date(campaign.interview_deadline).toLocaleString() : "-"}</td>
+                        <td>{campaign.total_candidates || 0}</td>
+                        <td>{campaign.invitation_sent_count || 0}</td>
+                        <td>{campaign.completed_count || 0}</td>
+                        <td>{campaign.analyzed_count || 0}</td>
+                        <td><Badge value={campaign.status || "Draft"} /></td>
+                        <td className="table-actions">
+                          <button onClick={() => selectAIInterviewCampaign(campaign.id, "Candidate Selection")}>Open</button>
+                          <button onClick={() => selectAIInterviewCampaign(campaign.id, "Results & Ranking")}>Results</button>
+                          {canManageAIInterviewCampaigns && ["Draft", "Ready", "Cancelled"].includes(campaign.status) && (
+                            <button className="danger" onClick={() => deleteAIInterviewCampaign(campaign)}>Delete</button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TableCard>
+          </>
+        )}
+
+        {aiInterviewCampaignTab === "Candidate Selection" && (
+          <>
+            {!selectedCampaign ? (
+              <TableCard title="Candidate Selection"><p>Select or create a campaign first.</p></TableCard>
+            ) : (
+              <>
+                <TableCard title={`Campaign Setup — ${selectedCampaign.campaign_name}`}>
+                  <div className="dashboard-grid">
+                    <Stat title="Status" value={selectedCampaign.status} />
+                    <Stat title="Valid Candidates" value={campaignRows.filter((item) => item.validation_status === "Valid").length} className="passed" />
+                    <Stat title="Invalid / Duplicate" value={campaignRows.filter((item) => item.validation_status !== "Valid").length} className={campaignRows.some((item) => item.validation_status !== "Valid") ? "warning" : "passed"} />
+                    <Stat title="Deadline" value={selectedCampaign.interview_deadline ? new Date(selectedCampaign.interview_deadline).toLocaleString() : "-"} />
+                  </div>
+                  <div className="actions-line" style={{ marginTop: "14px" }}>
+                    {canManageAIInterviewCampaigns && ["Draft", "Ready", "Paused"].includes(selectedCampaign.status) && (
+                      <>
+                        <button className="light-btn" disabled={aiInterviewCampaignBusy} onClick={revalidateSelectedAIInterviewCampaign}>Validate Candidates</button>
+                        <button className="save-btn" disabled={aiInterviewCampaignBusy} onClick={launchSelectedAIInterviewCampaign}>Launch Campaign</button>
+                      </>
+                    )}
+                  </div>
+                </TableCard>
+
+                {canManageAIInterviewCampaigns && ["Draft", "Ready", "Paused"].includes(selectedCampaign.status) && (
+                  <TableCard title="Select Candidates from VisaFlow">
+                    <div className="form-grid" style={{ marginBottom: "12px" }}>
+                      <Input placeholder="Search name, email, profession, nationality or agency" value={aiInterviewCandidateSearch} onChange={setAIInterviewCandidateSearch} />
+                      <Select
+                        value={aiInterviewCandidateRequestFilter}
+                        onChange={setAIInterviewCandidateRequestFilter}
+                        placeholder="All Requests"
+                        searchable
+                        options={Array.from(new Set(candidates.map((item) => item.request_no).filter(Boolean)))}
+                      />
+                      <Select
+                        value={aiInterviewCandidateProfessionFilter}
+                        onChange={setAIInterviewCandidateProfessionFilter}
+                        placeholder="All Professions"
+                        searchable
+                        options={Array.from(new Set(candidates.map((item) => item.profession).filter(Boolean)))}
+                      />
+                    </div>
+                    <div className="actions-line" style={{ marginBottom: "12px" }}>
+                      <button
+                        className="light-btn"
+                        onClick={() => setSelectedCampaignCandidateIds(eligibleCandidates.map((item) => String(item.id)))}
+                      >
+                        Select All Filtered ({eligibleCandidates.length})
+                      </button>
+                      <button className="light-btn" onClick={() => setSelectedCampaignCandidateIds([])}>Clear Selection</button>
+                      <button className="save-btn" disabled={aiInterviewCampaignBusy || selectedCampaignCandidateIds.length === 0} onClick={addSelectedCandidatesToCampaign}>
+                        Add Selected ({selectedCampaignCandidateIds.length})
+                      </button>
+                    </div>
+                    <div className="table-wrap" style={{ maxHeight: "520px", overflow: "auto" }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Select</th>
+                            <th>Candidate</th>
+                            <th>Email</th>
+                            <th>Profession</th>
+                            <th>Nationality</th>
+                            <th>Request</th>
+                            <th>Agency</th>
+                            <th>Eligibility</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {eligibleCandidates.length === 0 ? (
+                            <tr><td colSpan="8">No eligible candidates match the current filters. Candidates on No Interview request lines are excluded automatically.</td></tr>
+                          ) : eligibleCandidates.map((candidate) => (
+                            <tr key={candidate.id}>
+                              <td>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCampaignCandidateIds.includes(String(candidate.id))}
+                                  onChange={() => toggleCampaignCandidateSelection(candidate.id)}
+                                />
+                              </td>
+                              <td><b>{candidate.candidate_name || "-"}</b><div style={{ fontSize: "12px", color: "#64748b" }}>{candidate.mobile || ""}</div></td>
+                              <td>{candidate.email || <span style={{ color: "#b91c1c" }}>Missing</span>}</td>
+                              <td>{candidate.profession || "-"}</td>
+                              <td>{candidate.nationality || "-"}</td>
+                              <td>{candidate.request_no || "-"}</td>
+                              <td>{candidate.agency || "-"}</td>
+                              <td><Badge value={isValidEmailAddress(candidate.email || "") ? "Ready" : "Email Required"} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </TableCard>
+                )}
+
+                <TableCard title="Candidates Added to Campaign">
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Candidate</th>
+                          <th>Email</th>
+                          <th>Profession</th>
+                          <th>Request</th>
+                          <th>Validation</th>
+                          <th>Invitation</th>
+                          <th>Interview</th>
+                          <th>Analysis</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {campaignRows.length === 0 ? (
+                          <tr><td colSpan="9">No candidates added to this campaign.</td></tr>
+                        ) : campaignRows.map((item) => (
+                          <tr key={item.id}>
+                            <td>{item.candidate_name || "-"}</td>
+                            <td>{item.candidate_email || "-"}</td>
+                            <td>{item.profession || "-"}</td>
+                            <td>{item.request_no || "-"}</td>
+                            <td><Badge value={item.validation_status || "Pending"} />{item.validation_error && <div style={{ color: "#b91c1c", fontSize: "11px", marginTop: "4px" }}>{item.validation_error}</div>}</td>
+                            <td><Badge value={item.invitation_status || "Not Queued"} /></td>
+                            <td><Badge value={item.status || "Pending"} /></td>
+                            <td><Badge value={item.analysis_status || "Pending"} /></td>
+                            <td className="table-actions">
+                              {item.session_id && <button onClick={() => {
+                                const session = aiInterviewSessions.find((sessionRow) => String(sessionRow.id) === String(item.session_id));
+                                if (session) openAIInterviewPortal(session);
+                              }}>Open Link</button>}
+                              {canManageAIInterviewCampaigns && !item.session_id && <button className="danger" onClick={() => removeCampaignCandidate(item)}>Remove</button>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </TableCard>
+              </>
+            )}
+          </>
+        )}
+
+        {aiInterviewCampaignTab === "Results & Ranking" && (
+          <TableCard title={selectedCampaign ? `Results & Ranking — ${selectedCampaign.campaign_name}` : "Results & Ranking"}>
+            {!selectedCampaign ? (
+              <p>Select a campaign first.</p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Candidate</th>
+                      <th>Profession</th>
+                      <th>Completion</th>
+                      <th>Score</th>
+                      <th>AI Recommendation</th>
+                      <th>Analysis</th>
+                      <th>Company Decision</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rankedRows.length === 0 ? (
+                      <tr><td colSpan="9">No campaign candidates yet.</td></tr>
+                    ) : rankedRows.map((item, index) => {
+                      const session = aiInterviewSessions.find((sessionRow) => String(sessionRow.id || "") === String(item.session_id || ""));
+                      return (
+                        <tr key={item.id}>
+                          <td><b>{item.overall_score === null || item.overall_score === undefined ? "-" : index + 1}</b></td>
+                          <td><b>{item.candidate_name || "-"}</b><div style={{ fontSize: "12px", color: "#64748b" }}>{item.candidate_email || ""}</div></td>
+                          <td>{item.profession || "-"}</td>
+                          <td>{item.completed_at ? new Date(item.completed_at).toLocaleString() : <Badge value={item.status || "Pending"} />}</td>
+                          <td style={{ fontWeight: 900 }}>{item.overall_score ?? "Pending"}</td>
+                          <td>{item.ai_recommendation || "Pending Analysis"}</td>
+                          <td><Badge value={item.analysis_status || "Pending"} /></td>
+                          <td>
+                            {canManageAIInterviewCampaigns ? (
+                              <select
+                                value={item.human_decision || "Pending Company Review"}
+                                onChange={(event) => updateCampaignCandidateHumanDecision(item, event.target.value)}
+                                disabled={aiInterviewCampaignBusy}
+                              >
+                                {AI_INTERVIEW_HUMAN_DECISIONS.map((decision) => <option key={decision} value={decision}>{decision}</option>)}
+                              </select>
+                            ) : (
+                              <Badge value={item.human_decision || "Pending Company Review"} />
+                            )}
+                          </td>
+                          <td className="table-actions">
+                            {session && <button onClick={() => {
+                              setSelectedAIInterviewSessionId(session.id);
+                              setActivePage("Interviews");
+                              window.scrollTo({ top: 0, behavior: "smooth" });
+                            }}>Full Review</button>}
+                            {session && <button onClick={() => openAIInterviewPortal(session)}>Candidate Link</button>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </TableCard>
+        )}
+
+        {aiInterviewCampaignTab === "Invitation Queue" && (
+          <TableCard title={selectedCampaign ? `Invitation Queue — ${selectedCampaign.campaign_name}` : "Invitation Queue"}>
+            {!selectedCampaign ? (
+              <p>Select a campaign first.</p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Created</th>
+                      <th>Candidate</th>
+                      <th>Email</th>
+                      <th>Type</th>
+                      <th>Status</th>
+                      <th>Attempts</th>
+                      <th>Available / Sent</th>
+                      <th>Message ID</th>
+                      <th>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {campaignJobs.length === 0 ? (
+                      <tr><td colSpan="9">No invitation jobs yet. Launch the campaign to create jobs.</td></tr>
+                    ) : campaignJobs.map((job) => (
+                      <tr key={job.id}>
+                        <td>{job.created_at ? new Date(job.created_at).toLocaleString() : "-"}</td>
+                        <td>{job.recipient_name || "-"}</td>
+                        <td>{job.recipient_email || "-"}</td>
+                        <td>{job.job_type || "Invitation"}</td>
+                        <td><Badge value={job.status || "Queued"} /></td>
+                        <td>{job.attempt_count || 0} / {job.max_attempts || 3}</td>
+                        <td>{job.sent_at ? new Date(job.sent_at).toLocaleString() : job.available_at ? new Date(job.available_at).toLocaleString() : "-"}</td>
+                        <td style={{ maxWidth: "180px", overflowWrap: "anywhere" }}>{job.message_id || "-"}</td>
+                        <td style={{ color: job.last_error ? "#b91c1c" : "inherit", maxWidth: "320px", whiteSpace: "pre-wrap" }}>{job.last_error || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </TableCard>
+        )}
+      </>
+    );
+  }
+
+
 function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
   if (activePage === "Requests") return exportRowsToExcel(requests, "VisaFlow_Requests", "Requests");
@@ -21851,6 +22814,28 @@ function exportCurrentPage() {
   if (activePage === "Company Management") return exportRowsToExcel(companies, "VisaFlow_Company_Management", "Companies");
   if (activePage === "Users Management") return exportRowsToExcel(users, "VisaFlow_Users_Management", "Users");
   if (activePage === "Permissions") return exportRowsToExcel(CLIENT_ROLE_OPTIONS.map((role) => ({ role, performance_category: getRolePerformanceCategory(role), included_in_recruitment_performance: isRecruitmentPerformanceRole(role) ? "Yes" : "No", description: ROLE_DESCRIPTIONS[role], pages: (ROLE_PAGES[role] || []).join(", "), actions: (ACTION_PERMISSIONS[role] || []).join(", ") })), "VisaFlow_Permissions", "Permissions");
+  if (activePage === "AI Interview Center") {
+    const selectedCampaignRows = aiInterviewCampaignCandidates
+      .filter((item) => !selectedAIInterviewCampaignId || String(item.campaign_id) === String(selectedAIInterviewCampaignId))
+      .map((item) => ({
+        campaign: aiInterviewCampaigns.find((campaign) => String(campaign.id) === String(item.campaign_id))?.campaign_name || "-",
+        rank: item.rank_position || "",
+        candidate_name: item.candidate_name,
+        candidate_email: item.candidate_email,
+        profession: item.profession,
+        nationality: item.nationality,
+        request_no: item.request_no,
+        invitation_status: item.invitation_status,
+        interview_status: item.status,
+        analysis_status: item.analysis_status,
+        overall_score: item.overall_score ?? "",
+        ai_recommendation: item.ai_recommendation,
+        human_decision: item.human_decision,
+        completed_at: item.completed_at,
+        analyzed_at: item.analyzed_at,
+      }));
+    return exportRowsToExcel(selectedCampaignRows, "VisaFlow_AI_Interview_Campaign_Results", "AI Interview Results");
+  }
   if (activePage === "Interviews") return exportRowsToExcel(
     interviews.map((interview) => {
       const aiSession = getAIInterviewSessionForInterview(interview);
@@ -22455,7 +23440,7 @@ if (!currentUser) {
             {activePage === "Executive Dashboard" ? (
               <p>Last Updated: {new Date().toLocaleString()}</p>
             ) : (
-              <p>{loading ? "Loading data..." : "Saudi company recruitment, visa authorization and manpower tracking system."}</p>
+              <p>{loading ? "Loading data..." : activePage === "AI Interview Center" ? "Bulk AI interview campaigns, invitations, analysis and final company decisions." : "Saudi company recruitment, visa authorization and manpower tracking system."}</p>
             )}
           </div>
           {activePage !== "Executive Dashboard" && (
@@ -25717,6 +26702,8 @@ Save Authorization
 </TableCard>
           </>
         )}
+
+        {activePage === "AI Interview Center" && canViewAIInterviewCampaigns && renderAIInterviewCenter()}
 
         {["Interviews", "Global Engineering Templates"].includes(activePage) && (
           <>
