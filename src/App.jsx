@@ -2385,6 +2385,10 @@ const [selectedCampaignCandidateIds, setSelectedCampaignCandidateIds] = useState
 const [aiInterviewCandidateSearch, setAIInterviewCandidateSearch] = useState("");
 const [aiInterviewCandidateRequestFilter, setAIInterviewCandidateRequestFilter] = useState("");
 const [aiInterviewCandidateProfessionFilter, setAIInterviewCandidateProfessionFilter] = useState("");
+const aiInterviewLinkedInExcelInputRef = useRef(null);
+const [aiInterviewLinkedInImportRows, setAIInterviewLinkedInImportRows] = useState([]);
+const [aiInterviewLinkedInImportFileName, setAIInterviewLinkedInImportFileName] = useState("");
+const [aiInterviewLinkedInImportSheetName, setAIInterviewLinkedInImportSheetName] = useState("");
 const [aiInterviewCampaignBusy, setAIInterviewCampaignBusy] = useState(false);
 const [aiInterviewCampaignMessage, setAIInterviewCampaignMessage] = useState("");
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
@@ -22002,6 +22006,9 @@ function getReportStudioVisualModel() {
   function selectAIInterviewCampaign(campaignId, tab = "Candidate Selection") {
     setSelectedAIInterviewCampaignId(campaignId || "");
     setSelectedCampaignCandidateIds([]);
+    setAIInterviewLinkedInImportRows([]);
+    setAIInterviewLinkedInImportFileName("");
+    setAIInterviewLinkedInImportSheetName("");
     setAIInterviewCampaignTab(tab);
     setAIInterviewCampaignMessage("");
   }
@@ -22139,6 +22146,401 @@ function getReportStudioVisualModel() {
     );
     const requirement = normalize(line?.interview_required || "Required");
     return !["no interview", "not required", "no", "n/a"].includes(requirement);
+  }
+
+  function normalizeAIInterviewExcelHeader(value = "") {
+    return String(value || "")
+      .normalize("NFKD")
+      .toLowerCase()
+      .replace(/[’‘`´]/g, "'")
+      .replace(/[^a-z0-9\u0600-\u06ff]+/g, "")
+      .trim();
+  }
+
+  function getAIInterviewExcelValue(row = {}, aliases = []) {
+    const normalizedRow = Object.entries(row || {}).reduce((acc, [key, value]) => {
+      acc[normalizeAIInterviewExcelHeader(key)] = value;
+      return acc;
+    }, {});
+
+    for (const alias of aliases) {
+      const value = normalizedRow[normalizeAIInterviewExcelHeader(alias)];
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        return String(value).trim();
+      }
+    }
+    return "";
+  }
+
+  function findAIInterviewExcelRequestLine(row = {}, campaign = {}) {
+    const requestNo = String(row.request_no || campaign.request_no || "").trim();
+    const profession = normalize(row.profession || campaign.profession || "");
+    const matchingLines = requestLines.filter(
+      (line) => !requestNo || String(line.request_no || "") === requestNo
+    );
+
+    if (matchingLines.length === 1) return matchingLines[0];
+    return matchingLines.find((line) => normalize(line.profession || "") === profession) || null;
+  }
+
+  function buildAIInterviewLinkedInNotes(mapped = {}) {
+    const parts = [
+      "Source: LinkedIn",
+      mapped.linkedin_profile_url ? `LinkedIn Profile: ${mapped.linkedin_profile_url}` : "",
+      mapped.linkedin_headline ? `LinkedIn Headline: ${mapped.linkedin_headline}` : "",
+      mapped.current_title ? `Current Title: ${mapped.current_title}` : "",
+      mapped.current_company ? `Current Company: ${mapped.current_company}` : "",
+      mapped.general_location ? `Location: ${mapped.general_location}` : "",
+      mapped.job_id ? `LinkedIn Job ID: ${mapped.job_id}` : "",
+      mapped.job_title ? `LinkedIn Job Title: ${mapped.job_title}` : "",
+      mapped.stage ? `LinkedIn Stage: ${mapped.stage}` : "",
+      mapped.date_applied ? `Date Applied: ${mapped.date_applied}` : "",
+      mapped.screening_responses ? `Screening Questions: ${mapped.screening_responses}` : "",
+      mapped.original_notes ? `Notes: ${mapped.original_notes}` : "",
+    ].filter(Boolean);
+
+    return parts.join("\n");
+  }
+
+  function mapAIInterviewLinkedInExcelRow(sourceRow = {}, rowIndex = 0, campaign = {}, seenEmails = new Set(), seenProfiles = new Set()) {
+    const firstName = getAIInterviewExcelValue(sourceRow, ["First Name", "FirstName", "Given Name", "الاسم الأول"]);
+    const lastName = getAIInterviewExcelValue(sourceRow, ["Last Name", "LastName", "Family Name", "الاسم الأخير"]);
+    const fullName = getAIInterviewExcelValue(sourceRow, ["Candidate Name", "Full Name", "Name", "Applicant Name", "اسم المرشح"])
+      || [firstName, lastName].filter(Boolean).join(" ").trim();
+    const email = getAIInterviewExcelValue(sourceRow, ["Email", "Email Address", "Candidate Email", "Applicant Email", "البريد", "البريد الإلكتروني"]).toLowerCase();
+    const mobile = getAIInterviewExcelValue(sourceRow, ["Phone", "Phone Number", "Mobile", "Mobile Number", "Candidate Phone", "الجوال"]);
+    const jobTitle = getAIInterviewExcelValue(sourceRow, ["Job Title", "Position Title", "Vacancy Title", "المسمى الوظيفي"]);
+    const currentTitle = getAIInterviewExcelValue(sourceRow, ["Current Title", "Current Position", "Current Job Title"]);
+    const profession = getAIInterviewExcelValue(sourceRow, ["Profession", "Position", "Job", "المهنة"])
+      || jobTitle
+      || currentTitle
+      || String(campaign.profession || "").trim();
+    const nationality = getAIInterviewExcelValue(sourceRow, ["Nationality", "Country of Citizenship", "الجنسية"]);
+    const generalLocation = getAIInterviewExcelValue(sourceRow, ["General Location", "Location", "Current Location", "City", "الموقع"]);
+    const currentCompany = getAIInterviewExcelValue(sourceRow, ["Current Company", "Company", "Employer"]);
+    const linkedinProfileUrl = getAIInterviewExcelValue(sourceRow, [
+      "Applicant’s LinkedIn Profile URL",
+      "Applicant's LinkedIn Profile URL",
+      "LinkedIn Profile URL",
+      "LinkedIn URL",
+      "Profile URL",
+    ]);
+    const linkedinHeadline = getAIInterviewExcelValue(sourceRow, ["LinkedIn Headline", "Headline"]);
+    const jobId = getAIInterviewExcelValue(sourceRow, ["Job ID", "LinkedIn Job ID"]);
+    const stage = getAIInterviewExcelValue(sourceRow, ["Stage", "Applicant Stage", "Pipeline Stage"]);
+    const dateApplied = getAIInterviewExcelValue(sourceRow, ["Date Applied", "Application Date", "Applied Date"]);
+    const screeningResponses = getAIInterviewExcelValue(sourceRow, [
+      "Screening Questions and Responses",
+      "Screening Questions & Responses",
+      "Screening Responses",
+    ]);
+    const requestNo = getAIInterviewExcelValue(sourceRow, ["Request No", "Request Number", "request_no", "رقم الطلب"])
+      || String(campaign.request_no || "").trim();
+    const projectName = getAIInterviewExcelValue(sourceRow, ["Project Title", "Project Name", "Project", "المشروع"])
+      || String(campaign.project_name || "").trim();
+    const originalNotes = getAIInterviewExcelValue(sourceRow, ["Notes", "Recruiter Notes", "Comments", "ملاحظات"]);
+
+    const existingCandidate = candidates.find(
+      (candidate) => email && normalize(candidate.email || "") === normalize(email)
+    ) || null;
+    const existingCampaignCandidate = getCampaignCandidateRows(campaign.id).find(
+      (candidate) => email && normalize(candidate.candidate_email || "") === normalize(email)
+    ) || null;
+
+    const emailKey = normalize(email);
+    const profileKey = normalize(linkedinProfileUrl);
+    const duplicateInsideFile = Boolean(
+      (emailKey && seenEmails.has(emailKey)) ||
+      (profileKey && seenProfiles.has(profileKey))
+    );
+
+    if (emailKey) seenEmails.add(emailKey);
+    if (profileKey) seenProfiles.add(profileKey);
+
+    const mapped = {
+      import_row_id: `${rowIndex + 2}-${email || fullName || crypto.randomUUID()}`,
+      row_no: rowIndex + 2,
+      candidate_name: fullName,
+      first_name: firstName,
+      last_name: lastName,
+      email,
+      mobile,
+      profession,
+      nationality,
+      general_location: generalLocation,
+      current_company: currentCompany,
+      current_title: currentTitle,
+      linkedin_profile_url: linkedinProfileUrl,
+      linkedin_headline: linkedinHeadline,
+      job_id: jobId,
+      job_title: jobTitle,
+      request_no: requestNo,
+      project_name: projectName,
+      stage,
+      date_applied: dateApplied,
+      screening_responses: screeningResponses,
+      original_notes: originalNotes,
+      existing_candidate_id: existingCandidate?.id ? String(existingCandidate.id) : "",
+      request_line_id: "",
+      selected: true,
+      validation_status: "Ready",
+      validation_error: "",
+    };
+
+    const matchedLine = findAIInterviewExcelRequestLine(mapped, campaign);
+    mapped.request_line_id = matchedLine?.id || "";
+
+    if (!fullName) {
+      mapped.validation_status = "Invalid";
+      mapped.validation_error = "Candidate name is missing.";
+    } else if (!email) {
+      mapped.validation_status = "Invalid";
+      mapped.validation_error = "Email is missing.";
+    } else if (!isValidEmailAddress(email)) {
+      mapped.validation_status = "Invalid";
+      mapped.validation_error = "Email format is invalid.";
+    } else if (!profession) {
+      mapped.validation_status = "Invalid";
+      mapped.validation_error = "Job Title / Profession is missing.";
+    } else if (existingCampaignCandidate) {
+      mapped.validation_status = "Already Added";
+      mapped.validation_error = "Candidate is already in this campaign.";
+    } else if (duplicateInsideFile) {
+      mapped.validation_status = "Duplicate";
+      mapped.validation_error = "Duplicate email or LinkedIn profile inside the Excel file.";
+    } else if (matchedLine && !candidateNeedsInterview({ request_line_id: matchedLine.id })) {
+      mapped.validation_status = "No Interview";
+      mapped.validation_error = "The matched request line is configured as No Interview.";
+    } else if (existingCandidate) {
+      mapped.validation_status = "Existing Candidate";
+      mapped.validation_error = "Existing VisaFlow candidate will be added without creating a duplicate.";
+    }
+
+    mapped.selected = ["Ready", "Existing Candidate"].includes(mapped.validation_status);
+    mapped.notes = buildAIInterviewLinkedInNotes(mapped);
+    return mapped;
+  }
+
+  function downloadAIInterviewLinkedInTemplate() {
+    const linkedinHeaders = [
+      "First Name",
+      "Last Name",
+      "Email",
+      "Phone",
+      "General Location",
+      "LinkedIn Headline",
+      "Current Title",
+      "Current Company",
+      "Applicant’s LinkedIn Profile URL",
+      "Date Applied",
+      "Stage",
+      "Screening Questions and Responses",
+      "Job ID",
+      "Job Title",
+      "LinkedIn Job URL",
+      "ATS Job ID",
+      "Project ID",
+      "Project Title",
+    ];
+    const visaFlowHeaders = [
+      "Candidate Name",
+      "First Name",
+      "Last Name",
+      "Email",
+      "Phone",
+      "Profession",
+      "Nationality",
+      "General Location",
+      "Current Company",
+      "LinkedIn Profile URL",
+      "Job ID",
+      "Job Title",
+      "Request No",
+      "Project Title",
+      "Stage",
+      "Date Applied",
+      "Notes",
+    ];
+    const workbook = XLSX.utils.book_new();
+    const linkedInSheet = XLSX.utils.aoa_to_sheet([linkedinHeaders]);
+    const visaFlowSheet = XLSX.utils.aoa_to_sheet([visaFlowHeaders]);
+    linkedInSheet["!cols"] = linkedinHeaders.map(() => ({ wch: 24 }));
+    visaFlowSheet["!cols"] = visaFlowHeaders.map(() => ({ wch: 22 }));
+    XLSX.utils.book_append_sheet(workbook, linkedInSheet, "LinkedIn Applicants");
+    XLSX.utils.book_append_sheet(workbook, visaFlowSheet, "VisaFlow AI Import");
+    XLSX.writeFile(workbook, "VisaFlow_LinkedIn_AI_Interview_Import_Template.xlsx");
+  }
+
+  async function handleAIInterviewLinkedInExcelUpload(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const campaign = getSelectedAIInterviewCampaign();
+    if (!campaign?.id) return alert("Create or select an AI interview campaign first.");
+    if (!["Draft", "Ready", "Paused"].includes(campaign.status)) {
+      return alert("Excel candidates can only be imported before campaign launch.");
+    }
+
+    setAIInterviewCampaignBusy(true);
+    setAIInterviewCampaignMessage(`Reading ${file.name}...`);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const preferredSheetNames = [
+        "LinkedIn Applicants",
+        "VisaFlow AI Import",
+        "Applicants",
+        "Candidates",
+      ];
+
+      let selectedSheetName = "";
+      let sourceRows = [];
+      const orderedSheetNames = [
+        ...preferredSheetNames.filter((name) => workbook.SheetNames.includes(name)),
+        ...workbook.SheetNames.filter((name) => !preferredSheetNames.includes(name)),
+      ];
+
+      for (const sheetName of orderedSheetNames) {
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+          defval: "",
+          raw: false,
+          dateNF: "yyyy-mm-dd",
+        });
+        const meaningfulRows = rows.filter((row) =>
+          Object.values(row || {}).some((value) => String(value || "").trim() !== "")
+        );
+        if (meaningfulRows.length > 0) {
+          selectedSheetName = sheetName;
+          sourceRows = meaningfulRows;
+          break;
+        }
+      }
+
+      if (!sourceRows.length) {
+        throw new Error("The Excel file does not contain applicant rows.");
+      }
+
+      const seenEmails = new Set();
+      const seenProfiles = new Set();
+      const mappedRows = sourceRows.map((row, index) =>
+        mapAIInterviewLinkedInExcelRow(row, index, campaign, seenEmails, seenProfiles)
+      );
+
+      setAIInterviewLinkedInImportRows(mappedRows);
+      setAIInterviewLinkedInImportFileName(file.name);
+      setAIInterviewLinkedInImportSheetName(selectedSheetName);
+
+      const readyCount = mappedRows.filter((row) => row.selected).length;
+      const invalidCount = mappedRows.length - readyCount;
+      setAIInterviewCampaignMessage(
+        `Excel preview ready. Rows: ${mappedRows.length}. Ready: ${readyCount}. Excluded: ${invalidCount}. Review before import.`
+      );
+    } catch (error) {
+      console.warn("LinkedIn Excel read failed", error?.message || error);
+      setAIInterviewLinkedInImportRows([]);
+      setAIInterviewLinkedInImportFileName("");
+      setAIInterviewLinkedInImportSheetName("");
+      setAIInterviewCampaignMessage(`Excel import failed: ${error?.message || error}`);
+      alert(error?.message || "Excel import failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
+  }
+
+  function toggleAIInterviewLinkedInImportRow(importRowId) {
+    setAIInterviewLinkedInImportRows((rows) => rows.map((row) =>
+      row.import_row_id === importRowId && ["Ready", "Existing Candidate"].includes(row.validation_status)
+        ? { ...row, selected: !row.selected }
+        : row
+    ));
+  }
+
+  function clearAIInterviewLinkedInImport() {
+    setAIInterviewLinkedInImportRows([]);
+    setAIInterviewLinkedInImportFileName("");
+    setAIInterviewLinkedInImportSheetName("");
+    if (aiInterviewLinkedInExcelInputRef.current) {
+      aiInterviewLinkedInExcelInputRef.current.value = "";
+    }
+  }
+
+  async function importAIInterviewLinkedInCandidatesToCampaign() {
+    if (!canManageAIInterviewCampaigns) return;
+    const campaign = getSelectedAIInterviewCampaign();
+    if (!campaign?.id) return alert("Select a campaign first.");
+
+    const selectedRows = aiInterviewLinkedInImportRows.filter(
+      (row) => row.selected && ["Ready", "Existing Candidate"].includes(row.validation_status)
+    );
+    if (!selectedRows.length) return alert("Select at least one valid Excel row.");
+
+    setAIInterviewCampaignBusy(true);
+    setAIInterviewCampaignMessage(`Importing ${selectedRows.length} LinkedIn applicant(s)...`);
+
+    try {
+      const existingIds = selectedRows
+        .filter((row) => row.existing_candidate_id)
+        .map((row) => String(row.existing_candidate_id));
+      const newRows = selectedRows.filter((row) => !row.existing_candidate_id);
+      let insertedIds = [];
+
+      if (newRows.length > 0) {
+        const payloads = newRows.map((row) => withCompany(withCreateActor({
+          candidate_name: row.candidate_name,
+          request_line_id: row.request_line_id || null,
+          profession: row.profession || campaign.profession || "",
+          nationality: row.nationality || "",
+          gender: "",
+          project: row.project_name || campaign.project_name || "",
+          request_no: row.request_no || campaign.request_no || "",
+          agency: "",
+          passport_no: "",
+          mobile: row.mobile || "",
+          email: row.email,
+          notes: row.notes || "Source: LinkedIn",
+          status: "Candidate Submitted",
+          medical_status: "Pending",
+          contract_status: "Pending",
+          updated_at: new Date().toISOString(),
+        })));
+
+        const { data: insertedCandidates, error: insertError } = await supabase
+          .from("candidates")
+          .insert(payloads)
+          .select("id, candidate_name, email");
+        if (insertError) throw insertError;
+        insertedIds = (insertedCandidates || []).map((candidate) => String(candidate.id));
+      }
+
+      const candidateIds = Array.from(new Set([...existingIds, ...insertedIds]));
+      if (!candidateIds.length) throw new Error("No candidate records were available for the campaign.");
+
+      const { data, error } = await supabase.rpc("add_candidates_to_ai_interview_campaign", {
+        p_campaign_id: campaign.id,
+        p_candidate_ids: candidateIds,
+      });
+      if (error) throw error;
+
+      const result = Array.isArray(data) ? data[0] : data;
+      await Promise.all([
+        loadCandidates(),
+        loadAIInterviewCampaigns(),
+        loadAIInterviewCampaignCandidates(),
+      ]);
+      clearAIInterviewLinkedInImport();
+      setAIInterviewCampaignMessage(
+        `LinkedIn import completed. New candidates: ${insertedIds.length}. Existing candidates reused: ${existingIds.length}. ` +
+        `Added to campaign: ${result?.inserted_count ?? candidateIds.length}. Valid in campaign: ${result?.valid_count ?? 0}.`
+      );
+    } catch (error) {
+      console.warn("LinkedIn candidate import failed", error?.message || error);
+      setAIInterviewCampaignMessage(`LinkedIn import failed: ${error?.message || error}`);
+      alert(error?.message || "LinkedIn candidate import failed.");
+    } finally {
+      setAIInterviewCampaignBusy(false);
+    }
   }
 
   async function addSelectedCandidatesToCampaign() {
@@ -22568,7 +22970,141 @@ function getReportStudioVisualModel() {
                 </TableCard>
 
                 {canManageAIInterviewCampaigns && ["Draft", "Ready", "Paused"].includes(selectedCampaign.status) && (
-                  <TableCard title="Select Candidates from VisaFlow">
+                  <>
+                    <TableCard title="Import LinkedIn Applicants from Excel">
+                      <input
+                        ref={aiInterviewLinkedInExcelInputRef}
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        style={{ display: "none" }}
+                        onChange={handleAIInterviewLinkedInExcelUpload}
+                      />
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: "18px",
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                          padding: "16px",
+                          border: "1px solid #dbeafe",
+                          borderRadius: "16px",
+                          background: "linear-gradient(135deg, #eff6ff 0%, #f0fdfa 100%)",
+                          marginBottom: aiInterviewLinkedInImportRows.length ? "16px" : 0,
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 900, color: "#061b49", marginBottom: "5px" }}>LinkedIn Excel / XLSX Import</div>
+                          <div style={{ color: "#475569", lineHeight: 1.6, maxWidth: "760px" }}>
+                            Upload a LinkedIn Recruiter applicant export or the VisaFlow template. VisaFlow maps names, email, phone, job title, project, stage and LinkedIn profile automatically, then checks invalid and duplicate records before saving.
+                          </div>
+                        </div>
+                        <div className="actions-line">
+                          <button className="light-btn" onClick={downloadAIInterviewLinkedInTemplate}>Download Template</button>
+                          <button
+                            className="save-btn"
+                            disabled={aiInterviewCampaignBusy}
+                            onClick={() => aiInterviewLinkedInExcelInputRef.current?.click()}
+                          >
+                            Upload LinkedIn Excel
+                          </button>
+                        </div>
+                      </div>
+
+                      {aiInterviewLinkedInImportRows.length > 0 && (
+                        <>
+                          <div className="dashboard-grid" style={{ marginBottom: "14px" }}>
+                            <Stat title="Excel Rows" value={aiInterviewLinkedInImportRows.length} />
+                            <Stat title="Selected / Ready" value={aiInterviewLinkedInImportRows.filter((row) => row.selected).length} className="passed" />
+                            <Stat title="Existing VisaFlow Candidates" value={aiInterviewLinkedInImportRows.filter((row) => row.validation_status === "Existing Candidate").length} />
+                            <Stat title="Excluded" value={aiInterviewLinkedInImportRows.filter((row) => !["Ready", "Existing Candidate"].includes(row.validation_status)).length} className="warning" />
+                          </div>
+                          <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "10px" }}>
+                            File: <b>{aiInterviewLinkedInImportFileName}</b> · Sheet: <b>{aiInterviewLinkedInImportSheetName || "-"}</b>
+                          </div>
+                          <div className="actions-line" style={{ marginBottom: "12px" }}>
+                            <button
+                              className="light-btn"
+                              onClick={() => setAIInterviewLinkedInImportRows((rows) => rows.map((row) => ({
+                                ...row,
+                                selected: ["Ready", "Existing Candidate"].includes(row.validation_status),
+                              })))}
+                            >
+                              Select All Ready
+                            </button>
+                            <button
+                              className="light-btn"
+                              onClick={() => setAIInterviewLinkedInImportRows((rows) => rows.map((row) => ({ ...row, selected: false })))}
+                            >
+                              Clear Selection
+                            </button>
+                            <button className="light-btn" onClick={clearAIInterviewLinkedInImport}>Remove File</button>
+                            <button
+                              className="save-btn"
+                              disabled={aiInterviewCampaignBusy || !aiInterviewLinkedInImportRows.some((row) => row.selected)}
+                              onClick={importAIInterviewLinkedInCandidatesToCampaign}
+                            >
+                              Import & Add to Campaign ({aiInterviewLinkedInImportRows.filter((row) => row.selected).length})
+                            </button>
+                          </div>
+                          <div className="table-wrap" style={{ maxHeight: "480px", overflow: "auto" }}>
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Select</th>
+                                  <th>Row</th>
+                                  <th>Candidate</th>
+                                  <th>Email</th>
+                                  <th>Phone</th>
+                                  <th>Job Title</th>
+                                  <th>Current Company</th>
+                                  <th>LinkedIn Profile</th>
+                                  <th>Validation</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {aiInterviewLinkedInImportRows.map((row) => (
+                                  <tr key={row.import_row_id}>
+                                    <td>
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(row.selected)}
+                                        disabled={!["Ready", "Existing Candidate"].includes(row.validation_status)}
+                                        onChange={() => toggleAIInterviewLinkedInImportRow(row.import_row_id)}
+                                      />
+                                    </td>
+                                    <td>{row.row_no}</td>
+                                    <td>
+                                      <b>{row.candidate_name || "-"}</b>
+                                      <div style={{ fontSize: "11px", color: "#64748b" }}>{row.general_location || row.nationality || ""}</div>
+                                    </td>
+                                    <td>{row.email || <span style={{ color: "#b91c1c" }}>Missing</span>}</td>
+                                    <td>{row.mobile || "-"}</td>
+                                    <td>{row.profession || "-"}</td>
+                                    <td>{row.current_company || "-"}</td>
+                                    <td>
+                                      {row.linkedin_profile_url ? (
+                                        <a href={row.linkedin_profile_url} target="_blank" rel="noreferrer">Open Profile</a>
+                                      ) : "-"}
+                                    </td>
+                                    <td>
+                                      <Badge value={row.validation_status} />
+                                      {row.validation_error && (
+                                        <div style={{ color: row.validation_status === "Existing Candidate" ? "#0369a1" : "#b91c1c", fontSize: "11px", marginTop: "4px", maxWidth: "260px" }}>
+                                          {row.validation_error}
+                                        </div>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </TableCard>
+
+                    <TableCard title="Select Candidates from VisaFlow">
                     <div className="form-grid" style={{ marginBottom: "12px" }}>
                       <Input placeholder="Search name, email, profession, nationality or agency" value={aiInterviewCandidateSearch} onChange={setAIInterviewCandidateSearch} />
                       <Select
@@ -22637,6 +23173,7 @@ function getReportStudioVisualModel() {
                       </table>
                     </div>
                   </TableCard>
+                  </>
                 )}
 
                 <TableCard title="Candidates Added to Campaign">
