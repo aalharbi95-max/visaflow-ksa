@@ -1337,12 +1337,21 @@ function getAIInterviewAccessToken() {
   }
 }
 
-function getRecordingExtension(mimeType = "") {
+function getRecordingExtension(mimeType = "", isVideo = false) {
   const value = String(mimeType || "").toLowerCase();
-  if (value.includes("mp4") || value.includes("m4a")) return "m4a";
+  if (isVideo && value.includes("mp4")) return "mp4";
+  if (!isVideo && (value.includes("mp4") || value.includes("m4a"))) return "m4a";
   if (value.includes("ogg")) return "ogg";
   if (value.includes("wav")) return "wav";
   return "webm";
+}
+
+function isAIInterviewVideoRecording(answerOrPath = "") {
+  const path = typeof answerOrPath === "string"
+    ? answerOrPath
+    : (answerOrPath?.audio_storage_path || answerOrPath?.video_storage_path || "");
+  const value = String(path || "").toLowerCase();
+  return value.includes("-video-") || value.includes("/video-") || value.endsWith(".mp4");
 }
 
 function AIInterviewCandidatePortal({ accessToken }) {
@@ -1364,6 +1373,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const [decliningParticipation, setDecliningParticipation] = useState(false);
   const [microphoneReady, setMicrophoneReady] = useState(false);
   const [microphoneTesting, setMicrophoneTesting] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraTesting, setCameraTesting] = useState(false);
+  const [cameraSkipped, setCameraSkipped] = useState(false);
+  const [currentMediaType, setCurrentMediaType] = useState("audio");
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [savingAnswer, setSavingAnswer] = useState(false);
@@ -1372,6 +1385,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
   const mediaRecorderRef = useRef(null);
   const microphoneStreamRef = useRef(null);
+  const cameraPreviewRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingTimerRef = useRef(null);
   const recordingStartedAtRef = useRef(null);
@@ -1397,9 +1411,14 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const portalInterviewTitle = portalLanguage === "AR"
     ? `تجربة المقابلة الذكية المتقدمة — ${portalProfessionLabel}`
     : (template?.template_name_en || template?.template_name || "VisaFlow KSA AI Interview Pilot");
+  const effectiveInterviewMode = session?.interview_mode || template?.interview_mode || "Voice";
+  const effectiveCameraMode = session?.camera_mode || template?.camera_mode || "Off";
+  const cameraConfigured = effectiveCameraMode !== "Off" || effectiveInterviewMode === "Video";
+  const cameraRequired = effectiveCameraMode === "Required" || (effectiveInterviewMode === "Video" && effectiveCameraMode !== "Optional");
+  const cameraOptional = cameraConfigured && !cameraRequired;
   const portalInstructions = portalLanguage === "AR"
-    ? "هذه تجربة اختيارية لمنصة VisaFlow KSA. استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون، وأجب بوضوح. التقييم الناتج تجريبي ولا يمثل عرضًا وظيفيًا أو قرار توظيف نهائيًا."
-    : "This is a voluntary VisaFlow KSA product pilot. Use a quiet place, allow microphone access, and answer clearly. The resulting evaluation is experimental and is not a job offer or a final employment decision.";
+    ? `هذه تجربة اختيارية لمنصة VisaFlow KSA. استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون${cameraConfigured ? " والكاميرا" : ""}، وأجب بوضوح. التقييم الناتج تجريبي ولا يمثل عرضًا وظيفيًا أو قرار توظيف نهائيًا.`
+    : `This is a voluntary VisaFlow KSA product pilot. Use a quiet place, allow microphone${cameraConfigured ? " and camera" : ""} access, and answer clearly. The resulting evaluation is experimental and is not a job offer or a final employment decision.`;
 
   useEffect(() => {
     loadCandidateInterviewPortal();
@@ -1409,10 +1428,14 @@ function AIInterviewCandidatePortal({ accessToken }) {
       if (mediaRecorderRef.current?.state === "recording") {
         try { mediaRecorderRef.current.stop(); } catch { /* no-op */ }
       }
-      microphoneStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+      stopCaptureStream();
       window.speechSynthesis?.cancel?.();
     };
   }, [accessToken]);
+
+  useEffect(() => {
+    if (cameraReady) attachCameraPreview(microphoneStreamRef.current);
+  }, [cameraReady, session?.status, currentQuestionIndex]);
 
   useEffect(() => {
     if (!currentQuestion || !session?.id) return;
@@ -1424,6 +1447,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     setCurrentAnswerSaved(Boolean(savedAnswer && ["Answered", "Analyzed", "Skipped"].includes(savedAnswer.answer_status)));
     setCurrentAudioUrl("");
+    setCurrentMediaType(isAIInterviewVideoRecording(savedAnswer) ? "video" : "audio");
 
     if (savedAnswer?.audio_storage_path) {
       createCandidateSignedAudioUrl(savedAnswer.audio_storage_path).then(setCurrentAudioUrl).catch(() => setCurrentAudioUrl(""));
@@ -1628,18 +1652,37 @@ function AIInterviewCandidatePortal({ accessToken }) {
     }
   }
 
-  async function ensureMicrophoneStream() {
+  function attachCameraPreview(stream = microphoneStreamRef.current) {
+    const preview = cameraPreviewRef.current;
+    if (!preview) return;
+    preview.srcObject = stream || null;
+    if (stream) preview.play?.().catch(() => {});
+  }
+
+  function stopCaptureStream() {
+    microphoneStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+    microphoneStreamRef.current = null;
+    if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
+  }
+
+  async function ensureCaptureStream({ withVideo = false } = {}) {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error(tr(
-        "This browser does not support microphone recording. Please use the latest Chrome, Edge, or Safari.",
-        "هذا المتصفح لا يدعم تسجيل الميكروفون. يرجى استخدام أحدث إصدار من Chrome أو Edge أو Safari."
+        "This browser does not support media recording. Please use the latest Chrome, Edge, or Safari.",
+        "هذا المتصفح لا يدعم تسجيل الوسائط. يرجى استخدام أحدث إصدار من Chrome أو Edge أو Safari."
       ));
     }
 
     const existingStream = microphoneStreamRef.current;
-    if (existingStream?.getAudioTracks?.().some((track) => track.readyState === "live")) {
+    const hasLiveAudio = existingStream?.getAudioTracks?.().some((track) => track.readyState === "live");
+    const hasLiveVideo = existingStream?.getVideoTracks?.().some((track) => track.readyState === "live");
+
+    if (hasLiveAudio && (!withVideo || hasLiveVideo)) {
+      if (withVideo) attachCameraPreview(existingStream);
       return existingStream;
     }
+
+    stopCaptureStream();
 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -1647,9 +1690,16 @@ function AIInterviewCandidatePortal({ accessToken }) {
         noiseSuppression: true,
         autoGainControl: true,
       },
+      video: withVideo ? {
+        facingMode: "user",
+        width: { ideal: 640 },
+        height: { ideal: 360 },
+        frameRate: { ideal: 20, max: 24 },
+      } : false,
     });
 
     microphoneStreamRef.current = stream;
+    if (withVideo) attachCameraPreview(stream);
     return stream;
   }
 
@@ -1658,7 +1708,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setPortalMessage("");
 
     try {
-      await ensureMicrophoneStream();
+      await ensureCaptureStream({ withVideo: cameraReady });
       const now = new Date().toISOString();
       const nextStatus = session.consent_required !== false && !session.consent_accepted
         ? "Consent Pending"
@@ -1687,6 +1737,42 @@ function AIInterviewCandidatePortal({ accessToken }) {
     }
   }
 
+  async function testCamera() {
+    setCameraTesting(true);
+    setPortalMessage("");
+
+    try {
+      await ensureCaptureStream({ withVideo: true });
+      setCameraReady(true);
+      setCameraSkipped(false);
+      setMicrophoneReady(true);
+      setPortalMessage(tr(
+        "Camera and microphone are working. Check the live preview before continuing.",
+        "تم التحقق من عمل الكاميرا والميكروفون. راجع المعاينة المباشرة قبل المتابعة."
+      ));
+    } catch (error) {
+      setCameraReady(false);
+      setPortalMessage(error?.message || tr(
+        "Camera access failed. Check the browser permission and try again.",
+        "فشل الوصول إلى الكاميرا. تحقق من إذن المتصفح ثم حاول مرة أخرى."
+      ));
+    } finally {
+      setCameraTesting(false);
+    }
+  }
+
+  async function disableOptionalCamera() {
+    if (!cameraOptional) return;
+    stopCaptureStream();
+    setCameraReady(false);
+    setCameraSkipped(true);
+    setMicrophoneReady(false);
+    setPortalMessage(tr(
+      "Camera disabled. This interview will continue with voice recording only after the microphone test.",
+      "تم تعطيل الكاميرا. ستستمر المقابلة بالتسجيل الصوتي فقط بعد اختبار الميكروفون."
+    ));
+  }
+
   async function startCandidateInterview() {
     if (session.consent_required !== false && !session.consent_accepted) {
       setPortalMessage(tr("Consent is required before starting.", "الموافقة مطلوبة قبل بدء المقابلة."));
@@ -1696,9 +1782,17 @@ function AIInterviewCandidatePortal({ accessToken }) {
       setPortalMessage(tr("Please test your microphone before starting.", "يرجى اختبار الميكروفون قبل البدء."));
       return;
     }
+    if (cameraRequired && !cameraReady) {
+      setPortalMessage(tr("Camera access is required before starting.", "تشغيل الكاميرا مطلوب قبل بدء المقابلة."));
+      return;
+    }
+    if (cameraOptional && !cameraReady && !cameraSkipped) {
+      setPortalMessage(tr("Choose whether to use the optional camera before starting.", "حدد ما إذا كنت ترغب باستخدام الكاميرا الاختيارية قبل البدء."));
+      return;
+    }
 
     try {
-      await ensureMicrophoneStream();
+      await ensureCaptureStream({ withVideo: cameraReady });
       const now = new Date().toISOString();
       const firstQuestionOrder = Number(currentQuestion?.question_order || 1);
       const { data, error } = await supabase
@@ -1741,29 +1835,40 @@ function AIInterviewCandidatePortal({ accessToken }) {
     window.speechSynthesis.speak(utterance);
   }
 
-  function getSupportedRecordingMimeType() {
-    const options = [
-      "audio/webm;codecs=opus",
-      "audio/webm",
-      "audio/mp4",
-      "audio/ogg;codecs=opus",
-    ];
+  function getSupportedRecordingMimeType(useVideo = false) {
+    const options = useVideo
+      ? [
+          "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
+          "video/webm",
+          "video/mp4",
+        ]
+      : [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/mp4",
+          "audio/ogg;codecs=opus",
+        ];
     return options.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
   }
 
   async function startRecordingAnswer() {
     if (!currentQuestion || isRecording || savingAnswer) return;
     if (!window.MediaRecorder) {
-      setPortalMessage(tr("Audio recording is not supported in this browser.", "تسجيل الصوت غير مدعوم في هذا المتصفح."));
+      setPortalMessage(tr("Media recording is not supported in this browser.", "تسجيل الوسائط غير مدعوم في هذا المتصفح."));
       return;
     }
 
     try {
-      const stream = await ensureMicrophoneStream();
-      const mimeType = getSupportedRecordingMimeType();
-      const recorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
+      const useVideo = Boolean(cameraReady);
+      const stream = await ensureCaptureStream({ withVideo: useVideo });
+      const mimeType = getSupportedRecordingMimeType(useVideo);
+      const recorderOptions = mimeType ? { mimeType } : {};
+      if (useVideo) {
+        recorderOptions.videoBitsPerSecond = 700000;
+        recorderOptions.audioBitsPerSecond = 64000;
+      }
+      const recorder = new MediaRecorder(stream, recorderOptions);
 
       recordingChunksRef.current = [];
       recordingStartedAtRef.current = new Date();
@@ -1791,6 +1896,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
       setRecordingSeconds(0);
       setCurrentAnswerSaved(false);
       setCurrentAudioUrl("");
+      setCurrentMediaType(useVideo ? "video" : "audio");
       setPortalMessage("");
 
       const maximumSeconds = Math.max(10, Number(currentQuestion.maximum_answer_seconds || 120));
@@ -1804,7 +1910,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
         }
       }, 500);
     } catch (error) {
-      setPortalMessage(error?.message || tr("Microphone access was denied.", "تم رفض الوصول إلى الميكروفون."));
+      setPortalMessage(error?.message || tr("Camera or microphone access was denied.", "تم رفض الوصول إلى الكاميرا أو الميكروفون."));
       setIsRecording(false);
     }
   }
@@ -1820,17 +1926,19 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setPortalMessage(tr("Saving your answer securely...", "جاري حفظ إجابتك بشكل آمن..."));
 
     try {
-      const mimeType = recorder.mimeType || "audio/webm";
+      const isVideo = recorder.stream?.getVideoTracks?.().some((track) => track.readyState === "live") || String(recorder.mimeType || "").startsWith("video/");
+      const mimeType = recorder.mimeType || (isVideo ? "video/webm" : "audio/webm");
       const blob = new Blob(recordingChunksRef.current, { type: mimeType });
-      if (!blob.size) throw new Error(tr("No audio was recorded. Please try again.", "لم يتم تسجيل صوت. يرجى المحاولة مرة أخرى."));
+      if (!blob.size) throw new Error(tr("No recording was captured. Please try again.", "لم يتم تسجيل أي وسائط. يرجى المحاولة مرة أخرى."));
 
       const durationSeconds = Math.max(
         1,
         Math.round((Date.now() - (recordingStartedAtRef.current?.getTime?.() || Date.now())) / 1000)
       );
-      const extension = getRecordingExtension(mimeType);
+      const extension = getRecordingExtension(mimeType, isVideo);
       const randomPart = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const storagePath = `${session.company_id}/${session.id}/question-${question.question_order}-${randomPart}.${extension}`;
+      const mediaLabel = isVideo ? "video" : "audio";
+      const storagePath = `${session.company_id}/${session.id}/question-${question.question_order}-${mediaLabel}-${randomPart}.${extension}`;
 
       const { error: uploadError } = await supabase.storage
         .from(AI_INTERVIEW_AUDIO_BUCKET)
@@ -1840,7 +1948,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
           upsert: false,
         });
 
-      if (uploadError) throw new Error(`Audio upload failed: ${uploadError.message}`);
+      if (uploadError) throw new Error(`${isVideo ? "Video" : "Audio"} upload failed: ${uploadError.message}`);
 
       await saveCandidateAnswerRecord({
         question,
@@ -1852,8 +1960,12 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
       const signedUrl = await createCandidateSignedAudioUrl(storagePath).catch(() => "");
       setCurrentAudioUrl(signedUrl);
+      setCurrentMediaType(isVideo ? "video" : "audio");
       setCurrentAnswerSaved(true);
-      setPortalMessage(tr("Your answer was saved successfully.", "تم حفظ إجابتك بنجاح."));
+      setPortalMessage(tr(
+        isVideo ? "Your video answer was saved successfully." : "Your audio answer was saved successfully.",
+        isVideo ? "تم حفظ إجابتك بالفيديو بنجاح." : "تم حفظ إجابتك الصوتية بنجاح."
+      ));
     } catch (error) {
       console.warn("AI interview answer save failed", error?.message || error);
       setPortalMessage(error?.message || tr("Your answer could not be saved.", "تعذر حفظ إجابتك."));
@@ -1995,6 +2107,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setCurrentQuestionIndex(nextIndex);
     setCurrentAnswerSaved(false);
     setCurrentAudioUrl("");
+    setCurrentMediaType(cameraReady ? "video" : "audio");
     setRecordingSeconds(0);
     questionAskedAtRef.current = new Date().toISOString();
 
@@ -2053,7 +2166,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
       setAnswers(finalAnswers);
       setSession(data);
       setPortalMessage("");
-      microphoneStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+      stopCaptureStream();
     } catch (error) {
       setPortalMessage(error?.message || tr("The interview could not be completed.", "تعذر إنهاء المقابلة."));
     } finally {
@@ -2109,6 +2222,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const consentComplete = !consentRequired || (participationConsentComplete && recordingConsentComplete);
   const microphoneRequired = template?.require_microphone_test !== false;
   const microphoneComplete = !microphoneRequired || microphoneReady;
+  const cameraComplete = !cameraConfigured || cameraReady || (cameraOptional && cameraSkipped);
 
   return (
     <main className="ai-candidate-shell" dir={portalLanguage === "AR" ? "rtl" : "ltr"}>
@@ -2144,6 +2258,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
             <span>{tr("Duration", "المدة")}</span>
             <strong>{tr("15–20 minutes", "15–20 دقيقة")}</strong>
           </div>
+          <div>
+            <span>{tr("Recording", "نوع التسجيل")}</span>
+            <strong>{cameraConfigured ? tr("Video + Voice", "فيديو + صوت") : tr("Voice", "صوت")}</strong>
+          </div>
         </div>
 
         {portalMessage && <div className="ai-candidate-message">{portalMessage}</div>}
@@ -2156,8 +2274,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
               : tr("This interview is not available", "هذه المقابلة غير متاحة")}</h1>
             <p>{declinedParticipation
               ? tr(
-                  "Thank you. Your choice was recorded and no interview audio will be collected.",
-                  "شكرًا لك. تم تسجيل اختيارك، ولن يتم جمع أو تسجيل أي صوت للمقابلة."
+                  "Thank you. Your choice was recorded and no interview media will be collected.",
+                  "شكرًا لك. تم تسجيل اختيارك، ولن يتم جمع أو تسجيل أي وسائط للمقابلة."
                 )
               : tr(`Session status: ${session.status}`, `حالة الجلسة: ${session.status}`)}</p>
           </div>
@@ -2206,7 +2324,14 @@ function AIInterviewCandidatePortal({ accessToken }) {
               <div className="ai-candidate-steps">
                 <div className={consentComplete ? "done" : "active"}><span>1</span><b>{tr("Consent", "الموافقة")}</b></div>
                 <div className={microphoneComplete ? "done" : consentComplete ? "active" : ""}><span>2</span><b>{tr("Microphone", "الميكروفون")}</b></div>
-                <div className={consentComplete && microphoneComplete ? "active" : ""}><span>3</span><b>{tr("Start", "البدء")}</b></div>
+                {cameraConfigured && (
+                  <div className={cameraComplete ? "done" : consentComplete && microphoneComplete ? "active" : ""}>
+                    <span>3</span><b>{tr("Camera", "الكاميرا")}</b>
+                  </div>
+                )}
+                <div className={consentComplete && microphoneComplete && cameraComplete ? "active" : ""}>
+                  <span>{cameraConfigured ? 4 : 3}</span><b>{tr("Start", "البدء")}</b>
+                </div>
               </div>
 
               {consentRequired && !consentComplete && (
@@ -2236,8 +2361,12 @@ function AIInterviewCandidatePortal({ accessToken }) {
                       onChange={(event) => setConsentChecked(event.target.checked)}
                     />
                     <span>{tr(
-                      "I consent to microphone recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision.",
-                      "أوافق على تسجيل الصوت وتفريغه نصيًا وتحليل إجاباتي بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
+                      cameraConfigured
+                        ? "I consent to microphone and camera recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision."
+                        : "I consent to microphone recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision.",
+                      cameraConfigured
+                        ? "أوافق على تسجيل الصوت والكاميرا وتفريغ الإجابات نصيًا وتحليلها بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
+                        : "أوافق على تسجيل الصوت وتفريغه نصيًا وتحليل إجاباتي بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
                     )}</span>
                   </label>
 
@@ -2303,8 +2432,12 @@ function AIInterviewCandidatePortal({ accessToken }) {
                 <div className="ai-candidate-microphone-box">
                   <h3>{tr("Microphone test", "اختبار الميكروفون")}</h3>
                   <p>{tr(
-                    "The browser will request microphone permission. VisaFlow records audio only when you press Start recording.",
-                    "سيطلب المتصفح الإذن باستخدام الميكروفون. لا يبدأ VisaFlow التسجيل إلا عند الضغط على بدء التسجيل."
+                    cameraReady
+                      ? "The microphone is active together with the camera. VisaFlow records only when you press Start recording."
+                      : "The browser will request microphone permission. VisaFlow records only when you press Start recording.",
+                    cameraReady
+                      ? "الميكروفون يعمل مع الكاميرا. لا يبدأ VisaFlow التسجيل إلا عند الضغط على بدء التسجيل."
+                      : "سيطلب المتصفح الإذن باستخدام الميكروفون. لا يبدأ VisaFlow التسجيل إلا عند الضغط على بدء التسجيل."
                   )}</p>
                   <button className={microphoneReady ? "ai-candidate-success" : "ai-candidate-secondary"} disabled={microphoneTesting} onClick={testMicrophone}>
                     {microphoneTesting
@@ -2316,9 +2449,45 @@ function AIInterviewCandidatePortal({ accessToken }) {
                 </div>
               )}
 
-              {consentComplete && microphoneComplete && (
+              {consentComplete && microphoneComplete && cameraConfigured && (
+                <div className="ai-candidate-microphone-box" style={{ marginTop: 14 }}>
+                  <h3>{cameraRequired ? tr("Camera test — required", "اختبار الكاميرا — إلزامي") : tr("Camera — optional", "الكاميرا — اختيارية")}</h3>
+                  <p>{cameraRequired
+                    ? tr("Camera access is required for this interview. Your video and voice will be recorded only while answering.", "تشغيل الكاميرا مطلوب لهذه المقابلة. سيتم تسجيل الفيديو والصوت فقط أثناء الإجابة.")
+                    : tr("You may enable the camera for a video interview or continue with voice only.", "يمكنك تشغيل الكاميرا لإجراء مقابلة فيديو أو المتابعة بالصوت فقط.")}</p>
+
+                  {cameraReady && (
+                    <div style={{ maxWidth: 560, margin: "12px auto", borderRadius: 14, overflow: "hidden", background: "#0f172a" }}>
+                      <video
+                        ref={cameraPreviewRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        style={{ width: "100%", display: "block", aspectRatio: "16 / 9", objectFit: "cover", transform: "scaleX(-1)" }}
+                      />
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button className={cameraReady ? "ai-candidate-success" : "ai-candidate-secondary"} disabled={cameraTesting} onClick={testCamera}>
+                      {cameraTesting
+                        ? tr("Testing camera...", "جاري اختبار الكاميرا...")
+                        : cameraReady
+                          ? tr("✓ Camera ready", "✓ الكاميرا جاهزة")
+                          : tr("Test and enable camera", "اختبار وتشغيل الكاميرا")}
+                    </button>
+                    {cameraOptional && (
+                      <button className="ai-candidate-secondary" disabled={cameraTesting} onClick={disableOptionalCamera}>
+                        {cameraSkipped ? tr("✓ Continue with voice only", "✓ المتابعة بالصوت فقط") : tr("Continue without camera", "المتابعة بدون كاميرا")}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {consentComplete && microphoneComplete && cameraComplete && (
                 <button className="ai-candidate-primary ai-candidate-start-button" onClick={startCandidateInterview}>
-                  {tr("Start AI interview", "بدء المقابلة الذكية")}
+                  {cameraReady ? tr("Start video AI interview", "بدء مقابلة الفيديو الذكية") : tr("Start AI interview", "بدء المقابلة الذكية")}
                 </button>
               )}
             </section>
@@ -2328,6 +2497,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
               <ul>
                 <li>{tr("Choose a quiet place with a stable internet connection.", "اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت.")}</li>
                 <li>{tr("Speak clearly and provide job-related examples.", "تحدث بوضوح واذكر أمثلة مرتبطة بالعمل.")}</li>
+                {cameraConfigured && <li>{tr("Keep your face visible, use front lighting, and avoid a bright window behind you.", "اجعل وجهك ظاهرًا، واستخدم إضاءة أمامية، وتجنب وجود نافذة مضيئة خلفك.")}</li>}
                 <li>{tr("Do not refresh or close the page while recording.", "لا تحدث الصفحة أو تغلقها أثناء التسجيل.")}</li>
                 <li>{tr("This pilot evaluation is experimental and is not a job offer or a final employment decision.", "هذا التقييم تجريبي، ولا يُعد عرضًا وظيفيًا أو قرار توظيف نهائيًا.")}</li>
               </ul>
@@ -2356,11 +2526,26 @@ function AIInterviewCandidatePortal({ accessToken }) {
               </div>
             </div>
 
+            {cameraReady && (
+              <div style={{ maxWidth: 680, margin: "0 auto 16px", borderRadius: 16, overflow: "hidden", background: "#0f172a", boxShadow: "0 10px 30px rgba(15,23,42,.18)" }}>
+                <video
+                  ref={cameraPreviewRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  style={{ width: "100%", display: "block", aspectRatio: "16 / 9", objectFit: "cover", transform: "scaleX(-1)" }}
+                />
+                <div style={{ padding: "8px 12px", color: "white", fontSize: 12, textAlign: "center" }}>
+                  {isRecording ? tr("● Video recording in progress", "● جاري تسجيل الفيديو") : tr("Live camera preview — recording has not started", "معاينة مباشرة للكاميرا — لم يبدأ التسجيل")}
+                </div>
+              </div>
+            )}
+
             <div className={`ai-candidate-recorder ${isRecording ? "recording" : ""}`}>
-              <div className="ai-candidate-recorder-icon">{isRecording ? "●" : "🎙"}</div>
+              <div className="ai-candidate-recorder-icon">{isRecording ? "●" : cameraReady ? "🎥" : "🎙"}</div>
               <div>
                 <strong>{isRecording
-                  ? tr("Recording your answer", "جاري تسجيل إجابتك")
+                  ? (cameraReady ? tr("Recording your video answer", "جاري تسجيل إجابتك بالفيديو") : tr("Recording your audio answer", "جاري تسجيل إجابتك الصوتية"))
                   : currentAnswerSaved
                     ? tr("Answer saved", "تم حفظ الإجابة")
                     : tr("Ready to record", "جاهز للتسجيل")}</strong>
@@ -2373,14 +2558,16 @@ function AIInterviewCandidatePortal({ accessToken }) {
             {currentAudioUrl && (
               <div className="ai-candidate-audio-preview">
                 <span>{tr("Your saved answer", "إجابتك المحفوظة")}</span>
-                <audio controls src={currentAudioUrl} />
+                {currentMediaType === "video"
+                  ? <video controls playsInline src={currentAudioUrl} style={{ width: "100%", maxWidth: 640, borderRadius: 12, background: "#0f172a" }} />
+                  : <audio controls src={currentAudioUrl} />}
               </div>
             )}
 
             <div className="ai-candidate-action-row">
               {!isRecording && !currentAnswerSaved && (
                 <button className="ai-candidate-primary" disabled={savingAnswer} onClick={startRecordingAnswer}>
-                  🎙 {tr("Start recording", "بدء التسجيل")}
+                  {cameraReady ? "🎥" : "🎙"} {tr("Start recording", "بدء التسجيل")}
                 </button>
               )}
               {isRecording && (
@@ -12246,24 +12433,27 @@ ${errors.slice(0, 10).join("\n")}` : "")
       ? new Date(session.expires_at).toLocaleString()
       : "The link remains available until the company closes or expires the session.";
     const estimatedMinutes = Number(template.duration_minutes || 15);
+    const invitationCameraMode = session.camera_mode || template.camera_mode || "Off";
+    const invitationInterviewMode = session.interview_mode || template.interview_mode || "Voice";
+    const isVideoInvitation = invitationCameraMode !== "Off" || invitationInterviewMode === "Video";
     const subject = `AI Interview Invitation - ${profession} / دعوة مقابلة ذكية`;
 
     const englishLines = [
       `Dear ${candidateName},`,
-      `You are invited to complete a secure AI voice interview for the position of ${profession}.`,
+      `You are invited to complete a secure AI ${isVideoInvitation ? "video" : "voice"} interview for the position of ${profession}.`,
       `Estimated duration: ${estimatedMinutes} minutes.`,
       `Schedule: ${scheduledText}`,
       `Link validity: ${expiryText}`,
-      "Before starting, choose a quiet place, use a stable internet connection, allow microphone access, and use the latest Chrome, Edge, or Safari browser.",
+      `Before starting, choose a quiet place, use a stable internet connection, allow ${isVideoInvitation ? "camera and microphone" : "microphone"} access, and use the latest Chrome, Edge, or Safari browser.`,
       "Please answer each question clearly and do not refresh or close the page while recording.",
       "The final recruitment decision remains with the company.",
     ];
 
     const arabicLines = [
       `عزيزي/عزيزتي ${candidateName}،`,
-      `ندعوك لإجراء مقابلة صوتية آمنة بالذكاء الاصطناعي لوظيفة ${profession}.`,
+      `ندعوك لإجراء مقابلة ${isVideoInvitation ? "فيديو" : "صوتية"} آمنة بالذكاء الاصطناعي لوظيفة ${profession}.`,
       `المدة التقديرية: ${estimatedMinutes} دقيقة.`,
-      "قبل البدء، اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت، واسمح باستخدام الميكروفون، واستخدم أحدث إصدار من Chrome أو Edge أو Safari.",
+      `قبل البدء، اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت، واسمح باستخدام ${isVideoInvitation ? "الكاميرا والميكروفون" : "الميكروفون"}، واستخدم أحدث إصدار من Chrome أو Edge أو Safari.`,
       "يرجى الإجابة بوضوح وعدم تحديث الصفحة أو إغلاقها أثناء التسجيل.",
       "القرار النهائي للتوظيف يعود إلى الشركة.",
     ];
@@ -12358,15 +12548,15 @@ ${errors.slice(0, 10).join("\n")}` : "")
     window.open(reference, "_blank", "noopener,noreferrer");
   }
 
-  async function openAIInterviewAudio(answer = {}) {
-    if (!answer.audio_storage_path) return alert("No audio recording is available for this answer.");
+  async function openAIInterviewRecording(answer = {}) {
+    if (!answer.audio_storage_path) return alert("No recording is available for this answer.");
 
     const { data, error } = await supabase.storage
       .from(AI_INTERVIEW_AUDIO_BUCKET)
       .createSignedUrl(answer.audio_storage_path, 60 * 60);
 
-    if (error) return alert(`Audio playback failed: ${error.message}`);
-    if (!data?.signedUrl) return alert("Audio link could not be created.");
+    if (error) return alert(`Recording playback failed: ${error.message}`);
+    if (!data?.signedUrl) return alert("Recording link could not be created.");
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
@@ -28621,7 +28811,9 @@ Save Authorization
                                   <td style={{ minWidth: 180 }}>{answer.answer_text || (answer.answer_status === "Skipped" ? "Question skipped" : "Pending transcription")}</td>
                                   <td>
                                     {answer.audio_storage_path
-                                      ? <button onClick={() => openAIInterviewAudio(answer)}>Play Audio</button>
+                                      ? <button onClick={() => openAIInterviewRecording(answer)}>
+                                          {isAIInterviewVideoRecording(answer) ? "Play Video" : "Play Audio"}
+                                        </button>
                                       : "-"}
                                   </td>
                                 </tr>
