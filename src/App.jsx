@@ -12751,12 +12751,12 @@ ${errors.slice(0, 10).join("\n")}` : "")
     if (Math.abs(totalWeight - 100) > 0.01) {
       return alert(`Question weights must total 100 before approval. Current total: ${totalWeight}`);
     }
-    if (!window.confirm(`Approve and activate ${template.template_name || "this template"}?`)) return;
+    if (!window.confirm(`Publish ${template.template_name || "this template"} as the production version?`)) return;
 
     const actor = getAIInterviewActorName();
     const now = new Date().toISOString();
     setAIInterviewLoading(true);
-    setAIInterviewMessage("Approving and activating AI interview template...");
+    setAIInterviewMessage("Publishing AI interview template version...");
 
     try {
       if (isGlobalAIInterviewTemplate(template)) {
@@ -12781,6 +12781,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
       if (questionsError) throw questionsError;
 
+      const templateGroupId = getAIInterviewTemplateGroupId(template);
+
       const { error: templateError } = await supabase
         .from("ai_interview_templates")
         .update({
@@ -12789,6 +12791,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           approval_status: "Approved",
           status: "Active",
           is_active: true,
+          is_current_version: true,
           approved_by: actor,
           approved_at: now,
           rejected_by: "",
@@ -12803,15 +12806,32 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
       if (templateError) throw templateError;
 
+      // Keep only one production version inside the same template group.
+      if (templateGroupId) {
+        const { error: archiveError } = await supabase
+          .from("ai_interview_templates")
+          .update({
+            status: "Archived",
+            is_active: false,
+            is_current_version: false,
+            updated_by: actor,
+            updated_at: now,
+          })
+          .eq("template_group_id", templateGroupId)
+          .neq("id", template.id);
+
+        if (archiveError) throw archiveError;
+      }
+
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
       resetAIInterviewQuestionEditor();
       const approvalMessage = promoteToGlobalLibrary
         ? `${template.template_name || "Engineering template"} approved and published to every company.`
-        : `${template.template_name || "AI interview template"} approved and activated.`;
+        : `${template.template_name || "AI interview template"} published as the production version.`;
       setAIInterviewMessage(approvalMessage);
       alert(promoteToGlobalLibrary
         ? "Engineering template approved and published to all VisaFlow companies."
-        : "AI interview template approved and activated successfully.");
+        : "AI interview template version published successfully.");
     } catch (error) {
       console.warn("AI interview template approval failed", error?.message || error);
       setAIInterviewMessage(`Template approval failed: ${error?.message || error}`);
@@ -29091,7 +29111,13 @@ Save Authorization
                           <td>
                             <b>v{getAIInterviewTemplateVersionNumber(template)}</b>
                             <div style={{ fontSize: 11, color: "#64748b" }}>
-                              {template.is_current_version === false ? "Previous" : "Current"}
+                              {template.is_active && template.approval_status === "Approved"
+                                ? "Production"
+                                : template.approval_status === "Draft"
+                                  ? "Draft"
+                                  : template.status === "Archived" || template.is_current_version === false
+                                    ? "Archived"
+                                    : (template.approval_status || "Draft")}
                             </div>
                           </td>
                           <td>{template.profession || "General"}</td>
@@ -29120,7 +29146,7 @@ Save Authorization
                             )}
                             {canManageAIInterviewTemplate(template) && template.is_current_version !== false && template.approval_status === "Draft" && (
                               <button disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(template)}>
-                                Approve & Activate
+                                Publish Version
                               </button>
                             )}
                             {canManageAIInterviewTemplate(template) && template.is_current_version !== false && !["Approved", "Rejected"].includes(template.approval_status) && (
@@ -29227,10 +29253,13 @@ Save Authorization
                           onClick={() => openAIInterviewTemplateReview(versionTemplate)}
                           title={versionTemplate.version_notes || ""}
                         >
-                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.is_current_version === false
-                            ? "Archived"
-                            : (versionTemplate.approval_status || "Draft")}
-                          {versionTemplate.is_current_version !== false ? " · Current" : ""}
+                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.is_active && versionTemplate.approval_status === "Approved"
+                            ? "Production"
+                            : versionTemplate.approval_status === "Draft"
+                              ? "Draft"
+                              : versionTemplate.status === "Archived" || versionTemplate.is_current_version === false
+                                ? "Archived"
+                                : (versionTemplate.approval_status || "Draft")}
                         </button>
                       ))}
                     </div>
@@ -29351,7 +29380,7 @@ Save Authorization
                   <div className="actions-line" style={{ marginBottom: 16 }}>
                     {!templateLocked && canManageAIInterviewTemplate(selectedTemplate) && (
                       <button className="save-btn" disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(selectedTemplate)}>
-                        {isPlatformOwner && isEngineeringMasterTemplate(selectedTemplate) ? "Approve & Publish Globally" : "Approve & Activate"}
+                        {isPlatformOwner && isEngineeringMasterTemplate(selectedTemplate) ? "Approve & Publish Globally" : "Publish Version"}
                       </button>
                     )}
                     {canManageAIInterviewTemplate(selectedTemplate) && selectedTemplate.approval_status !== "Rejected" && (
