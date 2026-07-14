@@ -813,6 +813,22 @@ const EMPTY_AI_INTERVIEW_DELIVERY_FORM = {
   live_response_timeout_seconds: 60,
 };
 
+function getAIInterviewDeliveryFormFromTemplate(template = {}) {
+  return {
+    interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(template.interaction_mode)
+      ? template.interaction_mode
+      : "Recorded",
+    interview_mode: AI_INTERVIEW_MEDIA_MODES.includes(template.interview_mode)
+      ? template.interview_mode
+      : "Voice",
+    camera_mode: AI_INTERVIEW_CAMERA_MODES.includes(template.camera_mode)
+      ? template.camera_mode
+      : "Off",
+    max_dynamic_follow_ups: Number(template.max_dynamic_follow_ups ?? 1),
+    live_response_timeout_seconds: Number(template.live_response_timeout_seconds ?? 60),
+  };
+}
+
 
 const DEFAULT_AI_INTERVIEW_QUESTIONS = [
   {
@@ -11453,19 +11469,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     setSelectedAIInterviewTemplateId(template.id);
     setSelectedAIInterviewSessionId("");
     setEditingAIInterviewQuestionId("");
-    setAIInterviewTemplateDeliveryForm({
-      interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(template.interaction_mode)
-        ? template.interaction_mode
-        : "Recorded",
-      interview_mode: AI_INTERVIEW_MEDIA_MODES.includes(template.interview_mode)
-        ? template.interview_mode
-        : "Voice",
-      camera_mode: AI_INTERVIEW_CAMERA_MODES.includes(template.camera_mode)
-        ? template.camera_mode
-        : "Off",
-      max_dynamic_follow_ups: Number(template.max_dynamic_follow_ups ?? 1),
-      live_response_timeout_seconds: Number(template.live_response_timeout_seconds ?? 60),
-    });
+    setAIInterviewTemplateDeliveryForm(getAIInterviewDeliveryFormFromTemplate(template));
     setAIInterviewMessage(`Reviewing ${template.template_name || "AI interview template"}.`);
 
     // Always scroll, even when the same template was already selected after generation.
@@ -11482,6 +11486,28 @@ ${errors.slice(0, 10).join("\n")}` : "")
     aiInterviewTemplates.length,
     aiInterviewQuestions.length,
   ]);
+
+  useEffect(() => {
+    if (!selectedAIInterviewTemplateId) return;
+
+    const selectedTemplate = aiInterviewTemplates.find(
+      (template) => String(template.id || "") === String(selectedAIInterviewTemplateId || "")
+    );
+    if (!selectedTemplate) return;
+
+    const nextDeliveryForm = getAIInterviewDeliveryFormFromTemplate(selectedTemplate);
+
+    setAIInterviewTemplateDeliveryForm((current) => {
+      const unchanged =
+        current.interaction_mode === nextDeliveryForm.interaction_mode &&
+        current.interview_mode === nextDeliveryForm.interview_mode &&
+        current.camera_mode === nextDeliveryForm.camera_mode &&
+        Number(current.max_dynamic_follow_ups || 0) === Number(nextDeliveryForm.max_dynamic_follow_ups || 0) &&
+        Number(current.live_response_timeout_seconds || 0) === Number(nextDeliveryForm.live_response_timeout_seconds || 0);
+
+      return unchanged ? current : nextDeliveryForm;
+    });
+  }, [selectedAIInterviewTemplateId, aiInterviewTemplates]);
 
   function resetAIInterviewQuestionEditor() {
     setEditingAIInterviewQuestionId("");
@@ -28097,6 +28123,12 @@ Save Authorization
                 : [];
               const globalTemplate = isGlobalAIInterviewTemplate(selectedTemplate);
               const templateLocked = globalTemplate || selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked;
+              const savedDeliverySettings = getAIInterviewDeliveryFormFromTemplate(selectedTemplate);
+              const displayedDeliverySettings = templateLocked
+                ? savedDeliverySettings
+                : aiInterviewTemplateDeliveryForm;
+              const deliverySettingsDisabled =
+                templateLocked || !canManageAIInterviewTemplate(selectedTemplate);
 
               return (
                 <div
@@ -28107,9 +28139,9 @@ Save Authorization
                   <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"}`}>
                   <div className="dashboard-grid">
                     <Stat title="Profession" value={selectedTemplate.profession || "General"} />
-                    <Stat title="Interaction" value={selectedTemplate.interaction_mode || "Recorded"} />
-                    <Stat title="Media" value={selectedTemplate.interview_mode || "Voice"} />
-                    <Stat title="Camera" value={selectedTemplate.camera_mode || "Off"} />
+                    <Stat title="Interaction" value={savedDeliverySettings.interaction_mode} />
+                    <Stat title="Media" value={savedDeliverySettings.interview_mode} />
+                    <Stat title="Camera" value={savedDeliverySettings.camera_mode} />
                     <Stat title="Source" value={selectedTemplate.source_type || "Ready Template"} />
                     <Stat title="Questions" value={activeSelectedQuestions.length} />
                     <Stat title="Weight Total" value={`${totalWeight}%`} className={Math.abs(totalWeight - 100) <= 0.01 ? "passed" : "warning"} />
@@ -28155,39 +28187,76 @@ Save Authorization
                     <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, marginBottom: 12 }}>
                       Interaction controls whether the interview is recorded question-by-question or conducted as a live AI conversation. Media controls voice or video. Camera may be off, optional or required.
                     </div>
+                    <div style={{
+                      marginBottom: 12,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "#ffffff",
+                      border: "1px solid #e2e8f0",
+                      color: "#334155",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}>
+                      Saved configuration: {savedDeliverySettings.interaction_mode} + {savedDeliverySettings.interview_mode} + Camera {savedDeliverySettings.camera_mode}
+                    </div>
+
                     <div className="form-grid">
-                      <Select
-                        value={aiInterviewTemplateDeliveryForm.interaction_mode}
-                        onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "interaction_mode", value)}
-                        placeholder="Interaction Mode"
-                        options={AI_INTERVIEW_INTERACTION_MODES}
-                      />
-                      <Select
-                        value={aiInterviewTemplateDeliveryForm.interview_mode}
-                        onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "interview_mode", value)}
-                        placeholder="Interview Media"
-                        options={AI_INTERVIEW_MEDIA_MODES}
-                      />
-                      <Select
-                        value={aiInterviewTemplateDeliveryForm.camera_mode}
-                        onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "camera_mode", value)}
-                        placeholder="Camera Mode"
-                        options={AI_INTERVIEW_CAMERA_MODES}
-                      />
-                      {aiInterviewTemplateDeliveryForm.interaction_mode === "Live Conversational" && (
+                      <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
+                        <span>Interaction Mode</span>
+                        <Select
+                          value={displayedDeliverySettings.interaction_mode}
+                          onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "interaction_mode", value)}
+                          placeholder="Interaction Mode"
+                          options={AI_INTERVIEW_INTERACTION_MODES}
+                          disabled={deliverySettingsDisabled}
+                        />
+                      </label>
+
+                      <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
+                        <span>Interview Media</span>
+                        <Select
+                          value={displayedDeliverySettings.interview_mode}
+                          onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "interview_mode", value)}
+                          placeholder="Interview Media"
+                          options={AI_INTERVIEW_MEDIA_MODES}
+                          disabled={deliverySettingsDisabled}
+                        />
+                      </label>
+
+                      <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
+                        <span>Camera Mode</span>
+                        <Select
+                          value={displayedDeliverySettings.camera_mode}
+                          onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "camera_mode", value)}
+                          placeholder="Camera Mode"
+                          options={AI_INTERVIEW_CAMERA_MODES}
+                          disabled={deliverySettingsDisabled}
+                        />
+                      </label>
+
+                      {displayedDeliverySettings.interaction_mode === "Live Conversational" && (
                         <>
-                          <Input
-                            type="number"
-                            placeholder="Maximum Dynamic Follow-ups"
-                            value={aiInterviewTemplateDeliveryForm.max_dynamic_follow_ups}
-                            onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "max_dynamic_follow_ups", value)}
-                          />
-                          <Input
-                            type="number"
-                            placeholder="Response Timeout Seconds"
-                            value={aiInterviewTemplateDeliveryForm.live_response_timeout_seconds}
-                            onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "live_response_timeout_seconds", value)}
-                          />
+                          <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
+                            <span>Maximum Dynamic Follow-ups</span>
+                            <Input
+                              type="number"
+                              placeholder="Maximum Dynamic Follow-ups"
+                              value={displayedDeliverySettings.max_dynamic_follow_ups}
+                              onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "max_dynamic_follow_ups", value)}
+                              disabled={deliverySettingsDisabled}
+                            />
+                          </label>
+
+                          <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
+                            <span>Response Timeout (Seconds)</span>
+                            <Input
+                              type="number"
+                              placeholder="Response Timeout Seconds"
+                              value={displayedDeliverySettings.live_response_timeout_seconds}
+                              onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "live_response_timeout_seconds", value)}
+                              disabled={deliverySettingsDisabled}
+                            />
+                          </label>
                         </>
                       )}
                     </div>
@@ -32980,6 +33049,7 @@ function Input({
   placeholder,
   type = "text",
   readOnly = false,
+  disabled = false,
 }) {
   const inputElement = (
     <input
@@ -32987,6 +33057,7 @@ function Input({
       placeholder={placeholder}
       value={value || ""}
       readOnly={readOnly}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     />
   );
@@ -33013,7 +33084,7 @@ function TableCard({ title, children, className = "" }) {
 }
 
 
-function Select({ value, onChange, placeholder, options = [], searchable = false }) {
+function Select({ value, onChange, placeholder, options = [], searchable = false, disabled = false }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const getOptionValue = (option) => typeof option === "object" ? String(option.value ?? "") : String(option ?? "");
@@ -33023,7 +33094,7 @@ function Select({ value, onChange, placeholder, options = [], searchable = false
 
   if (!searchable) {
     return (
-      <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
+      <select value={value || ""} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder}</option>
         {options.map((option) => (
           <option key={getOptionValue(option)} value={getOptionValue(option)}>{getOptionLabel(option)}</option>
@@ -33041,7 +33112,9 @@ function Select({ value, onChange, placeholder, options = [], searchable = false
       <input
   value={open ? query : selectedLabel}
   placeholder={placeholder}
+  disabled={disabled}
   onFocus={() => {
+    if (disabled) return;
     setOpen(true);
     setQuery("");
   }}
@@ -33059,12 +33132,13 @@ function Select({ value, onChange, placeholder, options = [], searchable = false
     }
   }}
   onChange={(e) => {
+    if (disabled) return;
     setQuery(e.target.value);
     setOpen(true);
   }}
 />
 
-      {open && (
+      {open && !disabled && (
         <div style={{ position: "absolute", background: "#fff", border: "1px solid #ddd", maxHeight: "250px", overflowY: "auto", width: "100%", zIndex: 9999 }}>
           {filtered.slice(0, 80).map((option) => (
             <div
