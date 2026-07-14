@@ -12782,6 +12782,39 @@ ${errors.slice(0, 10).join("\n")}` : "")
       if (questionsError) throw questionsError;
 
       const templateGroupId = getAIInterviewTemplateGroupId(template);
+      const templateCompanyId = getAIInterviewTemplateCompanyId(template);
+
+      // Archive every other version first. Using explicit row IDs makes the update
+      // reliable even when RLS or company scoping is enabled.
+      if (templateGroupId) {
+        const { data: groupRows, error: groupRowsError } = await supabase
+          .from("ai_interview_templates")
+          .select("id")
+          .eq("template_group_id", templateGroupId)
+          .eq("company_id", templateCompanyId);
+
+        if (groupRowsError) throw groupRowsError;
+
+        const oldVersionIds = (groupRows || [])
+          .map((row) => row.id)
+          .filter((id) => String(id) !== String(template.id));
+
+        if (oldVersionIds.length > 0) {
+          const { error: archiveError } = await supabase
+            .from("ai_interview_templates")
+            .update({
+              status: "Archived",
+              is_active: false,
+              is_current_version: false,
+              updated_by: actor,
+              updated_at: now,
+            })
+            .in("id", oldVersionIds)
+            .eq("company_id", templateCompanyId);
+
+          if (archiveError) throw archiveError;
+        }
+      }
 
       const { error: templateError } = await supabase
         .from("ai_interview_templates")
@@ -12802,25 +12835,22 @@ ${errors.slice(0, 10).join("\n")}` : "")
           updated_at: now,
         })
         .eq("id", template.id)
-        .eq("company_id", getAIInterviewTemplateCompanyId(template));
+        .eq("company_id", templateCompanyId);
 
       if (templateError) throw templateError;
 
-      // Keep only one production version inside the same template group.
-      if (templateGroupId) {
-        const { error: archiveError } = await supabase
-          .from("ai_interview_templates")
-          .update({
-            status: "Archived",
-            is_active: false,
-            is_current_version: false,
-            updated_by: actor,
-            updated_at: now,
-          })
-          .eq("template_group_id", templateGroupId)
-          .neq("id", template.id);
+      // Safety verification: exactly one production version must remain.
+      const { data: productionRows, error: productionCheckError } = await supabase
+        .from("ai_interview_templates")
+        .select("id")
+        .eq("template_group_id", templateGroupId)
+        .eq("company_id", templateCompanyId)
+        .eq("is_active", true)
+        .eq("is_current_version", true);
 
-        if (archiveError) throw archiveError;
+      if (productionCheckError) throw productionCheckError;
+      if ((productionRows || []).length !== 1 || String(productionRows[0]?.id) !== String(template.id)) {
+        throw new Error("Template publishing verification failed. Exactly one production version is required.");
       }
 
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
@@ -29111,7 +29141,7 @@ Save Authorization
                           <td>
                             <b>v{getAIInterviewTemplateVersionNumber(template)}</b>
                             <div style={{ fontSize: 11, color: "#64748b" }}>
-                              {template.is_active && template.approval_status === "Approved"
+                              {template.is_active && template.is_current_version !== false && template.approval_status === "Approved"
                                 ? "Production"
                                 : template.approval_status === "Draft"
                                   ? "Draft"
@@ -29253,7 +29283,7 @@ Save Authorization
                           onClick={() => openAIInterviewTemplateReview(versionTemplate)}
                           title={versionTemplate.version_notes || ""}
                         >
-                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.is_active && versionTemplate.approval_status === "Approved"
+                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.is_active && versionTemplate.is_current_version !== false && versionTemplate.approval_status === "Approved"
                             ? "Production"
                             : versionTemplate.approval_status === "Draft"
                               ? "Draft"
