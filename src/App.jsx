@@ -605,6 +605,11 @@ const EMPTY_AI_INTERVIEW_CAMPAIGN_FORM = {
   project_name: "",
   profession: "",
   language: "Bilingual",
+  interaction_mode: "Recorded",
+  interview_mode: "Voice",
+  camera_mode: "Off",
+  max_dynamic_follow_ups: 1,
+  live_response_timeout_seconds: 60,
   interview_deadline: "",
   invitation_batch_size: 20,
   max_reminders: 3,
@@ -23286,9 +23291,17 @@ function getReportStudioVisualModel() {
         settings: {
           source: "AI Interview Center",
           created_from: window.location.hostname,
-          interaction_mode: template.interaction_mode || "Recorded",
-          interview_mode: template.interview_mode || "Voice",
-          camera_mode: template.camera_mode || "Off",
+          interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(form.interaction_mode)
+            ? form.interaction_mode
+            : "Recorded",
+          interview_mode: AI_INTERVIEW_MEDIA_MODES.includes(form.interview_mode)
+            ? form.interview_mode
+            : "Voice",
+          camera_mode: AI_INTERVIEW_CAMERA_MODES.includes(form.camera_mode)
+            ? form.camera_mode
+            : "Off",
+          max_dynamic_follow_ups: Math.max(0, Math.min(3, Number(form.max_dynamic_follow_ups || 0))),
+          live_response_timeout_seconds: Math.max(15, Math.min(180, Number(form.live_response_timeout_seconds || 60))),
         },
       };
 
@@ -23859,12 +23872,27 @@ function getReportStudioVisualModel() {
       );
 
       if (campaignTemplate?.id) {
+        const campaignSettings = campaign.settings && typeof campaign.settings === "object"
+          ? campaign.settings
+          : {};
+        const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(campaignSettings.interaction_mode)
+          ? campaignSettings.interaction_mode
+          : "Recorded";
+        const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(campaignSettings.interview_mode)
+          ? campaignSettings.interview_mode
+          : "Voice";
+        const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(campaignSettings.camera_mode)
+          ? campaignSettings.camera_mode
+          : "Off";
+
         const { error: modeSyncError } = await supabase
           .from("ai_interview_sessions")
           .update({
-            interaction_mode: campaignTemplate.interaction_mode || "Recorded",
-            interview_mode: campaignTemplate.interview_mode || "Voice",
-            camera_mode: campaignTemplate.camera_mode || "Off",
+            interaction_mode: interactionMode,
+            interview_mode: interviewMode,
+            camera_mode: cameraMode,
+            max_dynamic_follow_ups: Math.max(0, Math.min(3, Number(campaignSettings.max_dynamic_follow_ups || 0))),
+            live_response_timeout_seconds: Math.max(15, Math.min(180, Number(campaignSettings.live_response_timeout_seconds || 60))),
             updated_at: new Date().toISOString(),
           })
           .eq("campaign_id", campaign.id)
@@ -24124,14 +24152,58 @@ function getReportStudioVisualModel() {
                 </div>
                 {selectedTemplate && (
                   <div style={{ margin: "12px 0", padding: "12px 14px", borderRadius: "12px", background: "#f8fafc", border: "1px solid #e2e8f0", color: "#334155", fontSize: "13px", lineHeight: 1.65 }}>
-                    <b>Template delivery:</b> {selectedTemplate.interaction_mode || "Recorded"} + {selectedTemplate.interview_mode || "Voice"} + Camera {selectedTemplate.camera_mode || "Off"}
-                    {selectedTemplate.interaction_mode === "Live Conversational" && (
-                      <div style={{ color: "#9a3412", marginTop: 4 }}>
-                        Live Conversational execution requires the realtime candidate portal and server session endpoint before launch.
-                      </div>
-                    )}
+                    <b>Selected content template:</b> {selectedTemplate.template_name} · {selectedTemplate.profession || "General"} · {selectedTemplate.question_count || aiInterviewQuestions.filter((question) => String(question.template_id) === String(selectedTemplate.id)).length} question(s)
+                    <div style={{ marginTop: 4, color: "#64748b" }}>
+                      The template controls questions and scoring. Interview delivery is configured below for this campaign.
+                    </div>
                   </div>
                 )}
+
+                <div style={{ margin: "14px 0", padding: "16px", borderRadius: "16px", background: "#f8fafc", border: "1px solid #dbe4f0" }}>
+                  <div style={{ fontWeight: 900, color: "#0f172a", marginBottom: 12 }}>Interview Configuration</div>
+                  <div className="form-grid">
+                    <Select
+                      value={aiInterviewCampaignForm.interaction_mode}
+                      onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, interaction_mode: value }))}
+                      placeholder="Interaction Mode"
+                      options={AI_INTERVIEW_INTERACTION_MODES}
+                    />
+                    <Select
+                      value={aiInterviewCampaignForm.interview_mode}
+                      onChange={(value) => setAIInterviewCampaignForm((current) => ({
+                        ...current,
+                        interview_mode: value,
+                        camera_mode: value === "Voice" ? "Off" : current.camera_mode,
+                      }))}
+                      placeholder="Interview Media"
+                      options={AI_INTERVIEW_MEDIA_MODES}
+                    />
+                    <Select
+                      value={aiInterviewCampaignForm.camera_mode}
+                      onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, camera_mode: value }))}
+                      placeholder="Camera Mode"
+                      options={AI_INTERVIEW_CAMERA_MODES}
+                      disabled={aiInterviewCampaignForm.interview_mode === "Voice"}
+                    />
+                    <Input
+                      type="number"
+                      placeholder="Maximum Dynamic Follow-ups"
+                      value={aiInterviewCampaignForm.max_dynamic_follow_ups}
+                      onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, max_dynamic_follow_ups: value }))}
+                    />
+                    {aiInterviewCampaignForm.interaction_mode === "Live Conversational" && (
+                      <Input
+                        type="number"
+                        placeholder="Live Response Timeout (seconds)"
+                        value={aiInterviewCampaignForm.live_response_timeout_seconds}
+                        onChange={(value) => setAIInterviewCampaignForm((current) => ({ ...current, live_response_timeout_seconds: value }))}
+                      />
+                    )}
+                  </div>
+                  <div style={{ marginTop: 10, fontSize: 13, color: "#475569" }}>
+                    <b>Campaign delivery:</b> {aiInterviewCampaignForm.interaction_mode} + {aiInterviewCampaignForm.interview_mode} + Camera {aiInterviewCampaignForm.camera_mode}
+                  </div>
+                </div>
                 <textarea
                   rows="3"
                   placeholder="Campaign Notes"
