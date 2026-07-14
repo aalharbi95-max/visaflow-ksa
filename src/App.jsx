@@ -12309,6 +12309,15 @@ ${errors.slice(0, 10).join("\n")}` : "")
       .sort((a, b) => String(a.template_name || "").localeCompare(String(b.template_name || "")));
   }
 
+  function canCreateAIInterviewTemplateVersion(template = {}) {
+    return (
+      canManageAIInterviewTemplate(template) &&
+      template.approval_status === "Approved" &&
+      template.is_current_version !== false &&
+      template.is_active === true
+    );
+  }
+
   async function createNewAIInterviewTemplateVersion(template = {}) {
     if (!template?.id) return;
     if (!canManageAIInterviewTemplate(template)) {
@@ -29097,18 +29106,24 @@ Save Authorization
                           <td><Badge value={template.approval_status || "Draft"} /></td>
                           <td><Badge value={template.is_active ? "Active" : "Inactive"} /></td>
                           <td className="table-actions">
-                            <button onClick={() => openAIInterviewTemplateReview(template)}>Review</button>
-                            {canManageAIInterviewTemplate(template) && (template.approval_status === "Approved" || template.is_locked) && (
+                            <button onClick={() => openAIInterviewTemplateReview(template)}>
+                              {template.is_current_version === false
+                                ? "View"
+                                : template.approval_status === "Draft"
+                                  ? "Edit Draft"
+                                  : "Review"}
+                            </button>
+                            {canCreateAIInterviewTemplateVersion(template) && (
                               <button disabled={aiInterviewLoading} onClick={() => createNewAIInterviewTemplateVersion(template)}>
                                 Create New Version
                               </button>
                             )}
-                            {canManageAIInterviewTemplate(template) && template.approval_status !== "Approved" && (
+                            {canManageAIInterviewTemplate(template) && template.is_current_version !== false && template.approval_status === "Draft" && (
                               <button disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(template)}>
                                 Approve & Activate
                               </button>
                             )}
-                            {canManageAIInterviewTemplate(template) && template.approval_status !== "Rejected" && (
+                            {canManageAIInterviewTemplate(template) && template.is_current_version !== false && !["Approved", "Rejected"].includes(template.approval_status) && (
                               <button className="danger" disabled={aiInterviewLoading} onClick={() => rejectAIInterviewTemplate(template)}>
                                 Reject
                               </button>
@@ -29198,7 +29213,7 @@ Save Authorization
                           Campaigns use the latest approved version. Previous versions remain available for audit and review.
                         </div>
                       </div>
-                      {canManageAIInterviewTemplate(selectedTemplate) && (selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked) && (
+                      {canCreateAIInterviewTemplateVersion(selectedTemplate) && (
                         <button className="new-btn" disabled={aiInterviewLoading} onClick={() => createNewAIInterviewTemplateVersion(selectedTemplate)}>
                           Create New Version
                         </button>
@@ -29212,7 +29227,9 @@ Save Authorization
                           onClick={() => openAIInterviewTemplateReview(versionTemplate)}
                           title={versionTemplate.version_notes || ""}
                         >
-                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.approval_status || "Draft"}
+                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.is_current_version === false
+                            ? "Archived"
+                            : (versionTemplate.approval_status || "Draft")}
                           {versionTemplate.is_current_version !== false ? " · Current" : ""}
                         </button>
                       ))}
