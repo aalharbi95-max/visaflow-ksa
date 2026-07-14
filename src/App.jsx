@@ -12287,6 +12287,68 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return String(template?.company_id || currentCompanyId || "");
   }
 
+  function getAIInterviewTemplateVersionNumber(template = {}) {
+    return Number(template?.version_number || template?.version || 1);
+  }
+
+  function getAIInterviewTemplateGroupId(template = {}) {
+    return String(template?.template_group_id || template?.id || "");
+  }
+
+  function getAIInterviewTemplateVersions(template = {}) {
+    const groupId = getAIInterviewTemplateGroupId(template);
+    if (!groupId) return [];
+    return aiInterviewTemplates
+      .filter((item) => getAIInterviewTemplateGroupId(item) === groupId)
+      .sort((a, b) => getAIInterviewTemplateVersionNumber(b) - getAIInterviewTemplateVersionNumber(a));
+  }
+
+  function getAIInterviewTemplateLibraryRows() {
+    return aiInterviewTemplates
+      .filter((template) => template.is_current_version !== false)
+      .sort((a, b) => String(a.template_name || "").localeCompare(String(b.template_name || "")));
+  }
+
+  async function createNewAIInterviewTemplateVersion(template = {}) {
+    if (!template?.id) return;
+    if (!canManageAIInterviewTemplate(template)) {
+      return alert("You do not have permission to create a new version of this template.");
+    }
+    if (isGlobalAIInterviewTemplate(template)) {
+      return alert("VisaFlow global templates cannot be versioned by a company.");
+    }
+
+    const notes = String(window.prompt(
+      "Version notes (optional):",
+      `New version based on v${getAIInterviewTemplateVersionNumber(template)}`
+    ) || "").trim();
+
+    if (!window.confirm(`Create a new draft version of ${template.template_name || "this template"}?`)) return;
+
+    setAIInterviewLoading(true);
+    setAIInterviewMessage("Creating a new template version...");
+    try {
+      const { data, error } = await supabase.rpc("create_ai_interview_template_version", {
+        p_template_id: template.id,
+        p_version_notes: notes || null,
+      });
+      if (error) throw error;
+
+      const newTemplateId = Array.isArray(data) ? data[0] : data;
+      await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
+      if (newTemplateId) setSelectedAIInterviewTemplateId(String(newTemplateId));
+      resetAIInterviewQuestionEditor();
+      setAIInterviewMessage(`Version v${getAIInterviewTemplateVersionNumber(template) + 1} created as Draft.`);
+      scrollToAIInterviewTemplateReview();
+    } catch (error) {
+      console.warn("AI interview template version creation failed", error?.message || error);
+      setAIInterviewMessage(`Version creation failed: ${error?.message || error}`);
+      alert(error?.message || "Template version creation failed.");
+    } finally {
+      setAIInterviewLoading(false);
+    }
+  }
+
   function getEngineeringCatalogItem(profession = "") {
     return ENGINEERING_AI_TEMPLATE_CATALOG.find(
       (item) => normalizeMatchText(item.profession) === normalizeMatchText(profession)
@@ -23207,12 +23269,23 @@ function getReportStudioVisualModel() {
   }
 
   function getAIInterviewCampaignTemplateOptions() {
-    return aiInterviewTemplates
+    const latestApprovedByGroup = new Map();
+
+    aiInterviewTemplates
       .filter((template) =>
         template.is_active === true &&
         template.approval_status === "Approved" &&
         template.status === "Active"
       )
+      .forEach((template) => {
+        const groupId = getAIInterviewTemplateGroupId(template);
+        const existing = latestApprovedByGroup.get(groupId);
+        if (!existing || getAIInterviewTemplateVersionNumber(template) > getAIInterviewTemplateVersionNumber(existing)) {
+          latestApprovedByGroup.set(groupId, template);
+        }
+      });
+
+    return Array.from(latestApprovedByGroup.values())
       .sort((a, b) => String(a.template_name || "").localeCompare(String(b.template_name || "")));
   }
 
@@ -24098,7 +24171,10 @@ function getReportStudioVisualModel() {
                       }));
                     }}
                     placeholder="Approved AI Template"
-                    options={templateOptions.map((item) => ({ value: item.id, label: `${item.template_name} — ${item.profession || "General"}` }))}
+                    options={templateOptions.map((item) => ({
+                      value: item.id,
+                      label: `${item.template_name} — ${item.profession || "General"} — v${getAIInterviewTemplateVersionNumber(item)}`,
+                    }))}
                   />
                   <Select
                     value={aiInterviewCampaignForm.request_no}
@@ -28968,6 +29044,7 @@ Save Authorization
                   <tr>
                     <th>Created</th>
                     <th>Template</th>
+                    <th>Version</th>
                     <th>Profession</th>
                     <th>Delivery</th>
                     <th>Camera</th>
@@ -28982,10 +29059,10 @@ Save Authorization
                 <tbody>
                   {aiInterviewTemplates.length === 0 ? (
                     <tr>
-                      <td colSpan="9">No AI interview templates found.</td>
+                      <td colSpan="12">No AI interview templates found.</td>
                     </tr>
                   ) : (
-                    aiInterviewTemplates.map((template) => {
+                    getAIInterviewTemplateLibraryRows().map((template) => {
                       const templateQuestions = getAIInterviewTemplateAllQuestions(template.id);
                       const activeQuestions = templateQuestions.filter((question) => question.is_active !== false);
                       const isSelected = String(selectedAIInterviewTemplateId) === String(template.id);
@@ -29002,6 +29079,12 @@ Save Authorization
                               </span>
                             </div>
                           </td>
+                          <td>
+                            <b>v{getAIInterviewTemplateVersionNumber(template)}</b>
+                            <div style={{ fontSize: 11, color: "#64748b" }}>
+                              {template.is_current_version === false ? "Previous" : "Current"}
+                            </div>
+                          </td>
                           <td>{template.profession || "General"}</td>
                           <td>
                             <b>{template.interaction_mode || "Recorded"}</b>
@@ -29015,6 +29098,11 @@ Save Authorization
                           <td><Badge value={template.is_active ? "Active" : "Inactive"} /></td>
                           <td className="table-actions">
                             <button onClick={() => openAIInterviewTemplateReview(template)}>Review</button>
+                            {canManageAIInterviewTemplate(template) && (template.approval_status === "Approved" || template.is_locked) && (
+                              <button disabled={aiInterviewLoading} onClick={() => createNewAIInterviewTemplateVersion(template)}>
+                                Create New Version
+                              </button>
+                            )}
                             {canManageAIInterviewTemplate(template) && template.approval_status !== "Approved" && (
                               <button disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(template)}>
                                 Approve & Activate
@@ -29067,8 +29155,9 @@ Save Authorization
                   ref={aiInterviewTemplateReviewRef}
                   style={{ scrollMarginTop: 110 }}
                 >
-                  <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"}`}>
+                  <FormCard title={`AI Template Review - ${selectedTemplate.template_name || "Template"} - v${getAIInterviewTemplateVersionNumber(selectedTemplate)}`}>
                   <div className="dashboard-grid">
+                    <Stat title="Version" value={`v${getAIInterviewTemplateVersionNumber(selectedTemplate)}`} />
                     <Stat title="Profession" value={selectedTemplate.profession || "General"} />
                     <Stat title="Interaction" value={savedDeliverySettings.interaction_mode} />
                     <Stat title="Media" value={savedDeliverySettings.interview_mode} />
@@ -29099,6 +29188,40 @@ Save Authorization
                         {missingInformation.length ? missingInformation.join(" • ") : "No major missing information identified."}
                       </div>
                     </div>
+                  </div>
+
+                  <div style={{ marginBottom: 16, padding: 16, border: "1px solid #cbd5e1", borderRadius: 14, background: "#ffffff" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 900, color: "#0f172a" }}>Template Version History</div>
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                          Campaigns use the latest approved version. Previous versions remain available for audit and review.
+                        </div>
+                      </div>
+                      {canManageAIInterviewTemplate(selectedTemplate) && (selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked) && (
+                        <button className="new-btn" disabled={aiInterviewLoading} onClick={() => createNewAIInterviewTemplateVersion(selectedTemplate)}>
+                          Create New Version
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {getAIInterviewTemplateVersions(selectedTemplate).map((versionTemplate) => (
+                        <button
+                          key={versionTemplate.id}
+                          className={String(versionTemplate.id) === String(selectedTemplate.id) ? "save-btn" : "light-btn"}
+                          onClick={() => openAIInterviewTemplateReview(versionTemplate)}
+                          title={versionTemplate.version_notes || ""}
+                        >
+                          v{getAIInterviewTemplateVersionNumber(versionTemplate)} · {versionTemplate.approval_status || "Draft"}
+                          {versionTemplate.is_current_version !== false ? " · Current" : ""}
+                        </button>
+                      ))}
+                    </div>
+                    {selectedTemplate.version_notes && (
+                      <div style={{ marginTop: 10, fontSize: 12, color: "#475569" }}>
+                        <b>Version notes:</b> {selectedTemplate.version_notes}
+                      </div>
+                    )}
                   </div>
 
                   {selectedTemplate.rejection_reason && (
