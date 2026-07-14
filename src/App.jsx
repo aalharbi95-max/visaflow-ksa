@@ -1382,6 +1382,13 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const [savingAnswer, setSavingAnswer] = useState(false);
   const [currentAnswerSaved, setCurrentAnswerSaved] = useState(false);
   const [currentAudioUrl, setCurrentAudioUrl] = useState("");
+  const [liveConnecting, setLiveConnecting] = useState(false);
+  const [liveConnected, setLiveConnected] = useState(false);
+  const [livePhase, setLivePhase] = useState("Not connected");
+  const [liveTranscript, setLiveTranscript] = useState([]);
+  const [liveAssistantDraft, setLiveAssistantDraft] = useState("");
+  const [liveElapsedSeconds, setLiveElapsedSeconds] = useState(0);
+  const [liveUserSpeaking, setLiveUserSpeaking] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const microphoneStreamRef = useRef(null);
@@ -1391,6 +1398,18 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const recordingStartedAtRef = useRef(null);
   const interviewStartedAtRef = useRef(null);
   const questionAskedAtRef = useRef(null);
+  const realtimePeerConnectionRef = useRef(null);
+  const realtimeDataChannelRef = useRef(null);
+  const realtimeRemoteAudioRef = useRef(null);
+  const realtimeTimerRef = useRef(null);
+  const realtimeQuestionOrderRef = useRef(1);
+  const realtimeCandidateTranscriptRef = useRef([]);
+  const realtimeQuestionConversationRef = useRef([]);
+  const realtimeHandledToolCallsRef = useRef(new Set());
+  const realtimeEndingRef = useRef(false);
+  const liveMediaRecorderRef = useRef(null);
+  const liveMediaChunksRef = useRef([]);
+  const liveMediaStartedAtRef = useRef(null);
 
   const currentQuestion = questions[currentQuestionIndex] || null;
   const totalQuestions = questions.length || Number(session?.total_questions || 0);
@@ -1411,14 +1430,16 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const portalInterviewTitle = portalLanguage === "AR"
     ? `تجربة المقابلة الذكية المتقدمة — ${portalProfessionLabel}`
     : (template?.template_name_en || template?.template_name || "VisaFlow KSA AI Interview Pilot");
+  const effectiveInteractionMode = session?.interaction_mode || template?.interaction_mode || "Recorded";
+  const isLiveConversational = effectiveInteractionMode === "Live Conversational";
   const effectiveInterviewMode = session?.interview_mode || template?.interview_mode || "Voice";
   const effectiveCameraMode = session?.camera_mode || template?.camera_mode || "Off";
   const cameraConfigured = effectiveCameraMode !== "Off" || effectiveInterviewMode === "Video";
   const cameraRequired = effectiveCameraMode === "Required" || (effectiveInterviewMode === "Video" && effectiveCameraMode !== "Optional");
   const cameraOptional = cameraConfigured && !cameraRequired;
   const portalInstructions = portalLanguage === "AR"
-    ? `هذه تجربة اختيارية لمنصة VisaFlow KSA. استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون${cameraConfigured ? " والكاميرا" : ""}، وأجب بوضوح. التقييم الناتج تجريبي ولا يمثل عرضًا وظيفيًا أو قرار توظيف نهائيًا.`
-    : `This is a voluntary VisaFlow KSA product pilot. Use a quiet place, allow microphone${cameraConfigured ? " and camera" : ""} access, and answer clearly. The resulting evaluation is experimental and is not a job offer or a final employment decision.`;
+    ? `هذه تجربة اختيارية لمنصة VisaFlow KSA. استخدم مكانًا هادئًا، واسمح بالوصول إلى الميكروفون${cameraConfigured ? " والكاميرا" : ""}، وأجب بوضوح. ${isLiveConversational ? "سيتحدث معك محاور ذكي مباشرة، وسيطرح الأسئلة والأسئلة التكميلية تلقائيًا." : "سيتم تسجيل كل إجابة وحفظها بشكل منفصل."} التقييم الناتج تجريبي ولا يمثل عرضًا وظيفيًا أو قرار توظيف نهائيًا.`
+    : `This is a voluntary VisaFlow KSA product pilot. Use a quiet place, allow microphone${cameraConfigured ? " and camera" : ""} access, and answer clearly. ${isLiveConversational ? "A live AI interviewer will speak with you and ask approved questions and relevant follow-ups automatically." : "Each answer will be recorded and saved separately."} The resulting evaluation is experimental and is not a job offer or a final employment decision.`;
 
   useEffect(() => {
     loadCandidateInterviewPortal();
@@ -1428,6 +1449,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
       if (mediaRecorderRef.current?.state === "recording") {
         try { mediaRecorderRef.current.stop(); } catch { /* no-op */ }
       }
+      stopLiveConversation({ preserveStream: true, resetState: false });
       stopCaptureStream();
       window.speechSynthesis?.cancel?.();
     };
@@ -1544,7 +1566,9 @@ function AIInterviewCandidatePortal({ accessToken }) {
       setEvaluationSummaryConsentChecked(Boolean(nextSession.evaluation_email_consent));
       setEmployerSharingConsentChecked(Boolean(nextSession.employer_sharing_consent));
       setMicrophoneReady(Boolean(nextSession.microphone_test_passed));
-      setCurrentQuestionIndex(firstUnansweredIndex >= 0 ? firstUnansweredIndex : Math.max(questionRows.length - 1, 0));
+      const nextQuestionIndex = firstUnansweredIndex >= 0 ? firstUnansweredIndex : Math.max(questionRows.length - 1, 0);
+      setCurrentQuestionIndex(nextQuestionIndex);
+      realtimeQuestionOrderRef.current = Number(questionRows[nextQuestionIndex]?.question_order || nextSession.current_question_order || 1);
       interviewStartedAtRef.current = nextSession.started_at ? new Date(nextSession.started_at) : null;
     } catch (error) {
       console.warn("AI interview portal load failed", error?.message || error);
@@ -1773,6 +1797,503 @@ function AIInterviewCandidatePortal({ accessToken }) {
     ));
   }
 
+  function getRealtimeFunctionUrl() {
+    const configuredUrl = String(import.meta.env?.VITE_SUPABASE_URL || supabase?.supabaseUrl || "").replace(/\/$/, "");
+    if (!configuredUrl) throw new Error("Supabase URL is missing from the application environment.");
+    return `${configuredUrl}/functions/v1/create-ai-realtime-session`;
+  }
+
+  function formatLiveElapsed(totalSeconds = 0) {
+    const seconds = Math.max(0, Number(totalSeconds || 0));
+    const minutesPart = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const secondsPart = Math.floor(seconds % 60).toString().padStart(2, "0");
+    return `${minutesPart}:${secondsPart}`;
+  }
+
+  function appendLiveTranscript(role, text, extra = {}) {
+    const cleanText = String(text || "").trim();
+    if (!cleanText) return;
+    setLiveTranscript((previous) => [
+      ...previous,
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        role,
+        text: cleanText,
+        created_at: new Date().toISOString(),
+        ...extra,
+      },
+    ].slice(-40));
+  }
+
+  function sendRealtimeEvent(event) {
+    const channel = realtimeDataChannelRef.current;
+    if (!channel || channel.readyState !== "open") return false;
+    channel.send(JSON.stringify(event));
+    return true;
+  }
+
+  function startLiveMediaSegment() {
+    const stream = microphoneStreamRef.current;
+    if (!stream || !window.MediaRecorder || realtimeEndingRef.current) return;
+    if (liveMediaRecorderRef.current?.state === "recording") return;
+
+    const useVideo = Boolean(cameraReady && stream.getVideoTracks?.().some((track) => track.readyState === "live"));
+    const mimeType = getSupportedRecordingMimeType(useVideo);
+    const recorderOptions = mimeType ? { mimeType } : {};
+    if (useVideo) {
+      recorderOptions.videoBitsPerSecond = 700000;
+      recorderOptions.audioBitsPerSecond = 64000;
+    }
+
+    try {
+      const recorder = new MediaRecorder(stream, recorderOptions);
+      liveMediaChunksRef.current = [];
+      liveMediaStartedAtRef.current = new Date();
+      liveMediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size > 0) liveMediaChunksRef.current.push(event.data);
+      };
+      recorder.start(500);
+    } catch (error) {
+      console.warn("Live interview media segment could not start", error?.message || error);
+    }
+  }
+
+  async function stopLiveMediaSegmentAndUpload(questionOrder, discard = false) {
+    const recorder = liveMediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      liveMediaRecorderRef.current = null;
+      liveMediaChunksRef.current = [];
+      return { path: "", durationSeconds: 0, isVideo: false, startedAt: "" };
+    }
+
+    return await new Promise((resolve) => {
+      const startedAt = liveMediaStartedAtRef.current;
+      const mimeType = recorder.mimeType || "audio/webm";
+      const isVideo = String(mimeType).startsWith("video/") || recorder.stream?.getVideoTracks?.().some((track) => track.readyState === "live");
+
+      recorder.onstop = async () => {
+        try {
+          const chunks = [...liveMediaChunksRef.current];
+          liveMediaRecorderRef.current = null;
+          liveMediaChunksRef.current = [];
+          liveMediaStartedAtRef.current = null;
+
+          const durationSeconds = Math.max(1, Math.round((Date.now() - (startedAt?.getTime?.() || Date.now())) / 1000));
+          if (discard || chunks.length === 0) {
+            resolve({ path: "", durationSeconds, isVideo, startedAt: startedAt?.toISOString?.() || "" });
+            return;
+          }
+
+          const blob = new Blob(chunks, { type: mimeType });
+          if (!blob.size) {
+            resolve({ path: "", durationSeconds, isVideo, startedAt: startedAt?.toISOString?.() || "" });
+            return;
+          }
+
+          const extension = getRecordingExtension(mimeType, isVideo);
+          const randomPart = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const mediaLabel = isVideo ? "live-video" : "live-audio";
+          const storagePath = `${session.company_id}/${session.id}/question-${questionOrder}-${mediaLabel}-${randomPart}.${extension}`;
+          const { error: uploadError } = await supabase.storage
+            .from(AI_INTERVIEW_AUDIO_BUCKET)
+            .upload(storagePath, blob, {
+              contentType: mimeType,
+              cacheControl: "3600",
+              upsert: false,
+            });
+
+          if (uploadError) throw uploadError;
+          resolve({ path: storagePath, durationSeconds, isVideo, startedAt: startedAt?.toISOString?.() || "" });
+        } catch (error) {
+          console.warn("Live interview media upload failed", error?.message || error);
+          resolve({ path: "", durationSeconds: 0, isVideo: false, startedAt: startedAt?.toISOString?.() || "" });
+        }
+      };
+
+      try {
+        recorder.stop();
+      } catch {
+        liveMediaRecorderRef.current = null;
+        liveMediaChunksRef.current = [];
+        resolve({ path: "", durationSeconds: 0, isVideo: false, startedAt: startedAt?.toISOString?.() || "" });
+      }
+    });
+  }
+
+  async function saveLiveQuestionResult(argumentsValue = {}, callId = "") {
+    const requestedOrder = Number(argumentsValue.question_order || realtimeQuestionOrderRef.current || 1);
+    const questionOrder = Math.max(1, Math.min(questions.length || 1, requestedOrder));
+    const question = questions.find((item) => Number(item.question_order || 0) === questionOrder) || questions[questionOrder - 1];
+    if (!question) throw new Error("The live interview question could not be identified.");
+
+    setLivePhase(tr("Saving answer", "جاري حفظ الإجابة"));
+    const fallbackTranscript = realtimeQuestionConversationRef.current.join("\n").trim() || realtimeCandidateTranscriptRef.current.join("\n").trim();
+    const answerText = String(fallbackTranscript || argumentsValue.answer_summary || argumentsValue.candidate_answer_text || "").trim();
+    const answerLanguage = String(argumentsValue.answer_language || (portalLanguage === "AR" ? "Arabic" : "English"));
+    const mediaResult = await stopLiveMediaSegmentAndUpload(questionOrder, false);
+
+    await saveCandidateAnswerRecord({
+      question,
+      audioStoragePath: mediaResult.path,
+      audioDurationSeconds: mediaResult.durationSeconds,
+      answerStatus: "Answered",
+      transcriptionStatus: "Completed",
+      answerText,
+      answerLanguage,
+      answerStartedAt: mediaResult.startedAt || questionAskedAtRef.current || new Date().toISOString(),
+    });
+
+    realtimeCandidateTranscriptRef.current = [];
+    realtimeQuestionConversationRef.current = [];
+    const nextOrder = Math.min(questionOrder + 1, questions.length || questionOrder);
+    realtimeQuestionOrderRef.current = nextOrder;
+    setCurrentQuestionIndex(Math.max(0, nextOrder - 1));
+    const { data: advancedSession } = await supabase
+      .from("ai_interview_sessions")
+      .update({ current_question_order: nextOrder, updated_at: new Date().toISOString() })
+      .eq("id", session.id)
+      .eq("access_token", accessToken)
+      .select("*")
+      .maybeSingle();
+    if (advancedSession) setSession(advancedSession);
+
+    sendRealtimeEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify({
+          ok: true,
+          saved_question_order: questionOrder,
+          next_question_order: questionOrder < questions.length ? nextOrder : null,
+        }),
+      },
+    });
+
+    if (!realtimeEndingRef.current && questionOrder < questions.length) startLiveMediaSegment();
+    setLivePhase(tr("AI interviewer is continuing", "المحاور الذكي يتابع"));
+    sendRealtimeEvent({ type: "response.create" });
+  }
+
+  async function completeLiveCandidateInterview(argumentsValue = {}, callId = "") {
+    if (realtimeEndingRef.current) return;
+    realtimeEndingRef.current = true;
+    setLivePhase(tr("Completing interview", "جاري إنهاء المقابلة"));
+
+    await stopLiveMediaSegmentAndUpload(realtimeQuestionOrderRef.current, true);
+
+    const { data: answerRows, error: answerError } = await supabase
+      .from("ai_interview_answers")
+      .select("*")
+      .eq("session_id", session.id)
+      .order("question_order", { ascending: true });
+    if (answerError) throw answerError;
+
+    const finalAnswers = answerRows || [];
+    const finalAnswered = finalAnswers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
+    const finalSkipped = finalAnswers.filter((answer) => answer.answer_status === "Skipped").length;
+    const now = new Date();
+    const startedAt = interviewStartedAtRef.current || (session.started_at ? new Date(session.started_at) : now);
+    const durationSeconds = Math.max(0, Math.round((now - startedAt) / 1000));
+
+    const { data, error } = await supabase
+      .from("ai_interview_sessions")
+      .update({
+        status: "Completed",
+        completed_at: now.toISOString(),
+        current_question_order: questions.length,
+        total_questions: questions.length,
+        answered_questions: finalAnswered,
+        skipped_questions: finalSkipped,
+        interview_duration_seconds: durationSeconds,
+        review_status: "Pending Human Review",
+        ai_recommendation: "Pending Analysis",
+        updated_at: now.toISOString(),
+      })
+      .eq("id", session.id)
+      .eq("access_token", accessToken)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+    setAnswers(finalAnswers);
+    setSession(data);
+    setLivePhase(tr("Interview completed", "تم إكمال المقابلة"));
+
+    sendRealtimeEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify({
+          ok: true,
+          interview_completed: true,
+          completed_questions: Number(argumentsValue.completed_questions || finalAnswered),
+        }),
+      },
+    });
+
+    window.setTimeout(() => {
+      stopLiveConversation({ preserveStream: false, resetState: false });
+    }, 1200);
+  }
+
+  async function handleRealtimeToolCall(event = {}) {
+    const callId = String(event.call_id || event.item?.call_id || "");
+    const toolKey = callId || `${event.name || event.item?.name || "tool"}-${event.response_id || ""}`;
+    if (realtimeHandledToolCallsRef.current.has(toolKey)) return;
+    realtimeHandledToolCallsRef.current.add(toolKey);
+
+    const toolName = String(event.name || event.item?.name || "");
+    const rawArguments = event.arguments || event.item?.arguments || "{}";
+    let parsedArguments = {};
+    try {
+      parsedArguments = typeof rawArguments === "string" ? JSON.parse(rawArguments || "{}") : (rawArguments || {});
+    } catch {
+      parsedArguments = {};
+    }
+
+    try {
+      if (toolName === "record_question_result") {
+        await saveLiveQuestionResult(parsedArguments, callId);
+        return;
+      }
+      if (toolName === "finish_interview") {
+        await completeLiveCandidateInterview(parsedArguments, callId);
+      }
+    } catch (error) {
+      console.warn("Realtime tool handling failed", error?.message || error);
+      setPortalMessage(error?.message || tr("The live answer could not be saved.", "تعذر حفظ إجابة المقابلة المباشرة."));
+      setLivePhase(tr("Save error", "خطأ في الحفظ"));
+      sendRealtimeEvent({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ ok: false, error: error?.message || "Save failed" }),
+        },
+      });
+      sendRealtimeEvent({ type: "response.create" });
+    }
+  }
+
+  function handleRealtimeServerEvent(event = {}) {
+    const eventType = String(event.type || "");
+
+    if (eventType === "session.created" || eventType === "session.updated") {
+      setLivePhase(tr("Connected — AI interviewer is preparing", "تم الاتصال — المحاور الذكي يستعد"));
+      return;
+    }
+
+    if (eventType === "input_audio_buffer.speech_started") {
+      setLiveUserSpeaking(true);
+      setLivePhase(tr("Listening to you", "يستمع إليك"));
+      return;
+    }
+
+    if (eventType === "input_audio_buffer.speech_stopped") {
+      setLiveUserSpeaking(false);
+      setLivePhase(tr("Understanding your answer", "يفهم إجابتك"));
+      return;
+    }
+
+    if (eventType === "conversation.item.input_audio_transcription.completed") {
+      const transcript = String(event.transcript || "").trim();
+      if (transcript) {
+        realtimeCandidateTranscriptRef.current.push(transcript);
+        realtimeQuestionConversationRef.current.push(`Candidate: ${transcript}`);
+        appendLiveTranscript("candidate", transcript);
+      }
+      return;
+    }
+
+    if (eventType === "response.output_audio_transcript.delta") {
+      setLiveAssistantDraft((current) => `${current}${event.delta || ""}`);
+      setLivePhase(tr("AI interviewer is speaking", "المحاور الذكي يتحدث"));
+      return;
+    }
+
+    if (eventType === "response.output_audio_transcript.done") {
+      const transcript = String(event.transcript || liveAssistantDraft || "").trim();
+      if (transcript) {
+        realtimeQuestionConversationRef.current.push(`AI Interviewer: ${transcript}`);
+        appendLiveTranscript("assistant", transcript);
+      }
+      setLiveAssistantDraft("");
+      setLivePhase(tr("Your turn to answer", "دورك للإجابة"));
+      questionAskedAtRef.current = new Date().toISOString();
+      return;
+    }
+
+    if (eventType === "response.output_text.done") {
+      const text = String(event.text || "").trim();
+      if (text) appendLiveTranscript("assistant", text);
+      return;
+    }
+
+    if (eventType === "response.function_call_arguments.done") {
+      handleRealtimeToolCall(event);
+      return;
+    }
+
+    if (eventType === "response.done") {
+      const outputItems = event.response?.output || [];
+      outputItems
+        .filter((item) => item?.type === "function_call")
+        .forEach((item) => handleRealtimeToolCall({ ...item, type: "response.function_call_arguments.done" }));
+      return;
+    }
+
+    if (eventType === "error") {
+      const message = String(event.error?.message || "Realtime connection error.");
+      console.warn("OpenAI Realtime event error", event);
+      setPortalMessage(message);
+      setLivePhase(tr("Connection error", "خطأ في الاتصال"));
+    }
+  }
+
+  function stopLiveConversation({ preserveStream = false, resetState = true } = {}) {
+    if (realtimeTimerRef.current) window.clearInterval(realtimeTimerRef.current);
+    realtimeTimerRef.current = null;
+
+    const recorder = liveMediaRecorderRef.current;
+    if (recorder && recorder.state === "recording") {
+      try { recorder.stop(); } catch { /* no-op */ }
+    }
+    liveMediaRecorderRef.current = null;
+    liveMediaChunksRef.current = [];
+
+    try { realtimeDataChannelRef.current?.close?.(); } catch { /* no-op */ }
+    try { realtimePeerConnectionRef.current?.close?.(); } catch { /* no-op */ }
+    realtimeDataChannelRef.current = null;
+    realtimePeerConnectionRef.current = null;
+
+    if (realtimeRemoteAudioRef.current) {
+      realtimeRemoteAudioRef.current.pause?.();
+      realtimeRemoteAudioRef.current.srcObject = null;
+    }
+
+    if (!preserveStream) stopCaptureStream();
+    if (resetState) {
+      setLiveConnected(false);
+      setLiveConnecting(false);
+    }
+  }
+
+  async function startLiveCandidateInterview() {
+    if (liveConnecting || liveConnected) return;
+    setLiveConnecting(true);
+    setPortalMessage("");
+    setLivePhase(tr("Connecting to AI interviewer", "جاري الاتصال بالمحاور الذكي"));
+    realtimeEndingRef.current = false;
+    realtimeHandledToolCallsRef.current = new Set();
+    realtimeCandidateTranscriptRef.current = [];
+    realtimeQuestionConversationRef.current = [];
+
+    try {
+      const stream = await ensureCaptureStream({ withVideo: cameraReady });
+      const now = new Date().toISOString();
+      const firstQuestionOrder = Number(currentQuestion?.question_order || realtimeQuestionOrderRef.current || 1);
+      const { data: startedSession, error: startError } = await supabase
+        .from("ai_interview_sessions")
+        .update({
+          status: "In Progress",
+          started_at: session.started_at || now,
+          current_question_order: firstQuestionOrder,
+          total_questions: questions.length,
+          updated_at: now,
+        })
+        .eq("id", session.id)
+        .eq("access_token", accessToken)
+        .select("*")
+        .single();
+      if (startError) throw startError;
+
+      setSession(startedSession);
+      interviewStartedAtRef.current = new Date(startedSession.started_at || now);
+      realtimeQuestionOrderRef.current = firstQuestionOrder;
+
+      const peerConnection = new RTCPeerConnection();
+      realtimePeerConnectionRef.current = peerConnection;
+      peerConnection.onconnectionstatechange = () => {
+        const state = peerConnection.connectionState;
+        if (state === "connected") {
+          setLiveConnected(true);
+          setLiveConnecting(false);
+        } else if (["failed", "disconnected", "closed"].includes(state) && !realtimeEndingRef.current) {
+          setLiveConnected(false);
+          setLiveConnecting(false);
+          setLivePhase(tr("Connection lost — reconnect to continue", "انقطع الاتصال — أعد الاتصال للمتابعة"));
+        }
+      };
+
+      peerConnection.ontrack = (event) => {
+        const remoteStream = event.streams?.[0];
+        if (!remoteStream || !realtimeRemoteAudioRef.current) return;
+        realtimeRemoteAudioRef.current.srcObject = remoteStream;
+        realtimeRemoteAudioRef.current.play?.().catch(() => {});
+      };
+
+      stream.getAudioTracks().forEach((track) => peerConnection.addTrack(track, stream));
+      const dataChannel = peerConnection.createDataChannel("oai-events");
+      realtimeDataChannelRef.current = dataChannel;
+      dataChannel.onmessage = (messageEvent) => {
+        try {
+          handleRealtimeServerEvent(JSON.parse(messageEvent.data));
+        } catch (error) {
+          console.warn("Invalid Realtime event", error?.message || error);
+        }
+      };
+      dataChannel.onerror = () => {
+        setLivePhase(tr("Realtime data connection error", "خطأ في قناة الاتصال المباشر"));
+      };
+      dataChannel.onopen = () => {
+        setLiveConnected(true);
+        setLiveConnecting(false);
+        setLivePhase(tr("Connected — AI interviewer is starting", "تم الاتصال — المحاور الذكي يبدأ"));
+        setLiveElapsedSeconds(0);
+        if (realtimeTimerRef.current) window.clearInterval(realtimeTimerRef.current);
+        const timerStartedAt = Date.now();
+        realtimeTimerRef.current = window.setInterval(() => {
+          setLiveElapsedSeconds(Math.floor((Date.now() - timerStartedAt) / 1000));
+        }, 1000);
+        startLiveMediaSegment();
+        sendRealtimeEvent({ type: "response.create" });
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      const response = await fetch(getRealtimeFunctionUrl(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/sdp",
+          "X-AI-Interview-Token": accessToken,
+        },
+        body: offer.sdp || "",
+      });
+
+      const responseText = await response.text();
+      if (!response.ok) {
+        let message = responseText || "The AI live interview connection failed.";
+        try {
+          const parsed = JSON.parse(responseText);
+          message = parsed.error || parsed.message || message;
+        } catch { /* response is not JSON */ }
+        throw new Error(message);
+      }
+
+      await peerConnection.setRemoteDescription({ type: "answer", sdp: responseText });
+    } catch (error) {
+      console.warn("Live AI interview start failed", error?.message || error);
+      stopLiveConversation({ preserveStream: true, resetState: true });
+      setPortalMessage(error?.message || tr("The live AI interview could not start.", "تعذر بدء المقابلة المباشرة مع الذكاء الاصطناعي."));
+      setLivePhase(tr("Not connected", "غير متصل"));
+    } finally {
+      setLiveConnecting(false);
+    }
+  }
+
   async function startCandidateInterview() {
     if (session.consent_required !== false && !session.consent_accepted) {
       setPortalMessage(tr("Consent is required before starting.", "الموافقة مطلوبة قبل بدء المقابلة."));
@@ -1788,6 +2309,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
     }
     if (cameraOptional && !cameraReady && !cameraSkipped) {
       setPortalMessage(tr("Choose whether to use the optional camera before starting.", "حدد ما إذا كنت ترغب باستخدام الكاميرا الاختيارية قبل البدء."));
+      return;
+    }
+
+    if (isLiveConversational) {
+      await startLiveCandidateInterview();
       return;
     }
 
@@ -1982,6 +2508,9 @@ function AIInterviewCandidatePortal({ accessToken }) {
     audioDurationSeconds = 0,
     answerStatus = "Answered",
     transcriptionStatus = "Pending",
+    answerText = "",
+    answerLanguage = "",
+    answerStartedAt = "",
   }) {
     const now = new Date().toISOString();
     const questionOrder = Number(question.question_order || currentQuestionIndex + 1);
@@ -1994,10 +2523,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
       question_type: question.question_type || "Open Question",
       competency: question.competency || "General",
       asked_at: questionAskedAtRef.current || now,
-      answer_started_at: recordingStartedAtRef.current?.toISOString?.() || now,
+      answer_started_at: answerStartedAt || recordingStartedAtRef.current?.toISOString?.() || now,
       answer_completed_at: now,
-      answer_text: "",
-      answer_language: portalLanguage === "AR" ? "Arabic" : "English",
+      answer_text: String(answerText || ""),
+      answer_language: answerLanguage || (portalLanguage === "AR" ? "Arabic" : "English"),
       audio_storage_path: audioStoragePath,
       audio_duration_seconds: Number(audioDurationSeconds || 0),
       transcription_status: transcriptionStatus,
@@ -2259,7 +2788,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
             <strong>{tr("15–20 minutes", "15–20 دقيقة")}</strong>
           </div>
           <div>
-            <span>{tr("Recording", "نوع التسجيل")}</span>
+            <span>{tr("Interaction", "نمط المقابلة")}</span>
+            <strong>{isLiveConversational ? tr("Live AI Conversation", "حوار مباشر مع الذكاء الاصطناعي") : tr("Recorded answers", "إجابات مسجلة")}</strong>
+          </div>
+          <div>
+            <span>{tr("Media", "الوسائط")}</span>
             <strong>{cameraConfigured ? tr("Video + Voice", "فيديو + صوت") : tr("Voice", "صوت")}</strong>
           </div>
         </div>
@@ -2362,11 +2895,19 @@ function AIInterviewCandidatePortal({ accessToken }) {
                     />
                     <span>{tr(
                       cameraConfigured
-                        ? "I consent to microphone and camera recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision."
-                        : "I consent to microphone recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision.",
+                        ? (isLiveConversational
+                            ? "I consent to a live AI conversation using my microphone and camera, including recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision."
+                            : "I consent to microphone and camera recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision.")
+                        : (isLiveConversational
+                            ? "I consent to a live AI voice conversation, including microphone transmission, recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision."
+                            : "I consent to microphone recording, transcription and AI-assisted analysis of my answers. I understand that the AI evaluation is experimental and is not a final employment decision."),
                       cameraConfigured
-                        ? "أوافق على تسجيل الصوت والكاميرا وتفريغ الإجابات نصيًا وتحليلها بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
-                        : "أوافق على تسجيل الصوت وتفريغه نصيًا وتحليل إجاباتي بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
+                        ? (isLiveConversational
+                            ? "أوافق على إجراء حوار مباشر مع الذكاء الاصطناعي باستخدام الميكروفون والكاميرا، بما يشمل التسجيل والتفريغ النصي وتحليل الإجابات، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
+                            : "أوافق على تسجيل الصوت والكاميرا وتفريغ الإجابات نصيًا وتحليلها بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا.")
+                        : (isLiveConversational
+                            ? "أوافق على إجراء حوار صوتي مباشر مع الذكاء الاصطناعي، بما يشمل نقل الصوت وتسجيله وتفريغه نصيًا وتحليل الإجابات، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا."
+                            : "أوافق على تسجيل الصوت وتفريغه نصيًا وتحليل إجاباتي بمساعدة الذكاء الاصطناعي، وأفهم أن التقييم تجريبي ولا يمثل قرار توظيف نهائيًا.")
                     )}</span>
                   </label>
 
@@ -2486,8 +3027,14 @@ function AIInterviewCandidatePortal({ accessToken }) {
               )}
 
               {consentComplete && microphoneComplete && cameraComplete && (
-                <button className="ai-candidate-primary ai-candidate-start-button" onClick={startCandidateInterview}>
-                  {cameraReady ? tr("Start video AI interview", "بدء مقابلة الفيديو الذكية") : tr("Start AI interview", "بدء المقابلة الذكية")}
+                <button className="ai-candidate-primary ai-candidate-start-button" disabled={liveConnecting} onClick={startCandidateInterview}>
+                  {liveConnecting
+                    ? tr("Connecting...", "جاري الاتصال...")
+                    : isLiveConversational
+                      ? tr("Start live AI interview", "بدء المقابلة المباشرة مع الذكاء الاصطناعي")
+                      : cameraReady
+                        ? tr("Start video AI interview", "بدء مقابلة الفيديو الذكية")
+                        : tr("Start AI interview", "بدء المقابلة الذكية")}
                 </button>
               )}
             </section>
@@ -2498,14 +3045,136 @@ function AIInterviewCandidatePortal({ accessToken }) {
                 <li>{tr("Choose a quiet place with a stable internet connection.", "اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت.")}</li>
                 <li>{tr("Speak clearly and provide job-related examples.", "تحدث بوضوح واذكر أمثلة مرتبطة بالعمل.")}</li>
                 {cameraConfigured && <li>{tr("Keep your face visible, use front lighting, and avoid a bright window behind you.", "اجعل وجهك ظاهرًا، واستخدم إضاءة أمامية، وتجنب وجود نافذة مضيئة خلفك.")}</li>}
-                <li>{tr("Do not refresh or close the page while recording.", "لا تحدث الصفحة أو تغلقها أثناء التسجيل.")}</li>
+                <li>{tr(isLiveConversational ? "Do not refresh or close the page during the live conversation." : "Do not refresh or close the page while recording.", isLiveConversational ? "لا تحدث الصفحة أو تغلقها أثناء الحوار المباشر." : "لا تحدث الصفحة أو تغلقها أثناء التسجيل.")}</li>
                 <li>{tr("This pilot evaluation is experimental and is not a job offer or a final employment decision.", "هذا التقييم تجريبي، ولا يُعد عرضًا وظيفيًا أو قرار توظيف نهائيًا.")}</li>
               </ul>
             </aside>
           </div>
         )}
 
-        {!lockedStatus && !completed && inProgress && currentQuestion && (
+        {!lockedStatus && !completed && inProgress && isLiveConversational && (
+          <section className="ai-candidate-interview-card">
+            <audio ref={realtimeRemoteAudioRef} autoPlay playsInline />
+
+            <div style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+              marginBottom: 16,
+              padding: "14px 16px",
+              borderRadius: 14,
+              background: liveConnected ? "#ecfdf5" : "#fff7ed",
+              border: liveConnected ? "1px solid #a7f3d0" : "1px solid #fed7aa",
+            }}>
+              <div>
+                <strong style={{ display: "block", fontSize: 16 }}>
+                  {liveConnected ? tr("Live AI interview connected", "المقابلة المباشرة متصلة") : tr("Live AI interview", "المقابلة المباشرة")}
+                </strong>
+                <span style={{ fontSize: 13, color: "#475569" }}>{livePhase}</span>
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <span style={{ fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>{formatLiveElapsed(liveElapsedSeconds)}</span>
+                <span style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  background: liveUserSpeaking ? "#dbeafe" : "#f1f5f9",
+                  color: liveUserSpeaking ? "#1d4ed8" : "#475569",
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: liveUserSpeaking ? "#2563eb" : liveConnected ? "#10b981" : "#f59e0b" }} />
+                  {liveUserSpeaking ? tr("You are speaking", "أنت تتحدث") : liveConnected ? tr("AI is active", "الذكاء الاصطناعي نشط") : tr("Waiting", "انتظار")}
+                </span>
+              </div>
+            </div>
+
+            {cameraReady && (
+              <div style={{ maxWidth: 680, margin: "0 auto 16px", borderRadius: 16, overflow: "hidden", background: "#0f172a", boxShadow: "0 10px 30px rgba(15,23,42,.18)" }}>
+                <video
+                  ref={cameraPreviewRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  style={{ width: "100%", display: "block", aspectRatio: "16 / 9", objectFit: "cover", transform: "scaleX(-1)" }}
+                />
+                <div style={{ padding: "8px 12px", color: "white", fontSize: 12, textAlign: "center" }}>
+                  {tr("Live camera preview — the current answer segment is being recorded automatically", "معاينة مباشرة للكاميرا — يتم تسجيل مقطع الإجابة الحالية تلقائيًا")}
+                </div>
+              </div>
+            )}
+
+            <div style={{
+              maxWidth: 900,
+              margin: "0 auto",
+              border: "1px solid #dbe4f0",
+              borderRadius: 16,
+              background: "#f8fafc",
+              padding: 14,
+            }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>
+                {tr("Live conversation transcript", "نص الحوار المباشر")}
+              </div>
+              <div style={{ maxHeight: 360, overflowY: "auto", display: "grid", gap: 10 }}>
+                {liveTranscript.length === 0 && !liveAssistantDraft ? (
+                  <div style={{ padding: 20, textAlign: "center", color: "#64748b" }}>
+                    {liveConnecting
+                      ? tr("Connecting to the AI interviewer...", "جاري الاتصال بالمحاور الذكي...")
+                      : tr("The AI interviewer will welcome you and ask the first approved question automatically.", "سيرحب بك المحاور الذكي ويطرح السؤال المعتمد الأول تلقائيًا.")}
+                  </div>
+                ) : (
+                  <>
+                    {liveTranscript.map((turn) => (
+                      <div
+                        key={turn.id}
+                        style={{
+                          justifySelf: turn.role === "candidate" ? "end" : "start",
+                          maxWidth: "84%",
+                          padding: "10px 13px",
+                          borderRadius: 14,
+                          background: turn.role === "candidate" ? "#dbeafe" : "#ffffff",
+                          border: turn.role === "candidate" ? "1px solid #bfdbfe" : "1px solid #e2e8f0",
+                          lineHeight: 1.65,
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        <b style={{ display: "block", fontSize: 11, color: "#64748b", marginBottom: 3 }}>
+                          {turn.role === "candidate" ? tr("Candidate", "المرشح") : tr("AI Interviewer", "المحاور الذكي")}
+                        </b>
+                        {turn.text}
+                      </div>
+                    ))}
+                    {liveAssistantDraft && (
+                      <div style={{ justifySelf: "start", maxWidth: "84%", padding: "10px 13px", borderRadius: 14, background: "#ffffff", border: "1px solid #e2e8f0", lineHeight: 1.65 }}>
+                        <b style={{ display: "block", fontSize: 11, color: "#64748b", marginBottom: 3 }}>
+                          {tr("AI Interviewer", "المحاور الذكي")}
+                        </b>
+                        {liveAssistantDraft}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="ai-candidate-action-row" style={{ marginTop: 16 }}>
+              {!liveConnected && !liveConnecting && (
+                <button className="ai-candidate-primary" onClick={startLiveCandidateInterview}>
+                  {tr("Reconnect live interview", "إعادة الاتصال بالمقابلة المباشرة")}
+                </button>
+              )}
+              <span style={{ color: "#64748b", fontSize: 13 }}>
+                {tr("Speak naturally. The AI detects when you finish and asks the next question automatically.", "تحدث بشكل طبيعي. يكتشف الذكاء الاصطناعي انتهاء إجابتك وينتقل تلقائيًا للسؤال التالي.")}
+              </span>
+            </div>
+          </section>
+        )}
+
+        {!lockedStatus && !completed && inProgress && !isLiveConversational && currentQuestion && (
           <section className="ai-candidate-interview-card">
             <div className="ai-candidate-progress-row">
               <div>
