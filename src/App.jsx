@@ -585,7 +585,11 @@ mobile: "",
 };
 
 
-const DEFAULT_AI_INTERVIEW_TEMPLATE_NAME = "VisaFlow General AI Voice Screening";
+const DEFAULT_AI_INTERVIEW_TEMPLATE_NAME = "VisaFlow General AI Screening";
+const LEGACY_DEFAULT_AI_INTERVIEW_TEMPLATE_NAMES = [
+  DEFAULT_AI_INTERVIEW_TEMPLATE_NAME,
+  "VisaFlow General AI Voice Screening",
+];
 const AI_INTERVIEW_ACTIVE_SESSION_STATUSES = [
   "Created",
   "Invitation Pending",
@@ -789,6 +793,16 @@ const AI_INTERVIEW_INTERACTION_MODES = ["Recorded", "Live Conversational"];
 const AI_INTERVIEW_MEDIA_MODES = ["Voice", "Video"];
 const AI_INTERVIEW_CAMERA_MODES = ["Off", "Optional", "Required"];
 
+// Delivery belongs to campaigns and sessions, never to question templates.
+// These defaults are used only for legacy/direct sessions that are not launched from a campaign.
+const DEFAULT_AI_INTERVIEW_SESSION_DELIVERY = Object.freeze({
+  interaction_mode: "Recorded",
+  interview_mode: "Voice",
+  camera_mode: "Off",
+  max_dynamic_follow_ups: 0,
+  live_response_timeout_seconds: 60,
+});
+
 const EMPTY_AI_INTERVIEW_GENERATION_FORM = {
   template_name: "",
   profession: "",
@@ -803,36 +817,7 @@ const EMPTY_AI_INTERVIEW_GENERATION_FORM = {
   passing_score: 70,
   request_no: "",
   request_line_id: "",
-  interaction_mode: "Recorded",
-  interview_mode: "Voice",
-  camera_mode: "Off",
-  max_dynamic_follow_ups: 1,
-  live_response_timeout_seconds: 60,
 };
-
-const EMPTY_AI_INTERVIEW_DELIVERY_FORM = {
-  interaction_mode: "Recorded",
-  interview_mode: "Voice",
-  camera_mode: "Off",
-  max_dynamic_follow_ups: 1,
-  live_response_timeout_seconds: 60,
-};
-
-function getAIInterviewDeliveryFormFromTemplate(template = {}) {
-  return {
-    interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(template.interaction_mode)
-      ? template.interaction_mode
-      : "Recorded",
-    interview_mode: AI_INTERVIEW_MEDIA_MODES.includes(template.interview_mode)
-      ? template.interview_mode
-      : "Voice",
-    camera_mode: AI_INTERVIEW_CAMERA_MODES.includes(template.camera_mode)
-      ? template.camera_mode
-      : "Off",
-    max_dynamic_follow_ups: Number(template.max_dynamic_follow_ups ?? 1),
-    live_response_timeout_seconds: Number(template.live_response_timeout_seconds ?? 60),
-  };
-}
 
 
 const DEFAULT_AI_INTERVIEW_QUESTIONS = [
@@ -1435,10 +1420,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const portalInterviewTitle = portalLanguage === "AR"
     ? `تجربة المقابلة الذكية المتقدمة — ${portalProfessionLabel}`
     : (template?.template_name_en || template?.template_name || "VisaFlow KSA AI Interview Pilot");
-  const effectiveInteractionMode = session?.interaction_mode || template?.interaction_mode || "Recorded";
+  const effectiveInteractionMode = session?.interaction_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.interaction_mode;
   const isLiveConversational = effectiveInteractionMode === "Live Conversational";
-  const effectiveInterviewMode = session?.interview_mode || template?.interview_mode || "Voice";
-  const effectiveCameraMode = session?.camera_mode || template?.camera_mode || "Off";
+  const effectiveInterviewMode = session?.interview_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.interview_mode;
+  const effectiveCameraMode = session?.camera_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.camera_mode;
   const cameraConfigured = effectiveCameraMode !== "Off" || effectiveInterviewMode === "Video";
   const cameraRequired = effectiveCameraMode === "Required" || (effectiveInterviewMode === "Video" && effectiveCameraMode !== "Optional");
   const cameraOptional = cameraConfigured && !cameraRequired;
@@ -3481,7 +3466,6 @@ const [aiInterviewQuestionForm, setAIInterviewQuestionForm] = useState({
 });
 const [aiInterviewWorkspaceTab, setAIInterviewWorkspaceTab] = useState("Engineering Templates");
 const [aiInterviewGenerationForm, setAIInterviewGenerationForm] = useState({ ...EMPTY_AI_INTERVIEW_GENERATION_FORM });
-const [aiInterviewTemplateDeliveryForm, setAIInterviewTemplateDeliveryForm] = useState({ ...EMPTY_AI_INTERVIEW_DELIVERY_FORM });
 const [aiInterviewGenerationLoading, setAIInterviewGenerationLoading] = useState(false);
 const [aiInterviewGenerationResult, setAIInterviewGenerationResult] = useState(null);
 const [engineeringBulkGenerationLoading, setEngineeringBulkGenerationLoading] = useState(false);
@@ -11909,11 +11893,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
       difficulty: "Advanced",
       question_count: 15,
       passing_score: 75,
-      interaction_mode: "Recorded",
-      interview_mode: "Voice",
-      camera_mode: "Off",
-      max_dynamic_follow_ups: 1,
-      live_response_timeout_seconds: 60,
     };
   }
 
@@ -11939,20 +11918,9 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
     const profession = String(aiInterviewGenerationForm.profession || "").trim();
     const jobDescription = String(aiInterviewGenerationForm.job_description || "").trim();
-    const templateName = String(aiInterviewGenerationForm.template_name || "").trim() || `${profession} AI Voice Interview`;
+    const templateName = String(aiInterviewGenerationForm.template_name || "").trim() || `${profession} AI Interview`;
     const questionCount = Math.min(15, Math.max(3, Number(aiInterviewGenerationForm.question_count || 10)));
     const passingScore = Math.min(100, Math.max(0, Number(aiInterviewGenerationForm.passing_score || 70)));
-    const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(aiInterviewGenerationForm.interaction_mode)
-      ? aiInterviewGenerationForm.interaction_mode
-      : "Recorded";
-    const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(aiInterviewGenerationForm.interview_mode)
-      ? aiInterviewGenerationForm.interview_mode
-      : "Voice";
-    const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(aiInterviewGenerationForm.camera_mode)
-      ? aiInterviewGenerationForm.camera_mode
-      : "Off";
-    const maxDynamicFollowUps = Math.max(0, Math.min(5, Number(aiInterviewGenerationForm.max_dynamic_follow_ups || 0)));
-    const liveResponseTimeoutSeconds = Math.max(10, Math.min(300, Number(aiInterviewGenerationForm.live_response_timeout_seconds || 60)));
 
     if (!profession) return alert("Profession is required.");
     if (jobDescription.length < 30) {
@@ -11986,11 +11954,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
             certifications: String(aiInterviewGenerationForm.certifications || "").trim(),
             question_count: questionCount,
             passing_score: passingScore,
-            interaction_mode: interactionMode,
-            interview_mode: interviewMode,
-            camera_mode: cameraMode,
-            max_dynamic_follow_ups: maxDynamicFollowUps,
-            live_response_timeout_seconds: liveResponseTimeoutSeconds,
             request_no: String(aiInterviewGenerationForm.request_no || "").trim(),
             request_line_id: String(aiInterviewGenerationForm.request_line_id || "").trim(),
             created_by: getAIInterviewActorName(),
@@ -12003,32 +11966,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
         throw new Error(data?.error || `Template generation failed at ${data?.stage || "unknown stage"}.`);
       }
 
-      if (data.template_id) {
-        const deliverySettings = {
-          interaction_mode: interactionMode,
-          interview_mode: interviewMode,
-          camera_mode: cameraMode,
-          video_recording_mode: interactionMode === "Live Conversational" ? "Continuous" : "Per Answer",
-          allow_ai_follow_ups: interactionMode === "Live Conversational",
-          max_dynamic_follow_ups: maxDynamicFollowUps,
-          live_response_timeout_seconds: liveResponseTimeoutSeconds,
-          allow_candidate_barge_in: interactionMode === "Live Conversational",
-          save_live_audio: true,
-          save_live_video: interactionMode === "Live Conversational" && interviewMode === "Video",
-          updated_by: getAIInterviewActorName(),
-          updated_at: new Date().toISOString(),
-        };
-
-        const { error: deliveryError } = await supabase
-          .from("ai_interview_templates")
-          .update(deliverySettings)
-          .eq("id", data.template_id)
-          .eq("company_id", targetCompanyId);
-
-        if (deliveryError) {
-          throw new Error(`Template created, but delivery-mode settings failed: ${deliveryError.message}`);
-        }
-      }
+      // Delivery is intentionally not saved on the template.
+      // The campaign copies its own delivery settings into each candidate session at launch.
 
       const preparedCatalogItem = getEngineeringCatalogItem(profession);
       const isPreparedEngineeringMaster = Boolean(
@@ -12401,7 +12340,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
     setSelectedAIInterviewTemplateId(template.id);
     setSelectedAIInterviewSessionId("");
     setEditingAIInterviewQuestionId("");
-    setAIInterviewTemplateDeliveryForm(getAIInterviewDeliveryFormFromTemplate(template));
     setAIInterviewMessage(`Reviewing ${template.template_name || "AI interview template"}.`);
 
     // Always scroll, even when the same template was already selected after generation.
@@ -12418,28 +12356,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
     aiInterviewTemplates.length,
     aiInterviewQuestions.length,
   ]);
-
-  useEffect(() => {
-    if (!selectedAIInterviewTemplateId) return;
-
-    const selectedTemplate = aiInterviewTemplates.find(
-      (template) => String(template.id || "") === String(selectedAIInterviewTemplateId || "")
-    );
-    if (!selectedTemplate) return;
-
-    const nextDeliveryForm = getAIInterviewDeliveryFormFromTemplate(selectedTemplate);
-
-    setAIInterviewTemplateDeliveryForm((current) => {
-      const unchanged =
-        current.interaction_mode === nextDeliveryForm.interaction_mode &&
-        current.interview_mode === nextDeliveryForm.interview_mode &&
-        current.camera_mode === nextDeliveryForm.camera_mode &&
-        Number(current.max_dynamic_follow_ups || 0) === Number(nextDeliveryForm.max_dynamic_follow_ups || 0) &&
-        Number(current.live_response_timeout_seconds || 0) === Number(nextDeliveryForm.live_response_timeout_seconds || 0);
-
-      return unchanged ? current : nextDeliveryForm;
-    });
-  }, [selectedAIInterviewTemplateId, aiInterviewTemplates]);
 
   function resetAIInterviewQuestionEditor() {
     setEditingAIInterviewQuestionId("");
@@ -12484,76 +12400,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
       key_points_text: keyPoints.join("\n"),
       recruiter_notes: question.recruiter_notes || question.ai_generation_notes || "",
     });
-  }
-
-  async function saveAIInterviewTemplateDeliverySettings(template = {}) {
-    if (!canManageInterviewResults && !isPlatformOwner) {
-      return alert("You do not have permission to edit AI interview template delivery settings.");
-    }
-    if (!template?.id) return;
-    if (isGlobalAIInterviewTemplate(template)) {
-      return alert("VisaFlow global engineering templates are read-only. Create a company-specific template before changing delivery modes.");
-    }
-    if (template.approval_status === "Approved" || template.is_locked) {
-      return alert("Approved templates are locked. Create a new version before changing delivery modes.");
-    }
-
-    const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(aiInterviewTemplateDeliveryForm.interaction_mode)
-      ? aiInterviewTemplateDeliveryForm.interaction_mode
-      : "Recorded";
-    const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(aiInterviewTemplateDeliveryForm.interview_mode)
-      ? aiInterviewTemplateDeliveryForm.interview_mode
-      : "Voice";
-    const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(aiInterviewTemplateDeliveryForm.camera_mode)
-      ? aiInterviewTemplateDeliveryForm.camera_mode
-      : "Off";
-    const maxDynamicFollowUps = Math.max(0, Math.min(5, Number(aiInterviewTemplateDeliveryForm.max_dynamic_follow_ups || 0)));
-    const liveResponseTimeoutSeconds = Math.max(10, Math.min(300, Number(aiInterviewTemplateDeliveryForm.live_response_timeout_seconds || 60)));
-
-    const actor = getAIInterviewActorName();
-    const now = new Date().toISOString();
-
-    setAIInterviewLoading(true);
-    setAIInterviewMessage("Saving interview delivery settings...");
-
-    try {
-      const { error } = await supabase
-        .from("ai_interview_templates")
-        .update({
-          interaction_mode: interactionMode,
-          interview_mode: interviewMode,
-          camera_mode: cameraMode,
-          video_recording_mode: interactionMode === "Live Conversational" ? "Continuous" : "Per Answer",
-          allow_ai_follow_ups: interactionMode === "Live Conversational",
-          max_dynamic_follow_ups: maxDynamicFollowUps,
-          live_response_timeout_seconds: liveResponseTimeoutSeconds,
-          allow_candidate_barge_in: interactionMode === "Live Conversational",
-          save_live_audio: true,
-          save_live_video: interactionMode === "Live Conversational" && interviewMode === "Video",
-          approval_status: "Pending Review",
-          is_active: false,
-          approved_by: "",
-          approved_at: null,
-          is_locked: false,
-          updated_by: actor,
-          updated_at: now,
-        })
-        .eq("id", template.id)
-        .eq("company_id", getAIInterviewTemplateCompanyId(template));
-
-      if (error) throw error;
-
-      await loadAIInterviewTemplates();
-      setAIInterviewMessage(
-        `${interactionMode} + ${interviewMode} + Camera ${cameraMode} saved. The template remains Pending Review until approval.`
-      );
-    } catch (error) {
-      console.warn("AI interview delivery settings update failed", error?.message || error);
-      setAIInterviewMessage(`Delivery settings update failed: ${error?.message || error}`);
-      alert(error?.message || "Delivery settings update failed.");
-    } finally {
-      setAIInterviewLoading(false);
-    }
   }
 
   async function saveAIInterviewQuestionEdits() {
@@ -12947,7 +12793,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     }
 
     const existing = aiInterviewTemplates.find((template) =>
-      template.template_name === DEFAULT_AI_INTERVIEW_TEMPLATE_NAME &&
+      LEGACY_DEFAULT_AI_INTERVIEW_TEMPLATE_NAMES.includes(template.template_name) &&
       Number(template.version || 1) === 1
     );
 
@@ -12960,7 +12806,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     }
 
     setAIInterviewLoading(true);
-    setAIInterviewMessage("Preparing the default AI voice interview template...");
+    setAIInterviewMessage("Preparing the default AI interview template...");
 
     try {
       let template = existing || null;
@@ -12973,13 +12819,11 @@ ${errors.slice(0, 10).join("\n")}` : "")
             profession: "General",
             profession_category: "General",
             language: "Bilingual",
-            interview_mode: "Voice",
             description: "Initial AI screening interview for experience, technical knowledge, safety, communication and availability.",
             candidate_instructions: "Use a quiet place, allow microphone access, and answer each question clearly. The result will be reviewed by the company.",
             duration_minutes: 15,
             maximum_questions: DEFAULT_AI_INTERVIEW_QUESTIONS.length,
             passing_score: 70,
-            allow_ai_follow_up: true,
             allow_candidate_retry: false,
             maximum_retries: 0,
             require_microphone_test: true,
@@ -13031,7 +12875,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         loadAIInterviewQuestions(),
       ]);
 
-      setAIInterviewMessage("Default AI voice interview template is ready.");
+      setAIInterviewMessage("Default AI interview template is ready.");
       if (!options.silent) alert("Default AI interview template and questions are ready.");
       return template;
     } catch (error) {
@@ -13113,9 +12957,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         nationality: interview.nationality || candidate.nationality || "",
         agency_name: interview.agency || candidate.agency || "",
         language: template.language || "Bilingual",
-        interview_mode: template.interview_mode || "Voice",
-        interaction_mode: template.interaction_mode || "Recorded",
-        camera_mode: template.camera_mode || "Off",
+        ...DEFAULT_AI_INTERVIEW_SESSION_DELIVERY,
         invitation_url: "",
         status: "Created",
         scheduled_at: interview.interview_date ? new Date(`${interview.interview_date}T09:00:00`).toISOString() : null,
@@ -13228,8 +13070,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
       ? new Date(session.expires_at).toLocaleString()
       : "The link remains available until the company closes or expires the session.";
     const estimatedMinutes = Number(template.duration_minutes || 15);
-    const invitationCameraMode = session.camera_mode || template.camera_mode || "Off";
-    const invitationInterviewMode = session.interview_mode || template.interview_mode || "Voice";
+    const invitationCameraMode = session.camera_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.camera_mode;
+    const invitationInterviewMode = session.interview_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.interview_mode;
     const isVideoInvitation = invitationCameraMode !== "Off" || invitationInterviewMode === "Video";
     const subject = `AI Interview Invitation - ${profession} / دعوة مقابلة ذكية`;
 
@@ -24336,7 +24178,7 @@ function getReportStudioVisualModel() {
                     )}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 13, color: "#475569" }}>
-                    <b>Campaign delivery:</b> {aiInterviewCampaignForm.interaction_mode} + {aiInterviewCampaignForm.interview_mode} + Camera {aiInterviewCampaignForm.camera_mode}
+                    <b>Campaign delivery (applies to every created session):</b> {aiInterviewCampaignForm.interaction_mode} + {aiInterviewCampaignForm.interview_mode} + Camera {aiInterviewCampaignForm.camera_mode}
                   </div>
                 </div>
                 <textarea
@@ -28949,68 +28791,15 @@ Save Authorization
                     />
                     <div style={{
                       gridColumn: "1 / -1",
-                      padding: 16,
-                      border: "2px solid #2563eb",
-                      borderRadius: 14,
+                      padding: 14,
+                      border: "1px solid #bfdbfe",
+                      borderRadius: 12,
                       background: "#eff6ff",
-                      margin: "2px 0 4px",
+                      color: "#1e3a8a",
+                      lineHeight: 1.65,
+                      fontSize: 13,
                     }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-                        <div>
-                          <div style={{ fontWeight: 900, color: "#0f172a", fontSize: 15 }}>Video & Live Interview Settings</div>
-                          <div style={{ color: "#475569", fontSize: 12, marginTop: 3 }}>Choose how this interview will be delivered to candidates.</div>
-                        </div>
-                        <span style={{ fontSize: 11, fontWeight: 900, color: "#1d4ed8" }}>BUILD: VIDEO-LIVE-01</span>
-                      </div>
-
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-                        <label style={{ display: "grid", gap: 6 }}>
-                          <span style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Interaction Mode</span>
-                          <Select
-                            value={aiInterviewGenerationForm.interaction_mode}
-                            onChange={(value) => updateForm(setAIInterviewGenerationForm, "interaction_mode", value)}
-                            placeholder="Interaction Mode"
-                            options={AI_INTERVIEW_INTERACTION_MODES}
-                          />
-                        </label>
-
-                        <label style={{ display: "grid", gap: 6 }}>
-                          <span style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Interview Media</span>
-                          <Select
-                            value={aiInterviewGenerationForm.interview_mode}
-                            onChange={(value) => updateForm(setAIInterviewGenerationForm, "interview_mode", value)}
-                            placeholder="Interview Media"
-                            options={AI_INTERVIEW_MEDIA_MODES}
-                          />
-                        </label>
-
-                        <label style={{ display: "grid", gap: 6 }}>
-                          <span style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Camera Mode</span>
-                          <Select
-                            value={aiInterviewGenerationForm.camera_mode}
-                            onChange={(value) => updateForm(setAIInterviewGenerationForm, "camera_mode", value)}
-                            placeholder="Camera Mode"
-                            options={AI_INTERVIEW_CAMERA_MODES}
-                          />
-                        </label>
-                      </div>
-
-                      {aiInterviewGenerationForm.interaction_mode === "Live Conversational" && (
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 12 }}>
-                          <Input
-                            type="number"
-                            placeholder="Maximum Dynamic Follow-ups (0-5)"
-                            value={aiInterviewGenerationForm.max_dynamic_follow_ups}
-                            onChange={(value) => updateForm(setAIInterviewGenerationForm, "max_dynamic_follow_ups", value)}
-                          />
-                          <Input
-                            type="number"
-                            placeholder="Live Response Timeout Seconds"
-                            value={aiInterviewGenerationForm.live_response_timeout_seconds}
-                            onChange={(value) => updateForm(setAIInterviewGenerationForm, "live_response_timeout_seconds", value)}
-                          />
-                        </div>
-                      )}
+                      <b>Template scope:</b> This template stores approved questions, scoring rules, language and job requirements only. Voice, video, camera and live-conversation settings are selected later when creating the campaign.
                     </div>
                     <Select
                       value={aiInterviewGenerationForm.difficulty}
@@ -29105,8 +28894,6 @@ Save Authorization
                     <th>Template</th>
                     <th>Version</th>
                     <th>Profession</th>
-                    <th>Delivery</th>
-                    <th>Camera</th>
                     <th>Source</th>
                     <th>Questions</th>
                     <th>JD Quality</th>
@@ -29118,7 +28905,7 @@ Save Authorization
                 <tbody>
                   {aiInterviewTemplates.length === 0 ? (
                     <tr>
-                      <td colSpan="12">No AI interview templates found.</td>
+                      <td colSpan="10">No AI interview templates found.</td>
                     </tr>
                   ) : (
                     getAIInterviewTemplateLibraryRows().map((template) => {
@@ -29151,11 +28938,6 @@ Save Authorization
                             </div>
                           </td>
                           <td>{template.profession || "General"}</td>
-                          <td>
-                            <b>{template.interaction_mode || "Recorded"}</b>
-                            <div style={{ fontSize: 11, color: "#64748b" }}>{template.interview_mode || "Voice"}</div>
-                          </td>
-                          <td>{template.camera_mode || "Off"}</td>
                           <td>{template.source_type || "Ready Template"}</td>
                           <td>{activeQuestions.length}</td>
                           <td>{template.job_description_quality_score ?? "-"}</td>
@@ -29213,12 +28995,6 @@ Save Authorization
                 : [];
               const globalTemplate = isGlobalAIInterviewTemplate(selectedTemplate);
               const templateLocked = globalTemplate || selectedTemplate.approval_status === "Approved" || selectedTemplate.is_locked;
-              const savedDeliverySettings = getAIInterviewDeliveryFormFromTemplate(selectedTemplate);
-              const displayedDeliverySettings = templateLocked
-                ? savedDeliverySettings
-                : aiInterviewTemplateDeliveryForm;
-              const deliverySettingsDisabled =
-                templateLocked || !canManageAIInterviewTemplate(selectedTemplate);
 
               return (
                 <div
@@ -29230,9 +29006,6 @@ Save Authorization
                   <div className="dashboard-grid">
                     <Stat title="Version" value={`v${getAIInterviewTemplateVersionNumber(selectedTemplate)}`} />
                     <Stat title="Profession" value={selectedTemplate.profession || "General"} />
-                    <Stat title="Interaction" value={savedDeliverySettings.interaction_mode} />
-                    <Stat title="Media" value={savedDeliverySettings.interview_mode} />
-                    <Stat title="Camera" value={savedDeliverySettings.camera_mode} />
                     <Stat title="Source" value={selectedTemplate.source_type || "Ready Template"} />
                     <Stat title="Questions" value={activeSelectedQuestions.length} />
                     <Stat title="Weight Total" value={`${totalWeight}%`} className={Math.abs(totalWeight - 100) <= 0.01 ? "passed" : "warning"} />
@@ -29312,99 +29085,11 @@ Save Authorization
                     </div>
                   )}
 
-                  <div style={{ marginBottom: 16, padding: 16, border: "1px solid #cbd5e1", borderRadius: 14, background: "#f8fafc" }}>
-                    <div style={{ fontWeight: 900, color: "#0f172a", marginBottom: 6 }}>Interview Delivery Configuration</div>
-                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.55, marginBottom: 12 }}>
-                      Interaction controls whether the interview is recorded question-by-question or conducted as a live AI conversation. Media controls voice or video. Camera may be off, optional or required.
+                  <div style={{ marginBottom: 16, padding: 16, border: "1px solid #bfdbfe", borderRadius: 14, background: "#eff6ff", color: "#1e3a8a" }}>
+                    <div style={{ fontWeight: 900, marginBottom: 6 }}>Campaign-Controlled Delivery</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.65 }}>
+                      This template contains interview content and scoring only. Interaction mode, voice/video, camera requirements, dynamic follow-ups and response timeout are selected per campaign and copied into each candidate session when the campaign is launched.
                     </div>
-                    <div style={{
-                      marginBottom: 12,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      background: "#ffffff",
-                      border: "1px solid #e2e8f0",
-                      color: "#334155",
-                      fontSize: 12,
-                      fontWeight: 700,
-                    }}>
-                      Saved configuration: {savedDeliverySettings.interaction_mode} + {savedDeliverySettings.interview_mode} + Camera {savedDeliverySettings.camera_mode}
-                    </div>
-
-                    <div className="form-grid">
-                      <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
-                        <span>Interaction Mode</span>
-                        <Select
-                          value={displayedDeliverySettings.interaction_mode}
-                          onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "interaction_mode", value)}
-                          placeholder="Interaction Mode"
-                          options={AI_INTERVIEW_INTERACTION_MODES}
-                          disabled={deliverySettingsDisabled}
-                        />
-                      </label>
-
-                      <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
-                        <span>Interview Media</span>
-                        <Select
-                          value={displayedDeliverySettings.interview_mode}
-                          onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "interview_mode", value)}
-                          placeholder="Interview Media"
-                          options={AI_INTERVIEW_MEDIA_MODES}
-                          disabled={deliverySettingsDisabled}
-                        />
-                      </label>
-
-                      <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
-                        <span>Camera Mode</span>
-                        <Select
-                          value={displayedDeliverySettings.camera_mode}
-                          onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "camera_mode", value)}
-                          placeholder="Camera Mode"
-                          options={AI_INTERVIEW_CAMERA_MODES}
-                          disabled={deliverySettingsDisabled}
-                        />
-                      </label>
-
-                      {displayedDeliverySettings.interaction_mode === "Live Conversational" && (
-                        <>
-                          <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
-                            <span>Maximum Dynamic Follow-ups</span>
-                            <Input
-                              type="number"
-                              placeholder="Maximum Dynamic Follow-ups"
-                              value={displayedDeliverySettings.max_dynamic_follow_ups}
-                              onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "max_dynamic_follow_ups", value)}
-                              disabled={deliverySettingsDisabled}
-                            />
-                          </label>
-
-                          <label style={{ display: "grid", gap: 6, fontWeight: 800, color: "#0f172a" }}>
-                            <span>Response Timeout (Seconds)</span>
-                            <Input
-                              type="number"
-                              placeholder="Response Timeout Seconds"
-                              value={displayedDeliverySettings.live_response_timeout_seconds}
-                              onChange={(value) => updateForm(setAIInterviewTemplateDeliveryForm, "live_response_timeout_seconds", value)}
-                              disabled={deliverySettingsDisabled}
-                            />
-                          </label>
-                        </>
-                      )}
-                    </div>
-                    {!templateLocked && canManageAIInterviewTemplate(selectedTemplate) ? (
-                      <div className="actions-line" style={{ marginBottom: 0 }}>
-                        <button
-                          className="save-btn"
-                          disabled={aiInterviewLoading}
-                          onClick={() => saveAIInterviewTemplateDeliverySettings(selectedTemplate)}
-                        >
-                          Save Delivery Settings
-                        </button>
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 10, color: "#64748b", fontSize: 12, fontWeight: 700 }}>
-                        This approved/global template is locked. Create a new version to change its delivery mode.
-                      </div>
-                    )}
                   </div>
 
                   <div className="actions-line" style={{ marginBottom: 16 }}>
@@ -29423,7 +29108,6 @@ Save Authorization
                     </button>
                     <button className="light-btn" onClick={() => {
                       setSelectedAIInterviewTemplateId("");
-                      setAIInterviewTemplateDeliveryForm({ ...EMPTY_AI_INTERVIEW_DELIVERY_FORM });
                       resetAIInterviewQuestionEditor();
                     }}>
                       Close Review
