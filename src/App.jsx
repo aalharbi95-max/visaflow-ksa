@@ -12828,6 +12828,46 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return aiInterviewTemplates.find((template) => String(template.id || "") === String(templateId || ""))?.template_name || "-";
   }
 
+  function getAIInterviewTemplateAllQuestions(templateId) {
+    return aiInterviewQuestions
+      .filter((question) => String(question.template_id || "") === String(templateId || ""))
+      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
+  }
+
+  function getAIInterviewTemplateWeightTotal(templateId) {
+    return getAIInterviewTemplateAllQuestions(templateId)
+      .filter((question) => question.is_active !== false)
+      .reduce((sum, question) => sum + Number(question.weight || 0), 0);
+  }
+
+  function getAIInterviewActorName() {
+    return currentUser?.name || currentUser?.full_name || currentUser?.email || "VisaFlow User";
+  }
+
+  function isGlobalAIInterviewTemplate(template = {}) {
+    return Boolean(template?.id) && template?.is_global === true;
+  }
+
+  function canManageAIInterviewTemplate(template = {}) {
+    if (!template?.id || isGlobalAIInterviewTemplate(template)) return false;
+    if (isPlatformOwner) return isEngineeringMasterTemplate(template);
+    return canManageInterviewResults && String(template.company_id || "") === String(currentCompanyId || "");
+  }
+
+  function getAIInterviewTemplateCompanyId(template = {}) {
+    return String(template?.company_id || currentCompanyId || "");
+  }
+
+  function getAIInterviewInvitationUrl(session = {}) {
+    return session.invitation_url || (session.access_token
+      ? `${window.location.origin}${window.location.pathname}?ai_interview=${session.access_token}`
+      : "");
+  }
+
+  function isValidEmailAddress(value = "") {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+  }
+
   function getAIInterviewTemplateVersionNumber(template = {}) {
     return Number(template?.version_number || template?.version || 1);
   }
