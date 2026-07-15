@@ -625,9 +625,10 @@ const EMPTY_AI_INTERVIEW_CAMPAIGN_FORM = {
 
 const AI_INTERVIEW_CAMPAIGN_TABS = [
   "Campaigns",
-  "Candidate Selection",
-  "Results & Ranking",
-  "Invitation Queue",
+  "Candidates",
+  "Results",
+  "Templates",
+  "Queue & Issues",
 ];
 
 const AI_INTERVIEW_HUMAN_DECISIONS = [
@@ -7414,10 +7415,15 @@ const filteredCandidateTableRows = useMemo(() => {
 const candidateTableTotalPages = Math.max(1, Math.ceil(filteredCandidateTableRows.length / candidateTablePageSize));
 const pagedCandidateTableRows = getPagedRows(filteredCandidateTableRows, candidateTablePage, candidateTablePageSize);
 
+const humanInterviewRows = useMemo(
+  () => interviews.filter((item) => !String(item.interview_type || "").trim().toLowerCase().includes("ai")),
+  [interviews]
+);
+
 const filteredInterviewTableRows = useMemo(() => {
   const query = normalize(interviewTableFilters.query);
 
-  return interviews.filter((item) => {
+  return humanInterviewRows.filter((item) => {
     const interviewCandidate =
       candidates.find((candidate) => String(candidate.id || "") === String(item.candidate_id || "")) ||
       candidates.find((candidate) =>
@@ -7469,7 +7475,7 @@ const filteredInterviewTableRows = useMemo(() => {
 
     return matchesQuery && matchesStatus && matchesProfession && matchesProject && matchesAgency && matchesType;
   });
-}, [interviews, candidates, requests, interviewTableFilters]);
+}, [humanInterviewRows, candidates, requests, interviewTableFilters]);
 
 const interviewTableTotalPages = Math.max(1, Math.ceil(filteredInterviewTableRows.length / interviewTablePageSize));
 const pagedInterviewTableRows = getPagedRows(filteredInterviewTableRows, interviewTablePage, interviewTablePageSize);
@@ -12822,55 +12828,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return aiInterviewTemplates.find((template) => String(template.id || "") === String(templateId || ""))?.template_name || "-";
   }
 
-  function getAIInterviewSessionForInterview(interview = {}) {
-    return aiInterviewSessions.find((session) =>
-      String(session.interview_id || "") === String(interview.id || "") &&
-      !["Cancelled", "Expired"].includes(session.status)
-    ) || aiInterviewSessions.find((session) =>
-      String(session.candidate_id || "") === String(interview.candidate_id || "") &&
-      String(session.request_no || "") === String(interview.request_no || "") &&
-      AI_INTERVIEW_ACTIVE_SESSION_STATUSES.includes(session.status)
-    ) || null;
-  }
-
-  function getAIInterviewStatusProgress(session = {}) {
-    const total = Number(session.total_questions || 0);
-    const answered = Number(session.answered_questions || 0);
-    if (!total) return "0%";
-    return `${Math.min(100, Math.round((answered / total) * 100))}%`;
-  }
-
-
-  function getAIInterviewTemplateAllQuestions(templateId) {
-    return aiInterviewQuestions
-      .filter((question) => String(question.template_id || "") === String(templateId || ""))
-      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
-  }
-
-  function getAIInterviewTemplateWeightTotal(templateId) {
-    return getAIInterviewTemplateAllQuestions(templateId)
-      .filter((question) => question.is_active !== false)
-      .reduce((sum, question) => sum + Number(question.weight || 0), 0);
-  }
-
-  function getAIInterviewActorName() {
-    return currentUser?.name || currentUser?.full_name || currentUser?.email || "VisaFlow User";
-  }
-
-  function isGlobalAIInterviewTemplate(template = {}) {
-    return Boolean(template?.id) && template?.is_global === true;
-  }
-
-  function canManageAIInterviewTemplate(template = {}) {
-    if (!template?.id || isGlobalAIInterviewTemplate(template)) return false;
-    if (isPlatformOwner) return isEngineeringMasterTemplate(template);
-    return canManageInterviewResults && String(template.company_id || "") === String(currentCompanyId || "");
-  }
-
-  function getAIInterviewTemplateCompanyId(template = {}) {
-    return String(template?.company_id || currentCompanyId || "");
-  }
-
   function getAIInterviewTemplateVersionNumber(template = {}) {
     return Number(template?.version_number || template?.version || 1);
   }
@@ -13554,124 +13511,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
       template.profession &&
       normalizeMatchText(template.profession) === normalizeMatchText(interview.profession)
     ) || null;
-  }
-
-  async function createAIInterviewSession(interview = {}) {
-    if (!canManageInterviewResults) {
-      return alert("You do not have permission to create AI interviews.");
-    }
-    if (!interview?.candidate_id) {
-      return alert("This interview is not linked to a candidate.");
-    }
-
-    const existingSession = getAIInterviewSessionForInterview(interview);
-    if (existingSession) {
-      setSelectedAIInterviewSessionId(existingSession.id);
-      return alert(`An AI interview session already exists for this candidate. Status: ${existingSession.status}`);
-    }
-
-    setAIInterviewLoading(true);
-    setAIInterviewMessage(`Creating AI interview for ${interview.candidate_name || "candidate"}...`);
-
-    try {
-      const template = await resolveAIInterviewTemplate(interview);
-      if (!template?.id) throw new Error("No approved active template matches this profession. Generate and approve a template from the job description first.");
-
-      let questions = getAIInterviewTemplateQuestions(template.id);
-      if (questions.length === 0) {
-        await loadAIInterviewQuestions();
-        questions = getAIInterviewTemplateQuestions(template.id);
-      }
-
-      const candidate = candidates.find(
-        (item) => String(item.id || "") === String(interview.candidate_id || "")
-      ) || {};
-
-      const sessionPayload = withCompany({
-        template_id: template.id,
-        candidate_id: String(interview.candidate_id || ""),
-        interview_id: String(interview.id || ""),
-        request_line_id: String(candidate.request_line_id || ""),
-        request_no: interview.request_no || candidate.request_no || "",
-        project_name: interview.project || candidate.project || "",
-        candidate_name: interview.candidate_name || candidate.candidate_name || "Candidate",
-        candidate_email: candidate.email || "",
-        candidate_mobile: interview.mobile || candidate.mobile || "",
-        passport_no: interview.passport_no || candidate.passport_no || "",
-        profession: interview.profession || candidate.profession || "",
-        nationality: interview.nationality || candidate.nationality || "",
-        agency_name: interview.agency || candidate.agency || "",
-        language: template.language || "Bilingual",
-        ...DEFAULT_AI_INTERVIEW_SESSION_DELIVERY,
-        invitation_url: "",
-        status: "Created",
-        scheduled_at: interview.interview_date ? new Date(`${interview.interview_date}T09:00:00`).toISOString() : null,
-        consent_required: template.require_consent !== false,
-        total_questions: questions.length || Number(template.maximum_questions || 0),
-        ai_recommendation: "Pending Analysis",
-        review_status: "Pending Human Review",
-        human_decision: "Pending Company Review",
-        created_by: currentUser?.name || currentUser?.email || "VisaFlow User",
-        updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
-      });
-
-      const { data: createdSession, error } = await supabase
-        .from("ai_interview_sessions")
-        .insert([sessionPayload])
-        .select("*")
-        .single();
-
-      if (error) throw error;
-
-      const invitationUrl = `${window.location.origin}${window.location.pathname}?ai_interview=${createdSession.access_token}`;
-      const { error: urlError } = await supabase
-        .from("ai_interview_sessions")
-        .update({ invitation_url: invitationUrl, updated_by: currentUser?.name || currentUser?.email || "VisaFlow User" })
-        .eq("id", createdSession.id)
-        .eq("company_id", currentCompanyId);
-
-      if (urlError) console.warn("AI interview invitation URL update:", urlError.message);
-
-      await loadAIInterviewSessions();
-      setSelectedAIInterviewSessionId(createdSession.id);
-      setAIInterviewMessage("AI interview session created. Candidate portal and voice engine are the next connection step.");
-      alert("AI interview session created successfully. The session is now ready for the candidate portal connection.");
-    } catch (error) {
-      console.warn("create AI interview session failed", error?.message || error);
-      setAIInterviewMessage(`AI interview session failed: ${error?.message || error}`);
-      alert(`AI interview session failed: ${error?.message || error}`);
-    } finally {
-      setAIInterviewLoading(false);
-    }
-  }
-
-  async function cancelAIInterviewSession(session = {}) {
-    if (!canManageInterviewResults) return alert("You do not have permission to cancel AI interviews.");
-    if (!session?.id) return;
-    if (!window.confirm(`Cancel AI interview for ${session.candidate_name || "candidate"}?`)) return;
-
-    const { error } = await supabase
-      .from("ai_interview_sessions")
-      .update({
-        status: "Cancelled",
-        updated_by: currentUser?.name || currentUser?.email || "VisaFlow User",
-      })
-      .eq("id", session.id)
-      .eq("company_id", currentCompanyId);
-
-    if (error) return alert(error.message);
-    if (String(selectedAIInterviewSessionId) === String(session.id)) setSelectedAIInterviewSessionId("");
-    await loadAIInterviewSessions();
-  }
-
-  function getAIInterviewInvitationUrl(session = {}) {
-    return session.invitation_url || (session.access_token
-      ? `${window.location.origin}${window.location.pathname}?ai_interview=${session.access_token}`
-      : "");
-  }
-
-  function isValidEmailAddress(value = "") {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
   }
 
   async function sendAIInterviewInvitationEmail(session = {}) {
@@ -23839,8 +23678,9 @@ function getReportStudioVisualModel() {
     setAIInterviewCampaignForm({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
   }
 
-  function selectAIInterviewCampaign(campaignId, tab = "Candidate Selection") {
+  function selectAIInterviewCampaign(campaignId, tab = "Candidates") {
     setSelectedAIInterviewCampaignId(campaignId || "");
+    setSelectedAIInterviewSessionId("");
     setSelectedCampaignCandidateIds([]);
     setAIInterviewLinkedInImportRows([]);
     setAIInterviewLinkedInImportFileName("");
@@ -23857,7 +23697,9 @@ function getReportStudioVisualModel() {
         loadAIInterviewCampaignCandidates(),
         loadAIInterviewInvitationJobs(),
         loadAIInterviewSessions(),
+        loadAIInterviewAnswers(),
         loadAIInterviewTemplates(),
+        loadAIInterviewQuestions(),
       ]);
     } finally {
       setAIInterviewCampaignBusy(false);
@@ -23935,7 +23777,7 @@ function getReportStudioVisualModel() {
       resetAIInterviewCampaignForm();
       await loadAIInterviewCampaigns();
       setSelectedAIInterviewCampaignId(data.id);
-      setAIInterviewCampaignTab("Candidate Selection");
+      setAIInterviewCampaignTab("Candidates");
       setAIInterviewCampaignMessage(`Campaign ${data.campaign_name} created. Select candidates before launch.`);
     } catch (error) {
       console.warn("create AI interview campaign failed", error?.message || error);
@@ -24589,7 +24431,7 @@ function getReportStudioVisualModel() {
         loadAIInterviewInvitationJobs(),
         loadAIInterviewSessions(),
       ]);
-      setAIInterviewCampaignTab("Invitation Queue");
+      setAIInterviewCampaignTab("Queue & Issues");
       setAIInterviewCampaignMessage(
         `Campaign launched. Sessions created: ${result?.sessions_created ?? 0}. ` +
         `Existing sessions: ${result?.existing_sessions ?? 0}. ` +
@@ -24838,7 +24680,7 @@ function getReportStudioVisualModel() {
               <div style={{ fontSize: "12px", fontWeight: 900, letterSpacing: ".08em", opacity: .78, textTransform: "uppercase" }}>VisaFlow AI Recruitment</div>
               <h2 style={{ margin: "8px 0", fontSize: "32px" }}>AI Interview Center</h2>
               <p style={{ margin: 0, maxWidth: "820px", lineHeight: 1.7, opacity: .9 }}>
-                Create bulk interview campaigns, invite up to hundreds of candidates, monitor completion, rank AI results, and record the company&apos;s final decision.
+                All AI interviews are created and managed here through campaigns — for one candidate or hundreds. Create the campaign, add candidates, launch invitations, review results, and record the company&apos;s final decision without leaving this center.
               </p>
             </div>
             <div className="actions-line" style={{ margin: 0 }}>
@@ -24859,6 +24701,10 @@ function getReportStudioVisualModel() {
             {aiInterviewCampaignMessage}
           </div>
         )}
+
+        <div style={{ padding: "12px 14px", marginBottom: "14px", borderRadius: "14px", background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontWeight: 800, lineHeight: 1.6 }}>
+          One rule: every AI interview starts from a campaign. A campaign may contain one candidate or a full recruitment batch.
+        </div>
 
         <div className="dashboard-grid" style={{ marginBottom: "16px" }}>
           <Stat title="Campaigns" value={aiInterviewCampaigns.length} />
@@ -25075,8 +24921,8 @@ function getReportStudioVisualModel() {
                         <td>{campaign.analyzed_count || 0}</td>
                         <td><Badge value={campaign.status || "Draft"} /></td>
                         <td className="table-actions">
-                          <button onClick={() => selectAIInterviewCampaign(campaign.id, "Candidate Selection")}>Open</button>
-                          <button onClick={() => selectAIInterviewCampaign(campaign.id, "Results & Ranking")}>Results</button>
+                          <button onClick={() => selectAIInterviewCampaign(campaign.id, "Candidates")}>Open</button>
+                          <button onClick={() => selectAIInterviewCampaign(campaign.id, "Results")}>Results</button>
                           {canManageAIInterviewCampaigns && ["Draft", "Ready", "Cancelled"].includes(campaign.status) && (
                             <button className="danger" onClick={() => deleteAIInterviewCampaign(campaign)}>Delete</button>
                           )}
@@ -25095,10 +24941,10 @@ function getReportStudioVisualModel() {
           </>
         )}
 
-        {aiInterviewCampaignTab === "Candidate Selection" && (
+        {aiInterviewCampaignTab === "Candidates" && (
           <>
             {!selectedCampaign ? (
-              <TableCard title="Candidate Selection"><p>Select or create a campaign first.</p></TableCard>
+              <TableCard title="Candidates"><p>Select or create a campaign first.</p></TableCard>
             ) : (
               <>
                 <TableCard title={`Campaign Setup — ${selectedCampaign.campaign_name}`}>
@@ -25392,8 +25238,9 @@ function getReportStudioVisualModel() {
           </>
         )}
 
-        {aiInterviewCampaignTab === "Results & Ranking" && (
-          <TableCard title={selectedCampaign ? `Results & Ranking — ${selectedCampaign.campaign_name}` : "Results & Ranking"}>
+        {aiInterviewCampaignTab === "Results" && (
+          <>
+          <TableCard title={selectedCampaign ? `Results — ${selectedCampaign.campaign_name}` : "Results"}>
             {!selectedCampaign ? (
               <p>Select a campaign first.</p>
             ) : (
@@ -25458,8 +25305,9 @@ function getReportStudioVisualModel() {
                           <td className="table-actions">
                             {session && <button onClick={() => {
                               setSelectedAIInterviewSessionId(session.id);
-                              setActivePage("Interviews");
-                              window.scrollTo({ top: 0, behavior: "smooth" });
+                              window.setTimeout(() => {
+                                document.getElementById("ai-interview-full-review")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }, 50);
                             }}>Full Review</button>}
                             {session && <button onClick={() => openAIInterviewPortal(session)}>Candidate Link</button>}
                           </td>
@@ -25477,10 +25325,104 @@ function getReportStudioVisualModel() {
               </>
             )}
           </TableCard>
+            {selectedAIInterviewSessionId && (() => {
+              const selectedSession = aiInterviewSessions.find((session) => String(session.id) === String(selectedAIInterviewSessionId));
+              if (!selectedSession) return null;
+              return (
+                <div id="ai-interview-full-review"><FormCard title={`AI Interview Review - ${selectedSession.candidate_name || "Candidate"}`}>
+                  <div className="dashboard-grid">
+                    <Stat title="Status" value={selectedSession.status || "Created"} />
+                    <Stat title="Answered" value={`${selectedSession.answered_questions || 0} / ${selectedSession.total_questions || 0}`} />
+                    <Stat title="Overall Score" value={selectedSession.overall_score ?? "Pending"} />
+                    <Stat title="Human Review" value={selectedSession.review_status || "Pending Human Review"} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginTop: 14 }}>
+                    <div style={{ padding: 12, border: "1px solid #e2e8f0", borderRadius: 10 }}>
+                      <b>AI Summary</b>
+                      <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_summary || "Pending AI analysis."}</p>
+                    </div>
+                    <div style={{ padding: 12, border: "1px solid #e2e8f0", borderRadius: 10 }}>
+                      <b>AI Reasoning</b>
+                      <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_reasoning || "Pending AI analysis."}</p>
+                    </div>
+                  </div>
+                  {(() => {
+                    const selectedAnswers = aiInterviewAnswers
+                      .filter((answer) => String(answer.session_id || "") === String(selectedSession.id || ""))
+                      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
+
+                    return (
+                      <div style={{ marginTop: 16 }}>
+                        <h3 style={{ marginBottom: 10 }}>Candidate Recorded Answers</h3>
+                        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: 420, overflowX: "auto" }}>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>#</th>
+                                <th>Question</th>
+                                <th>Competency</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th>Transcript</th>
+                                <th>Recording</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedAnswers.length === 0 ? (
+                                <tr><td colSpan="7">No candidate answers have been submitted yet.</td></tr>
+                              ) : selectedAnswers.map((answer) => (
+                                <tr key={answer.id}>
+                                  <td>{answer.question_order || "-"}</td>
+                                  <td style={{ minWidth: 260 }}>{answer.question_text_snapshot || "-"}</td>
+                                  <td>{answer.competency || answer.question_type || "-"}</td>
+                                  <td><Badge value={answer.answer_status || "Pending"} /></td>
+                                  <td>{answer.audio_duration_seconds ? `${answer.audio_duration_seconds}s` : "-"}</td>
+                                  <td style={{ minWidth: 180 }}>{answer.answer_text || (answer.answer_status === "Skipped" ? "Question skipped" : "Pending transcription")}</td>
+                                  <td>
+                                    {answer.audio_storage_path
+                                      ? <button onClick={() => openAIInterviewRecording(answer)}>
+                                          {isAIInterviewVideoRecording(answer) ? "Play Video" : "Play Audio"}
+                                        </button>
+                                      : "-"}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <div className="actions-line">
+                    {!['Completed', 'Cancelled', 'Expired'].includes(selectedSession.status) && (
+                      <button
+                        className="light-btn"
+                        disabled={String(aiInterviewInvitationSendingId) === String(selectedSession.id)}
+                        onClick={() => sendAIInterviewInvitationEmail(selectedSession)}
+                      >
+                        {String(aiInterviewInvitationSendingId) === String(selectedSession.id)
+                          ? "Sending..."
+                          : selectedSession.invitation_sent_at
+                            ? "Resend Invitation Email"
+                            : "Send Invitation Email"}
+                      </button>
+                    )}
+                    <button className="light-btn" onClick={() => openAIInterviewPortal(selectedSession)}>Open Candidate Portal</button>
+                    <button className="light-btn" onClick={() => copyAIInterviewReference(selectedSession)}>Copy Candidate Link</button>
+                    <button className="light-btn" onClick={() => Promise.all([loadAIInterviewSessions(), loadAIInterviewAnswers()])}>Refresh Responses</button>
+                    <button className="light-btn" onClick={() => setSelectedAIInterviewSessionId("")}>Close Review</button>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#64748b" }}>
+                    Recommendation only — the final recruitment decision remains with the company.
+                  </div>
+                </FormCard></div>
+              );
+            })()}
+          </>
         )}
 
-        {aiInterviewCampaignTab === "Invitation Queue" && (
-          <TableCard title={selectedCampaign ? `Invitation Queue — ${selectedCampaign.campaign_name}` : "Invitation Queue"}>
+        {aiInterviewCampaignTab === "Queue & Issues" && (
+          <TableCard title={selectedCampaign ? `Invitation Queue — ${selectedCampaign.campaign_name}` : "Queue & Issues"}>
             {!selectedCampaign ? (
               <p>Select a campaign first.</p>
             ) : (
@@ -25586,18 +25528,9 @@ function exportCurrentPage() {
     return exportRowsToExcel(selectedCampaignRows, "VisaFlow_AI_Interview_Campaign_Results", "AI Interview Results");
   }
   if (activePage === "Interviews") return exportRowsToExcel(
-    filteredInterviewTableRows.map((interview) => {
-      const aiSession = getAIInterviewSessionForInterview(interview);
-      return {
-        ...interview,
-        ai_interview_status: aiSession?.status || "Not Created",
-        ai_interview_score: aiSession?.overall_score ?? "",
-        ai_recommendation: aiSession?.ai_recommendation || "",
-        ai_human_decision: aiSession?.human_decision || "",
-      };
-    }),
-    "VisaFlow_Interviews",
-    "Interviews"
+    filteredInterviewTableRows,
+    "VisaFlow_Human_Interviews",
+    "Human Interviews"
   );
   if (activePage === "Mobilization") return exportRowsToExcel(mobilizationRequestRows, "VisaFlow_Mobilization_Overview", "Mobilization");
   if (activePage === "Onboarding & Validation") return exportRowsToExcel(filteredOnboardingValidations, "VisaFlow_Onboarding_Validation", "Onboarding Validation");
@@ -26189,7 +26122,7 @@ if (!currentUser) {
             {activePage === "Executive Dashboard" ? (
               <p>Last Updated: {new Date().toLocaleString()}</p>
             ) : (
-              <p>{loading ? "Loading data..." : activePage === "AI Interview Center" ? "Bulk AI interview campaigns, invitations, analysis and final company decisions." : "Saudi company recruitment, visa authorization and manpower tracking system."}</p>
+              <p>{loading ? "Loading data..." : activePage === "AI Interview Center" ? "All AI interviews: campaigns, candidates, templates, invitations, results and final company decisions in one center." : "Saudi company recruitment, visa authorization and manpower tracking system."}</p>
             )}
           </div>
           {activePage !== "Executive Dashboard" && (
@@ -27985,7 +27918,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                       value={requestLineForm.interview_type || "Online"}
                       onChange={(v) => updateForm(setRequestLineForm, "interview_type", v)}
                       placeholder="Interview Type"
-                      options={["Online", "In-person", "AI Voice Interview"]}
+                      options={["Online", "In-person", "AI Interview Campaign"]}
                     />
                   )}
                   <Input
@@ -29560,10 +29493,10 @@ Save Authorization
 
         {activePage === "AI Interview Center" && canViewAIInterviewCampaigns && renderAIInterviewCenter()}
 
-        {["Interviews", "Global Engineering Templates"].includes(activePage) && (
+        {["Interviews", "AI Interview Center", "Global Engineering Templates"].includes(activePage) && (
           <>
             {activePage === "Interviews" && canScheduleInterviews && (
-            <FormCard title={interviewEditingId ? "Edit Interview" : "Add Interview"}>
+            <FormCard title={interviewEditingId ? "Edit Human Interview" : "Add Human Interview"}>
               <div className="form-grid">
                 <Input placeholder="Candidate Name" value={interviewForm.candidate_name} onChange={(v) => updateForm(setInterviewForm, "candidate_name", v)} />
                 <Input placeholder="Profession" value={interviewForm.profession} onChange={(v) => updateForm(setInterviewForm, "profession", v)} />
@@ -29571,7 +29504,7 @@ Save Authorization
                 <Select value={interviewForm.agency} onChange={(v) => updateForm(setInterviewForm, "agency", v)} placeholder="Agency" options={agencies.map((x) => x.name)} />
                 <Input placeholder="Project" value={interviewForm.project} onChange={(v) => updateForm(setInterviewForm, "project", v)} />
                 <Input type="date" placeholder="Interview Date" value={interviewForm.interview_date} onChange={(v) => updateForm(setInterviewForm, "interview_date", v)} />
-                <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person", "AI Voice Interview"]} />
+                <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person", "Microsoft Teams", "Zoom", "Phone"]} />
                 <Input placeholder="Interviewers" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
                 <Select value={interviewForm.score} onChange={(v) => updateForm(setInterviewForm, "score", v)} placeholder="Score" options={["Excellent", "Good", "Average", "Weak"]} />
                 <Select value={interviewForm.status} onChange={(v) => updateForm(setInterviewForm, "status", v)} placeholder="Status" options={INTERVIEW_STATUSES} />
@@ -29580,12 +29513,13 @@ Save Authorization
               <div className="actions-line"><button className="save-btn" onClick={saveInterview}>{interviewEditingId ? "Update Interview" : "Save Interview"}</button><button className="light-btn" onClick={resetInterviewForm}>Clear</button></div>
             </FormCard>
             )}
-            <FormCard title={isGlobalEngineeringAdminPage ? "Global Engineering Template Administration" : "AI Interview Control - Phase 3A"}>
+            {(isGlobalEngineeringAdminPage || (activePage === "AI Interview Center" && aiInterviewCampaignTab === "Templates")) && (<>
+            <FormCard title={isGlobalEngineeringAdminPage ? "Global Engineering Template Administration" : "AI Interview Templates"}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>AI voice interview portal is connected to VisaFlow.</div>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Templates define questions and evaluation standards only.</div>
                   <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
-                    Job-description AI templates, question review and approval, candidate links, consent, microphone testing, recorded answers, Video configuration and Live Conversational configuration are connected. Camera capture and realtime conversation execution are the next implementation steps.
+                    Create or review the question template here. Recorded or Live Conversational delivery, Voice or Video, camera settings, deadline and reminders are selected when creating the campaign.
                   </div>
                 </div>
                 <div className="actions-line" style={{ margin: 0 }}>
@@ -29597,12 +29531,8 @@ Save Authorization
                       Generate from Job Description
                     </button>
                   )}
-                  <button className="light-btn" onClick={() => Promise.all(
-                    isGlobalEngineeringAdminPage
-                      ? [loadAIInterviewTemplates(), loadAIInterviewQuestions()]
-                      : [loadAIInterviewTemplates(), loadAIInterviewQuestions(), loadAIInterviewSessions(), loadAIInterviewAnswers()]
-                  )}>
-                    Refresh AI Interviews
+                  <button className="light-btn" onClick={() => Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()])}>
+                    Refresh Templates
                   </button>
                 </div>
               </div>
@@ -29618,9 +29548,9 @@ Save Authorization
                   </>
                 ) : (
                   <>
-                    <Stat title="AI Sessions" value={aiInterviewSessions.length} />
-                    <Stat title="Completed" value={aiInterviewSessions.filter((session) => session.status === "Completed").length} className="passed" />
-                    <Stat title="Pending Human Review" value={aiInterviewSessions.filter((session) => session.review_status === "Pending Human Review").length} className="warning" />
+                    <Stat title="Approved & Active" value={aiInterviewTemplates.filter((template) => template.approval_status === "Approved" && template.is_active !== false).length} className="passed" />
+                    <Stat title="Pending Review" value={aiInterviewTemplates.filter((template) => template.approval_status === "Pending Review").length} className="warning" />
+                    <Stat title="Company Templates" value={aiInterviewTemplates.filter((template) => template.is_global !== true).length} />
                   </>
                 )}
               </div>
@@ -30260,9 +30190,11 @@ Save Authorization
               );
             })()}
 
+            </>)}
+
             {activePage === "Interviews" && (
             <>
-            <TableCard title="Interview Records">
+            <TableCard title="Human Interview Records">
               <SmartTableToolbar
                 searchValue={interviewTableFilters.query}
                 onSearchChange={(value) => setInterviewTableFilters((current) => ({ ...current, query: value }))}
@@ -30272,11 +30204,11 @@ Save Authorization
                 onPageSizeChange={setInterviewTablePageSize}
                 onClear={() => setInterviewTableFilters({ query: "", status: "All", profession: "All", project: "All", agency: "All", type: "All" })}
                 filters={[
-                  { label: "Status", value: interviewTableFilters.status, options: ["All", ...getUniqueTableOptions(interviews, "status")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, status: value })) },
-                  { label: "Profession", value: interviewTableFilters.profession, options: ["All", ...getUniqueTableOptions(interviews, "profession")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, profession: value })) },
-                  { label: "Project", value: interviewTableFilters.project, options: ["All", ...getUniqueTableOptions(interviews, (item) => item.project || requests.find((request) => String(request.request_no || "") === String(item.request_no || ""))?.project_name)], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, project: value })) },
-                  { label: "Agency", value: interviewTableFilters.agency, options: ["All", ...getUniqueTableOptions(interviews, "agency")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, agency: value })) },
-                  { label: "Type", value: interviewTableFilters.type, options: ["All", ...getUniqueTableOptions(interviews, "interview_type")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, type: value })) },
+                  { label: "Status", value: interviewTableFilters.status, options: ["All", ...getUniqueTableOptions(humanInterviewRows, "status")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, status: value })) },
+                  { label: "Profession", value: interviewTableFilters.profession, options: ["All", ...getUniqueTableOptions(humanInterviewRows, "profession")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, profession: value })) },
+                  { label: "Project", value: interviewTableFilters.project, options: ["All", ...getUniqueTableOptions(humanInterviewRows, (item) => item.project || requests.find((request) => String(request.request_no || "") === String(item.request_no || ""))?.project_name)], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, project: value })) },
+                  { label: "Agency", value: interviewTableFilters.agency, options: ["All", ...getUniqueTableOptions(humanInterviewRows, "agency")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, agency: value })) },
+                  { label: "Type", value: interviewTableFilters.type, options: ["All", ...getUniqueTableOptions(humanInterviewRows, "interview_type")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, type: value })) },
                 ]}
               />
               <div className="table-wrap">
@@ -30297,7 +30229,7 @@ Save Authorization
                 </thead>
                 <tbody>
                   {filteredInterviewTableRows.length === 0 ? (
-                    <tr><td colSpan="10">No interview records match the current search and filters.</td></tr>
+                    <tr><td colSpan="10">No human interview records match the current search and filters.</td></tr>
                   ) : pagedInterviewTableRows.map((item) => {
                     const interviewCandidate =
   candidates.find(
@@ -30340,15 +30272,6 @@ Save Authorization
                               {item.status === "Passed" && interviewCandidate && (
                                 <button onClick={() => openOfferEmail(interviewCandidate)}>Send Offer</button>
                               )}
-                              {getAIInterviewSessionForInterview(item) ? (
-                                <button onClick={() => setSelectedAIInterviewSessionId(getAIInterviewSessionForInterview(item)?.id || "")}>
-                                  View AI Interview
-                                </button>
-                              ) : (
-                                <button disabled={aiInterviewLoading} onClick={() => createAIInterviewSession(item)}>
-                                  Create AI Interview
-                                </button>
-                              )}
                               <button className="danger" onClick={() => deleteInterview(item.id)}>Delete</button>
                             </>
                           ) : "-"}
@@ -30366,184 +30289,6 @@ Save Authorization
               />
             </TableCard>
 
-            <TableCard title="AI Interview Sessions">
-              <SmartTableToolbar
-                searchValue={aiSessionTableFilters.query}
-                onSearchChange={(value) => setAISessionTableFilters((current) => ({ ...current, query: value }))}
-                searchPlaceholder="Search candidate, civil ID, iqama, passport, mobile, campaign, request, project, template or score..."
-                resultCount={filteredAISessionTableRows.length}
-                pageSize={aiSessionTablePageSize}
-                onPageSizeChange={setAISessionTablePageSize}
-                onClear={() => setAISessionTableFilters({ query: "", status: "All", profession: "All", mode: "All", recommendation: "All", decision: "All" })}
-                filters={[
-                  { label: "Status", value: aiSessionTableFilters.status, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, "status")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, status: value })) },
-                  { label: "Profession", value: aiSessionTableFilters.profession, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, "profession")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, profession: value })) },
-                  { label: "Mode", value: aiSessionTableFilters.mode, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, (session) => session.interview_mode || "Voice")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, mode: value })) },
-                  { label: "AI Recommendation", value: aiSessionTableFilters.recommendation, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, (session) => session.ai_recommendation || "Pending Analysis")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, recommendation: value })) },
-                  { label: "Company Decision", value: aiSessionTableFilters.decision, options: ["All", ...AI_INTERVIEW_HUMAN_DECISIONS], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, decision: value })) },
-                ]}
-              />
-              <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Created</th>
-                    <th>Candidate</th>
-                    <th>Profession</th>
-                    <th>Template</th>
-                    <th>Mode</th>
-                    <th>Progress</th>
-                    <th>Overall Score</th>
-                    <th>AI Recommendation</th>
-                    <th>Human Decision</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredAISessionTableRows.length === 0 ? (
-                    <tr>
-                      <td colSpan="11">No AI interview sessions match the current search and filters.</td>
-                    </tr>
-                  ) : (
-                    pagedAISessionTableRows.map((session) => (
-                      <tr key={session.id} style={String(selectedAIInterviewSessionId) === String(session.id) ? { background: "#eff6ff" } : undefined}>
-                        <td>{session.created_at ? new Date(session.created_at).toLocaleString() : "-"}</td>
-                        <td>{session.candidate_name || "-"}</td>
-                        <td>{session.profession || "-"}</td>
-                        <td>{getAIInterviewTemplateName(session.template_id)}</td>
-                        <td>{session.interview_mode || "Voice"}</td>
-                        <td>{session.answered_questions || 0}/{session.total_questions || 0} ({getAIInterviewStatusProgress(session)})</td>
-                        <td>{session.overall_score ?? "Pending"}</td>
-                        <td>{session.ai_recommendation || "Pending Analysis"}</td>
-                        <td>{session.human_decision || "Pending Company Review"}</td>
-                        <td><Badge value={session.status || "Created"} /></td>
-                        <td className="table-actions">
-                          <button onClick={() => setSelectedAIInterviewSessionId(session.id)}>Review</button>
-                          {!['Completed', 'Cancelled', 'Expired'].includes(session.status) && (
-                            <button
-                              disabled={String(aiInterviewInvitationSendingId) === String(session.id)}
-                              onClick={() => sendAIInterviewInvitationEmail(session)}
-                            >
-                              {String(aiInterviewInvitationSendingId) === String(session.id)
-                                ? "Sending..."
-                                : session.invitation_sent_at
-                                  ? "Resend Email"
-                                  : "Send Email"}
-                            </button>
-                          )}
-                          <button onClick={() => openAIInterviewPortal(session)}>Open Portal</button>
-                          <button onClick={() => copyAIInterviewReference(session)}>Copy Candidate Link</button>
-                          {!['Completed', 'Cancelled', 'Expired'].includes(session.status) && (
-                            <button className="danger" onClick={() => cancelAIInterviewSession(session)}>Cancel</button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-              </div>
-              <SmartTablePagination
-                page={aiSessionTablePage}
-                totalPages={aiSessionTableTotalPages}
-                onPageChange={setAISessionTablePage}
-              />
-            </TableCard>
-
-            {selectedAIInterviewSessionId && (() => {
-              const selectedSession = aiInterviewSessions.find((session) => String(session.id) === String(selectedAIInterviewSessionId));
-              if (!selectedSession) return null;
-              return (
-                <FormCard title={`AI Interview Review - ${selectedSession.candidate_name || "Candidate"}`}>
-                  <div className="dashboard-grid">
-                    <Stat title="Status" value={selectedSession.status || "Created"} />
-                    <Stat title="Answered" value={`${selectedSession.answered_questions || 0} / ${selectedSession.total_questions || 0}`} />
-                    <Stat title="Overall Score" value={selectedSession.overall_score ?? "Pending"} />
-                    <Stat title="Human Review" value={selectedSession.review_status || "Pending Human Review"} />
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginTop: 14 }}>
-                    <div style={{ padding: 12, border: "1px solid #e2e8f0", borderRadius: 10 }}>
-                      <b>AI Summary</b>
-                      <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_summary || "Pending AI analysis."}</p>
-                    </div>
-                    <div style={{ padding: 12, border: "1px solid #e2e8f0", borderRadius: 10 }}>
-                      <b>AI Reasoning</b>
-                      <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{selectedSession.ai_reasoning || "Pending AI analysis."}</p>
-                    </div>
-                  </div>
-                  {(() => {
-                    const selectedAnswers = aiInterviewAnswers
-                      .filter((answer) => String(answer.session_id || "") === String(selectedSession.id || ""))
-                      .sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
-
-                    return (
-                      <div style={{ marginTop: 16 }}>
-                        <h3 style={{ marginBottom: 10 }}>Candidate Recorded Answers</h3>
-                        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: 420, overflowX: "auto" }}>
-                          <table>
-                            <thead>
-                              <tr>
-                                <th>#</th>
-                                <th>Question</th>
-                                <th>Competency</th>
-                                <th>Status</th>
-                                <th>Duration</th>
-                                <th>Transcript</th>
-                                <th>Recording</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {selectedAnswers.length === 0 ? (
-                                <tr><td colSpan="7">No candidate answers have been submitted yet.</td></tr>
-                              ) : selectedAnswers.map((answer) => (
-                                <tr key={answer.id}>
-                                  <td>{answer.question_order || "-"}</td>
-                                  <td style={{ minWidth: 260 }}>{answer.question_text_snapshot || "-"}</td>
-                                  <td>{answer.competency || answer.question_type || "-"}</td>
-                                  <td><Badge value={answer.answer_status || "Pending"} /></td>
-                                  <td>{answer.audio_duration_seconds ? `${answer.audio_duration_seconds}s` : "-"}</td>
-                                  <td style={{ minWidth: 180 }}>{answer.answer_text || (answer.answer_status === "Skipped" ? "Question skipped" : "Pending transcription")}</td>
-                                  <td>
-                                    {answer.audio_storage_path
-                                      ? <button onClick={() => openAIInterviewRecording(answer)}>
-                                          {isAIInterviewVideoRecording(answer) ? "Play Video" : "Play Audio"}
-                                        </button>
-                                      : "-"}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                  <div className="actions-line">
-                    {!['Completed', 'Cancelled', 'Expired'].includes(selectedSession.status) && (
-                      <button
-                        className="light-btn"
-                        disabled={String(aiInterviewInvitationSendingId) === String(selectedSession.id)}
-                        onClick={() => sendAIInterviewInvitationEmail(selectedSession)}
-                      >
-                        {String(aiInterviewInvitationSendingId) === String(selectedSession.id)
-                          ? "Sending..."
-                          : selectedSession.invitation_sent_at
-                            ? "Resend Invitation Email"
-                            : "Send Invitation Email"}
-                      </button>
-                    )}
-                    <button className="light-btn" onClick={() => openAIInterviewPortal(selectedSession)}>Open Candidate Portal</button>
-                    <button className="light-btn" onClick={() => copyAIInterviewReference(selectedSession)}>Copy Candidate Link</button>
-                    <button className="light-btn" onClick={() => Promise.all([loadAIInterviewSessions(), loadAIInterviewAnswers()])}>Refresh Responses</button>
-                    <button className="light-btn" onClick={() => setSelectedAIInterviewSessionId("")}>Close Review</button>
-                  </div>
-                  <div style={{ marginTop: 8, fontSize: 12, color: "#64748b" }}>
-                    Recommendation only — the final recruitment decision remains with the company.
-                  </div>
-                </FormCard>
-              );
-            })()}
             </>
             )}
           </>
@@ -31161,7 +30906,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           <Input placeholder="Profession" value={interviewForm.profession} onChange={(v) => updateForm(setInterviewForm, "profession", v)} />
           <Input placeholder="Passport No" value={interviewForm.passport_no} onChange={(v) => updateForm(setInterviewForm, "passport_no", v)} />
           <Input type="date" placeholder="Interview Date" value={interviewForm.interview_date} onChange={(v) => updateForm(setInterviewForm, "interview_date", v)} />
-          <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person", "AI Voice Interview"]} />
+          <Select value={interviewForm.interview_type} onChange={(v) => updateForm(setInterviewForm, "interview_type", v)} placeholder="Interview Type" options={["Online", "In-person", "Microsoft Teams", "Zoom", "Phone"]} />
           <Input placeholder="Meeting Link / Interview Location" value={interviewForm.interviewers} onChange={(v) => updateForm(setInterviewForm, "interviewers", v)} />
           <Input placeholder="Company Schedule Approval" value="Pending Company Approval" onChange={() => {}} />
         </div>
