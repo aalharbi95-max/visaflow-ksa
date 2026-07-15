@@ -3282,8 +3282,919 @@ function AIInterviewCandidatePortal({ accessToken }) {
 }
 
 
+const EMPTY_TALENT_PROFILE_FORM = {
+  full_name: "",
+  phone: "",
+  nationality: "",
+  country_of_residence: "",
+  city: "",
+  profession: "",
+  headline: "",
+  professional_summary: "",
+  years_experience: "",
+  current_company: "",
+  current_job_title: "",
+  availability_status: "Open to Opportunities",
+  notice_period_days: "",
+  expected_salary: "",
+  expected_salary_currency: "SAR",
+  preferred_locations_text: "",
+  preferred_employment_types_text: "",
+  languages_text: "",
+  linkedin_url: "",
+  portfolio_url: "",
+};
+
+const EMPTY_TALENT_CONSENTS = {
+  "Platform Terms": false,
+  "Privacy Policy": false,
+  "Employer Sharing": false,
+  "AI CV Analysis": false,
+  "AI Interview": false,
+  "Evaluation Email": false,
+  "Marketing Communications": false,
+};
+
+function talentTextList(value) {
+  if (!Array.isArray(value)) return "";
+  return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+}
+
+function talentJsonList(value) {
+  return String(value || "")
+    .split(/[,،\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function talentSafeFileName(value = "cv") {
+  return String(value || "cv")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "cv";
+}
+
+function calculateTalentCompleteness(profile, hasCv) {
+  const data = profile || {};
+  let score = 0;
+  if (String(data.full_name || "").trim()) score += 10;
+  if (String(data.email || "").trim()) score += 8;
+  if (String(data.phone || "").trim()) score += 8;
+  if (String(data.profession || "").trim()) score += 10;
+  if (String(data.nationality || "").trim()) score += 6;
+  if (String(data.country_of_residence || "").trim()) score += 5;
+  if (data.years_experience !== "" && data.years_experience !== null && data.years_experience !== undefined) score += 5;
+  if (String(data.professional_summary || "").trim()) score += 10;
+  if (talentJsonList(data.languages_text || talentTextList(data.languages)).length > 0) score += 5;
+  if (hasCv) score += 15;
+  return Math.min(100, score);
+}
+
+function TalentCandidatePortal({ onBack }) {
+  const [portalLanguage, setPortalLanguage] = useState("AR");
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authMode, setAuthMode] = useState("signup");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [authForm, setAuthForm] = useState({
+    full_name: "",
+    phone: "",
+    email: "",
+    password: "",
+    confirm_password: "",
+  });
+  const [profile, setProfile] = useState(null);
+  const [profileForm, setProfileForm] = useState({ ...EMPTY_TALENT_PROFILE_FORM });
+  const [documents, setDocuments] = useState([]);
+  const [consents, setConsents] = useState({ ...EMPTY_TALENT_CONSENTS });
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const [workspaceTab, setWorkspaceTab] = useState("Profile");
+  const [talentStats, setTalentStats] = useState({
+    registered_candidates: 0,
+    marketplace_ready: 0,
+    completed_ai_interviews: 0,
+  });
+  const cvInputRef = useRef(null);
+
+  const isArabic = portalLanguage === "AR";
+  const primaryCv = documents.find((item) => item.document_type === "CV" && item.is_primary) || null;
+  const estimatedCompleteness = calculateTalentCompleteness(
+    { ...profile, ...profileForm, email: profile?.email || session?.user?.email || "" },
+    Boolean(primaryCv)
+  );
+
+  const palette = {
+    navy: "#071b3d",
+    blue: "#0e3a75",
+    cyan: "#12b8b0",
+    pale: "#eef7fb",
+    border: "#d7e5ee",
+    text: "#10243e",
+    muted: "#64748b",
+    danger: "#b91c1c",
+    success: "#047857",
+  };
+
+  async function loadTalentStats() {
+    try {
+      const { data, error } = await supabase.rpc("get_talent_public_stats");
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row) {
+        setTalentStats({
+          registered_candidates: Number(row.registered_candidates || 0),
+          marketplace_ready: Number(row.marketplace_ready || 0),
+          completed_ai_interviews: Number(row.completed_ai_interviews || 0),
+        });
+      }
+    } catch (error) {
+      console.warn("Talent public stats failed", error?.message || error);
+    }
+  }
+
+  function mapTalentProfileToForm(row) {
+    return {
+      ...EMPTY_TALENT_PROFILE_FORM,
+      full_name: row?.full_name || "",
+      phone: row?.phone || "",
+      nationality: row?.nationality || "",
+      country_of_residence: row?.country_of_residence || "",
+      city: row?.city || "",
+      profession: row?.profession || "",
+      headline: row?.headline || "",
+      professional_summary: row?.professional_summary || "",
+      years_experience: row?.years_experience ?? "",
+      current_company: row?.current_company || "",
+      current_job_title: row?.current_job_title || "",
+      availability_status: row?.availability_status || "Open to Opportunities",
+      notice_period_days: row?.notice_period_days ?? "",
+      expected_salary: row?.expected_salary ?? "",
+      expected_salary_currency: row?.expected_salary_currency || "SAR",
+      preferred_locations_text: talentTextList(row?.preferred_locations),
+      preferred_employment_types_text: talentTextList(row?.preferred_employment_types),
+      languages_text: talentTextList(row?.languages),
+      linkedin_url: row?.linkedin_url || "",
+      portfolio_url: row?.portfolio_url || "",
+    };
+  }
+
+  async function ensureTalentProfile(user) {
+    if (!user?.id) return null;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { data, error } = await supabase
+        .from("talent_candidates")
+        .select("*")
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data) return data;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+
+    const { data, error } = await supabase
+      .from("talent_candidates")
+      .upsert({
+        auth_user_id: user.id,
+        email: user.email || "",
+        full_name: user.user_metadata?.full_name || "",
+        phone: user.user_metadata?.phone || "",
+        last_active_at: new Date().toISOString(),
+      }, { onConflict: "auth_user_id" })
+      .select("*")
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async function loadCandidateWorkspace(user) {
+    if (!user?.id) return;
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+
+    try {
+      const candidateRow = await ensureTalentProfile(user);
+      const [documentsResult, consentsResult] = await Promise.all([
+        supabase
+          .from("talent_candidate_documents")
+          .select("id, candidate_id, document_type, file_name, storage_path, mime_type, size_bytes, is_primary, parse_status, uploaded_at")
+          .eq("candidate_id", candidateRow.id)
+          .order("uploaded_at", { ascending: false }),
+        supabase
+          .from("talent_candidate_consents")
+          .select("consent_type, is_granted, granted_at, withdrawn_at")
+          .eq("candidate_id", candidateRow.id),
+      ]);
+
+      if (documentsResult.error) throw documentsResult.error;
+      if (consentsResult.error) throw consentsResult.error;
+
+      const nextConsents = { ...EMPTY_TALENT_CONSENTS };
+      (consentsResult.data || []).forEach((item) => {
+        if (Object.prototype.hasOwnProperty.call(nextConsents, item.consent_type)) {
+          nextConsents[item.consent_type] = Boolean(item.is_granted);
+        }
+      });
+
+      setProfile(candidateRow);
+      setProfileForm(mapTalentProfileToForm(candidateRow));
+      setDocuments(documentsResult.data || []);
+      setConsents(nextConsents);
+    } catch (error) {
+      console.error("Talent workspace load failed", error);
+      setWorkspaceMessage(error?.message || "تعذر تحميل ملف المتقدم.");
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    const styleId = "visaflow-talent-responsive-styles";
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = `
+        @media (max-width: 900px) {
+          .vf-talent-auth-grid,
+          .vf-talent-workspace-grid,
+          .vf-talent-summary-grid { grid-template-columns: 1fr !important; }
+          .vf-talent-workspace-sidebar { position: static !important; display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .vf-talent-form-grid,
+          .vf-talent-review-grid { grid-template-columns: 1fr !important; }
+        }
+        @media (max-width: 620px) {
+          .vf-talent-stats-grid,
+          .vf-talent-metrics-grid { grid-template-columns: 1fr !important; }
+          .vf-talent-workspace-sidebar { grid-template-columns: 1fr !important; }
+          .vf-talent-page-shell { padding: 14px !important; }
+          .vf-talent-dashboard-shell { padding: 14px !important; }
+          .vf-talent-auth-card { padding: 20px !important; }
+          .vf-talent-public-header { align-items: flex-start !important; flex-direction: column !important; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+    return () => {
+      document.getElementById(styleId)?.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    loadTalentStats();
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      const activeSession = data?.session || null;
+      if (activeSession?.user?.user_metadata?.account_type === "candidate") {
+        setSession(activeSession);
+        loadCandidateWorkspace(activeSession.user);
+      } else {
+        setSession(null);
+      }
+      setAuthChecked(true);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted) return;
+      if (nextSession?.user?.user_metadata?.account_type === "candidate") {
+        setSession(nextSession);
+        loadCandidateWorkspace(nextSession.user);
+      } else {
+        setSession(null);
+        setProfile(null);
+        setDocuments([]);
+      }
+      setAuthChecked(true);
+    });
+
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  async function handleTalentSignUp() {
+    const fullName = String(authForm.full_name || "").trim();
+    const phone = String(authForm.phone || "").trim();
+    const email = String(authForm.email || "").trim().toLowerCase();
+    const password = String(authForm.password || "");
+
+    if (!fullName || !phone || !email || !password) {
+      setAuthMessage(isArabic ? "أكمل الاسم والجوال والبريد وكلمة المرور." : "Complete name, phone, email, and password.");
+      return;
+    }
+    if (password.length < 8) {
+      setAuthMessage(isArabic ? "كلمة المرور يجب ألا تقل عن 8 أحرف." : "Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== authForm.confirm_password) {
+      setAuthMessage(isArabic ? "كلمتا المرور غير متطابقتين." : "Passwords do not match.");
+      return;
+    }
+
+    setAuthBusy(true);
+    setAuthMessage("");
+    try {
+      const redirectUrl = `${window.location.origin}${window.location.pathname}?talent=1`;
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: redirectUrl,
+          data: {
+            account_type: "candidate",
+            full_name: fullName,
+            phone,
+          },
+        },
+      });
+      if (error) throw error;
+
+      if (data?.session && data?.user) {
+        setSession(data.session);
+        await loadCandidateWorkspace(data.user);
+        setAuthMessage(isArabic ? "تم إنشاء حسابك بنجاح." : "Your candidate account was created successfully.");
+      } else {
+        setAuthMessage(isArabic
+          ? "تم إنشاء الحساب. افتح رسالة التأكيد في بريدك ثم ارجع لتسجيل الدخول."
+          : "Account created. Confirm your email, then return to sign in.");
+        setAuthMode("signin");
+      }
+    } catch (error) {
+      setAuthMessage(error?.message || (isArabic ? "تعذر إنشاء الحساب." : "Unable to create the account."));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleTalentSignIn() {
+    const email = String(authForm.email || "").trim().toLowerCase();
+    const password = String(authForm.password || "");
+    if (!email || !password) {
+      setAuthMessage(isArabic ? "أدخل البريد وكلمة المرور." : "Enter email and password.");
+      return;
+    }
+
+    setAuthBusy(true);
+    setAuthMessage("");
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (data?.user?.user_metadata?.account_type !== "candidate") {
+        await supabase.auth.signOut();
+        throw new Error(isArabic ? "هذا الحساب ليس حساب متقدم." : "This is not a candidate account.");
+      }
+      setSession(data.session);
+      await loadCandidateWorkspace(data.user);
+    } catch (error) {
+      setAuthMessage(error?.message || (isArabic ? "تعذر تسجيل الدخول." : "Unable to sign in."));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleTalentSignOut() {
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
+    setDocuments([]);
+    setConsents({ ...EMPTY_TALENT_CONSENTS });
+    setProfileForm({ ...EMPTY_TALENT_PROFILE_FORM });
+    setWorkspaceTab("Profile");
+    setAuthMode("signin");
+  }
+
+  function buildProfilePayload() {
+    return {
+      full_name: String(profileForm.full_name || "").trim(),
+      phone: String(profileForm.phone || "").trim(),
+      nationality: String(profileForm.nationality || "").trim() || null,
+      country_of_residence: String(profileForm.country_of_residence || "").trim() || null,
+      city: String(profileForm.city || "").trim() || null,
+      profession: String(profileForm.profession || "").trim() || null,
+      headline: String(profileForm.headline || "").trim() || null,
+      professional_summary: String(profileForm.professional_summary || "").trim() || null,
+      years_experience: profileForm.years_experience === "" ? null : Number(profileForm.years_experience),
+      current_company: String(profileForm.current_company || "").trim() || null,
+      current_job_title: String(profileForm.current_job_title || "").trim() || null,
+      availability_status: profileForm.availability_status || "Open to Opportunities",
+      notice_period_days: profileForm.notice_period_days === "" ? null : Number(profileForm.notice_period_days),
+      expected_salary: profileForm.expected_salary === "" ? null : Number(profileForm.expected_salary),
+      expected_salary_currency: profileForm.expected_salary_currency || "SAR",
+      preferred_locations: talentJsonList(profileForm.preferred_locations_text),
+      preferred_employment_types: talentJsonList(profileForm.preferred_employment_types_text),
+      languages: talentJsonList(profileForm.languages_text),
+      linkedin_url: String(profileForm.linkedin_url || "").trim() || null,
+      portfolio_url: String(profileForm.portfolio_url || "").trim() || null,
+      employer_sharing_consent: Boolean(consents["Employer Sharing"]),
+      profile_visibility: consents["Employer Sharing"] ? "Anonymized" : "Private",
+      last_active_at: new Date().toISOString(),
+    };
+  }
+
+  async function saveTalentConsents(candidateId) {
+    const now = new Date().toISOString();
+    const rows = Object.entries(consents).map(([consentType, isGranted]) => ({
+      candidate_id: candidateId,
+      consent_type: consentType,
+      consent_version: "1.0",
+      is_granted: Boolean(isGranted),
+      granted_at: isGranted ? now : null,
+      withdrawn_at: isGranted ? null : now,
+      source: "Candidate Portal",
+      metadata: { language: portalLanguage },
+    }));
+
+    const { error } = await supabase
+      .from("talent_candidate_consents")
+      .upsert(rows, { onConflict: "candidate_id,consent_type,consent_version" });
+    if (error) throw error;
+  }
+
+  async function logTalentEvent(eventName, metadata = {}) {
+    if (!session?.user?.id || !profile?.id) return;
+    try {
+      await supabase.from("talent_candidate_events").insert([{
+        candidate_id: profile.id,
+        auth_user_id: session.user.id,
+        event_name: eventName,
+        event_source: "Candidate Portal",
+        metadata,
+      }]);
+    } catch (error) {
+      console.warn("Talent event log failed", error?.message || error);
+    }
+  }
+
+  async function handleSaveTalentProfile({ quiet = false } = {}) {
+    if (!profile?.id) return false;
+    const payload = buildProfilePayload();
+    if (!payload.full_name || !payload.phone) {
+      setWorkspaceMessage(isArabic ? "الاسم ورقم الجوال مطلوبان." : "Name and phone are required.");
+      return false;
+    }
+
+    setWorkspaceBusy(true);
+    if (!quiet) setWorkspaceMessage("");
+    try {
+      const { error } = await supabase
+        .from("talent_candidates")
+        .update(payload)
+        .eq("id", profile.id);
+      if (error) throw error;
+      await saveTalentConsents(profile.id);
+      await logTalentEvent("PROFILE_SAVED", { completeness: estimatedCompleteness });
+      await loadCandidateWorkspace(session.user);
+      if (!quiet) setWorkspaceMessage(isArabic ? "تم حفظ الملف المهني." : "Professional profile saved.");
+      return true;
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر حفظ الملف." : "Unable to save the profile."));
+      return false;
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function handleTalentCvUpload(file) {
+    if (!file || !profile?.id || !session?.user?.id) return;
+    const allowedTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+    if (!allowedTypes.includes(file.type)) {
+      setWorkspaceMessage(isArabic ? "ارفع السيرة بصيغة PDF أو Word فقط." : "Upload PDF or Word only.");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setWorkspaceMessage(isArabic ? "حجم الملف يجب ألا يتجاوز 10 ميجابايت." : "File size must not exceed 10 MB.");
+      return;
+    }
+
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+    let storagePath = "";
+    try {
+      storagePath = `${session.user.id}/${Date.now()}-${talentSafeFileName(file.name)}`;
+      const { error: uploadError } = await supabase.storage
+        .from("talent-cv")
+        .upload(storagePath, file, { cacheControl: "3600", upsert: false });
+      if (uploadError) throw uploadError;
+
+      const { error: clearPrimaryError } = await supabase
+        .from("talent_candidate_documents")
+        .update({ is_primary: false })
+        .eq("candidate_id", profile.id)
+        .eq("document_type", "CV")
+        .eq("is_primary", true);
+      if (clearPrimaryError) throw clearPrimaryError;
+
+      const { error: documentError } = await supabase
+        .from("talent_candidate_documents")
+        .insert([{
+          candidate_id: profile.id,
+          document_type: "CV",
+          file_name: file.name,
+          storage_bucket: "talent-cv",
+          storage_path: storagePath,
+          mime_type: file.type,
+          size_bytes: file.size,
+          is_primary: true,
+        }]);
+      if (documentError) throw documentError;
+
+      const { error: profileError } = await supabase
+        .from("talent_candidates")
+        .update({ ai_cv_status: "Pending", last_active_at: new Date().toISOString() })
+        .eq("id", profile.id);
+      if (profileError) throw profileError;
+
+      await logTalentEvent("CV_UPLOADED", { file_name: file.name, size_bytes: file.size });
+      await loadCandidateWorkspace(session.user);
+      setWorkspaceMessage(isArabic ? "تم رفع السيرة الذاتية بنجاح." : "CV uploaded successfully.");
+      setWorkspaceTab("Consent");
+    } catch (error) {
+      if (storagePath) {
+        try {
+          await supabase.storage.from("talent-cv").remove([storagePath]);
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر رفع السيرة الذاتية." : "Unable to upload the CV."));
+    } finally {
+      setWorkspaceBusy(false);
+      if (cvInputRef.current) cvInputRef.current.value = "";
+    }
+  }
+
+  async function handleSubmitTalentProfile() {
+    if (!profile?.id) return;
+    if (!profileForm.full_name || !profileForm.phone || !profileForm.profession) {
+      setWorkspaceMessage(isArabic ? "أكمل الاسم والجوال والمهنة قبل الإرسال." : "Complete name, phone, and profession before submission.");
+      setWorkspaceTab("Profile");
+      return;
+    }
+    if (!primaryCv) {
+      setWorkspaceMessage(isArabic ? "ارفع السيرة الذاتية قبل إرسال الملف للمراجعة." : "Upload your CV before submission.");
+      setWorkspaceTab("CV");
+      return;
+    }
+    if (!consents["Platform Terms"] || !consents["Privacy Policy"] || !consents["AI CV Analysis"]) {
+      setWorkspaceMessage(isArabic
+        ? "يلزم قبول شروط المنصة وسياسة الخصوصية وتحليل السيرة بالذكاء الاصطناعي."
+        : "Accept platform terms, privacy policy, and AI CV analysis consent.");
+      setWorkspaceTab("Consent");
+      return;
+    }
+
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+    try {
+      const payload = {
+        ...buildProfilePayload(),
+        marketplace_status: "Submitted",
+        submitted_at: new Date().toISOString(),
+      };
+      const { error } = await supabase
+        .from("talent_candidates")
+        .update(payload)
+        .eq("id", profile.id);
+      if (error) throw error;
+      await saveTalentConsents(profile.id);
+      await logTalentEvent("PROFILE_SUBMITTED", {
+        employer_sharing: Boolean(consents["Employer Sharing"]),
+        estimated_completeness: estimatedCompleteness,
+      });
+      await loadCandidateWorkspace(session.user);
+      await loadTalentStats();
+      setWorkspaceTab("Review");
+      setWorkspaceMessage(isArabic
+        ? "تم إرسال ملفك للمراجعة. لن يظهر للشركات إلا وفق موافقتك على المشاركة."
+        : "Your profile was submitted for review and will only be shared according to your consent.");
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر إرسال الملف." : "Unable to submit the profile."));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  function Field({ label, value, onChange, type = "text", placeholder = "", min, max, dir }) {
+    return (
+      <label style={{ display: "grid", gap: "7px", fontWeight: 800, color: palette.text }}>
+        <span style={{ fontSize: "13px" }}>{label}</span>
+        <input
+          type={type}
+          value={value ?? ""}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          min={min}
+          max={max}
+          dir={dir}
+          style={{
+            width: "100%",
+            minHeight: "46px",
+            border: `1px solid ${palette.border}`,
+            borderRadius: "12px",
+            padding: "10px 12px",
+            background: "#fff",
+            color: palette.text,
+            font: "inherit",
+            boxSizing: "border-box",
+          }}
+        />
+      </label>
+    );
+  }
+
+  if (!authChecked) {
+    return (
+      <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: palette.navy, color: "#fff" }}>
+        <div style={{ fontWeight: 900, fontSize: "18px" }}>VisaFlow Talent — Loading...</div>
+      </main>
+    );
+  }
+
+  if (!session) {
+    return (
+      <main className="vf-talent-page-shell" dir={isArabic ? "rtl" : "ltr"} style={{ minHeight: "100vh", background: `linear-gradient(135deg, ${palette.navy}, ${palette.blue})`, padding: "24px", boxSizing: "border-box", fontFamily: "inherit" }}>
+        <div style={{ maxWidth: "1180px", margin: "0 auto" }}>
+          <header className="vf-talent-public-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginBottom: "28px" }}>
+            <div style={{ color: "#fff" }}>
+              <strong style={{ fontSize: "23px" }}>VisaFlow Talent</strong>
+              <div style={{ opacity: 0.72, fontSize: "12px", marginTop: "4px" }}>Your verified career profile for Saudi employers</div>
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button type="button" onClick={() => setPortalLanguage(isArabic ? "EN" : "AR")} style={{ border: "1px solid rgba(255,255,255,.35)", background: "transparent", color: "#fff", borderRadius: "10px", padding: "9px 13px", cursor: "pointer", fontWeight: 800 }}>
+                {isArabic ? "English" : "العربية"}
+              </button>
+              <button type="button" onClick={onBack} style={{ border: 0, background: "rgba(255,255,255,.12)", color: "#fff", borderRadius: "10px", padding: "9px 13px", cursor: "pointer", fontWeight: 800 }}>
+                {isArabic ? "عودة لدخول الشركات" : "Company Login"}
+              </button>
+            </div>
+          </header>
+
+          <div className="vf-talent-auth-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(340px, .85fr)", gap: "28px", alignItems: "stretch" }}>
+            <section style={{ color: "#fff", padding: "38px 12px 28px" }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", background: "rgba(18,184,176,.16)", border: "1px solid rgba(45,212,191,.35)", borderRadius: "999px", padding: "8px 12px", fontWeight: 900, fontSize: "13px" }}>
+                ✦ {isArabic ? "ابنِ ملفك المهني مرة واحدة" : "Build your professional profile once"}
+              </div>
+              <h1 style={{ fontSize: "clamp(38px, 6vw, 72px)", lineHeight: 1.02, margin: "22px 0 18px", letterSpacing: "-0.04em" }}>
+                {isArabic ? "قدّم سيرتك الذاتية. دع الفرص تصل إليك." : "Submit your CV. Let opportunities find you."}
+              </h1>
+              <p style={{ maxWidth: "720px", fontSize: "18px", lineHeight: 1.8, color: "rgba(255,255,255,.8)", margin: 0 }}>
+                {isArabic
+                  ? "سجّل ملفك، ارفع سيرتك، وافق على التحليل الذكي، ثم يظهر ملف مجهول الهوية للشركات المشتركة بعد المراجعة. بياناتك الكاملة لا تُشارك دون موافقتك."
+                  : "Create your profile, upload your CV, consent to AI analysis, and become discoverable to subscribed employers after review. Your full identity is never shared without consent."}
+              </p>
+
+              <div className="vf-talent-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px", marginTop: "34px" }}>
+                {[
+                  [talentStats.registered_candidates, isArabic ? "متقدم مسجل" : "Registered"],
+                  [talentStats.marketplace_ready, isArabic ? "جاهز للشركات" : "Marketplace Ready"],
+                  [talentStats.completed_ai_interviews, isArabic ? "أكمل مقابلة AI" : "AI Interviews"],
+                ].map(([value, label]) => (
+                  <div key={label} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)", borderRadius: "16px", padding: "18px" }}>
+                    <strong style={{ display: "block", fontSize: "28px" }}>{Number(value || 0).toLocaleString()}</strong>
+                    <span style={{ color: "rgba(255,255,255,.7)", fontSize: "12px" }}>{label}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px", marginTop: "18px" }}>
+                {[
+                  ["🧠", isArabic ? "تحليل ذكي للسيرة والمهارات" : "AI CV and skills analysis"],
+                  ["🎙", isArabic ? "مقابلة AI بعد التأهل" : "AI interview after qualification"],
+                  ["🛡", isArabic ? "عرض مجهول الهوية للشركات" : "Anonymized employer discovery"],
+                  ["📱", isArabic ? "مصمم للجوال والكمبيوتر" : "Mobile and desktop ready"],
+                ].map(([icon, text]) => (
+                  <div key={text} style={{ display: "flex", gap: "10px", alignItems: "center", color: "rgba(255,255,255,.86)", fontWeight: 800 }}>
+                    <span style={{ fontSize: "22px" }}>{icon}</span><span>{text}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="vf-talent-auth-card" style={{ background: "#fff", borderRadius: "24px", padding: "28px", boxShadow: "0 30px 80px rgba(0,0,0,.28)" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", background: palette.pale, padding: "5px", borderRadius: "13px", marginBottom: "22px" }}>
+                <button type="button" onClick={() => { setAuthMode("signup"); setAuthMessage(""); }} style={{ border: 0, borderRadius: "10px", padding: "11px", cursor: "pointer", fontWeight: 900, background: authMode === "signup" ? "#fff" : "transparent", color: authMode === "signup" ? palette.blue : palette.muted, boxShadow: authMode === "signup" ? "0 3px 12px rgba(15,23,42,.08)" : "none" }}>
+                  {isArabic ? "إنشاء حساب" : "Create Account"}
+                </button>
+                <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, borderRadius: "10px", padding: "11px", cursor: "pointer", fontWeight: 900, background: authMode === "signin" ? "#fff" : "transparent", color: authMode === "signin" ? palette.blue : palette.muted, boxShadow: authMode === "signin" ? "0 3px 12px rgba(15,23,42,.08)" : "none" }}>
+                  {isArabic ? "دخول المتقدم" : "Candidate Login"}
+                </button>
+              </div>
+
+              <h2 style={{ margin: "0 0 6px", color: palette.text }}>{authMode === "signup" ? (isArabic ? "ابدأ ملفك المهني" : "Start your career profile") : (isArabic ? "مرحبًا بعودتك" : "Welcome back")}</h2>
+              <p style={{ margin: "0 0 22px", color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "لن نشارك بياناتك الكاملة مع أي شركة دون موافقتك." : "Your full information is never shared with an employer without your consent."}</p>
+
+              <div style={{ display: "grid", gap: "13px" }}>
+                {authMode === "signup" && (
+                  <>
+                    <Field label={isArabic ? "الاسم الكامل" : "Full Name"} value={authForm.full_name} onChange={(value) => setAuthForm((prev) => ({ ...prev, full_name: value }))} />
+                    <Field label={isArabic ? "رقم الجوال" : "Mobile Number"} value={authForm.phone} onChange={(value) => setAuthForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
+                  </>
+                )}
+                <Field label={isArabic ? "البريد الإلكتروني" : "Email Address"} type="email" value={authForm.email} onChange={(value) => setAuthForm((prev) => ({ ...prev, email: value }))} dir="ltr" />
+                <Field label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" />
+                {authMode === "signup" && <Field label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" />}
+              </div>
+
+              {authMessage && <div style={{ marginTop: "14px", padding: "12px", borderRadius: "12px", background: authMessage.includes("بنجاح") || authMessage.includes("created") ? "#ecfdf5" : "#fff7ed", color: authMessage.includes("بنجاح") || authMessage.includes("created") ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{authMessage}</div>}
+
+              <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : handleTalentSignIn} disabled={authBusy} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy ? "wait" : "pointer", fontWeight: 900, fontSize: "16px" }}>
+                {authBusy ? (isArabic ? "جاري التنفيذ..." : "Please wait...") : authMode === "signup" ? (isArabic ? "إنشاء حساب المتقدم" : "Create Candidate Account") : (isArabic ? "دخول إلى ملفي" : "Open My Profile")}
+              </button>
+            </section>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const statusLabel = profile?.marketplace_status || "Draft";
+  const tabItems = [
+    ["Profile", isArabic ? "الملف المهني" : "Professional Profile"],
+    ["CV", isArabic ? "السيرة الذاتية" : "CV Upload"],
+    ["Consent", isArabic ? "الموافقات" : "Consents"],
+    ["Review", isArabic ? "المراجعة والإرسال" : "Review & Submit"],
+  ];
+
+  return (
+    <main dir={isArabic ? "rtl" : "ltr"} style={{ minHeight: "100vh", background: "#f4f8fb", color: palette.text, fontFamily: "inherit" }}>
+      <header style={{ background: palette.navy, color: "#fff", padding: "16px 24px", position: "sticky", top: 0, zIndex: 20, boxShadow: "0 8px 24px rgba(7,27,61,.16)" }}>
+        <div style={{ maxWidth: "1240px", margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "14px" }}>
+          <div>
+            <strong style={{ fontSize: "21px" }}>VisaFlow Talent</strong>
+            <div style={{ fontSize: "12px", color: "rgba(255,255,255,.65)", marginTop: "3px" }}>{profile?.public_reference || session.user.email}</div>
+          </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" onClick={() => setPortalLanguage(isArabic ? "EN" : "AR")} style={{ border: "1px solid rgba(255,255,255,.3)", background: "transparent", color: "#fff", borderRadius: "10px", padding: "8px 11px", cursor: "pointer", fontWeight: 800 }}>{isArabic ? "English" : "العربية"}</button>
+            <button type="button" onClick={onBack} style={{ border: 0, background: "rgba(255,255,255,.12)", color: "#fff", borderRadius: "10px", padding: "8px 11px", cursor: "pointer", fontWeight: 800 }}>{isArabic ? "موقع VisaFlow" : "VisaFlow Home"}</button>
+            <button type="button" onClick={handleTalentSignOut} style={{ border: 0, background: "#fff", color: palette.navy, borderRadius: "10px", padding: "8px 11px", cursor: "pointer", fontWeight: 900 }}>{isArabic ? "تسجيل الخروج" : "Sign Out"}</button>
+          </div>
+        </div>
+      </header>
+
+      <div className="vf-talent-dashboard-shell" style={{ maxWidth: "1240px", margin: "0 auto", padding: "24px" }}>
+        <section className="vf-talent-summary-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "18px", alignItems: "center", background: "#fff", border: `1px solid ${palette.border}`, borderRadius: "20px", padding: "22px", marginBottom: "18px" }}>
+          <div>
+            <div style={{ color: palette.cyan, fontWeight: 900, fontSize: "12px", textTransform: "uppercase", letterSpacing: ".08em" }}>{isArabic ? "لوحة المتقدم" : "Candidate Dashboard"}</div>
+            <h1 style={{ margin: "7px 0 6px", fontSize: "30px" }}>{isArabic ? `مرحبًا، ${profileForm.full_name || "بك"}` : `Welcome, ${profileForm.full_name || "Candidate"}`}</h1>
+            <p style={{ margin: 0, color: palette.muted }}>{isArabic ? "أكمل بياناتك وارفع سيرتك ثم أرسل ملفك للمراجعة." : "Complete your information, upload your CV, and submit your profile for review."}</p>
+          </div>
+          <div style={{ minWidth: "210px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontWeight: 900 }}><span>{isArabic ? "اكتمال الملف" : "Profile Completion"}</span><strong>{estimatedCompleteness}%</strong></div>
+            <div style={{ height: "12px", background: "#e5edf3", borderRadius: "999px", overflow: "hidden" }}><div style={{ width: `${estimatedCompleteness}%`, height: "100%", background: `linear-gradient(90deg, ${palette.blue}, ${palette.cyan})`, transition: "width .25s ease" }} /></div>
+          </div>
+        </section>
+
+        <section className="vf-talent-metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px", marginBottom: "18px" }}>
+          {[
+            [isArabic ? "حالة الملف" : "Profile Status", statusLabel],
+            [isArabic ? "السيرة الذاتية" : "CV", primaryCv ? (isArabic ? "مرفوعة" : "Uploaded") : (isArabic ? "غير مرفوعة" : "Missing")],
+            [isArabic ? "تحليل السيرة" : "CV Analysis", profile?.ai_cv_status || "Not Uploaded"],
+            [isArabic ? "مقابلة AI" : "AI Interview", profile?.ai_interview_status || "Not Invited"],
+          ].map(([label, value]) => (
+            <div key={label} style={{ background: "#fff", border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "16px" }}>
+              <span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{label}</span>
+              <strong style={{ display: "block", marginTop: "8px", fontSize: "17px" }}>{value}</strong>
+            </div>
+          ))}
+        </section>
+
+        <div className="vf-talent-workspace-grid" style={{ display: "grid", gridTemplateColumns: "240px minmax(0, 1fr)", gap: "18px", alignItems: "start" }}>
+          <aside className="vf-talent-workspace-sidebar" style={{ background: "#fff", border: `1px solid ${palette.border}`, borderRadius: "18px", padding: "10px", position: "sticky", top: "90px" }}>
+            {tabItems.map(([key, label], index) => (
+              <button key={key} type="button" onClick={() => setWorkspaceTab(key)} style={{ width: "100%", border: 0, textAlign: isArabic ? "right" : "left", borderRadius: "12px", padding: "13px", marginBottom: "5px", cursor: "pointer", fontWeight: 900, background: workspaceTab === key ? palette.pale : "transparent", color: workspaceTab === key ? palette.blue : palette.text }}>
+                <span style={{ display: "inline-grid", placeItems: "center", width: "24px", height: "24px", borderRadius: "999px", background: workspaceTab === key ? palette.blue : "#e8eef4", color: workspaceTab === key ? "#fff" : palette.muted, marginInlineEnd: "8px", fontSize: "11px" }}>{index + 1}</span>{label}
+              </button>
+            ))}
+          </aside>
+
+          <section style={{ background: "#fff", border: `1px solid ${palette.border}`, borderRadius: "18px", padding: "22px", minHeight: "520px" }}>
+            {workspaceMessage && <div style={{ padding: "12px 14px", borderRadius: "12px", marginBottom: "16px", background: workspaceMessage.includes("تم") || workspaceMessage.includes("saved") || workspaceMessage.includes("submitted") ? "#ecfdf5" : "#fff7ed", color: workspaceMessage.includes("تم") || workspaceMessage.includes("saved") || workspaceMessage.includes("submitted") ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{workspaceMessage}</div>}
+
+            {workspaceBusy && <div style={{ marginBottom: "14px", color: palette.blue, fontWeight: 900 }}>{isArabic ? "جاري الحفظ..." : "Saving..."}</div>}
+
+            {workspaceTab === "Profile" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "الملف المهني" : "Professional Profile"}</h2>
+                <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "اكتب معلومات حقيقية ومختصرة؛ سيستخدمها النظام في مطابقة الفرص." : "Use accurate, concise information; it will support employer matching."}</p>
+                <div className="vf-talent-form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "14px" }}>
+                  <Field label={isArabic ? "الاسم الكامل *" : "Full Name *"} value={profileForm.full_name} onChange={(value) => setProfileForm((prev) => ({ ...prev, full_name: value }))} />
+                  <Field label={isArabic ? "رقم الجوال *" : "Mobile Number *"} value={profileForm.phone} onChange={(value) => setProfileForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
+                  <Field label={isArabic ? "الجنسية" : "Nationality"} value={profileForm.nationality} onChange={(value) => setProfileForm((prev) => ({ ...prev, nationality: value }))} />
+                  <Field label={isArabic ? "دولة الإقامة" : "Country of Residence"} value={profileForm.country_of_residence} onChange={(value) => setProfileForm((prev) => ({ ...prev, country_of_residence: value }))} />
+                  <Field label={isArabic ? "المدينة" : "City"} value={profileForm.city} onChange={(value) => setProfileForm((prev) => ({ ...prev, city: value }))} />
+                  <Field label={isArabic ? "المهنة المستهدفة *" : "Target Profession *"} value={profileForm.profession} onChange={(value) => setProfileForm((prev) => ({ ...prev, profession: value }))} />
+                  <Field label={isArabic ? "المسمى الحالي" : "Current Job Title"} value={profileForm.current_job_title} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_job_title: value }))} />
+                  <Field label={isArabic ? "جهة العمل الحالية" : "Current Employer"} value={profileForm.current_company} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_company: value }))} />
+                  <Field label={isArabic ? "سنوات الخبرة" : "Years of Experience"} type="number" min="0" max="80" value={profileForm.years_experience} onChange={(value) => setProfileForm((prev) => ({ ...prev, years_experience: value }))} />
+                  <Field label={isArabic ? "مدة الإشعار بالأيام" : "Notice Period (days)"} type="number" min="0" max="730" value={profileForm.notice_period_days} onChange={(value) => setProfileForm((prev) => ({ ...prev, notice_period_days: value }))} />
+                  <Field label={isArabic ? "الراتب المتوقع" : "Expected Salary"} type="number" min="0" value={profileForm.expected_salary} onChange={(value) => setProfileForm((prev) => ({ ...prev, expected_salary: value }))} />
+                  <label style={{ display: "grid", gap: "7px", fontWeight: 800 }}><span style={{ fontSize: "13px" }}>{isArabic ? "العملة" : "Currency"}</span><select value={profileForm.expected_salary_currency} onChange={(event) => setProfileForm((prev) => ({ ...prev, expected_salary_currency: event.target.value }))} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", background: "#fff", font: "inherit" }}><option value="SAR">SAR</option><option value="USD">USD</option><option value="AED">AED</option><option value="EGP">EGP</option><option value="INR">INR</option><option value="PKR">PKR</option><option value="PHP">PHP</option></select></label>
+                  <Field label={isArabic ? "اللغات — افصل بفاصلة" : "Languages — comma separated"} value={profileForm.languages_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, languages_text: value }))} />
+                  <Field label={isArabic ? "المواقع المفضلة — افصل بفاصلة" : "Preferred Locations — comma separated"} value={profileForm.preferred_locations_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_locations_text: value }))} />
+                  <Field label={isArabic ? "أنواع العمل المفضلة" : "Preferred Employment Types"} value={profileForm.preferred_employment_types_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_employment_types_text: value }))} placeholder={isArabic ? "دوام كامل، عقد، مؤقت" : "Full-time, Contract, Temporary"} />
+                  <Field label="LinkedIn" value={profileForm.linkedin_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, linkedin_url: value }))} dir="ltr" />
+                  <Field label={isArabic ? "رابط الأعمال أو Portfolio" : "Portfolio URL"} value={profileForm.portfolio_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, portfolio_url: value }))} dir="ltr" />
+                </div>
+                <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "العنوان المهني" : "Professional Headline"}</span><input value={profileForm.headline} onChange={(event) => setProfileForm((prev) => ({ ...prev, headline: event.target.value }))} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", font: "inherit" }} /></label>
+                <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "ملخص مهني" : "Professional Summary"}</span><textarea rows="6" value={profileForm.professional_summary} onChange={(event) => setProfileForm((prev) => ({ ...prev, professional_summary: event.target.value }))} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "12px", font: "inherit", resize: "vertical" }} /></label>
+                <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "18px" }}><button type="button" disabled={workspaceBusy} onClick={() => handleSaveTalentProfile()} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "حفظ ومتابعة" : "Save & Continue"}</button><button type="button" onClick={() => setWorkspaceTab("CV")} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", background: "#fff", color: palette.text, padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "التالي: السيرة" : "Next: CV"}</button></div>
+              </>
+            )}
+
+            {workspaceTab === "CV" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "رفع السيرة الذاتية" : "Upload Your CV"}</h2>
+                <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "الصيغ المقبولة PDF وWord، بحد أقصى 10 ميجابايت. يتم التخزين في مساحة خاصة لا يراها إلا صاحب الملف والنظام المصرح له." : "Accepted formats are PDF and Word, up to 10 MB, stored privately under your account."}</p>
+                <input ref={cvInputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => handleTalentCvUpload(event.target.files?.[0])} style={{ display: "none" }} />
+                <div style={{ border: `2px dashed ${palette.border}`, borderRadius: "18px", padding: "34px", textAlign: "center", background: palette.pale }}>
+                  <div style={{ fontSize: "46px" }}>📄</div>
+                  <h3>{primaryCv ? primaryCv.file_name : (isArabic ? "لم ترفع سيرة ذاتية بعد" : "No CV uploaded yet")}</h3>
+                  {primaryCv && <p style={{ color: palette.muted }}>{isArabic ? `حالة المعالجة: ${primaryCv.parse_status}` : `Processing status: ${primaryCv.parse_status}`}</p>}
+                  <button type="button" disabled={workspaceBusy} onClick={() => cvInputRef.current?.click()} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{primaryCv ? (isArabic ? "استبدال السيرة" : "Replace CV") : (isArabic ? "اختيار السيرة" : "Choose CV")}</button>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}><button type="button" onClick={() => setWorkspaceTab("Consent")} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "التالي: الموافقات" : "Next: Consents"}</button></div>
+              </>
+            )}
+
+            {workspaceTab === "Consent" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "الموافقات والخصوصية" : "Consent & Privacy"}</h2>
+                <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "يمكنك سحب الموافقات الاختيارية لاحقًا. مشاركة الملف مع الشركات مستقلة عن موافقة تحليل السيرة." : "Optional consents can be withdrawn later. Employer sharing is separate from AI CV analysis."}</p>
+                <div style={{ display: "grid", gap: "11px" }}>
+                  {Object.keys(EMPTY_TALENT_CONSENTS).map((key) => {
+                    const required = ["Platform Terms", "Privacy Policy", "AI CV Analysis"].includes(key);
+                    const labels = {
+                      "Platform Terms": isArabic ? "أوافق على شروط استخدام المنصة" : "I accept the platform terms",
+                      "Privacy Policy": isArabic ? "أوافق على سياسة الخصوصية ومعالجة البيانات" : "I accept the privacy policy and data processing",
+                      "Employer Sharing": isArabic ? "أوافق على إظهار ملف مجهول الهوية للشركات المشتركة" : "I allow an anonymized profile to be shown to subscribed employers",
+                      "AI CV Analysis": isArabic ? "أوافق على تحليل سيرتي الذاتية بالذكاء الاصطناعي" : "I consent to AI analysis of my CV",
+                      "AI Interview": isArabic ? "أوافق على دعوة مقابلة AI عند التأهل" : "I consent to AI interview invitations when qualified",
+                      "Evaluation Email": isArabic ? "أوافق على استقبال ملخص التقييم عبر البريد" : "I consent to receiving evaluation summaries by email",
+                      "Marketing Communications": isArabic ? "أوافق على الرسائل التسويقية والفرص" : "I consent to marketing and opportunity communications",
+                    };
+                    return (
+                      <label key={key} style={{ display: "flex", alignItems: "flex-start", gap: "12px", padding: "14px", border: `1px solid ${palette.border}`, borderRadius: "13px", cursor: "pointer" }}>
+                        <input type="checkbox" checked={Boolean(consents[key])} onChange={(event) => setConsents((prev) => ({ ...prev, [key]: event.target.checked }))} style={{ marginTop: "3px", width: "18px", height: "18px" }} />
+                        <span style={{ flex: 1, lineHeight: 1.6, fontWeight: 800 }}>{labels[key]} {required && <strong style={{ color: palette.danger }}>*</strong>}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "18px" }}><button type="button" disabled={workspaceBusy} onClick={() => handleSaveTalentProfile()} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", background: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "حفظ الموافقات" : "Save Consents"}</button><button type="button" onClick={() => setWorkspaceTab("Review")} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "مراجعة الملف" : "Review Profile"}</button></div>
+              </>
+            )}
+
+            {workspaceTab === "Review" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "مراجعة وإرسال الملف" : "Review & Submit"}</h2>
+                <div className="vf-talent-review-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px", marginBottom: "18px" }}>
+                  {[
+                    [isArabic ? "الاسم" : "Name", profileForm.full_name || "—"],
+                    [isArabic ? "المهنة" : "Profession", profileForm.profession || "—"],
+                    [isArabic ? "الخبرة" : "Experience", profileForm.years_experience === "" ? "—" : `${profileForm.years_experience} ${isArabic ? "سنة" : "years"}`],
+                    [isArabic ? "السيرة" : "CV", primaryCv?.file_name || "—"],
+                    [isArabic ? "المشاركة مع الشركات" : "Employer Sharing", consents["Employer Sharing"] ? (isArabic ? "موافق — مجهول الهوية" : "Allowed — anonymized") : (isArabic ? "غير موافق" : "Not allowed")],
+                    [isArabic ? "حالة الملف" : "Status", statusLabel],
+                  ].map(([label, value]) => <div key={label} style={{ border: `1px solid ${palette.border}`, borderRadius: "13px", padding: "14px" }}><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{label}</span><strong style={{ display: "block", marginTop: "7px" }}>{value}</strong></div>)}
+                </div>
+                <div style={{ padding: "16px", borderRadius: "14px", background: consents["Employer Sharing"] ? "#ecfdf5" : "#fff7ed", color: consents["Employer Sharing"] ? palette.success : "#9a3412", lineHeight: 1.7, fontWeight: 800 }}>
+                  {consents["Employer Sharing"]
+                    ? (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات ملفًا مجهول الهوية. فتح الاسم وبيانات الاتصال سيكون وفق آلية الموافقة لاحقًا." : "After approval, employers will see an anonymized profile. Identity and contact details will require the controlled unlock workflow.")
+                    : (isArabic ? "ملفك سيبقى خاصًا ولن يظهر للشركات حتى تمنح موافقة المشاركة." : "Your profile remains private and will not appear to employers until sharing consent is granted.")}
+                </div>
+                <button type="button" disabled={workspaceBusy || statusLabel === "Under Review" || statusLabel === "Approved"} onClick={handleSubmitTalentProfile} style={{ width: "100%", border: 0, borderRadius: "13px", background: statusLabel === "Submitted" ? palette.success : `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: "pointer", fontWeight: 900, fontSize: "16px" }}>
+                  {statusLabel === "Submitted" ? (isArabic ? "تحديث الملف وإعادة الإرسال" : "Update and Resubmit") : statusLabel === "Under Review" ? (isArabic ? "الملف تحت المراجعة" : "Profile Under Review") : statusLabel === "Approved" ? (isArabic ? "الملف معتمد" : "Profile Approved") : (isArabic ? "إرسال الملف للمراجعة" : "Submit Profile for Review")}
+                </button>
+              </>
+            )}
+          </section>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
+  const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("talent") === "1" || window.location.hash === "#talent";
+    } catch {
+      return false;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
@@ -15742,6 +16653,31 @@ async function handleLogout() {
 }
 
 
+function openTalentPortal() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("talent", "1");
+    window.history.pushState({}, "", url);
+  } catch {
+    window.location.hash = "talent";
+  }
+  setTalentPortalOpen(true);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function closeTalentPortal() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("talent");
+    if (url.hash === "#talent") url.hash = "";
+    window.history.pushState({}, "", url);
+  } catch {
+    window.location.hash = "";
+  }
+  setTalentPortalOpen(false);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function exportRowsToExcel(rows, fileName, sheetName = "Data") {
   if (!rows || rows.length === 0) {
     alert("No data to export");
@@ -25614,6 +26550,10 @@ if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
 }
 
+if (!currentUser && talentPortalOpen) {
+  return <TalentCandidatePortal onBack={closeTalentPortal} />;
+}
+
 if (!currentUser) {
   const showMicrosoftSso = false; // Feature flag: enable only after real Microsoft SSO implementation.
 
@@ -25830,6 +26770,24 @@ if (!currentUser) {
                 ? "🔐 دخول"
                 : "🔐 Sign In"}
           </button>
+
+          <div style={{ marginTop: "16px", padding: "15px", borderRadius: "16px", background: "linear-gradient(135deg, #eef8fb, #edf4ff)", border: "1px solid #cfe3ee", textAlign: loginLanguage === "AR" ? "right" : "left" }}>
+            <div style={{ color: "#0d2d5a", fontWeight: 900, fontSize: "15px" }}>
+              {loginLanguage === "AR" ? "باحث عن فرصة وظيفية؟" : "Looking for your next opportunity?"}
+            </div>
+            <p style={{ margin: "6px 0 12px", color: "#64748b", fontSize: "12px", lineHeight: 1.6 }}>
+              {loginLanguage === "AR"
+                ? "أنشئ ملفك المهني وارفع سيرتك لتصل إلى الشركات المشتركة بعد موافقتك."
+                : "Create your career profile and upload your CV to reach subscribed employers with your consent."}
+            </p>
+            <button
+              type="button"
+              onClick={openTalentPortal}
+              style={{ width: "100%", border: 0, borderRadius: "12px", background: "linear-gradient(135deg, #0e3a75, #12b8b0)", color: "#fff", padding: "12px", fontWeight: 900, cursor: "pointer" }}
+            >
+              {loginLanguage === "AR" ? "✨ قدم سيرتك الذاتية" : "✨ Join VisaFlow Talent"}
+            </button>
+          </div>
 
           {showMicrosoftSso && (
             <>
