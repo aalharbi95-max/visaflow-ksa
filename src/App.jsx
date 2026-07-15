@@ -953,6 +953,27 @@ function normalize(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function getUniqueTableOptions(rows = [], getter) {
+  const getValue = typeof getter === "function"
+    ? getter
+    : (row) => row?.[getter];
+
+  return Array.from(
+    new Set(
+      (rows || [])
+        .map((row) => String(getValue(row) || "").trim())
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+}
+
+function getPagedRows(rows = [], page = 1, pageSize = 25) {
+  const safePageSize = Math.max(1, Number(pageSize || 25));
+  const safePage = Math.max(1, Number(page || 1));
+  const start = (safePage - 1) * safePageSize;
+  return rows.slice(start, start + safePageSize);
+}
+
 function numberOrDefault(value, fallback = 0) {
   if (value === null || value === undefined || value === "") return fallback;
   const numericValue = Number(value);
@@ -3446,6 +3467,38 @@ const [aiInterviewLinkedInImportFileName, setAIInterviewLinkedInImportFileName] 
 const [aiInterviewLinkedInImportSheetName, setAIInterviewLinkedInImportSheetName] = useState("");
 const [aiInterviewCampaignBusy, setAIInterviewCampaignBusy] = useState(false);
 const [aiInterviewCampaignMessage, setAIInterviewCampaignMessage] = useState("");
+
+// Unified smart-table filters — phase 1 (Requests, Candidates, AI Results).
+const [requestTableFilters, setRequestTableFilters] = useState({
+  query: "",
+  status: "All",
+  approval: "All",
+  priority: "All",
+  project: "All",
+});
+const [requestTablePage, setRequestTablePage] = useState(1);
+const [requestTablePageSize, setRequestTablePageSize] = useState(25);
+
+const [candidateTableFilters, setCandidateTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  nationality: "All",
+  project: "All",
+  agency: "All",
+});
+const [candidateTablePage, setCandidateTablePage] = useState(1);
+const [candidateTablePageSize, setCandidateTablePageSize] = useState(25);
+
+const [aiResultsTableFilters, setAIResultsTableFilters] = useState({
+  query: "",
+  profession: "All",
+  analysis: "All",
+  recommendation: "All",
+  decision: "All",
+});
+const [aiResultsTablePage, setAIResultsTablePage] = useState(1);
+const [aiResultsTablePageSize, setAIResultsTablePageSize] = useState(25);
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewInvitationSendingId, setAIInterviewInvitationSendingId] = useState("");
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
@@ -6970,10 +7023,113 @@ const getVisaAvailableQty = (visaNo) => {
       .includes(keyword);
   });
 }, [candidates, search]);
-    
-  
 
-  
+const filteredRequestTableRows = useMemo(() => {
+  const query = normalize(requestTableFilters.query);
+
+  return requests.filter((item) => {
+    const lineText = getRequestLinesForRequest(item)
+      .map((line) => [line.profession, line.nationality, line.gender, line.salary, line.quantity].join(" "))
+      .join(" ");
+
+    const searchableText = normalize([
+      item.request_no,
+      item.request_date,
+      item.recruitment_type,
+      item.request_type,
+      item.project_name,
+      item.project_no,
+      item.project_city,
+      item.project_location,
+      item.department,
+      item.profession,
+      item.nationality,
+      item.gender,
+      item.requested_by,
+      item.priority,
+      item.status,
+      item.approval_status,
+      lineText,
+    ].join(" "));
+
+    const matchesQuery = !query || searchableText.includes(query);
+    const matchesStatus = requestTableFilters.status === "All" || item.status === requestTableFilters.status;
+    const matchesApproval = requestTableFilters.approval === "All" || item.approval_status === requestTableFilters.approval;
+    const matchesPriority = requestTableFilters.priority === "All" || item.priority === requestTableFilters.priority;
+    const projectValue = item.project_name || item.project || "";
+    const matchesProject = requestTableFilters.project === "All" || projectValue === requestTableFilters.project;
+
+    return matchesQuery && matchesStatus && matchesApproval && matchesPriority && matchesProject;
+  });
+}, [requests, requestLines, requestTableFilters]);
+
+const requestTableTotalPages = Math.max(1, Math.ceil(filteredRequestTableRows.length / requestTablePageSize));
+const pagedRequestTableRows = getPagedRows(filteredRequestTableRows, requestTablePage, requestTablePageSize);
+
+const filteredCandidateTableRows = useMemo(() => {
+  const query = normalize(candidateTableFilters.query);
+
+  return candidates.filter((item) => {
+    const relatedRequest = requests.find((request) => String(request.request_no || "") === String(item.request_no || ""));
+    const projectName = item.project || relatedRequest?.project_name || relatedRequest?.project || "";
+    const projectNo = relatedRequest?.project_no || "";
+
+    const searchableText = normalize([
+      item.candidate_name,
+      item.civil_id_no,
+      item.iqama_no,
+      item.passport_no,
+      item.mobile,
+      item.email,
+      item.request_no,
+      projectName,
+      projectNo,
+      item.profession,
+      item.nationality,
+      item.gender,
+      item.agency,
+      item.status,
+      item.medical_status,
+      item.ticket_no,
+      item.source,
+      item.offer_status,
+      item.final_company_decision,
+    ].join(" "));
+
+    const matchesQuery = !query || searchableText.includes(query);
+    const matchesStatus = candidateTableFilters.status === "All" || item.status === candidateTableFilters.status;
+    const matchesProfession = candidateTableFilters.profession === "All" || item.profession === candidateTableFilters.profession;
+    const matchesNationality = candidateTableFilters.nationality === "All" || item.nationality === candidateTableFilters.nationality;
+    const matchesProject = candidateTableFilters.project === "All" || projectName === candidateTableFilters.project;
+    const matchesAgency = candidateTableFilters.agency === "All" || item.agency === candidateTableFilters.agency;
+
+    return matchesQuery && matchesStatus && matchesProfession && matchesNationality && matchesProject && matchesAgency;
+  });
+}, [candidates, requests, candidateTableFilters]);
+
+const candidateTableTotalPages = Math.max(1, Math.ceil(filteredCandidateTableRows.length / candidateTablePageSize));
+const pagedCandidateTableRows = getPagedRows(filteredCandidateTableRows, candidateTablePage, candidateTablePageSize);
+
+useEffect(() => {
+  setRequestTablePage(1);
+}, [requestTableFilters, requestTablePageSize]);
+
+useEffect(() => {
+  setCandidateTablePage(1);
+}, [candidateTableFilters, candidateTablePageSize]);
+
+useEffect(() => {
+  setAIResultsTablePage(1);
+}, [aiResultsTableFilters, aiResultsTablePageSize, selectedAIInterviewCampaignId]);
+
+useEffect(() => {
+  if (requestTablePage > requestTableTotalPages) setRequestTablePage(requestTableTotalPages);
+}, [requestTablePage, requestTableTotalPages]);
+
+useEffect(() => {
+  if (candidateTablePage > candidateTableTotalPages) setCandidateTablePage(candidateTableTotalPages);
+}, [candidateTablePage, candidateTableTotalPages]);
+
 const saudiHiringRows = useMemo(() => {
   const rows = [];
 
@@ -24043,6 +24199,39 @@ function getReportStudioVisualModel() {
       return bScore - aScore || String(a.candidate_name || "").localeCompare(String(b.candidate_name || ""));
     });
 
+    const aiResultsQuery = normalize(aiResultsTableFilters.query);
+    const filteredRankedRows = rankedRows.filter((item) => {
+      const session = aiInterviewSessions.find((sessionRow) => String(sessionRow.id || "") === String(item.session_id || ""));
+      const sourceCandidate = candidates.find((candidate) => String(candidate.id || "") === String(item.candidate_id || ""));
+      const searchableText = normalize([
+        item.candidate_name,
+        item.candidate_email,
+        item.candidate_mobile,
+        sourceCandidate?.civil_id_no,
+        sourceCandidate?.passport_no,
+        sourceCandidate?.mobile,
+        item.profession,
+        item.request_no,
+        item.project_name,
+        selectedCampaign?.campaign_name,
+        item.ai_recommendation,
+        item.analysis_status,
+        item.human_decision,
+        item.status,
+        session?.access_token,
+      ].join(" "));
+
+      const matchesQuery = !aiResultsQuery || searchableText.includes(aiResultsQuery);
+      const matchesProfession = aiResultsTableFilters.profession === "All" || item.profession === aiResultsTableFilters.profession;
+      const matchesAnalysis = aiResultsTableFilters.analysis === "All" || item.analysis_status === aiResultsTableFilters.analysis;
+      const matchesRecommendation = aiResultsTableFilters.recommendation === "All" || item.ai_recommendation === aiResultsTableFilters.recommendation;
+      const matchesDecision = aiResultsTableFilters.decision === "All" || (item.human_decision || "Pending Company Review") === aiResultsTableFilters.decision;
+
+      return matchesQuery && matchesProfession && matchesAnalysis && matchesRecommendation && matchesDecision;
+    });
+    const aiResultsTableTotalPages = Math.max(1, Math.ceil(filteredRankedRows.length / aiResultsTablePageSize));
+    const pagedRankedRows = getPagedRows(filteredRankedRows, aiResultsTablePage, aiResultsTablePageSize);
+
     const sentJobs = campaignJobs.filter((job) => job.status === "Sent").length;
     const queuedJobs = campaignJobs.filter((job) => ["Queued", "Processing"].includes(job.status)).length;
     const failedJobs = campaignJobs.filter((job) => job.status === "Failed").length;
@@ -24584,7 +24773,23 @@ function getReportStudioVisualModel() {
             {!selectedCampaign ? (
               <p>Select a campaign first.</p>
             ) : (
-              <div className="table-wrap">
+              <>
+                <SmartTableToolbar
+                  searchValue={aiResultsTableFilters.query}
+                  onSearchChange={(value) => setAIResultsTableFilters((current) => ({ ...current, query: value }))}
+                  searchPlaceholder="Search candidate, civil ID, passport, email, mobile, request, project, campaign..."
+                  resultCount={filteredRankedRows.length}
+                  pageSize={aiResultsTablePageSize}
+                  onPageSizeChange={setAIResultsTablePageSize}
+                  onClear={() => setAIResultsTableFilters({ query: "", profession: "All", analysis: "All", recommendation: "All", decision: "All" })}
+                  filters={[
+                    { label: "Profession", value: aiResultsTableFilters.profession, options: ["All", ...getUniqueTableOptions(rankedRows, "profession")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, profession: value })) },
+                    { label: "Analysis", value: aiResultsTableFilters.analysis, options: ["All", ...getUniqueTableOptions(rankedRows, "analysis_status")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, analysis: value })) },
+                    { label: "AI Recommendation", value: aiResultsTableFilters.recommendation, options: ["All", ...getUniqueTableOptions(rankedRows, "ai_recommendation")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, recommendation: value })) },
+                    { label: "Company Decision", value: aiResultsTableFilters.decision, options: ["All", ...AI_INTERVIEW_HUMAN_DECISIONS], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, decision: value })) },
+                  ]}
+                />
+                <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
@@ -24600,13 +24805,13 @@ function getReportStudioVisualModel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rankedRows.length === 0 ? (
-                      <tr><td colSpan="9">No campaign candidates yet.</td></tr>
-                    ) : rankedRows.map((item, index) => {
+                    {filteredRankedRows.length === 0 ? (
+                      <tr><td colSpan="9">No candidates match the current search and filters.</td></tr>
+                    ) : pagedRankedRows.map((item, index) => {
                       const session = aiInterviewSessions.find((sessionRow) => String(sessionRow.id || "") === String(item.session_id || ""));
                       return (
                         <tr key={item.id}>
-                          <td><b>{item.overall_score === null || item.overall_score === undefined ? "-" : index + 1}</b></td>
+                          <td><b>{item.overall_score === null || item.overall_score === undefined ? "-" : ((aiResultsTablePage - 1) * aiResultsTablePageSize) + index + 1}</b></td>
                           <td><b>{item.candidate_name || "-"}</b><div style={{ fontSize: "12px", color: "#64748b" }}>{item.candidate_email || ""}</div></td>
                           <td>{item.profession || "-"}</td>
                           <td>{item.completed_at ? new Date(item.completed_at).toLocaleString() : <Badge value={item.status || "Pending"} />}</td>
@@ -24639,7 +24844,13 @@ function getReportStudioVisualModel() {
                     })}
                   </tbody>
                 </table>
-              </div>
+                </div>
+                <SmartTablePagination
+                  page={aiResultsTablePage}
+                  totalPages={aiResultsTableTotalPages}
+                  onPageChange={setAIResultsTablePage}
+                />
+              </>
             )}
           </TableCard>
         )}
@@ -24693,8 +24904,8 @@ function getReportStudioVisualModel() {
 
 function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
-  if (activePage === "Requests") return exportRowsToExcel(requests, "VisaFlow_Requests", "Requests");
-  if (activePage === "Candidates") return exportRowsToExcel(filteredCandidates, "VisaFlow_Candidates", "Candidates");
+  if (activePage === "Requests") return exportRowsToExcel(filteredRequestTableRows, "VisaFlow_Requests", "Requests");
+  if (activePage === "Candidates") return exportRowsToExcel(filteredCandidateTableRows, "VisaFlow_Candidates", "Candidates");
   if (activePage === "Visa Inventory") return exportRowsToExcel(filteredVisaRecords, "VisaFlow_Visa_Inventory", "Visas");
   if (activePage === "Authorization") return exportRowsToExcel(visaAuthorizations, "VisaFlow_Authorizations", "Authorizations");
   if (activePage === "Visa Allocation") return exportRowsToExcel(visaAllocations, "VisaFlow_Visa_Allocations", "Allocations");
@@ -27337,6 +27548,22 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
             )}
 
             <TableCard title="Requests List">
+              <SmartTableToolbar
+                searchValue={requestTableFilters.query}
+                onSearchChange={(value) => setRequestTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search request no, project no, project, profession, nationality, requester..."
+                resultCount={filteredRequestTableRows.length}
+                pageSize={requestTablePageSize}
+                onPageSizeChange={setRequestTablePageSize}
+                onClear={() => setRequestTableFilters({ query: "", status: "All", approval: "All", priority: "All", project: "All" })}
+                filters={[
+                  { label: "Status", value: requestTableFilters.status, options: ["All", ...getUniqueTableOptions(requests, "status")], onChange: (value) => setRequestTableFilters((current) => ({ ...current, status: value })) },
+                  { label: "Approval", value: requestTableFilters.approval, options: ["All", ...getUniqueTableOptions(requests, "approval_status")], onChange: (value) => setRequestTableFilters((current) => ({ ...current, approval: value })) },
+                  { label: "Priority", value: requestTableFilters.priority, options: ["All", ...getUniqueTableOptions(requests, "priority")], onChange: (value) => setRequestTableFilters((current) => ({ ...current, priority: value })) },
+                  { label: "Project", value: requestTableFilters.project, options: ["All", ...getUniqueTableOptions(requests, (item) => item.project_name || item.project)], onChange: (value) => setRequestTableFilters((current) => ({ ...current, project: value })) },
+                ]}
+              />
+              <div className="table-wrap">
               <table>
          <thead>
 <tr>
@@ -27363,18 +27590,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 </tr>
 </thead>
                 <tbody>
-                  {requests
-  .filter((item) =>
-    !search ||
-    String(item.request_no || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.profession || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.nationality || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.project_name || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.project_no || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.project_city || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.project_location || "").toLowerCase().includes(search.toLowerCase()) ||
-    String(item.request_date || "").toLowerCase().includes(search.toLowerCase())
-  )
+                  {pagedRequestTableRows
   .map((item) => (
                     <tr key={item.id}>
                       <td>
@@ -27492,6 +27708,13 @@ item.created_at
                   ))}
                 </tbody>
               </table>
+              </div>
+              {pagedRequestTableRows.length === 0 && <div style={{ padding: "24px", textAlign: "center", color: "#64748b" }}>No requests match the current search and filters.</div>}
+              <SmartTablePagination
+                page={requestTablePage}
+                totalPages={requestTableTotalPages}
+                onPageChange={setRequestTablePage}
+              />
             </TableCard>
           </>
         )}
@@ -28489,6 +28712,23 @@ Save Authorization
             </FormCard>
             )}
             <TableCard title="Candidates List">
+  <SmartTableToolbar
+    searchValue={candidateTableFilters.query}
+    onSearchChange={(value) => setCandidateTableFilters((current) => ({ ...current, query: value }))}
+    searchPlaceholder="Search name, civil ID, iqama, passport, mobile, email, request no, project no..."
+    resultCount={filteredCandidateTableRows.length}
+    pageSize={candidateTablePageSize}
+    onPageSizeChange={setCandidateTablePageSize}
+    onClear={() => setCandidateTableFilters({ query: "", status: "All", profession: "All", nationality: "All", project: "All", agency: "All" })}
+    filters={[
+      { label: "Status", value: candidateTableFilters.status, options: ["All", ...getUniqueTableOptions(candidates, "status")], onChange: (value) => setCandidateTableFilters((current) => ({ ...current, status: value })) },
+      { label: "Profession", value: candidateTableFilters.profession, options: ["All", ...getUniqueTableOptions(candidates, "profession")], onChange: (value) => setCandidateTableFilters((current) => ({ ...current, profession: value })) },
+      { label: "Nationality", value: candidateTableFilters.nationality, options: ["All", ...getUniqueTableOptions(candidates, "nationality")], onChange: (value) => setCandidateTableFilters((current) => ({ ...current, nationality: value })) },
+      { label: "Project", value: candidateTableFilters.project, options: ["All", ...getUniqueTableOptions(candidates, (item) => item.project || requests.find((request) => String(request.request_no || "") === String(item.request_no || ""))?.project_name)], onChange: (value) => setCandidateTableFilters((current) => ({ ...current, project: value })) },
+      { label: "Agency", value: candidateTableFilters.agency, options: ["All", ...getUniqueTableOptions(candidates, "agency")], onChange: (value) => setCandidateTableFilters((current) => ({ ...current, agency: value })) },
+    ]}
+  />
+  <div className="table-wrap">
   <table>
     <thead>
       <tr>
@@ -28521,7 +28761,7 @@ Save Authorization
     </thead>
 
     <tbody>
-      {filteredCandidates.map((item) => (
+      {pagedCandidateTableRows.map((item) => (
         <tr key={item.id}>
           <td>{item.request_no}</td>
           <td>{item.candidate_name}</td>
@@ -28592,6 +28832,13 @@ Save Authorization
       ))}
     </tbody>
   </table>
+  </div>
+  {pagedCandidateTableRows.length === 0 && <div style={{ padding: "24px", textAlign: "center", color: "#64748b" }}>No candidates match the current search and filters.</div>}
+  <SmartTablePagination
+    page={candidateTablePage}
+    totalPages={candidateTableTotalPages}
+    onPageChange={setCandidateTablePage}
+  />
 </TableCard>
           </>
         )}
@@ -33956,6 +34203,77 @@ function TableCard({ title, children, className = "" }) {
     <div className={`table-card ${className}`}>
       <h2>{title}</h2>
       {children}
+    </div>
+  );
+}
+
+function SmartTableToolbar({
+  searchValue = "",
+  onSearchChange,
+  searchPlaceholder = "Search this table...",
+  filters = [],
+  resultCount = 0,
+  pageSize = 25,
+  onPageSizeChange,
+  onClear,
+}) {
+  const hasActiveFilter = Boolean(String(searchValue || "").trim()) || filters.some((filter) => !["", "All"].includes(String(filter.value || "")));
+
+  return (
+    <div style={{ marginBottom: 14, display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 360px", position: "relative" }}>
+          <span style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }}>⌕</span>
+          <input
+            value={searchValue || ""}
+            onChange={(event) => onSearchChange?.(event.target.value)}
+            placeholder={searchPlaceholder}
+            style={{ width: "100%", paddingLeft: 38, minHeight: 42 }}
+          />
+        </div>
+
+        {filters.map((filter) => (
+          <label key={filter.label} style={{ display: "grid", gap: 4, minWidth: 150, fontSize: 11, fontWeight: 800, color: "#475569" }}>
+            <span>{filter.label}</span>
+            <select value={filter.value || "All"} onChange={(event) => filter.onChange?.(event.target.value)}>
+              {(filter.options || []).map((option) => (
+                <option key={String(option)} value={String(option)}>{String(option)}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+
+        <label style={{ display: "grid", gap: 4, minWidth: 105, fontSize: 11, fontWeight: 800, color: "#475569" }}>
+          <span>Rows</span>
+          <select value={pageSize} onChange={(event) => onPageSizeChange?.(Number(event.target.value))}>
+            {[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+          </select>
+        </label>
+
+        <button type="button" className="light-btn" disabled={!hasActiveFilter} onClick={() => onClear?.()}>
+          Clear Filters
+        </button>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+        <span>{Number(resultCount || 0).toLocaleString()} matching records</span>
+        {hasActiveFilter && <span>Filters are active</span>}
+      </div>
+    </div>
+  );
+}
+
+function SmartTablePagination({ page = 1, totalPages = 1, onPageChange }) {
+  const safeTotal = Math.max(1, Number(totalPages || 1));
+  const safePage = Math.min(Math.max(1, Number(page || 1)), safeTotal);
+
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+      <button type="button" className="light-btn" disabled={safePage <= 1} onClick={() => onPageChange?.(1)}>First</button>
+      <button type="button" className="light-btn" disabled={safePage <= 1} onClick={() => onPageChange?.(safePage - 1)}>Previous</button>
+      <strong style={{ minWidth: 120, textAlign: "center" }}>Page {safePage} of {safeTotal}</strong>
+      <button type="button" className="light-btn" disabled={safePage >= safeTotal} onClick={() => onPageChange?.(safePage + 1)}>Next</button>
+      <button type="button" className="light-btn" disabled={safePage >= safeTotal} onClick={() => onPageChange?.(safeTotal)}>Last</button>
     </div>
   );
 }
