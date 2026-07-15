@@ -23841,40 +23841,96 @@ function getReportStudioVisualModel() {
       if (error) throw error;
 
       const result = Array.isArray(data) ? data[0] : data;
-      const campaignTemplate = aiInterviewTemplates.find(
-        (item) => String(item.id || "") === String(campaign.template_id || "")
+
+      // Campaign delivery settings must be copied to every linked session.
+      // Do not rely only on ai_interview_sessions.campaign_id because the launch RPC may
+      // reuse an existing active session for a candidate. In that case, the reused session
+      // can keep its old campaign_id and would otherwise remain Recorded instead of Live.
+      let campaignSettings = {};
+      if (campaign.settings && typeof campaign.settings === "object") {
+        campaignSettings = campaign.settings;
+      } else if (typeof campaign.settings === "string") {
+        try {
+          campaignSettings = JSON.parse(campaign.settings) || {};
+        } catch {
+          campaignSettings = {};
+        }
+      }
+
+      const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(campaignSettings.interaction_mode)
+        ? campaignSettings.interaction_mode
+        : "Recorded";
+      const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(campaignSettings.interview_mode)
+        ? campaignSettings.interview_mode
+        : "Voice";
+      const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(campaignSettings.camera_mode)
+        ? campaignSettings.camera_mode
+        : "Off";
+      const maxDynamicFollowUps = Math.max(0, Math.min(3, Number(campaignSettings.max_dynamic_follow_ups || 0)));
+      const liveResponseTimeoutSeconds = Math.max(15, Math.min(180, Number(campaignSettings.live_response_timeout_seconds || 60)));
+
+      const { data: linkedCandidateRows, error: linkedCandidateError } = await supabase
+        .from("ai_interview_campaign_candidates")
+        .select("session_id")
+        .eq("campaign_id", campaign.id)
+        .eq("company_id", currentCompanyId)
+        .not("session_id", "is", null);
+
+      if (linkedCandidateError) {
+        throw new Error(`Campaign launched, but linked sessions could not be resolved: ${linkedCandidateError.message}`);
+      }
+
+      const linkedSessionIds = Array.from(new Set(
+        (linkedCandidateRows || []).map((row) => String(row.session_id || "")).filter(Boolean)
+      ));
+
+      const sessionDeliveryPayload = {
+        interaction_mode: interactionMode,
+        interview_mode: interviewMode,
+        camera_mode: cameraMode,
+        max_dynamic_follow_ups: maxDynamicFollowUps,
+        live_response_timeout_seconds: liveResponseTimeoutSeconds,
+        updated_at: new Date().toISOString(),
+      };
+
+      let modeSyncQuery = supabase
+        .from("ai_interview_sessions")
+        .update(sessionDeliveryPayload)
+        .eq("company_id", currentCompanyId);
+
+      modeSyncQuery = linkedSessionIds.length > 0
+        ? modeSyncQuery.in("id", linkedSessionIds)
+        : modeSyncQuery.eq("campaign_id", campaign.id);
+
+      const { error: modeSyncError } = await modeSyncQuery;
+      if (modeSyncError) {
+        throw new Error(`Campaign launched, but interview delivery settings were not applied: ${modeSyncError.message}`);
+      }
+
+      let verificationQuery = supabase
+        .from("ai_interview_sessions")
+        .select("id, campaign_id, interaction_mode, interview_mode, camera_mode, max_dynamic_follow_ups, live_response_timeout_seconds")
+        .eq("company_id", currentCompanyId);
+
+      verificationQuery = linkedSessionIds.length > 0
+        ? verificationQuery.in("id", linkedSessionIds)
+        : verificationQuery.eq("campaign_id", campaign.id);
+
+      const { data: verifiedSessions, error: verificationError } = await verificationQuery;
+      if (verificationError) {
+        throw new Error(`Campaign launched, but session delivery verification failed: ${verificationError.message}`);
+      }
+
+      const mismatchedSessions = (verifiedSessions || []).filter((sessionRow) =>
+        sessionRow.interaction_mode !== interactionMode ||
+        sessionRow.interview_mode !== interviewMode ||
+        sessionRow.camera_mode !== cameraMode
       );
 
-      if (campaignTemplate?.id) {
-        const campaignSettings = campaign.settings && typeof campaign.settings === "object"
-          ? campaign.settings
-          : {};
-        const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(campaignSettings.interaction_mode)
-          ? campaignSettings.interaction_mode
-          : "Recorded";
-        const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(campaignSettings.interview_mode)
-          ? campaignSettings.interview_mode
-          : "Voice";
-        const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(campaignSettings.camera_mode)
-          ? campaignSettings.camera_mode
-          : "Off";
-
-        const { error: modeSyncError } = await supabase
-          .from("ai_interview_sessions")
-          .update({
-            interaction_mode: interactionMode,
-            interview_mode: interviewMode,
-            camera_mode: cameraMode,
-            max_dynamic_follow_ups: Math.max(0, Math.min(3, Number(campaignSettings.max_dynamic_follow_ups || 0))),
-            live_response_timeout_seconds: Math.max(15, Math.min(180, Number(campaignSettings.live_response_timeout_seconds || 60))),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("campaign_id", campaign.id)
-          .eq("company_id", currentCompanyId);
-
-        if (modeSyncError) {
-          console.warn("Campaign session delivery-mode sync failed:", modeSyncError.message);
-        }
+      if (!(verifiedSessions || []).length || mismatchedSessions.length > 0) {
+        throw new Error(
+          `Campaign launched, but ${mismatchedSessions.length || "no"} session(s) failed delivery-mode verification.`
+        );
       }
 
       await Promise.all([
