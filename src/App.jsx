@@ -3416,6 +3416,11 @@ function TalentCandidatePortal({ onBack }) {
     completed_ai_interviews: 0,
   });
   const cvInputRef = useRef(null);
+  const loadedTalentUserRef = useRef(null);
+  const loadingTalentUserRef = useRef(null);
+  const profileDirtyRef = useRef(false);
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState("Idle");
 
   const isArabic = portalLanguage === "AR";
   const primaryCv = documents.find((item) => item.document_type === "CV" && item.is_primary) || null;
@@ -3510,8 +3515,10 @@ function TalentCandidatePortal({ onBack }) {
     return data;
   }
 
-  async function loadCandidateWorkspace(user) {
+  async function loadCandidateWorkspace(user, { force = false } = {}) {
     if (!user?.id) return;
+    if (!force && (loadedTalentUserRef.current === user.id || loadingTalentUserRef.current === user.id)) return;
+    loadingTalentUserRef.current = user.id;
     setWorkspaceBusy(true);
     setWorkspaceMessage("");
 
@@ -3543,12 +3550,29 @@ function TalentCandidatePortal({ onBack }) {
       setProfileForm(mapTalentProfileToForm(candidateRow));
       setDocuments(documentsResult.data || []);
       setConsents(nextConsents);
+      loadedTalentUserRef.current = user.id;
+      profileDirtyRef.current = false;
+      setWorkspaceHydrated(true);
+      setAutoSaveStatus("Saved");
     } catch (error) {
       console.error("Talent workspace load failed", error);
       setWorkspaceMessage(error?.message || "تعذر تحميل ملف المتقدم.");
     } finally {
+      loadingTalentUserRef.current = null;
       setWorkspaceBusy(false);
     }
+  }
+
+  function updateProfileField(field, value) {
+    profileDirtyRef.current = true;
+    setAutoSaveStatus("Unsaved");
+    setProfileForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function updateTalentConsent(key, value) {
+    profileDirtyRef.current = true;
+    setAutoSaveStatus("Unsaved");
+    setConsents((prev) => ({ ...prev, [key]: value }));
   }
 
   useEffect(() => {
@@ -3598,11 +3622,13 @@ function TalentCandidatePortal({ onBack }) {
       setAuthChecked(true);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
       if (nextSession?.user?.user_metadata?.account_type === "candidate") {
         setSession(nextSession);
-        loadCandidateWorkspace(nextSession.user);
+        if (["INITIAL_SESSION", "SIGNED_IN", "USER_UPDATED"].includes(event) && loadedTalentUserRef.current !== nextSession.user.id) {
+          loadCandidateWorkspace(nextSession.user);
+        }
       } else {
         setSession(null);
         setProfile(null);
@@ -3704,6 +3730,11 @@ function TalentCandidatePortal({ onBack }) {
     setDocuments([]);
     setConsents({ ...EMPTY_TALENT_CONSENTS });
     setProfileForm({ ...EMPTY_TALENT_PROFILE_FORM });
+    loadedTalentUserRef.current = null;
+    loadingTalentUserRef.current = null;
+    profileDirtyRef.current = false;
+    setWorkspaceHydrated(false);
+    setAutoSaveStatus("Idle");
     setWorkspaceTab("Profile");
     setAuthMode("signin");
   }
@@ -3774,12 +3805,15 @@ function TalentCandidatePortal({ onBack }) {
     if (!profile?.id) return false;
     const payload = buildProfilePayload();
     if (!payload.full_name || !payload.phone) {
-      setWorkspaceMessage(isArabic ? "الاسم ورقم الجوال مطلوبان." : "Name and phone are required.");
+      if (!quiet) setWorkspaceMessage(isArabic ? "الاسم ورقم الجوال مطلوبان." : "Name and phone are required.");
       return false;
     }
 
-    setWorkspaceBusy(true);
-    if (!quiet) setWorkspaceMessage("");
+    if (quiet) setAutoSaveStatus("Saving");
+    else {
+      setWorkspaceBusy(true);
+      setWorkspaceMessage("");
+    }
     try {
       const { error } = await supabase
         .from("talent_candidates")
@@ -3787,17 +3821,30 @@ function TalentCandidatePortal({ onBack }) {
         .eq("id", profile.id);
       if (error) throw error;
       await saveTalentConsents(profile.id);
-      await logTalentEvent("PROFILE_SAVED", { completeness: estimatedCompleteness });
-      await loadCandidateWorkspace(session.user);
-      if (!quiet) setWorkspaceMessage(isArabic ? "تم حفظ الملف المهني." : "Professional profile saved.");
+      setProfile((prev) => ({ ...prev, ...payload }));
+      profileDirtyRef.current = false;
+      setAutoSaveStatus("Saved");
+      if (!quiet) {
+        await logTalentEvent("PROFILE_SAVED", { completeness: estimatedCompleteness });
+        setWorkspaceMessage(isArabic ? "تم حفظ الملف المهني." : "Professional profile saved.");
+      }
       return true;
     } catch (error) {
-      setWorkspaceMessage(error?.message || (isArabic ? "تعذر حفظ الملف." : "Unable to save the profile."));
+      setAutoSaveStatus("Error");
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر حفظ التغييرات." : "Unable to save changes."));
       return false;
     } finally {
-      setWorkspaceBusy(false);
+      if (!quiet) setWorkspaceBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!workspaceHydrated || !profile?.id || !profileDirtyRef.current) return undefined;
+    const timer = window.setTimeout(() => {
+      handleSaveTalentProfile({ quiet: true });
+    }, 1400);
+    return () => window.clearTimeout(timer);
+  }, [profileForm, consents, workspaceHydrated, profile?.id]);
 
   async function handleTalentCvUpload(file) {
     if (!file || !profile?.id || !session?.user?.id) return;
@@ -3854,7 +3901,7 @@ function TalentCandidatePortal({ onBack }) {
       if (profileError) throw profileError;
 
       await logTalentEvent("CV_UPLOADED", { file_name: file.name, size_bytes: file.size });
-      await loadCandidateWorkspace(session.user);
+      await loadCandidateWorkspace(session.user, { force: true });
       setWorkspaceMessage(isArabic ? "تم رفع السيرة الذاتية بنجاح." : "CV uploaded successfully.");
       setWorkspaceTab("Consent");
     } catch (error) {
@@ -3910,7 +3957,7 @@ function TalentCandidatePortal({ onBack }) {
         employer_sharing: Boolean(consents["Employer Sharing"]),
         estimated_completeness: estimatedCompleteness,
       });
-      await loadCandidateWorkspace(session.user);
+      await loadCandidateWorkspace(session.user, { force: true });
       await loadTalentStats();
       setWorkspaceTab("Review");
       setWorkspaceMessage(isArabic
@@ -4092,32 +4139,37 @@ function TalentCandidatePortal({ onBack }) {
             {workspaceMessage && <div style={{ padding: "12px 14px", borderRadius: "12px", marginBottom: "16px", background: workspaceMessage.includes("تم") || workspaceMessage.includes("saved") || workspaceMessage.includes("submitted") ? "#ecfdf5" : "#fff7ed", color: workspaceMessage.includes("تم") || workspaceMessage.includes("saved") || workspaceMessage.includes("submitted") ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{workspaceMessage}</div>}
 
             {workspaceBusy && <div style={{ marginBottom: "14px", color: palette.blue, fontWeight: 900 }}>{isArabic ? "جاري الحفظ..." : "Saving..."}</div>}
+            {!workspaceBusy && workspaceHydrated && (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "10px", minHeight: "20px", color: autoSaveStatus === "Error" ? palette.danger : autoSaveStatus === "Saved" ? palette.success : palette.muted, fontSize: "12px", fontWeight: 900 }}>
+                {autoSaveStatus === "Saving" ? (isArabic ? "جاري الحفظ التلقائي..." : "Auto-saving...") : autoSaveStatus === "Saved" ? (isArabic ? "تم الحفظ ✓" : "Saved ✓") : autoSaveStatus === "Unsaved" ? (isArabic ? "تغييرات غير محفوظة..." : "Unsaved changes...") : autoSaveStatus === "Error" ? (isArabic ? "تعذر الحفظ" : "Unable to save") : ""}
+              </div>
+            )}
 
             {workspaceTab === "Profile" && (
               <>
                 <h2 style={{ marginTop: 0 }}>{isArabic ? "الملف المهني" : "Professional Profile"}</h2>
                 <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "اكتب معلومات حقيقية ومختصرة؛ سيستخدمها النظام في مطابقة الفرص." : "Use accurate, concise information; it will support employer matching."}</p>
                 <div className="vf-talent-form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "14px" }}>
-                  <TalentField label={isArabic ? "الاسم الكامل *" : "Full Name *"} value={profileForm.full_name} onChange={(value) => setProfileForm((prev) => ({ ...prev, full_name: value }))} />
-                  <TalentField label={isArabic ? "رقم الجوال *" : "Mobile Number *"} value={profileForm.phone} onChange={(value) => setProfileForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
-                  <TalentField label={isArabic ? "الجنسية" : "Nationality"} value={profileForm.nationality} onChange={(value) => setProfileForm((prev) => ({ ...prev, nationality: value }))} />
-                  <TalentField label={isArabic ? "دولة الإقامة" : "Country of Residence"} value={profileForm.country_of_residence} onChange={(value) => setProfileForm((prev) => ({ ...prev, country_of_residence: value }))} />
-                  <TalentField label={isArabic ? "المدينة" : "City"} value={profileForm.city} onChange={(value) => setProfileForm((prev) => ({ ...prev, city: value }))} />
-                  <TalentField label={isArabic ? "المهنة المستهدفة *" : "Target Profession *"} value={profileForm.profession} onChange={(value) => setProfileForm((prev) => ({ ...prev, profession: value }))} />
-                  <TalentField label={isArabic ? "المسمى الحالي" : "Current Job Title"} value={profileForm.current_job_title} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_job_title: value }))} />
-                  <TalentField label={isArabic ? "جهة العمل الحالية" : "Current Employer"} value={profileForm.current_company} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_company: value }))} />
-                  <TalentField label={isArabic ? "سنوات الخبرة" : "Years of Experience"} type="number" min="0" max="80" value={profileForm.years_experience} onChange={(value) => setProfileForm((prev) => ({ ...prev, years_experience: value }))} />
-                  <TalentField label={isArabic ? "مدة الإشعار بالأيام" : "Notice Period (days)"} type="number" min="0" max="730" value={profileForm.notice_period_days} onChange={(value) => setProfileForm((prev) => ({ ...prev, notice_period_days: value }))} />
-                  <TalentField label={isArabic ? "الراتب المتوقع" : "Expected Salary"} type="number" min="0" value={profileForm.expected_salary} onChange={(value) => setProfileForm((prev) => ({ ...prev, expected_salary: value }))} />
-                  <label style={{ display: "grid", gap: "7px", fontWeight: 800 }}><span style={{ fontSize: "13px" }}>{isArabic ? "العملة" : "Currency"}</span><select value={profileForm.expected_salary_currency} onChange={(event) => setProfileForm((prev) => ({ ...prev, expected_salary_currency: event.target.value }))} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", background: "#fff", font: "inherit" }}><option value="SAR">SAR</option><option value="USD">USD</option><option value="AED">AED</option><option value="EGP">EGP</option><option value="INR">INR</option><option value="PKR">PKR</option><option value="PHP">PHP</option></select></label>
-                  <TalentField label={isArabic ? "اللغات — افصل بفاصلة" : "Languages — comma separated"} value={profileForm.languages_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, languages_text: value }))} />
-                  <TalentField label={isArabic ? "المواقع المفضلة — افصل بفاصلة" : "Preferred Locations — comma separated"} value={profileForm.preferred_locations_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_locations_text: value }))} />
-                  <TalentField label={isArabic ? "أنواع العمل المفضلة" : "Preferred Employment Types"} value={profileForm.preferred_employment_types_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_employment_types_text: value }))} placeholder={isArabic ? "دوام كامل، عقد، مؤقت" : "Full-time, Contract, Temporary"} />
-                  <TalentField label="LinkedIn" value={profileForm.linkedin_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, linkedin_url: value }))} dir="ltr" />
-                  <TalentField label={isArabic ? "رابط الأعمال أو Portfolio" : "Portfolio URL"} value={profileForm.portfolio_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, portfolio_url: value }))} dir="ltr" />
+                  <TalentField label={isArabic ? "الاسم الكامل *" : "Full Name *"} value={profileForm.full_name} onChange={(value) => updateProfileField("full_name", value)} />
+                  <TalentField label={isArabic ? "رقم الجوال *" : "Mobile Number *"} value={profileForm.phone} onChange={(value) => updateProfileField("phone", value)} dir="ltr" />
+                  <TalentField label={isArabic ? "الجنسية" : "Nationality"} value={profileForm.nationality} onChange={(value) => updateProfileField("nationality", value)} />
+                  <TalentField label={isArabic ? "دولة الإقامة" : "Country of Residence"} value={profileForm.country_of_residence} onChange={(value) => updateProfileField("country_of_residence", value)} />
+                  <TalentField label={isArabic ? "المدينة" : "City"} value={profileForm.city} onChange={(value) => updateProfileField("city", value)} />
+                  <TalentField label={isArabic ? "المهنة المستهدفة *" : "Target Profession *"} value={profileForm.profession} onChange={(value) => updateProfileField("profession", value)} />
+                  <TalentField label={isArabic ? "المسمى الحالي" : "Current Job Title"} value={profileForm.current_job_title} onChange={(value) => updateProfileField("current_job_title", value)} />
+                  <TalentField label={isArabic ? "جهة العمل الحالية" : "Current Employer"} value={profileForm.current_company} onChange={(value) => updateProfileField("current_company", value)} />
+                  <TalentField label={isArabic ? "سنوات الخبرة" : "Years of Experience"} type="number" min="0" max="80" value={profileForm.years_experience} onChange={(value) => updateProfileField("years_experience", value)} />
+                  <TalentField label={isArabic ? "مدة الإشعار بالأيام" : "Notice Period (days)"} type="number" min="0" max="730" value={profileForm.notice_period_days} onChange={(value) => updateProfileField("notice_period_days", value)} />
+                  <TalentField label={isArabic ? "الراتب المتوقع" : "Expected Salary"} type="number" min="0" value={profileForm.expected_salary} onChange={(value) => updateProfileField("expected_salary", value)} />
+                  <label style={{ display: "grid", gap: "7px", fontWeight: 800 }}><span style={{ fontSize: "13px" }}>{isArabic ? "العملة" : "Currency"}</span><select value={profileForm.expected_salary_currency} onChange={(event) => updateProfileField("expected_salary_currency", event.target.value)} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", background: "#fff", font: "inherit" }}><option value="SAR">SAR</option><option value="USD">USD</option><option value="AED">AED</option><option value="EGP">EGP</option><option value="INR">INR</option><option value="PKR">PKR</option><option value="PHP">PHP</option></select></label>
+                  <TalentField label={isArabic ? "اللغات — افصل بفاصلة" : "Languages — comma separated"} value={profileForm.languages_text} onChange={(value) => updateProfileField("languages_text", value)} />
+                  <TalentField label={isArabic ? "المواقع المفضلة — افصل بفاصلة" : "Preferred Locations — comma separated"} value={profileForm.preferred_locations_text} onChange={(value) => updateProfileField("preferred_locations_text", value)} />
+                  <TalentField label={isArabic ? "أنواع العمل المفضلة" : "Preferred Employment Types"} value={profileForm.preferred_employment_types_text} onChange={(value) => updateProfileField("preferred_employment_types_text", value)} placeholder={isArabic ? "دوام كامل، عقد، مؤقت" : "Full-time, Contract, Temporary"} />
+                  <TalentField label="LinkedIn" value={profileForm.linkedin_url} onChange={(value) => updateProfileField("linkedin_url", value)} dir="ltr" />
+                  <TalentField label={isArabic ? "رابط الأعمال أو Portfolio" : "Portfolio URL"} value={profileForm.portfolio_url} onChange={(value) => updateProfileField("portfolio_url", value)} dir="ltr" />
                 </div>
-                <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "العنوان المهني" : "Professional Headline"}</span><input value={profileForm.headline} onChange={(event) => setProfileForm((prev) => ({ ...prev, headline: event.target.value }))} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", font: "inherit" }} /></label>
-                <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "ملخص مهني" : "Professional Summary"}</span><textarea rows="6" value={profileForm.professional_summary} onChange={(event) => setProfileForm((prev) => ({ ...prev, professional_summary: event.target.value }))} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "12px", font: "inherit", resize: "vertical" }} /></label>
+                <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "العنوان المهني" : "Professional Headline"}</span><input value={profileForm.headline} onChange={(event) => updateProfileField("headline", event.target.value)} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", font: "inherit" }} /></label>
+                <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "ملخص مهني" : "Professional Summary"}</span><textarea rows="6" value={profileForm.professional_summary} onChange={(event) => updateProfileField("professional_summary", event.target.value)} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "12px", font: "inherit", resize: "vertical" }} /></label>
                 <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "18px" }}><button type="button" disabled={workspaceBusy} onClick={() => handleSaveTalentProfile()} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "حفظ ومتابعة" : "Save & Continue"}</button><button type="button" onClick={() => setWorkspaceTab("CV")} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", background: "#fff", color: palette.text, padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "التالي: السيرة" : "Next: CV"}</button></div>
               </>
             )}
@@ -4130,9 +4182,24 @@ function TalentCandidatePortal({ onBack }) {
                 <div style={{ border: `2px dashed ${palette.border}`, borderRadius: "18px", padding: "34px", textAlign: "center", background: palette.pale }}>
                   <div style={{ fontSize: "46px" }}>📄</div>
                   <h3>{primaryCv ? primaryCv.file_name : (isArabic ? "لم ترفع سيرة ذاتية بعد" : "No CV uploaded yet")}</h3>
-                  {primaryCv && <p style={{ color: palette.muted }}>{isArabic ? `حالة المعالجة: ${primaryCv.parse_status}` : `Processing status: ${primaryCv.parse_status}`}</p>}
+                  {primaryCv && (
+                    <div style={{ display: "grid", gap: "8px", maxWidth: "520px", margin: "0 auto 18px", textAlign: isArabic ? "right" : "left" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", padding: "10px 12px", background: "#fff", borderRadius: "10px" }}><span>{isArabic ? "الحجم" : "Size"}</span><strong>{primaryCv.size_bytes ? `${(Number(primaryCv.size_bytes) / 1024).toFixed(0)} KB` : "—"}</strong></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", padding: "10px 12px", background: "#fff", borderRadius: "10px" }}><span>{isArabic ? "تاريخ الرفع" : "Uploaded"}</span><strong>{primaryCv.uploaded_at ? new Date(primaryCv.uploaded_at).toLocaleString(isArabic ? "ar-SA" : "en-US") : "—"}</strong></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", padding: "10px 12px", background: "#fff", borderRadius: "10px" }}><span>{isArabic ? "حالة المعالجة" : "Processing"}</span><strong>{primaryCv.parse_status || "Pending"}</strong></div>
+                    </div>
+                  )}
                   <button type="button" disabled={workspaceBusy} onClick={() => cvInputRef.current?.click()} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{primaryCv ? (isArabic ? "استبدال السيرة" : "Replace CV") : (isArabic ? "اختيار السيرة" : "Choose CV")}</button>
                 </div>
+                {primaryCv && (
+                  <div style={{ marginTop: "16px", border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px", background: "#fff" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "14px", alignItems: "center", flexWrap: "wrap" }}>
+                      <div><div style={{ color: palette.cyan, fontSize: "12px", fontWeight: 900, textTransform: "uppercase" }}>{isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI Resume Analysis"}</div><h3 style={{ margin: "5px 0 0" }}>{profile?.ai_cv_status || (isArabic ? "في الانتظار" : "Pending")}</h3></div>
+                      <span style={{ padding: "8px 12px", borderRadius: "999px", background: "#fff7ed", color: "#9a3412", fontWeight: 900 }}>{isArabic ? "سيبدأ التحليل بعد الإرسال" : "Starts after submission"}</span>
+                    </div>
+                    <p style={{ color: palette.muted, lineHeight: 1.7, marginBottom: 0 }}>{isArabic ? "بعد إرسال الملف سيستخرج النظام المهارات والخبرة والمؤهلات ويجهز ملخصًا مهنيًا للمراجعة." : "After submission, the system will extract skills, experience, education, and prepare a professional summary for review."}</p>
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}><button type="button" onClick={() => setWorkspaceTab("Consent")} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "التالي: الموافقات" : "Next: Consents"}</button></div>
               </>
             )}
@@ -4155,7 +4222,7 @@ function TalentCandidatePortal({ onBack }) {
                     };
                     return (
                       <label key={key} style={{ display: "flex", alignItems: "flex-start", gap: "12px", padding: "14px", border: `1px solid ${palette.border}`, borderRadius: "13px", cursor: "pointer" }}>
-                        <input type="checkbox" checked={Boolean(consents[key])} onChange={(event) => setConsents((prev) => ({ ...prev, [key]: event.target.checked }))} style={{ marginTop: "3px", width: "18px", height: "18px" }} />
+                        <input type="checkbox" checked={Boolean(consents[key])} onChange={(event) => updateTalentConsent(key, event.target.checked)} style={{ marginTop: "3px", width: "18px", height: "18px" }} />
                         <span style={{ flex: 1, lineHeight: 1.6, fontWeight: 800 }}>{labels[key]} {required && <strong style={{ color: palette.danger }}>*</strong>}</span>
                       </label>
                     );
@@ -4171,12 +4238,25 @@ function TalentCandidatePortal({ onBack }) {
                 <div className="vf-talent-review-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px", marginBottom: "18px" }}>
                   {[
                     [isArabic ? "الاسم" : "Name", profileForm.full_name || "—"],
-                    [isArabic ? "المهنة" : "Profession", profileForm.profession || "—"],
+                    [isArabic ? "رقم الجوال" : "Mobile", profileForm.phone || "—"],
+                    [isArabic ? "الجنسية" : "Nationality", profileForm.nationality || "—"],
+                    [isArabic ? "المدينة" : "City", profileForm.city || "—"],
+                    [isArabic ? "المهنة المستهدفة" : "Target Profession", profileForm.profession || "—"],
+                    [isArabic ? "المسمى الحالي" : "Current Job Title", profileForm.current_job_title || "—"],
+                    [isArabic ? "جهة العمل" : "Current Employer", profileForm.current_company || "—"],
                     [isArabic ? "الخبرة" : "Experience", profileForm.years_experience === "" ? "—" : `${profileForm.years_experience} ${isArabic ? "سنة" : "years"}`],
+                    [isArabic ? "الراتب المتوقع" : "Expected Salary", profileForm.expected_salary === "" ? "—" : `${profileForm.expected_salary} ${profileForm.expected_salary_currency || "SAR"}`],
                     [isArabic ? "السيرة" : "CV", primaryCv?.file_name || "—"],
+                    [isArabic ? "اكتمال الملف" : "Profile Completion", `${estimatedCompleteness}%`],
                     [isArabic ? "المشاركة مع الشركات" : "Employer Sharing", consents["Employer Sharing"] ? (isArabic ? "موافق — مجهول الهوية" : "Allowed — anonymized") : (isArabic ? "غير موافق" : "Not allowed")],
                     [isArabic ? "حالة الملف" : "Status", statusLabel],
                   ].map(([label, value]) => <div key={label} style={{ border: `1px solid ${palette.border}`, borderRadius: "13px", padding: "14px" }}><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{label}</span><strong style={{ display: "block", marginTop: "7px" }}>{value}</strong></div>)}
+                </div>
+                <div style={{ border: `1px solid ${palette.border}`, borderRadius: "14px", padding: "16px", marginBottom: "14px" }}>
+                  <h3 style={{ margin: "0 0 12px" }}>{isArabic ? "ملخص الموافقات" : "Consent Summary"}</h3>
+                  <div style={{ display: "grid", gap: "8px" }}>
+                    {[["Platform Terms", isArabic ? "شروط المنصة" : "Platform Terms"], ["Privacy Policy", isArabic ? "الخصوصية ومعالجة البيانات" : "Privacy & Data Processing"], ["AI CV Analysis", isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI CV Analysis"], ["Employer Sharing", isArabic ? "مشاركة الملف مع الشركات" : "Employer Sharing"], ["AI Interview", isArabic ? "دعوات مقابلات AI" : "AI Interview Invitations"]].map(([key, label]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}><span>{label}</span><strong style={{ color: consents[key] ? palette.success : palette.muted }}>{consents[key] ? (isArabic ? "موافق ✓" : "Accepted ✓") : (isArabic ? "غير موافق" : "Not accepted")}</strong></div>)}
+                  </div>
                 </div>
                 <div style={{ padding: "16px", borderRadius: "14px", background: consents["Employer Sharing"] ? "#ecfdf5" : "#fff7ed", color: consents["Employer Sharing"] ? palette.success : "#9a3412", lineHeight: 1.7, fontWeight: 800 }}>
                   {consents["Employer Sharing"]
