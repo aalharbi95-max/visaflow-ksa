@@ -3548,6 +3548,55 @@ const [aiSessionTableFilters, setAISessionTableFilters] = useState({
 });
 const [aiSessionTablePage, setAISessionTablePage] = useState(1);
 const [aiSessionTablePageSize, setAISessionTablePageSize] = useState(25);
+
+// Unified smart-table filters — phase 3 (Visa Inventory, Allocation, Authorization, Cancellation).
+const [visaBatchTableFilters, setVisaBatchTableFilters] = useState({
+  query: "",
+  status: "All",
+  project: "All",
+});
+const [visaBatchTablePage, setVisaBatchTablePage] = useState(1);
+const [visaBatchTablePageSize, setVisaBatchTablePageSize] = useState(25);
+
+const [visaLineTableFilters, setVisaLineTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  nationality: "All",
+  gender: "All",
+});
+const [visaLineTablePage, setVisaLineTablePage] = useState(1);
+const [visaLineTablePageSize, setVisaLineTablePageSize] = useState(25);
+
+const [visaAllocationTableFilters, setVisaAllocationTableFilters] = useState({
+  query: "",
+  request: "All",
+  project: "All",
+  profession: "All",
+  nationality: "All",
+  gender: "All",
+});
+const [visaAllocationTablePage, setVisaAllocationTablePage] = useState(1);
+const [visaAllocationTablePageSize, setVisaAllocationTablePageSize] = useState(25);
+
+const [authorizationTableFilters, setAuthorizationTableFilters] = useState({
+  query: "",
+  status: "All",
+  agency: "All",
+  profession: "All",
+  nationality: "All",
+});
+const [authorizationTablePage, setAuthorizationTablePage] = useState(1);
+const [authorizationTablePageSize, setAuthorizationTablePageSize] = useState(25);
+
+const [cancellationTableFilters, setCancellationTableFilters] = useState({
+  query: "",
+  agency: "All",
+  profession: "All",
+  nationality: "All",
+});
+const [cancellationTablePage, setCancellationTablePage] = useState(1);
+const [cancellationTablePageSize, setCancellationTablePageSize] = useState(25);
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewInvitationSendingId, setAIInterviewInvitationSendingId] = useState("");
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
@@ -7033,21 +7082,227 @@ const getVisaAvailableQty = (visaNo) => {
 
   return totalQty - allocated;
 };
-  const filteredVisaRecords = useMemo(() => {
-    const keyword = search.toLowerCase();
+  const filteredVisaBatchTableRows = useMemo(() => {
+    const query = normalize(visaBatchTableFilters.query);
+
     return visaRecords.filter((item) => {
       const lines = getVisaLinesForBatch(item);
       const lineText = lines
-        .map((line) => [line.profession, line.nationality, line.gender, line.quantity].join(" "))
+        .map((line) => [line.profession, line.nationality, line.gender, line.quantity, line.notes].join(" "))
         .join(" ");
-      const matchesSearch = [item.visa_no, item.moi_no, item.request_no, item.project, lineText]
-        .join(" ")
-        .toLowerCase()
-        .includes(keyword);
-      const matchesStatus = filterStatus === "All" || item.status === filterStatus;
-      return matchesSearch && matchesStatus;
+
+      const searchableText = normalize([
+        item.visa_no,
+        item.moi_no,
+        item.request_no,
+        item.project,
+        item.issue_date,
+        item.expiry_date,
+        item.status,
+        item.notes,
+        lineText,
+      ].join(" "));
+
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesStatus = visaBatchTableFilters.status === "All" || item.status === visaBatchTableFilters.status;
+      const matchesProject = visaBatchTableFilters.project === "All" || (item.project || "") === visaBatchTableFilters.project;
+      return matchesQuery && matchesStatus && matchesProject;
     });
-  }, [visaRecords, visaBatchLines, visaAllocations, search, filterStatus]);
+  }, [visaRecords, visaBatchLines, visaAllocations, visaBatchTableFilters]);
+
+  // Backward-compatible alias used by existing export and summary code.
+  const filteredVisaRecords = filteredVisaBatchTableRows;
+  const visaBatchTableTotalPages = Math.max(1, Math.ceil(filteredVisaBatchTableRows.length / visaBatchTablePageSize));
+  const pagedVisaBatchTableRows = getPagedRows(filteredVisaBatchTableRows, visaBatchTablePage, visaBatchTablePageSize);
+
+  const filteredVisaLineTableRows = useMemo(() => {
+    const query = normalize(visaLineTableFilters.query);
+
+    return visaInventoryLines.filter((line) => {
+      const relatedBatch = visaRecords.find((item) => String(item.id || "") === String(line.batch_id || line.visa_batch_id || ""));
+      const searchableText = normalize([
+        line.visa_no,
+        relatedBatch?.moi_no,
+        relatedBatch?.project,
+        line.profession,
+        line.nationality,
+        line.gender,
+        line.quantity,
+        getVisaLineAllocatedQty(line.legacy ? "" : line.id, line.visa_no),
+        getVisaLineRemainingQty(line),
+        line.status,
+        line.issue_date,
+        line.expiry_date,
+        line.notes,
+      ].join(" "));
+
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesStatus = visaLineTableFilters.status === "All" || line.status === visaLineTableFilters.status;
+      const matchesProfession = visaLineTableFilters.profession === "All" || (line.profession || "") === visaLineTableFilters.profession;
+      const matchesNationality = visaLineTableFilters.nationality === "All" || (line.nationality || "") === visaLineTableFilters.nationality;
+      const matchesGender = visaLineTableFilters.gender === "All" || (line.gender || "") === visaLineTableFilters.gender;
+      return matchesQuery && matchesStatus && matchesProfession && matchesNationality && matchesGender;
+    });
+  }, [visaInventoryLines, visaRecords, visaAllocations, visaLineTableFilters]);
+
+  const visaLineTableTotalPages = Math.max(1, Math.ceil(filteredVisaLineTableRows.length / visaLineTablePageSize));
+  const pagedVisaLineTableRows = getPagedRows(filteredVisaLineTableRows, visaLineTablePage, visaLineTablePageSize);
+
+  const enrichedVisaAllocationRows = useMemo(() => {
+    return visaAllocations.map((item) => {
+      const line = visaInventoryLines.find((vLine) => String(vLine.id || "") === String(item.visa_batch_line_id || ""));
+      const batch = visaRecords.find((visa) => String(visa.visa_no || "") === String(item.visa_no || ""));
+      const request = requests.find((row) => String(row.request_no || "") === String(item.request_no || ""));
+      return {
+        ...item,
+        profession: item.profession || line?.profession || batch?.profession || "",
+        nationality: item.nationality || line?.nationality || batch?.nationality || "",
+        gender: item.gender || line?.gender || batch?.gender || "",
+        moi_no: batch?.moi_no || "",
+        project_name: request?.project_name || request?.project || batch?.project || "",
+        project_no: request?.project_no || "",
+        request_status: request?.status || "",
+      };
+    });
+  }, [visaAllocations, visaInventoryLines, visaRecords, requests]);
+
+  const filteredVisaAllocationTableRows = useMemo(() => {
+    const query = normalize(visaAllocationTableFilters.query);
+
+    return enrichedVisaAllocationRows.filter((item) => {
+      const searchableText = normalize([
+        item.request_no,
+        item.project_no,
+        item.project_name,
+        item.visa_no,
+        item.moi_no,
+        item.profession,
+        item.nationality,
+        item.gender,
+        item.allocated_qty,
+        item.request_status,
+        item.created_at,
+        item.updated_at,
+      ].join(" "));
+
+      const matchesSelectedRequest = !allocationForm.request_no || String(item.request_no || "") === String(allocationForm.request_no || "");
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesRequest = visaAllocationTableFilters.request === "All" || item.request_no === visaAllocationTableFilters.request;
+      const matchesProject = visaAllocationTableFilters.project === "All" || item.project_name === visaAllocationTableFilters.project;
+      const matchesProfession = visaAllocationTableFilters.profession === "All" || item.profession === visaAllocationTableFilters.profession;
+      const matchesNationality = visaAllocationTableFilters.nationality === "All" || item.nationality === visaAllocationTableFilters.nationality;
+      const matchesGender = visaAllocationTableFilters.gender === "All" || item.gender === visaAllocationTableFilters.gender;
+      return matchesSelectedRequest && matchesQuery && matchesRequest && matchesProject && matchesProfession && matchesNationality && matchesGender;
+    });
+  }, [enrichedVisaAllocationRows, visaAllocationTableFilters, allocationForm.request_no]);
+
+  const visaAllocationTableTotalPages = Math.max(1, Math.ceil(filteredVisaAllocationTableRows.length / visaAllocationTablePageSize));
+  const pagedVisaAllocationTableRows = getPagedRows(filteredVisaAllocationTableRows, visaAllocationTablePage, visaAllocationTablePageSize);
+
+  const enrichedAuthorizationRows = useMemo(() => {
+    return visaAuthorizations.map((item) => {
+      const allocation = visaAllocations.find((row) => String(row.id || "") === String(item.visa_allocation_id || ""));
+      const line = visaInventoryLines.find((vLine) =>
+        String(vLine.id || "") === String(item.visa_batch_line_id || allocation?.visa_batch_line_id || "")
+      );
+      const batch = visaRecords.find((visa) => String(visa.visa_no || "") === String(item.visa_no || allocation?.visa_no || ""));
+      const request = requests.find((row) => String(row.request_no || "") === String(item.request_no || allocation?.request_no || ""));
+      return {
+        ...item,
+        request_no: item.request_no || allocation?.request_no || "",
+        visa_no: item.visa_no || allocation?.visa_no || "",
+        profession: item.profession || line?.profession || batch?.profession || "",
+        nationality: item.nationality || line?.nationality || batch?.nationality || "",
+        gender: item.gender || line?.gender || batch?.gender || "",
+        moi_no: batch?.moi_no || "",
+        project_name: request?.project_name || request?.project || batch?.project || "",
+        project_no: request?.project_no || "",
+      };
+    });
+  }, [visaAuthorizations, visaAllocations, visaInventoryLines, visaRecords, requests]);
+
+  const filteredAuthorizationTableRows = useMemo(() => {
+    const query = normalize(authorizationTableFilters.query);
+
+    return enrichedAuthorizationRows.filter((item) => {
+      const matchesSelectedVisa = !selectedVisa || (
+        item.visa_allocation_id
+          ? String(item.visa_allocation_id) === String(selectedVisa.id)
+          : (
+              String(item.visa_no || "") === String(selectedVisa.visa_no || "") &&
+              String(item.request_no || "") === String(selectedVisa.request_no || "") &&
+              (!item.profession || !selectedVisa.profession || normalize(item.profession) === normalize(selectedVisa.profession)) &&
+              (!item.nationality || !selectedVisa.nationality || normalize(item.nationality) === normalize(selectedVisa.nationality)) &&
+              (!item.gender || !selectedVisa.gender || normalize(item.gender) === normalize(selectedVisa.gender))
+            )
+      );
+
+      const searchableText = normalize([
+        item.visa_no,
+        item.moi_no,
+        item.request_no,
+        item.project_no,
+        item.project_name,
+        item.profession,
+        item.nationality,
+        item.gender,
+        item.agency,
+        item.office_country,
+        item.authorization_no,
+        item.allocated_qty,
+        item.received_candidates,
+        item.interview_passed,
+        item.mobilized,
+        item.status,
+        item.cancellation_no,
+        item.cancelled_at,
+      ].join(" "));
+
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesStatus = authorizationTableFilters.status === "All" || (item.status || "") === authorizationTableFilters.status;
+      const matchesAgency = authorizationTableFilters.agency === "All" || (item.agency || "") === authorizationTableFilters.agency;
+      const matchesProfession = authorizationTableFilters.profession === "All" || (item.profession || "") === authorizationTableFilters.profession;
+      const matchesNationality = authorizationTableFilters.nationality === "All" || (item.nationality || "") === authorizationTableFilters.nationality;
+      return matchesSelectedVisa && matchesQuery && matchesStatus && matchesAgency && matchesProfession && matchesNationality;
+    });
+  }, [enrichedAuthorizationRows, authorizationTableFilters, selectedVisa]);
+
+  const authorizationTableTotalPages = Math.max(1, Math.ceil(filteredAuthorizationTableRows.length / authorizationTablePageSize));
+  const pagedAuthorizationTableRows = getPagedRows(filteredAuthorizationTableRows, authorizationTablePage, authorizationTablePageSize);
+
+  const filteredCancellationTableRows = useMemo(() => {
+    const query = normalize(cancellationTableFilters.query);
+
+    return enrichedAuthorizationRows.filter((item) => {
+      if (item.status !== "Cancelled") return false;
+
+      const searchableText = normalize([
+        item.visa_no,
+        item.moi_no,
+        item.request_no,
+        item.project_no,
+        item.project_name,
+        item.profession,
+        item.nationality,
+        item.gender,
+        item.agency,
+        item.authorization_no,
+        item.cancellation_no,
+        item.cancelled_at,
+        item.allocated_qty,
+        item.status,
+      ].join(" "));
+
+      const matchesQuery = !query || searchableText.includes(query);
+      const matchesAgency = cancellationTableFilters.agency === "All" || (item.agency || "") === cancellationTableFilters.agency;
+      const matchesProfession = cancellationTableFilters.profession === "All" || (item.profession || "") === cancellationTableFilters.profession;
+      const matchesNationality = cancellationTableFilters.nationality === "All" || (item.nationality || "") === cancellationTableFilters.nationality;
+      return matchesQuery && matchesAgency && matchesProfession && matchesNationality;
+    });
+  }, [enrichedAuthorizationRows, cancellationTableFilters]);
+
+  const cancellationTableTotalPages = Math.max(1, Math.ceil(filteredCancellationTableRows.length / cancellationTablePageSize));
+  const pagedCancellationTableRows = getPagedRows(filteredCancellationTableRows, cancellationTablePage, cancellationTablePageSize);
 
   const filteredCandidates = useMemo(() => {
   const keyword = search.toLowerCase();
@@ -7309,6 +7564,26 @@ useEffect(() => {
 }, [aiSessionTableFilters, aiSessionTablePageSize]);
 
 useEffect(() => {
+  setVisaBatchTablePage(1);
+}, [visaBatchTableFilters, visaBatchTablePageSize]);
+
+useEffect(() => {
+  setVisaLineTablePage(1);
+}, [visaLineTableFilters, visaLineTablePageSize]);
+
+useEffect(() => {
+  setVisaAllocationTablePage(1);
+}, [visaAllocationTableFilters, visaAllocationTablePageSize, allocationForm.request_no]);
+
+useEffect(() => {
+  setAuthorizationTablePage(1);
+}, [authorizationTableFilters, authorizationTablePageSize, selectedVisa?.id]);
+
+useEffect(() => {
+  setCancellationTablePage(1);
+}, [cancellationTableFilters, cancellationTablePageSize]);
+
+useEffect(() => {
   if (requestTablePage > requestTableTotalPages) setRequestTablePage(requestTableTotalPages);
 }, [requestTablePage, requestTableTotalPages]);
 
@@ -7323,6 +7598,26 @@ useEffect(() => {
 useEffect(() => {
   if (aiSessionTablePage > aiSessionTableTotalPages) setAISessionTablePage(aiSessionTableTotalPages);
 }, [aiSessionTablePage, aiSessionTableTotalPages]);
+
+useEffect(() => {
+  if (visaBatchTablePage > visaBatchTableTotalPages) setVisaBatchTablePage(visaBatchTableTotalPages);
+}, [visaBatchTablePage, visaBatchTableTotalPages]);
+
+useEffect(() => {
+  if (visaLineTablePage > visaLineTableTotalPages) setVisaLineTablePage(visaLineTableTotalPages);
+}, [visaLineTablePage, visaLineTableTotalPages]);
+
+useEffect(() => {
+  if (visaAllocationTablePage > visaAllocationTableTotalPages) setVisaAllocationTablePage(visaAllocationTableTotalPages);
+}, [visaAllocationTablePage, visaAllocationTableTotalPages]);
+
+useEffect(() => {
+  if (authorizationTablePage > authorizationTableTotalPages) setAuthorizationTablePage(authorizationTableTotalPages);
+}, [authorizationTablePage, authorizationTableTotalPages]);
+
+useEffect(() => {
+  if (cancellationTablePage > cancellationTableTotalPages) setCancellationTablePage(cancellationTableTotalPages);
+}, [cancellationTablePage, cancellationTableTotalPages]);
 
 const saudiHiringRows = useMemo(() => {
   const rows = [];
@@ -25255,9 +25550,10 @@ function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
   if (activePage === "Requests") return exportRowsToExcel(filteredRequestTableRows, "VisaFlow_Requests", "Requests");
   if (activePage === "Candidates") return exportRowsToExcel(filteredCandidateTableRows, "VisaFlow_Candidates", "Candidates");
-  if (activePage === "Visa Inventory") return exportRowsToExcel(filteredVisaRecords, "VisaFlow_Visa_Inventory", "Visas");
-  if (activePage === "Authorization") return exportRowsToExcel(visaAuthorizations, "VisaFlow_Authorizations", "Authorizations");
-  if (activePage === "Visa Allocation") return exportRowsToExcel(visaAllocations, "VisaFlow_Visa_Allocations", "Allocations");
+  if (activePage === "Visa Inventory") return exportRowsToExcel(filteredVisaBatchTableRows, "VisaFlow_Visa_Inventory", "Visas");
+  if (activePage === "Authorization") return exportRowsToExcel(filteredAuthorizationTableRows, "VisaFlow_Authorizations", "Authorizations");
+  if (activePage === "Cancellation Register") return exportRowsToExcel(filteredCancellationTableRows, "VisaFlow_Cancellation_Register", "Cancellations");
+  if (activePage === "Visa Allocation") return exportRowsToExcel(filteredVisaAllocationTableRows, "VisaFlow_Visa_Allocations", "Allocations");
   if (activePage === "Agencies") return exportRowsToExcel(agencies, "VisaFlow_Agencies", "Agencies");
   if (activePage === "Agency Agreements") return exportRowsToExcel(agencyAgreements, "VisaFlow_Agency_Agreements", "Agreements");
   if (activePage === "Penalty Register") return exportRowsToExcel(getPenaltyRegisterDisplayRows(), "VisaFlow_Penalty_Register", "Penalties");
@@ -28289,6 +28585,22 @@ Save Authorization
 )}
 </div>
 
+<SmartTableToolbar
+  searchValue={authorizationTableFilters.query}
+  onSearchChange={(value) => setAuthorizationTableFilters((current) => ({ ...current, query: value }))}
+  searchPlaceholder="Search visa, MOI, request, project, profession, nationality, office, authorization or cancellation..."
+  filters={[
+    { label: "Status", value: authorizationTableFilters.status, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows, (item) => item.status || "Open")], onChange: (value) => setAuthorizationTableFilters((current) => ({ ...current, status: value })) },
+    { label: "Office", value: authorizationTableFilters.agency, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows, "agency")], onChange: (value) => setAuthorizationTableFilters((current) => ({ ...current, agency: value })) },
+    { label: "Profession", value: authorizationTableFilters.profession, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows, "profession")], onChange: (value) => setAuthorizationTableFilters((current) => ({ ...current, profession: value })) },
+    { label: "Nationality", value: authorizationTableFilters.nationality, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows, "nationality")], onChange: (value) => setAuthorizationTableFilters((current) => ({ ...current, nationality: value })) },
+  ]}
+  resultCount={filteredAuthorizationTableRows.length}
+  pageSize={authorizationTablePageSize}
+  onPageSizeChange={setAuthorizationTablePageSize}
+  onClear={() => setAuthorizationTableFilters({ query: "", status: "All", agency: "All", profession: "All", nationality: "All" })}
+/>
+
 <table>
 <thead>
 <tr>
@@ -28310,73 +28622,80 @@ Save Authorization
 </thead>
 <tbody>
 
-{console.log("Selected Visa:", selectedVisa)}
-{console.log("Authorizations:", visaAuthorizations)}
-
-{visaAuthorizations
-  .filter((a) => {
-    if (!selectedVisa) return true;
-
-    if (a.visa_allocation_id) {
-      return String(a.visa_allocation_id) === String(selectedVisa.id);
-    }
-
-    return (
-      String(a.visa_no) === String(selectedVisa?.visa_no) &&
-      String(a.request_no) === String(selectedVisa?.request_no) &&
-      (!a.profession || !selectedVisa?.profession || normalize(a.profession) === normalize(selectedVisa.profession)) &&
-      (!a.nationality || !selectedVisa?.nationality || normalize(a.nationality) === normalize(selectedVisa.nationality)) &&
-      (!a.gender || !selectedVisa?.gender || normalize(a.gender) === normalize(selectedVisa.gender))
-    );
-  })
-  .map((item) => (
-
-<tr key={item.id}>
-<td>{item.visa_no}</td>
-<td>{item.profession || selectedVisa?.profession || "-"}</td>
-<td>{item.nationality || selectedVisa?.nationality || "-"}</td>
-<td>{item.gender || selectedVisa?.gender || "-"}</td>
-<td>{item.agency}</td>
-<td>{item.authorization_no}</td>
-<td>{item.allocated_qty}</td>
-<td>{item.received_candidates}</td>
-<td>{item.interview_passed}</td>
-<td>{item.mobilized}</td>
-<td>{item.status}</td>
-<td>{item.cancellation_no || "-"}</td>
-<td>{item.cancelled_at || "-"}</td>
-
-<td>
-  {canManageVisas && item.status !== "Cancelled" ? (
-    <button
-      className="btn btn-sm"
-      onClick={() => {
-        if (window.confirm("Cancel this authorization?")) {
-          cancelAuthorization(item.id);
-        }
-      }}
-    >
-      Cancel
-    </button>
-  ) : (
-    "-"
-  )}
-</td>
-</tr>
-
+{filteredAuthorizationTableRows.length === 0 ? (
+  <tr>
+    <td colSpan="14" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+      No authorizations match the current search and filters.
+    </td>
+  </tr>
+) : pagedAuthorizationTableRows.map((item) => (
+  <tr key={item.id}>
+    <td>{item.visa_no || "-"}</td>
+    <td>{item.profession || selectedVisa?.profession || "-"}</td>
+    <td>{item.nationality || selectedVisa?.nationality || "-"}</td>
+    <td>{item.gender || selectedVisa?.gender || "-"}</td>
+    <td>{item.agency || "-"}</td>
+    <td>{item.authorization_no || "-"}</td>
+    <td>{item.allocated_qty || 0}</td>
+    <td>{item.received_candidates || 0}</td>
+    <td>{item.interview_passed || 0}</td>
+    <td>{item.mobilized || 0}</td>
+    <td><Badge value={item.status || "Open"} /></td>
+    <td>{item.cancellation_no || "-"}</td>
+    <td>{item.cancelled_at || "-"}</td>
+    <td>
+      {canManageVisas && item.status !== "Cancelled" ? (
+        <button
+          className="btn btn-sm"
+          onClick={() => {
+            if (window.confirm("Cancel this authorization?")) {
+              cancelAuthorization(item.id);
+            }
+          }}
+        >
+          Cancel
+        </button>
+      ) : (
+        "-"
+      )}
+    </td>
+  </tr>
 ))}
 
 </tbody>
 </table>
+<SmartTablePagination
+  page={authorizationTablePage}
+  totalPages={authorizationTableTotalPages}
+  onPageChange={setAuthorizationTablePage}
+/>
 
 </TableCard>
 )}
   {activePage === "Cancellation Register" && (
   <TableCard title="Cancellation Register">
+    <SmartTableToolbar
+      searchValue={cancellationTableFilters.query}
+      onSearchChange={(value) => setCancellationTableFilters((current) => ({ ...current, query: value }))}
+      searchPlaceholder="Search visa, MOI, request, project, profession, nationality, office, authorization or cancellation..."
+      filters={[
+        { label: "Office", value: cancellationTableFilters.agency, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows.filter((item) => item.status === "Cancelled"), "agency")], onChange: (value) => setCancellationTableFilters((current) => ({ ...current, agency: value })) },
+        { label: "Profession", value: cancellationTableFilters.profession, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows.filter((item) => item.status === "Cancelled"), "profession")], onChange: (value) => setCancellationTableFilters((current) => ({ ...current, profession: value })) },
+        { label: "Nationality", value: cancellationTableFilters.nationality, options: ["All", ...getUniqueTableOptions(enrichedAuthorizationRows.filter((item) => item.status === "Cancelled"), "nationality")], onChange: (value) => setCancellationTableFilters((current) => ({ ...current, nationality: value })) },
+      ]}
+      resultCount={filteredCancellationTableRows.length}
+      pageSize={cancellationTablePageSize}
+      onPageSizeChange={setCancellationTablePageSize}
+      onClear={() => setCancellationTableFilters({ query: "", agency: "All", profession: "All", nationality: "All" })}
+    />
     <table>
       <thead>
         <tr>
           <th>Visa No</th>
+          <th>Request No</th>
+          <th>Project</th>
+          <th>Profession</th>
+          <th>Nationality</th>
           <th>Office</th>
           <th>Authorization No</th>
           <th>Cancellation No</th>
@@ -28385,32 +28704,36 @@ Save Authorization
           <th>Status</th>
         </tr>
       </thead>
-
       <tbody>
-        {visaAuthorizations
-          .filter(item => item.status === "Cancelled")
-          .map(item => (
-            <tr key={item.id}>
-              <td>{item.visa_no}</td>
-              <td>{item.agency}</td>
-              <td>{item.authorization_no}</td>
-              <td>{item.cancellation_no || "-"}</td>
-              <td>{item.cancelled_at || "-"}</td>     
-          
-
-
-<td>{item.allocated_qty}</td>
-
-<td>{item.status}</td>
-
-</tr>
-))
-}
-</tbody>
-
-</table>
-
-</TableCard>
+        {filteredCancellationTableRows.length === 0 ? (
+          <tr>
+            <td colSpan="11" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+              No cancelled authorizations match the current search and filters.
+            </td>
+          </tr>
+        ) : pagedCancellationTableRows.map((item) => (
+          <tr key={item.id}>
+            <td>{item.visa_no || "-"}</td>
+            <td>{item.request_no || "-"}</td>
+            <td>{item.project_name || item.project_no || "-"}</td>
+            <td>{item.profession || "-"}</td>
+            <td>{item.nationality || "-"}</td>
+            <td>{item.agency || "-"}</td>
+            <td>{item.authorization_no || "-"}</td>
+            <td>{item.cancellation_no || "-"}</td>
+            <td>{item.cancelled_at || "-"}</td>
+            <td>{item.allocated_qty || 0}</td>
+            <td><Badge value={item.status || "Cancelled"} /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+    <SmartTablePagination
+      page={cancellationTablePage}
+      totalPages={cancellationTableTotalPages}
+      onPageChange={setCancellationTablePage}
+    />
+  </TableCard>
 )}
 
 
@@ -28574,18 +28897,29 @@ Save Authorization
       )}
 
       <TableCard title="3. Current Allocations for This Request">
-        <p>
-          Total Allocations: {
-            allocationForm.request_no
-              ? visaAllocations.filter((item) => String(item.request_no || "") === String(allocationForm.request_no || "")).length
-              : visaAllocations.length
-          }
-        </p>
+        <SmartTableToolbar
+          searchValue={visaAllocationTableFilters.query}
+          onSearchChange={(value) => setVisaAllocationTableFilters((current) => ({ ...current, query: value }))}
+          searchPlaceholder="Search request, project, visa, MOI, profession, nationality or gender..."
+          filters={[
+            { label: "Request", value: visaAllocationTableFilters.request, options: ["All", ...getUniqueTableOptions(enrichedVisaAllocationRows, "request_no")], onChange: (value) => setVisaAllocationTableFilters((current) => ({ ...current, request: value })) },
+            { label: "Project", value: visaAllocationTableFilters.project, options: ["All", ...getUniqueTableOptions(enrichedVisaAllocationRows, "project_name")], onChange: (value) => setVisaAllocationTableFilters((current) => ({ ...current, project: value })) },
+            { label: "Profession", value: visaAllocationTableFilters.profession, options: ["All", ...getUniqueTableOptions(enrichedVisaAllocationRows, "profession")], onChange: (value) => setVisaAllocationTableFilters((current) => ({ ...current, profession: value })) },
+            { label: "Nationality", value: visaAllocationTableFilters.nationality, options: ["All", ...getUniqueTableOptions(enrichedVisaAllocationRows, "nationality")], onChange: (value) => setVisaAllocationTableFilters((current) => ({ ...current, nationality: value })) },
+            { label: "Gender", value: visaAllocationTableFilters.gender, options: ["All", ...getUniqueTableOptions(enrichedVisaAllocationRows, "gender")], onChange: (value) => setVisaAllocationTableFilters((current) => ({ ...current, gender: value })) },
+          ]}
+          resultCount={filteredVisaAllocationTableRows.length}
+          pageSize={visaAllocationTablePageSize}
+          onPageSizeChange={setVisaAllocationTablePageSize}
+          onClear={() => setVisaAllocationTableFilters({ query: "", request: "All", project: "All", profession: "All", nationality: "All", gender: "All" })}
+        />
         <table>
           <thead>
             <tr>
               <th>Request No</th>
+              <th>Project</th>
               <th>Visa No</th>
+              <th>MOI No</th>
               <th>Profession</th>
               <th>Nationality</th>
               <th>Gender</th>
@@ -28594,59 +28928,57 @@ Save Authorization
             </tr>
           </thead>
           <tbody>
-            {(allocationForm.request_no
-              ? visaAllocations.filter((item) => String(item.request_no || "") === String(allocationForm.request_no || ""))
-              : visaAllocations
-            ).length === 0 ? (
+            {filteredVisaAllocationTableRows.length === 0 ? (
               <tr>
-                <td colSpan="7">No allocations yet</td>
+                <td colSpan="9" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+                  No allocations match the current search and filters.
+                </td>
               </tr>
-            ) : (
-              (allocationForm.request_no
-                ? visaAllocations.filter((item) => String(item.request_no || "") === String(allocationForm.request_no || ""))
-                : visaAllocations
-              ).map((item) => {
-                const line = visaInventoryLines.find((vLine) => String(vLine.id) === String(item.visa_batch_line_id || ""));
-                return (
-                  <tr key={item.id}>
-                    <td>{item.request_no}</td>
-                    <td>{item.visa_no}</td>
-                    <td>{line?.profession || "-"}</td>
-                    <td>{line?.nationality || "-"}</td>
-                    <td>{line?.gender || "-"}</td>
-                    <td>{item.allocated_qty}</td>
-                    <td>
-                      {canManageVisas ? (
-                        <>
-                          <button
-                            onClick={() => {
-                              setAllocationForm({
-                                request_no: item.request_no,
-                                visa_no: item.visa_no,
-                                visa_batch_line_id: item.visa_batch_line_id || "",
-                                allocated_qty: item.allocated_qty,
-                              });
-                              setAllocationEditingId(item.id);
-                              window.scrollTo({ top: 0, behavior: "smooth" });
-                            }}
-                          >
-                            Edit
-                          </button>
+            ) : pagedVisaAllocationTableRows.map((item) => (
+              <tr key={item.id}>
+                <td>{item.request_no || "-"}</td>
+                <td>{item.project_name || item.project_no || "-"}</td>
+                <td>{item.visa_no || "-"}</td>
+                <td>{item.moi_no || "-"}</td>
+                <td>{item.profession || "-"}</td>
+                <td>{item.nationality || "-"}</td>
+                <td>{item.gender || "-"}</td>
+                <td>{item.allocated_qty || 0}</td>
+                <td>
+                  {canManageVisas ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          setAllocationForm({
+                            request_no: item.request_no,
+                            visa_no: item.visa_no,
+                            visa_batch_line_id: item.visa_batch_line_id || "",
+                            allocated_qty: item.allocated_qty,
+                          });
+                          setAllocationEditingId(item.id);
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        }}
+                      >
+                        Edit
+                      </button>
 
-                          <button className="danger" onClick={() => deleteAllocation(item.id)}>
-                            Delete
-                          </button>
-                        </>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
+                      <button className="danger" onClick={() => deleteAllocation(item.id)}>
+                        Delete
+                      </button>
+                    </>
+                  ) : (
+                    "-"
+                  )}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
+        <SmartTablePagination
+          page={visaAllocationTablePage}
+          totalPages={visaAllocationTableTotalPages}
+          onPageChange={setVisaAllocationTablePage}
+        />
       </TableCard>
     </>
   );
@@ -28658,18 +28990,6 @@ Save Authorization
       <Stat title="Requests With Visa" value={requestsWithVisa.length} className="passed" />
       <Stat title="Requests Without Visa" value={requestsWithoutVisa.length} className="warning" />
       <Stat title="Extra Visa Lines" value={extraVisaRequests.length} className="danger" />
-    </div>
-
-    <div className="toolbar">
-      <input
-        placeholder="Search visa, MOI, project, profession, nationality, gender"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-        <option>All</option>
-        {VISA_STATUSES.map((s) => <option key={s}>{s}</option>)}
-      </select>
     </div>
 
     {canManageVisas && (
@@ -28751,6 +29071,19 @@ Save Authorization
     )}
 
     <TableCard title="Visa Batches">
+      <SmartTableToolbar
+        searchValue={visaBatchTableFilters.query}
+        onSearchChange={(value) => setVisaBatchTableFilters((current) => ({ ...current, query: value }))}
+        searchPlaceholder="Search visa, MOI, request, project, profession, nationality, gender or dates..."
+        filters={[
+          { label: "Status", value: visaBatchTableFilters.status, options: ["All", ...getUniqueTableOptions(visaRecords, "status")], onChange: (value) => setVisaBatchTableFilters((current) => ({ ...current, status: value })) },
+          { label: "Project", value: visaBatchTableFilters.project, options: ["All", ...getUniqueTableOptions(visaRecords, "project")], onChange: (value) => setVisaBatchTableFilters((current) => ({ ...current, project: value })) },
+        ]}
+        resultCount={filteredVisaBatchTableRows.length}
+        pageSize={visaBatchTablePageSize}
+        onPageSizeChange={setVisaBatchTablePageSize}
+        onClear={() => setVisaBatchTableFilters({ query: "", status: "All", project: "All" })}
+      />
       <table>
         <thead>
           <tr>
@@ -28765,7 +29098,13 @@ Save Authorization
           </tr>
         </thead>
         <tbody>
-          {filteredVisaRecords.map((item) => (
+          {filteredVisaBatchTableRows.length === 0 ? (
+            <tr>
+              <td colSpan="8" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+                No visa batches match the current search and filters.
+              </td>
+            </tr>
+          ) : pagedVisaBatchTableRows.map((item) => (
             <tr key={item.id}>
               <td><button className="link-btn" onClick={() => editVisa(item)}>{item.visa_no || "-"}</button></td>
               <td>{item.moi_no || "-"}</td>
@@ -28789,9 +29128,29 @@ Save Authorization
           ))}
         </tbody>
       </table>
+      <SmartTablePagination
+        page={visaBatchTablePage}
+        totalPages={visaBatchTableTotalPages}
+        onPageChange={setVisaBatchTablePage}
+      />
     </TableCard>
 
     <TableCard title="Visa Batch Lines">
+      <SmartTableToolbar
+        searchValue={visaLineTableFilters.query}
+        onSearchChange={(value) => setVisaLineTableFilters((current) => ({ ...current, query: value }))}
+        searchPlaceholder="Search visa line, MOI, project, profession, nationality, gender or status..."
+        filters={[
+          { label: "Status", value: visaLineTableFilters.status, options: ["All", ...getUniqueTableOptions(visaInventoryLines, "status")], onChange: (value) => setVisaLineTableFilters((current) => ({ ...current, status: value })) },
+          { label: "Profession", value: visaLineTableFilters.profession, options: ["All", ...getUniqueTableOptions(visaInventoryLines, "profession")], onChange: (value) => setVisaLineTableFilters((current) => ({ ...current, profession: value })) },
+          { label: "Nationality", value: visaLineTableFilters.nationality, options: ["All", ...getUniqueTableOptions(visaInventoryLines, "nationality")], onChange: (value) => setVisaLineTableFilters((current) => ({ ...current, nationality: value })) },
+          { label: "Gender", value: visaLineTableFilters.gender, options: ["All", ...getUniqueTableOptions(visaInventoryLines, "gender")], onChange: (value) => setVisaLineTableFilters((current) => ({ ...current, gender: value })) },
+        ]}
+        resultCount={filteredVisaLineTableRows.length}
+        pageSize={visaLineTablePageSize}
+        onPageSizeChange={setVisaLineTablePageSize}
+        onClear={() => setVisaLineTableFilters({ query: "", status: "All", profession: "All", nationality: "All", gender: "All" })}
+      />
       <table>
         <thead>
           <tr>
@@ -28806,24 +29165,31 @@ Save Authorization
           </tr>
         </thead>
         <tbody>
-          {visaInventoryLines.length === 0 ? (
-            <tr><td colSpan="8">No visa lines found</td></tr>
-          ) : (
-            visaInventoryLines.map((line) => (
-              <tr key={line.id}>
-                <td>{line.visa_no || "-"}</td>
-                <td>{line.profession || "-"}</td>
-                <td>{line.nationality || "-"}</td>
-                <td>{line.gender || "-"}</td>
-                <td>{line.quantity || 0}</td>
-                <td>{getVisaLineAllocatedQty(line.legacy ? "" : line.id, line.visa_no)}</td>
-                <td>{getVisaLineRemainingQty(line)}</td>
-                <td><Badge value={line.status} /></td>
-              </tr>
-            ))
-          )}
+          {filteredVisaLineTableRows.length === 0 ? (
+            <tr>
+              <td colSpan="8" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+                No visa lines match the current search and filters.
+              </td>
+            </tr>
+          ) : pagedVisaLineTableRows.map((line) => (
+            <tr key={line.id}>
+              <td>{line.visa_no || "-"}</td>
+              <td>{line.profession || "-"}</td>
+              <td>{line.nationality || "-"}</td>
+              <td>{line.gender || "-"}</td>
+              <td>{line.quantity || 0}</td>
+              <td>{getVisaLineAllocatedQty(line.legacy ? "" : line.id, line.visa_no)}</td>
+              <td>{getVisaLineRemainingQty(line)}</td>
+              <td><Badge value={line.status} /></td>
+            </tr>
+          ))}
         </tbody>
       </table>
+      <SmartTablePagination
+        page={visaLineTablePage}
+        totalPages={visaLineTableTotalPages}
+        onPageChange={setVisaLineTablePage}
+      />
     </TableCard>
   </div>
 )}
