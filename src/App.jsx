@@ -3421,6 +3421,11 @@ function TalentCandidatePortal({ onBack }) {
   const profileDirtyRef = useRef(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("Idle");
+  const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
+  const [skills, setSkills] = useState([]);
+  const [experiences, setExperiences] = useState([]);
+  const [education, setEducation] = useState([]);
+  const [certifications, setCertifications] = useState([]);
 
   const isArabic = portalLanguage === "AR";
   const primaryCv = documents.find((item) => item.document_type === "CV" && item.is_primary) || null;
@@ -3524,7 +3529,7 @@ function TalentCandidatePortal({ onBack }) {
 
     try {
       const candidateRow = await ensureTalentProfile(user);
-      const [documentsResult, consentsResult] = await Promise.all([
+      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult] = await Promise.all([
         supabase
           .from("talent_candidate_documents")
           .select("id, candidate_id, document_type, file_name, storage_path, mime_type, size_bytes, is_primary, parse_status, uploaded_at")
@@ -3534,10 +3539,18 @@ function TalentCandidatePortal({ onBack }) {
           .from("talent_candidate_consents")
           .select("consent_type, is_granted, granted_at, withdrawn_at")
           .eq("candidate_id", candidateRow.id),
+        supabase.from("talent_candidate_skills").select("*").eq("candidate_id", candidateRow.id).order("confidence", { ascending: false }),
+        supabase.from("talent_candidate_experience").select("*").eq("candidate_id", candidateRow.id).order("sort_order", { ascending: true }),
+        supabase.from("talent_candidate_education").select("*").eq("candidate_id", candidateRow.id).order("sort_order", { ascending: true }),
+        supabase.from("talent_candidate_certifications").select("*").eq("candidate_id", candidateRow.id).order("issue_date", { ascending: false }),
       ]);
 
       if (documentsResult.error) throw documentsResult.error;
       if (consentsResult.error) throw consentsResult.error;
+      if (skillsResult.error) throw skillsResult.error;
+      if (experienceResult.error) throw experienceResult.error;
+      if (educationResult.error) throw educationResult.error;
+      if (certificationsResult.error) throw certificationsResult.error;
 
       const nextConsents = { ...EMPTY_TALENT_CONSENTS };
       (consentsResult.data || []).forEach((item) => {
@@ -3550,10 +3563,15 @@ function TalentCandidatePortal({ onBack }) {
       setProfileForm(mapTalentProfileToForm(candidateRow));
       setDocuments(documentsResult.data || []);
       setConsents(nextConsents);
+      setSkills(skillsResult.data || []);
+      setExperiences(experienceResult.data || []);
+      setEducation(educationResult.data || []);
+      setCertifications(certificationsResult.data || []);
       loadedTalentUserRef.current = user.id;
       profileDirtyRef.current = false;
       setWorkspaceHydrated(true);
       setAutoSaveStatus("Saved");
+      if (candidateRow.marketplace_status === "Submitted" && workspaceTab === "Profile") setWorkspaceTab("Dashboard");
     } catch (error) {
       console.error("Talent workspace load failed", error);
       setWorkspaceMessage(error?.message || "تعذر تحميل ملف المتقدم.");
@@ -3919,6 +3937,36 @@ function TalentCandidatePortal({ onBack }) {
     }
   }
 
+  async function handleStartTalentCvAnalysis() {
+    if (!primaryCv?.id) {
+      setWorkspaceMessage(isArabic ? "ارفع السيرة الذاتية أولًا." : "Upload your CV first.");
+      setWorkspaceTab("CV");
+      return;
+    }
+    if (!consents["AI CV Analysis"]) {
+      setWorkspaceMessage(isArabic ? "وافق على تحليل السيرة بالذكاء الاصطناعي أولًا." : "Please grant AI CV Analysis consent first.");
+      setWorkspaceTab("Consent");
+      return;
+    }
+    setAiAnalysisBusy(true);
+    setWorkspaceMessage(isArabic ? "بدأ تحليل السيرة بالذكاء الاصطناعي..." : "AI CV analysis started...");
+    try {
+      const { data, error } = await supabase.functions.invoke("visaflow-talent-cv-analyzer", {
+        body: { document_id: primaryCv.id },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || "AI CV analysis failed");
+      loadedTalentUserRef.current = null;
+      await loadCandidateWorkspace(session.user, { force: true });
+      setWorkspaceTab("Analysis");
+      setWorkspaceMessage(isArabic ? "اكتمل تحليل السيرة بنجاح ✓" : "CV analysis completed successfully ✓");
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر تحليل السيرة." : "Unable to analyze CV."));
+    } finally {
+      setAiAnalysisBusy(false);
+    }
+  }
+
   async function handleSubmitTalentProfile() {
     if (!profile?.id) return;
     if (!profileForm.full_name || !profileForm.phone || !profileForm.profession) {
@@ -4077,8 +4125,10 @@ function TalentCandidatePortal({ onBack }) {
 
   const statusLabel = profile?.marketplace_status || "Draft";
   const tabItems = [
+    ["Dashboard", isArabic ? "لوحة التحكم" : "Dashboard"],
     ["Profile", isArabic ? "الملف المهني" : "Professional Profile"],
     ["CV", isArabic ? "السيرة الذاتية" : "CV Upload"],
+    ["Analysis", isArabic ? "تحليل AI" : "AI Analysis"],
     ["Consent", isArabic ? "الموافقات" : "Consents"],
     ["Review", isArabic ? "المراجعة والإرسال" : "Review & Submit"],
   ];
@@ -4145,6 +4195,52 @@ function TalentCandidatePortal({ onBack }) {
               </div>
             )}
 
+            {workspaceTab === "Dashboard" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "لوحة التحكم المهنية" : "Career Dashboard"}</h2>
+                <div className="vf-talent-metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px" }}>
+                  {[
+                    [isArabic ? "اكتمال الملف" : "Profile", `${estimatedCompleteness}%`],
+                    [isArabic ? "تقييم السيرة" : "Resume Score", profile?.ai_cv_summary?.overall_score != null ? `${profile.ai_cv_summary.overall_score}%` : "—"],
+                    [isArabic ? "توافق ATS" : "ATS Score", profile?.ai_cv_summary?.ats_score != null ? `${profile.ai_cv_summary.ats_score}%` : "—"],
+                    [isArabic ? "المهارات المكتشفة" : "Skills Detected", String(skills.length || 0)],
+                  ].map(([label, value]) => <div key={label} style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px", background: palette.pale }}><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{label}</span><strong style={{ display: "block", fontSize: "25px", marginTop: "8px" }}>{value}</strong></div>)}
+                </div>
+                <div style={{ marginTop: "18px", border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px" }}>
+                  <h3 style={{ marginTop: 0 }}>{isArabic ? "حالة رحلتك" : "Your Journey"}</h3>
+                  <p style={{ color: palette.muted, lineHeight: 1.8 }}>{profile?.ai_cv_status === "Completed" ? (isArabic ? "تم تحليل سيرتك. راجع النتائج والمهارات والوظائف المقترحة." : "Your CV has been analyzed. Review scores, skills, and recommended roles.") : (isArabic ? "الخطوة التالية: وافق على تحليل AI ثم ابدأ التحليل من صفحة السيرة." : "Next: grant AI consent and start analysis from the CV page.")}</p>
+                  <button type="button" onClick={() => setWorkspaceTab(profile?.ai_cv_status === "Completed" ? "Analysis" : "CV")} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{profile?.ai_cv_status === "Completed" ? (isArabic ? "عرض تحليل السيرة" : "View CV Analysis") : (isArabic ? "متابعة السيرة" : "Continue CV")}</button>
+                </div>
+              </>
+            )}
+
+            {workspaceTab === "Analysis" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI Resume Analysis"}</h2>
+                {profile?.ai_cv_status !== "Completed" ? (
+                  <div style={{ padding: "24px", borderRadius: "16px", background: palette.pale, textAlign: "center" }}>
+                    <h3>{isArabic ? "التحليل غير مكتمل" : "Analysis not completed"}</h3>
+                    <button type="button" onClick={handleStartTalentCvAnalysis} disabled={aiAnalysisBusy} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{aiAnalysisBusy ? (isArabic ? "جاري التحليل..." : "Analyzing...") : (isArabic ? "ابدأ تحليل السيرة" : "Start AI Analysis")}</button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="vf-talent-metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px" }}>
+                      {[["Overall", profile.ai_cv_summary?.overall_score], ["ATS", profile.ai_cv_summary?.ats_score], ["Clarity", profile.ai_cv_summary?.clarity_score], ["Impact", profile.ai_cv_summary?.impact_score]].map(([label, value]) => <div key={label} style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px", textAlign: "center" }}><span style={{ color: palette.muted, fontWeight: 800 }}>{label}</span><strong style={{ display: "block", fontSize: "28px", marginTop: "8px" }}>{value ?? "—"}%</strong></div>)}
+                    </div>
+                    <div style={{ marginTop: "18px", display: "grid", gap: "16px" }}>
+                      <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "الملخص التنفيذي" : "Executive Summary"}</h3><p style={{ lineHeight: 1.8, color: palette.muted }}>{profile.ai_cv_summary?.executive_summary || "—"}</p></div>
+                      <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "المهارات المكتشفة" : "Detected Skills"}</h3><div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>{skills.map((skill) => <span key={skill.id} style={{ padding: "8px 11px", borderRadius: "999px", background: palette.pale, color: palette.blue, fontWeight: 900 }}>{skill.skill_name}</span>)}</div></div>
+                      <div className="vf-talent-review-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: "14px" }}>
+                        <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "نقاط القوة" : "Strengths"}</h3><ul>{(profile.ai_cv_summary?.strengths || []).map((x) => <li key={x} style={{ marginBottom: "8px" }}>{x}</li>)}</ul></div>
+                        <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "فرص التطوير" : "Development Areas"}</h3><ul>{(profile.ai_cv_summary?.development_areas || []).map((x) => <li key={x} style={{ marginBottom: "8px" }}>{x}</li>)}</ul></div>
+                      </div>
+                      <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "وظائف مقترحة" : "Recommended Roles"}</h3><div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>{(profile.ai_cv_summary?.recommended_roles || []).map((x) => <span key={x} style={{ padding: "9px 12px", borderRadius: "10px", background: "#ecfdf5", color: palette.success, fontWeight: 900 }}>{x}</span>)}</div></div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
             {workspaceTab === "Profile" && (
               <>
                 <h2 style={{ marginTop: 0 }}>{isArabic ? "الملف المهني" : "Professional Profile"}</h2>
@@ -4195,9 +4291,9 @@ function TalentCandidatePortal({ onBack }) {
                   <div style={{ marginTop: "16px", border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px", background: "#fff" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: "14px", alignItems: "center", flexWrap: "wrap" }}>
                       <div><div style={{ color: palette.cyan, fontSize: "12px", fontWeight: 900, textTransform: "uppercase" }}>{isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI Resume Analysis"}</div><h3 style={{ margin: "5px 0 0" }}>{profile?.ai_cv_status || (isArabic ? "في الانتظار" : "Pending")}</h3></div>
-                      <span style={{ padding: "8px 12px", borderRadius: "999px", background: "#fff7ed", color: "#9a3412", fontWeight: 900 }}>{isArabic ? "سيبدأ التحليل بعد الإرسال" : "Starts after submission"}</span>
+                      <button type="button" onClick={handleStartTalentCvAnalysis} disabled={aiAnalysisBusy || profile?.ai_cv_status === "Processing"} style={{ border: 0, padding: "10px 14px", borderRadius: "11px", background: palette.blue, color: "#fff", fontWeight: 900, cursor: "pointer" }}>{aiAnalysisBusy || profile?.ai_cv_status === "Processing" ? (isArabic ? "جاري التحليل..." : "Analyzing...") : profile?.ai_cv_status === "Completed" ? (isArabic ? "إعادة التحليل" : "Analyze Again") : (isArabic ? "ابدأ التحليل الآن" : "Start Analysis Now")}</button>
                     </div>
-                    <p style={{ color: palette.muted, lineHeight: 1.7, marginBottom: 0 }}>{isArabic ? "بعد إرسال الملف سيستخرج النظام المهارات والخبرة والمؤهلات ويجهز ملخصًا مهنيًا للمراجعة." : "After submission, the system will extract skills, experience, education, and prepare a professional summary for review."}</p>
+                    <p style={{ color: palette.muted, lineHeight: 1.7, marginBottom: 0 }}>{consents["AI CV Analysis"] ? (isArabic ? "سيستخرج النظام المهارات والخبرة والمؤهلات ويحسب تقييم ATS ويقترح وظائف مناسبة." : "The system will extract skills, experience, education, calculate ATS quality, and recommend suitable roles.") : (isArabic ? "انتقل إلى الموافقات وفعّل موافقة تحليل السيرة أولًا." : "Open Consents and grant AI CV Analysis permission first.")}</p>
                   </div>
                 )}
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}><button type="button" onClick={() => setWorkspaceTab("Consent")} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "التالي: الموافقات" : "Next: Consents"}</button></div>
