@@ -3499,6 +3499,55 @@ const [aiResultsTableFilters, setAIResultsTableFilters] = useState({
 });
 const [aiResultsTablePage, setAIResultsTablePage] = useState(1);
 const [aiResultsTablePageSize, setAIResultsTablePageSize] = useState(25);
+
+const [aiCampaignTableFilters, setAICampaignTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  mode: "All",
+});
+const [aiCampaignTablePage, setAICampaignTablePage] = useState(1);
+const [aiCampaignTablePageSize, setAICampaignTablePageSize] = useState(25);
+
+const [aiCampaignCandidateTableFilters, setAICampaignCandidateTableFilters] = useState({
+  query: "",
+  validation: "All",
+  invitation: "All",
+  interview: "All",
+  analysis: "All",
+});
+const [aiCampaignCandidateTablePage, setAICampaignCandidateTablePage] = useState(1);
+const [aiCampaignCandidateTablePageSize, setAICampaignCandidateTablePageSize] = useState(25);
+
+const [aiInvitationTableFilters, setAIInvitationTableFilters] = useState({
+  query: "",
+  status: "All",
+  type: "All",
+});
+const [aiInvitationTablePage, setAIInvitationTablePage] = useState(1);
+const [aiInvitationTablePageSize, setAIInvitationTablePageSize] = useState(25);
+
+const [interviewTableFilters, setInterviewTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  project: "All",
+  agency: "All",
+  type: "All",
+});
+const [interviewTablePage, setInterviewTablePage] = useState(1);
+const [interviewTablePageSize, setInterviewTablePageSize] = useState(25);
+
+const [aiSessionTableFilters, setAISessionTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  mode: "All",
+  recommendation: "All",
+  decision: "All",
+});
+const [aiSessionTablePage, setAISessionTablePage] = useState(1);
+const [aiSessionTablePageSize, setAISessionTablePageSize] = useState(25);
 const [aiInterviewLoading, setAIInterviewLoading] = useState(false);
 const [aiInterviewInvitationSendingId, setAIInterviewInvitationSendingId] = useState("");
 const [aiInterviewMessage, setAIInterviewMessage] = useState("");
@@ -7110,6 +7159,123 @@ const filteredCandidateTableRows = useMemo(() => {
 const candidateTableTotalPages = Math.max(1, Math.ceil(filteredCandidateTableRows.length / candidateTablePageSize));
 const pagedCandidateTableRows = getPagedRows(filteredCandidateTableRows, candidateTablePage, candidateTablePageSize);
 
+const filteredInterviewTableRows = useMemo(() => {
+  const query = normalize(interviewTableFilters.query);
+
+  return interviews.filter((item) => {
+    const interviewCandidate =
+      candidates.find((candidate) => String(candidate.id || "") === String(item.candidate_id || "")) ||
+      candidates.find((candidate) =>
+        String(candidate.passport_no || "") === String(item.passport_no || "") &&
+        String(candidate.request_no || "") === String(item.request_no || "")
+      ) ||
+      candidates.find((candidate) =>
+        normalize(candidate.candidate_name) === normalize(item.candidate_name) &&
+        String(candidate.request_no || "") === String(item.request_no || "")
+      );
+
+    const relatedRequest = requests.find(
+      (request) => String(request.request_no || "") === String(item.request_no || "")
+    );
+    const projectName = item.project || relatedRequest?.project_name || relatedRequest?.project || "";
+    const projectNo = relatedRequest?.project_no || "";
+
+    const searchableText = normalize([
+      item.interview_date,
+      item.candidate_name,
+      item.profession,
+      item.nationality,
+      item.agency,
+      item.project,
+      projectName,
+      projectNo,
+      item.request_no,
+      item.passport_no,
+      item.mobile,
+      interviewCandidate?.civil_id_no,
+      interviewCandidate?.iqama_no,
+      interviewCandidate?.passport_no,
+      interviewCandidate?.mobile,
+      interviewCandidate?.email,
+      item.interview_type,
+      item.interviewers,
+      item.meeting_link,
+      item.score,
+      item.status,
+      item.notes,
+    ].join(" "));
+
+    const matchesQuery = !query || searchableText.includes(query);
+    const matchesStatus = interviewTableFilters.status === "All" || item.status === interviewTableFilters.status;
+    const matchesProfession = interviewTableFilters.profession === "All" || item.profession === interviewTableFilters.profession;
+    const matchesProject = interviewTableFilters.project === "All" || projectName === interviewTableFilters.project;
+    const matchesAgency = interviewTableFilters.agency === "All" || item.agency === interviewTableFilters.agency;
+    const matchesType = interviewTableFilters.type === "All" || item.interview_type === interviewTableFilters.type;
+
+    return matchesQuery && matchesStatus && matchesProfession && matchesProject && matchesAgency && matchesType;
+  });
+}, [interviews, candidates, requests, interviewTableFilters]);
+
+const interviewTableTotalPages = Math.max(1, Math.ceil(filteredInterviewTableRows.length / interviewTablePageSize));
+const pagedInterviewTableRows = getPagedRows(filteredInterviewTableRows, interviewTablePage, interviewTablePageSize);
+
+const filteredAISessionTableRows = useMemo(() => {
+  const query = normalize(aiSessionTableFilters.query);
+
+  return aiInterviewSessions.filter((session) => {
+    const sourceCandidate = candidates.find(
+      (candidate) => String(candidate.id || "") === String(session.candidate_id || "")
+    );
+    const relatedRequest = requests.find(
+      (request) => String(request.request_no || "") === String(session.request_no || "")
+    );
+    const campaign = aiInterviewCampaigns.find(
+      (item) => String(item.id || "") === String(session.campaign_id || "")
+    );
+    const projectName = session.project_name || relatedRequest?.project_name || relatedRequest?.project || campaign?.project_name || "";
+    const projectNo = relatedRequest?.project_no || "";
+
+    const searchableText = normalize([
+      session.created_at,
+      session.candidate_name,
+      session.candidate_email,
+      session.candidate_mobile,
+      sourceCandidate?.civil_id_no,
+      sourceCandidate?.iqama_no,
+      sourceCandidate?.passport_no,
+      sourceCandidate?.mobile,
+      sourceCandidate?.email,
+      session.profession,
+      session.request_no,
+      projectName,
+      projectNo,
+      campaign?.campaign_name,
+      getAIInterviewTemplateName(session.template_id),
+      session.interaction_mode,
+      session.interview_mode,
+      session.camera_mode,
+      session.status,
+      session.analysis_status,
+      session.ai_recommendation,
+      session.human_decision,
+      session.review_status,
+      session.overall_score,
+    ].join(" "));
+
+    const matchesQuery = !query || searchableText.includes(query);
+    const matchesStatus = aiSessionTableFilters.status === "All" || session.status === aiSessionTableFilters.status;
+    const matchesProfession = aiSessionTableFilters.profession === "All" || session.profession === aiSessionTableFilters.profession;
+    const matchesMode = aiSessionTableFilters.mode === "All" || (session.interview_mode || "Voice") === aiSessionTableFilters.mode;
+    const matchesRecommendation = aiSessionTableFilters.recommendation === "All" || (session.ai_recommendation || "Pending Analysis") === aiSessionTableFilters.recommendation;
+    const matchesDecision = aiSessionTableFilters.decision === "All" || (session.human_decision || "Pending Company Review") === aiSessionTableFilters.decision;
+
+    return matchesQuery && matchesStatus && matchesProfession && matchesMode && matchesRecommendation && matchesDecision;
+  });
+}, [aiInterviewSessions, candidates, requests, aiInterviewCampaigns, aiSessionTableFilters]);
+
+const aiSessionTableTotalPages = Math.max(1, Math.ceil(filteredAISessionTableRows.length / aiSessionTablePageSize));
+const pagedAISessionTableRows = getPagedRows(filteredAISessionTableRows, aiSessionTablePage, aiSessionTablePageSize);
+
 useEffect(() => {
   setRequestTablePage(1);
 }, [requestTableFilters, requestTablePageSize]);
@@ -7123,12 +7289,40 @@ useEffect(() => {
 }, [aiResultsTableFilters, aiResultsTablePageSize, selectedAIInterviewCampaignId]);
 
 useEffect(() => {
+  setAICampaignTablePage(1);
+}, [aiCampaignTableFilters, aiCampaignTablePageSize]);
+
+useEffect(() => {
+  setAICampaignCandidateTablePage(1);
+}, [aiCampaignCandidateTableFilters, aiCampaignCandidateTablePageSize, selectedAIInterviewCampaignId]);
+
+useEffect(() => {
+  setAIInvitationTablePage(1);
+}, [aiInvitationTableFilters, aiInvitationTablePageSize, selectedAIInterviewCampaignId]);
+
+useEffect(() => {
+  setInterviewTablePage(1);
+}, [interviewTableFilters, interviewTablePageSize]);
+
+useEffect(() => {
+  setAISessionTablePage(1);
+}, [aiSessionTableFilters, aiSessionTablePageSize]);
+
+useEffect(() => {
   if (requestTablePage > requestTableTotalPages) setRequestTablePage(requestTableTotalPages);
 }, [requestTablePage, requestTableTotalPages]);
 
 useEffect(() => {
   if (candidateTablePage > candidateTableTotalPages) setCandidateTablePage(candidateTableTotalPages);
 }, [candidateTablePage, candidateTableTotalPages]);
+
+useEffect(() => {
+  if (interviewTablePage > interviewTableTotalPages) setInterviewTablePage(interviewTableTotalPages);
+}, [interviewTablePage, interviewTableTotalPages]);
+
+useEffect(() => {
+  if (aiSessionTablePage > aiSessionTableTotalPages) setAISessionTablePage(aiSessionTableTotalPages);
+}, [aiSessionTablePage, aiSessionTableTotalPages]);
 
 const saudiHiringRows = useMemo(() => {
   const rows = [];
@@ -24222,15 +24416,109 @@ function getReportStudioVisualModel() {
       ].join(" "));
 
       const matchesQuery = !aiResultsQuery || searchableText.includes(aiResultsQuery);
-      const matchesProfession = aiResultsTableFilters.profession === "All" || item.profession === aiResultsTableFilters.profession;
-      const matchesAnalysis = aiResultsTableFilters.analysis === "All" || item.analysis_status === aiResultsTableFilters.analysis;
-      const matchesRecommendation = aiResultsTableFilters.recommendation === "All" || item.ai_recommendation === aiResultsTableFilters.recommendation;
+      const matchesProfession = aiResultsTableFilters.profession === "All" || normalize(item.profession) === normalize(aiResultsTableFilters.profession);
+      const matchesAnalysis = aiResultsTableFilters.analysis === "All" || (item.analysis_status || "Pending") === aiResultsTableFilters.analysis;
+      const matchesRecommendation = aiResultsTableFilters.recommendation === "All" || (item.ai_recommendation || "Pending Analysis") === aiResultsTableFilters.recommendation;
       const matchesDecision = aiResultsTableFilters.decision === "All" || (item.human_decision || "Pending Company Review") === aiResultsTableFilters.decision;
 
       return matchesQuery && matchesProfession && matchesAnalysis && matchesRecommendation && matchesDecision;
     });
     const aiResultsTableTotalPages = Math.max(1, Math.ceil(filteredRankedRows.length / aiResultsTablePageSize));
-    const pagedRankedRows = getPagedRows(filteredRankedRows, aiResultsTablePage, aiResultsTablePageSize);
+    const pagedRankedRows = getPagedRows(filteredRankedRows, Math.min(aiResultsTablePage, aiResultsTableTotalPages), aiResultsTablePageSize);
+
+    const aiCampaignQuery = normalize(aiCampaignTableFilters.query);
+    const filteredAICampaignRows = aiInterviewCampaigns.filter((campaign) => {
+      const relatedRequest = requests.find(
+        (request) => String(request.request_no || "") === String(campaign.request_no || "")
+      );
+      const searchableText = normalize([
+        campaign.campaign_name,
+        campaign.profession,
+        campaign.request_no,
+        campaign.project_name,
+        relatedRequest?.project_no,
+        relatedRequest?.project_name,
+        getAIInterviewTemplateName(campaign.template_id),
+        campaign.language,
+        campaign.interaction_mode,
+        campaign.interview_mode,
+        campaign.camera_mode,
+        campaign.status,
+        campaign.notes,
+      ].join(" "));
+
+      const modeLabel = `${campaign.interaction_mode || "Recorded"} / ${campaign.interview_mode || "Voice"}`;
+      const matchesQuery = !aiCampaignQuery || searchableText.includes(aiCampaignQuery);
+      const matchesStatus = aiCampaignTableFilters.status === "All" || campaign.status === aiCampaignTableFilters.status;
+      const matchesProfession = aiCampaignTableFilters.profession === "All" || campaign.profession === aiCampaignTableFilters.profession;
+      const matchesMode = aiCampaignTableFilters.mode === "All" || modeLabel === aiCampaignTableFilters.mode;
+
+      return matchesQuery && matchesStatus && matchesProfession && matchesMode;
+    });
+    const aiCampaignTableTotalPages = Math.max(1, Math.ceil(filteredAICampaignRows.length / aiCampaignTablePageSize));
+    const pagedAICampaignRows = getPagedRows(filteredAICampaignRows, Math.min(aiCampaignTablePage, aiCampaignTableTotalPages), aiCampaignTablePageSize);
+
+    const aiCampaignCandidateQuery = normalize(aiCampaignCandidateTableFilters.query);
+    const filteredAICampaignCandidateRows = campaignRows.filter((item) => {
+      const sourceCandidate = candidates.find(
+        (candidate) => String(candidate.id || "") === String(item.candidate_id || "")
+      );
+      const relatedRequest = requests.find(
+        (request) => String(request.request_no || "") === String(item.request_no || "")
+      );
+      const searchableText = normalize([
+        item.candidate_name,
+        item.candidate_email,
+        item.candidate_mobile,
+        sourceCandidate?.civil_id_no,
+        sourceCandidate?.iqama_no,
+        sourceCandidate?.passport_no,
+        sourceCandidate?.mobile,
+        sourceCandidate?.email,
+        item.profession,
+        item.nationality,
+        item.request_no,
+        item.project_name,
+        relatedRequest?.project_no,
+        relatedRequest?.project_name,
+        item.validation_status,
+        item.invitation_status,
+        item.status,
+        item.analysis_status,
+        item.ai_recommendation,
+        item.human_decision,
+      ].join(" "));
+
+      const matchesQuery = !aiCampaignCandidateQuery || searchableText.includes(aiCampaignCandidateQuery);
+      const matchesValidation = aiCampaignCandidateTableFilters.validation === "All" || (item.validation_status || "Pending") === aiCampaignCandidateTableFilters.validation;
+      const matchesInvitation = aiCampaignCandidateTableFilters.invitation === "All" || (item.invitation_status || "Not Queued") === aiCampaignCandidateTableFilters.invitation;
+      const matchesInterview = aiCampaignCandidateTableFilters.interview === "All" || (item.status || "Pending") === aiCampaignCandidateTableFilters.interview;
+      const matchesAnalysis = aiCampaignCandidateTableFilters.analysis === "All" || (item.analysis_status || "Pending") === aiCampaignCandidateTableFilters.analysis;
+
+      return matchesQuery && matchesValidation && matchesInvitation && matchesInterview && matchesAnalysis;
+    });
+    const aiCampaignCandidateTableTotalPages = Math.max(1, Math.ceil(filteredAICampaignCandidateRows.length / aiCampaignCandidateTablePageSize));
+    const pagedAICampaignCandidateRows = getPagedRows(filteredAICampaignCandidateRows, Math.min(aiCampaignCandidateTablePage, aiCampaignCandidateTableTotalPages), aiCampaignCandidateTablePageSize);
+
+    const aiInvitationQuery = normalize(aiInvitationTableFilters.query);
+    const filteredAIInvitationRows = campaignJobs.filter((job) => {
+      const searchableText = normalize([
+        job.created_at,
+        job.recipient_name,
+        job.recipient_email,
+        job.job_type,
+        job.status,
+        job.provider_message_id,
+        job.last_error,
+      ].join(" "));
+
+      const matchesQuery = !aiInvitationQuery || searchableText.includes(aiInvitationQuery);
+      const matchesStatus = aiInvitationTableFilters.status === "All" || (job.status || "Queued") === aiInvitationTableFilters.status;
+      const matchesType = aiInvitationTableFilters.type === "All" || (job.job_type || "Invitation") === aiInvitationTableFilters.type;
+      return matchesQuery && matchesStatus && matchesType;
+    });
+    const aiInvitationTableTotalPages = Math.max(1, Math.ceil(filteredAIInvitationRows.length / aiInvitationTablePageSize));
+    const pagedAIInvitationRows = getPagedRows(filteredAIInvitationRows, Math.min(aiInvitationTablePage, aiInvitationTableTotalPages), aiInvitationTablePageSize);
 
     const sentJobs = campaignJobs.filter((job) => job.status === "Sent").length;
     const queuedJobs = campaignJobs.filter((job) => ["Queued", "Processing"].includes(job.status)).length;
@@ -24445,6 +24733,20 @@ function getReportStudioVisualModel() {
             )}
 
             <TableCard title="AI Interview Campaigns">
+              <SmartTableToolbar
+                searchValue={aiCampaignTableFilters.query}
+                onSearchChange={(value) => setAICampaignTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search campaign, request, project no, profession, template or mode..."
+                resultCount={filteredAICampaignRows.length}
+                pageSize={aiCampaignTablePageSize}
+                onPageSizeChange={setAICampaignTablePageSize}
+                onClear={() => setAICampaignTableFilters({ query: "", status: "All", profession: "All", mode: "All" })}
+                filters={[
+                  { label: "Status", value: aiCampaignTableFilters.status, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, "status")], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, status: value })) },
+                  { label: "Profession", value: aiCampaignTableFilters.profession, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, "profession")], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, profession: value })) },
+                  { label: "Mode", value: aiCampaignTableFilters.mode, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, (campaign) => `${campaign.interaction_mode || "Recorded"} / ${campaign.interview_mode || "Voice"}`)], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, mode: value })) },
+                ]}
+              />
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -24452,6 +24754,7 @@ function getReportStudioVisualModel() {
                       <th>Campaign</th>
                       <th>Profession</th>
                       <th>Template</th>
+                      <th>Mode</th>
                       <th>Deadline</th>
                       <th>Candidates</th>
                       <th>Sent</th>
@@ -24462,13 +24765,14 @@ function getReportStudioVisualModel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {aiInterviewCampaigns.length === 0 ? (
-                      <tr><td colSpan="10">No AI interview campaigns yet.</td></tr>
-                    ) : aiInterviewCampaigns.map((campaign) => (
+                    {filteredAICampaignRows.length === 0 ? (
+                      <tr><td colSpan="11">No campaigns match the current search and filters.</td></tr>
+                    ) : pagedAICampaignRows.map((campaign) => (
                       <tr key={campaign.id} style={String(campaign.id) === String(selectedAIInterviewCampaignId) ? { background: "#eff6ff" } : undefined}>
                         <td><b>{campaign.campaign_name}</b><div style={{ fontSize: "12px", color: "#64748b" }}>{campaign.request_no || "No request selected"}</div></td>
                         <td>{campaign.profession || "-"}</td>
                         <td>{getAIInterviewTemplateName(campaign.template_id)}</td>
+                        <td>{campaign.interaction_mode || "Recorded"} / {campaign.interview_mode || "Voice"}</td>
                         <td>{campaign.interview_deadline ? new Date(campaign.interview_deadline).toLocaleString() : "-"}</td>
                         <td>{campaign.total_candidates || 0}</td>
                         <td>{campaign.invitation_sent_count || 0}</td>
@@ -24487,6 +24791,11 @@ function getReportStudioVisualModel() {
                   </tbody>
                 </table>
               </div>
+              <SmartTablePagination
+                page={aiCampaignTablePage}
+                totalPages={aiCampaignTableTotalPages}
+                onPageChange={setAICampaignTablePage}
+              />
             </TableCard>
           </>
         )}
@@ -24722,6 +25031,21 @@ function getReportStudioVisualModel() {
                 )}
 
                 <TableCard title="Candidates Added to Campaign">
+                  <SmartTableToolbar
+                    searchValue={aiCampaignCandidateTableFilters.query}
+                    onSearchChange={(value) => setAICampaignCandidateTableFilters((current) => ({ ...current, query: value }))}
+                    searchPlaceholder="Search name, civil ID, iqama, passport, email, mobile, request or project..."
+                    resultCount={filteredAICampaignCandidateRows.length}
+                    pageSize={aiCampaignCandidateTablePageSize}
+                    onPageSizeChange={setAICampaignCandidateTablePageSize}
+                    onClear={() => setAICampaignCandidateTableFilters({ query: "", validation: "All", invitation: "All", interview: "All", analysis: "All" })}
+                    filters={[
+                      { label: "Validation", value: aiCampaignCandidateTableFilters.validation, options: ["All", ...getUniqueTableOptions(campaignRows, (item) => item.validation_status || "Pending")], onChange: (value) => setAICampaignCandidateTableFilters((current) => ({ ...current, validation: value })) },
+                      { label: "Invitation", value: aiCampaignCandidateTableFilters.invitation, options: ["All", ...getUniqueTableOptions(campaignRows, (item) => item.invitation_status || "Not Queued")], onChange: (value) => setAICampaignCandidateTableFilters((current) => ({ ...current, invitation: value })) },
+                      { label: "Interview", value: aiCampaignCandidateTableFilters.interview, options: ["All", ...getUniqueTableOptions(campaignRows, (item) => item.status || "Pending")], onChange: (value) => setAICampaignCandidateTableFilters((current) => ({ ...current, interview: value })) },
+                      { label: "Analysis", value: aiCampaignCandidateTableFilters.analysis, options: ["All", ...getUniqueTableOptions(campaignRows, (item) => item.analysis_status || "Pending")], onChange: (value) => setAICampaignCandidateTableFilters((current) => ({ ...current, analysis: value })) },
+                    ]}
+                  />
                   <div className="table-wrap">
                     <table>
                       <thead>
@@ -24738,9 +25062,9 @@ function getReportStudioVisualModel() {
                         </tr>
                       </thead>
                       <tbody>
-                        {campaignRows.length === 0 ? (
-                          <tr><td colSpan="9">No candidates added to this campaign.</td></tr>
-                        ) : campaignRows.map((item) => (
+                        {filteredAICampaignCandidateRows.length === 0 ? (
+                          <tr><td colSpan="9">No campaign candidates match the current search and filters.</td></tr>
+                        ) : pagedAICampaignCandidateRows.map((item) => (
                           <tr key={item.id}>
                             <td>{item.candidate_name || "-"}</td>
                             <td>{item.candidate_email || "-"}</td>
@@ -24762,6 +25086,11 @@ function getReportStudioVisualModel() {
                       </tbody>
                     </table>
                   </div>
+                  <SmartTablePagination
+                    page={aiCampaignCandidateTablePage}
+                    totalPages={aiCampaignCandidateTableTotalPages}
+                    onPageChange={setAICampaignCandidateTablePage}
+                  />
                 </TableCard>
               </>
             )}
@@ -24784,8 +25113,8 @@ function getReportStudioVisualModel() {
                   onClear={() => setAIResultsTableFilters({ query: "", profession: "All", analysis: "All", recommendation: "All", decision: "All" })}
                   filters={[
                     { label: "Profession", value: aiResultsTableFilters.profession, options: ["All", ...getUniqueTableOptions(rankedRows, "profession")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, profession: value })) },
-                    { label: "Analysis", value: aiResultsTableFilters.analysis, options: ["All", ...getUniqueTableOptions(rankedRows, "analysis_status")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, analysis: value })) },
-                    { label: "AI Recommendation", value: aiResultsTableFilters.recommendation, options: ["All", ...getUniqueTableOptions(rankedRows, "ai_recommendation")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, recommendation: value })) },
+                    { label: "Analysis", value: aiResultsTableFilters.analysis, options: ["All", ...getUniqueTableOptions(rankedRows, (item) => item.analysis_status || "Pending")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, analysis: value })) },
+                    { label: "AI Recommendation", value: aiResultsTableFilters.recommendation, options: ["All", ...getUniqueTableOptions(rankedRows, (item) => item.ai_recommendation || "Pending Analysis")], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, recommendation: value })) },
                     { label: "Company Decision", value: aiResultsTableFilters.decision, options: ["All", ...AI_INTERVIEW_HUMAN_DECISIONS], onChange: (value) => setAIResultsTableFilters((current) => ({ ...current, decision: value })) },
                   ]}
                 />
@@ -24860,40 +25189,60 @@ function getReportStudioVisualModel() {
             {!selectedCampaign ? (
               <p>Select a campaign first.</p>
             ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Created</th>
-                      <th>Candidate</th>
-                      <th>Email</th>
-                      <th>Type</th>
-                      <th>Status</th>
-                      <th>Attempts</th>
-                      <th>Available / Sent</th>
-                      <th>Message ID</th>
-                      <th>Error</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {campaignJobs.length === 0 ? (
-                      <tr><td colSpan="9">No invitation jobs yet. Launch the campaign to create jobs.</td></tr>
-                    ) : campaignJobs.map((job) => (
-                      <tr key={job.id}>
-                        <td>{job.created_at ? new Date(job.created_at).toLocaleString() : "-"}</td>
-                        <td>{job.recipient_name || "-"}</td>
-                        <td>{job.recipient_email || "-"}</td>
-                        <td>{job.job_type || "Invitation"}</td>
-                        <td><Badge value={job.status || "Queued"} /></td>
-                        <td>{job.attempt_count || 0} / {job.max_attempts || 3}</td>
-                        <td>{job.sent_at ? new Date(job.sent_at).toLocaleString() : job.available_at ? new Date(job.available_at).toLocaleString() : "-"}</td>
-                        <td style={{ maxWidth: "180px", overflowWrap: "anywhere" }}>{job.message_id || "-"}</td>
-                        <td style={{ color: job.last_error ? "#b91c1c" : "inherit", maxWidth: "320px", whiteSpace: "pre-wrap" }}>{job.last_error || "-"}</td>
+              <>
+                <SmartTableToolbar
+                  searchValue={aiInvitationTableFilters.query}
+                  onSearchChange={(value) => setAIInvitationTableFilters((current) => ({ ...current, query: value }))}
+                  searchPlaceholder="Search candidate, email, message ID, type, status or error..."
+                  resultCount={filteredAIInvitationRows.length}
+                  pageSize={aiInvitationTablePageSize}
+                  onPageSizeChange={setAIInvitationTablePageSize}
+                  onClear={() => setAIInvitationTableFilters({ query: "", status: "All", type: "All" })}
+                  filters={[
+                    { label: "Status", value: aiInvitationTableFilters.status, options: ["All", ...getUniqueTableOptions(campaignJobs, (job) => job.status || "Queued")], onChange: (value) => setAIInvitationTableFilters((current) => ({ ...current, status: value })) },
+                    { label: "Type", value: aiInvitationTableFilters.type, options: ["All", ...getUniqueTableOptions(campaignJobs, (job) => job.job_type || "Invitation")], onChange: (value) => setAIInvitationTableFilters((current) => ({ ...current, type: value })) },
+                  ]}
+                />
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Created</th>
+                        <th>Candidate</th>
+                        <th>Email</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Attempts</th>
+                        <th>Available / Sent</th>
+                        <th>Message ID</th>
+                        <th>Error</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {filteredAIInvitationRows.length === 0 ? (
+                        <tr><td colSpan="9">No invitation jobs match the current search and filters.</td></tr>
+                      ) : pagedAIInvitationRows.map((job) => (
+                        <tr key={job.id}>
+                          <td>{job.created_at ? new Date(job.created_at).toLocaleString() : "-"}</td>
+                          <td>{job.recipient_name || "-"}</td>
+                          <td>{job.recipient_email || "-"}</td>
+                          <td>{job.job_type || "Invitation"}</td>
+                          <td><Badge value={job.status || "Queued"} /></td>
+                          <td>{job.attempt_count || 0} / {job.max_attempts || 3}</td>
+                          <td>{job.sent_at ? new Date(job.sent_at).toLocaleString() : job.available_at ? new Date(job.available_at).toLocaleString() : "-"}</td>
+                          <td style={{ maxWidth: "180px", overflowWrap: "anywhere" }}>{job.message_id || "-"}</td>
+                          <td style={{ color: job.last_error ? "#b91c1c" : "inherit", maxWidth: "320px", whiteSpace: "pre-wrap" }}>{job.last_error || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <SmartTablePagination
+                  page={aiInvitationTablePage}
+                  totalPages={aiInvitationTableTotalPages}
+                  onPageChange={setAIInvitationTablePage}
+                />
+              </>
             )}
           </TableCard>
         )}
@@ -24941,7 +25290,7 @@ function exportCurrentPage() {
     return exportRowsToExcel(selectedCampaignRows, "VisaFlow_AI_Interview_Campaign_Results", "AI Interview Results");
   }
   if (activePage === "Interviews") return exportRowsToExcel(
-    interviews.map((interview) => {
+    filteredInterviewTableRows.map((interview) => {
       const aiSession = getAIInterviewSessionForInterview(interview);
       return {
         ...interview,
@@ -29548,6 +29897,23 @@ Save Authorization
             {activePage === "Interviews" && (
             <>
             <TableCard title="Interview Records">
+              <SmartTableToolbar
+                searchValue={interviewTableFilters.query}
+                onSearchChange={(value) => setInterviewTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search candidate, civil ID, iqama, passport, mobile, request, project no, profession or agency..."
+                resultCount={filteredInterviewTableRows.length}
+                pageSize={interviewTablePageSize}
+                onPageSizeChange={setInterviewTablePageSize}
+                onClear={() => setInterviewTableFilters({ query: "", status: "All", profession: "All", project: "All", agency: "All", type: "All" })}
+                filters={[
+                  { label: "Status", value: interviewTableFilters.status, options: ["All", ...getUniqueTableOptions(interviews, "status")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, status: value })) },
+                  { label: "Profession", value: interviewTableFilters.profession, options: ["All", ...getUniqueTableOptions(interviews, "profession")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, profession: value })) },
+                  { label: "Project", value: interviewTableFilters.project, options: ["All", ...getUniqueTableOptions(interviews, (item) => item.project || requests.find((request) => String(request.request_no || "") === String(item.request_no || ""))?.project_name)], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, project: value })) },
+                  { label: "Agency", value: interviewTableFilters.agency, options: ["All", ...getUniqueTableOptions(interviews, "agency")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, agency: value })) },
+                  { label: "Type", value: interviewTableFilters.type, options: ["All", ...getUniqueTableOptions(interviews, "interview_type")], onChange: (value) => setInterviewTableFilters((current) => ({ ...current, type: value })) },
+                ]}
+              />
+              <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
@@ -29564,7 +29930,9 @@ Save Authorization
                   </tr>
                 </thead>
                 <tbody>
-                  {interviews.map((item) => {
+                  {filteredInterviewTableRows.length === 0 ? (
+                    <tr><td colSpan="10">No interview records match the current search and filters.</td></tr>
+                  ) : pagedInterviewTableRows.map((item) => {
                     const interviewCandidate =
   candidates.find(
     (candidate) => String(candidate.id || "") === String(item.candidate_id || "")
@@ -29624,9 +29992,32 @@ Save Authorization
                   })}
                 </tbody>
               </table>
+              </div>
+              <SmartTablePagination
+                page={interviewTablePage}
+                totalPages={interviewTableTotalPages}
+                onPageChange={setInterviewTablePage}
+              />
             </TableCard>
 
             <TableCard title="AI Interview Sessions">
+              <SmartTableToolbar
+                searchValue={aiSessionTableFilters.query}
+                onSearchChange={(value) => setAISessionTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search candidate, civil ID, iqama, passport, mobile, campaign, request, project, template or score..."
+                resultCount={filteredAISessionTableRows.length}
+                pageSize={aiSessionTablePageSize}
+                onPageSizeChange={setAISessionTablePageSize}
+                onClear={() => setAISessionTableFilters({ query: "", status: "All", profession: "All", mode: "All", recommendation: "All", decision: "All" })}
+                filters={[
+                  { label: "Status", value: aiSessionTableFilters.status, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, "status")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, status: value })) },
+                  { label: "Profession", value: aiSessionTableFilters.profession, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, "profession")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, profession: value })) },
+                  { label: "Mode", value: aiSessionTableFilters.mode, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, (session) => session.interview_mode || "Voice")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, mode: value })) },
+                  { label: "AI Recommendation", value: aiSessionTableFilters.recommendation, options: ["All", ...getUniqueTableOptions(aiInterviewSessions, (session) => session.ai_recommendation || "Pending Analysis")], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, recommendation: value })) },
+                  { label: "Company Decision", value: aiSessionTableFilters.decision, options: ["All", ...AI_INTERVIEW_HUMAN_DECISIONS], onChange: (value) => setAISessionTableFilters((current) => ({ ...current, decision: value })) },
+                ]}
+              />
+              <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
@@ -29644,12 +30035,12 @@ Save Authorization
                   </tr>
                 </thead>
                 <tbody>
-                  {aiInterviewSessions.length === 0 ? (
+                  {filteredAISessionTableRows.length === 0 ? (
                     <tr>
-                      <td colSpan="11">No AI interview sessions yet. Create a normal interview first, then click Create AI Interview.</td>
+                      <td colSpan="11">No AI interview sessions match the current search and filters.</td>
                     </tr>
                   ) : (
-                    aiInterviewSessions.map((session) => (
+                    pagedAISessionTableRows.map((session) => (
                       <tr key={session.id} style={String(selectedAIInterviewSessionId) === String(session.id) ? { background: "#eff6ff" } : undefined}>
                         <td>{session.created_at ? new Date(session.created_at).toLocaleString() : "-"}</td>
                         <td>{session.candidate_name || "-"}</td>
@@ -29686,6 +30077,12 @@ Save Authorization
                   )}
                 </tbody>
               </table>
+              </div>
+              <SmartTablePagination
+                page={aiSessionTablePage}
+                totalPages={aiSessionTableTotalPages}
+                onPageChange={setAISessionTablePage}
+              />
             </TableCard>
 
             {selectedAIInterviewSessionId && (() => {
