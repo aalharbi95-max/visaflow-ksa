@@ -23833,6 +23833,31 @@ function getReportStudioVisualModel() {
     setAIInterviewCampaignMessage("Launching campaign and creating secure interview sessions...");
 
     try {
+      const { data: preflightData, error: preflightError } = await supabase
+        .rpc("ai_interview_delivery_preflight");
+
+      if (preflightError) {
+        throw new Error(
+          `AI interview launch preflight failed. Apply the production database migration before launching campaigns: ${preflightError.message}`
+        );
+      }
+
+      const preflight = Array.isArray(preflightData) ? preflightData[0] : preflightData;
+      if (!preflight?.ok) {
+        const missingColumns = Array.isArray(preflight?.missing_columns)
+          ? preflight.missing_columns.join(", ")
+          : "unknown";
+        const missingTriggers = Array.isArray(preflight?.missing_triggers)
+          ? preflight.missing_triggers.join(", ")
+          : "unknown";
+
+        throw new Error(
+          `AI interview launch blocked by database preflight. ` +
+          `Missing columns: ${missingColumns || "none"}. ` +
+          `Missing triggers: ${missingTriggers || "none"}.`
+        );
+      }
+
       const baseUrl = `${window.location.origin}${window.location.pathname}`.replace(/\/$/, "");
       const { data, error } = await supabase.rpc("launch_ai_interview_campaign", {
         p_campaign_id: campaign.id,
@@ -23842,10 +23867,9 @@ function getReportStudioVisualModel() {
 
       const result = Array.isArray(data) ? data[0] : data;
 
-      // Campaign delivery settings must be copied to every linked session.
-      // Do not rely only on ai_interview_sessions.campaign_id because the launch RPC may
-      // reuse an existing active session for a candidate. In that case, the reused session
-      // can keep its old campaign_id and would otherwise remain Recorded instead of Live.
+      // Production rule: campaign delivery settings are synchronized in PostgreSQL
+      // by database triggers during campaign launch. The browser only verifies the result;
+      // it must never repair or mutate launched sessions after the RPC has completed.
       let campaignSettings = {};
       if (campaign.settings && typeof campaign.settings === "object") {
         campaignSettings = campaign.settings;
@@ -23877,35 +23901,12 @@ function getReportStudioVisualModel() {
         .not("session_id", "is", null);
 
       if (linkedCandidateError) {
-        throw new Error(`Campaign launched, but linked sessions could not be resolved: ${linkedCandidateError.message}`);
+        throw new Error(`Campaign launch verification could not resolve linked sessions: ${linkedCandidateError.message}`);
       }
 
       const linkedSessionIds = Array.from(new Set(
         (linkedCandidateRows || []).map((row) => String(row.session_id || "")).filter(Boolean)
       ));
-
-      const sessionDeliveryPayload = {
-        interaction_mode: interactionMode,
-        interview_mode: interviewMode,
-        camera_mode: cameraMode,
-        max_dynamic_follow_ups: maxDynamicFollowUps,
-        live_response_timeout_seconds: liveResponseTimeoutSeconds,
-        updated_at: new Date().toISOString(),
-      };
-
-      let modeSyncQuery = supabase
-        .from("ai_interview_sessions")
-        .update(sessionDeliveryPayload)
-        .eq("company_id", currentCompanyId);
-
-      modeSyncQuery = linkedSessionIds.length > 0
-        ? modeSyncQuery.in("id", linkedSessionIds)
-        : modeSyncQuery.eq("campaign_id", campaign.id);
-
-      const { error: modeSyncError } = await modeSyncQuery;
-      if (modeSyncError) {
-        throw new Error(`Campaign launched, but interview delivery settings were not applied: ${modeSyncError.message}`);
-      }
 
       let verificationQuery = supabase
         .from("ai_interview_sessions")
@@ -23918,18 +23919,22 @@ function getReportStudioVisualModel() {
 
       const { data: verifiedSessions, error: verificationError } = await verificationQuery;
       if (verificationError) {
-        throw new Error(`Campaign launched, but session delivery verification failed: ${verificationError.message}`);
+        throw new Error(`Campaign launch verification failed: ${verificationError.message}`);
       }
 
       const mismatchedSessions = (verifiedSessions || []).filter((sessionRow) =>
+        String(sessionRow.campaign_id || "") !== String(campaign.id) ||
         sessionRow.interaction_mode !== interactionMode ||
         sessionRow.interview_mode !== interviewMode ||
-        sessionRow.camera_mode !== cameraMode
+        sessionRow.camera_mode !== cameraMode ||
+        Number(sessionRow.max_dynamic_follow_ups || 0) !== maxDynamicFollowUps ||
+        Number(sessionRow.live_response_timeout_seconds || 60) !== liveResponseTimeoutSeconds
       );
 
       if (!(verifiedSessions || []).length || mismatchedSessions.length > 0) {
         throw new Error(
-          `Campaign launched, but ${mismatchedSessions.length || "no"} session(s) failed delivery-mode verification.`
+          `Campaign launch was blocked because database delivery synchronization failed for ` +
+          `${mismatchedSessions.length || "all"} session(s). No browser-side repair was attempted.`
         );
       }
 
