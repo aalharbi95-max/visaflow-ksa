@@ -3315,6 +3315,45 @@ const EMPTY_TALENT_CONSENTS = {
   "Marketing Communications": false,
 };
 
+function TalentField({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder = "",
+  min,
+  max,
+  dir,
+  autoComplete,
+}) {
+  return (
+    <label style={{ display: "grid", gap: "7px", fontWeight: 800, color: "#10243e" }}>
+      <span style={{ fontSize: "13px" }}>{label}</span>
+      <input
+        type={type}
+        value={value ?? ""}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        min={min}
+        max={max}
+        dir={dir}
+        autoComplete={autoComplete}
+        style={{
+          width: "100%",
+          minHeight: "46px",
+          border: "1px solid #d7e5ee",
+          borderRadius: "12px",
+          padding: "10px 12px",
+          background: "#fff",
+          color: "#10243e",
+          font: "inherit",
+          boxSizing: "border-box",
+        }}
+      />
+    </label>
+  );
+}
+
 function talentTextList(value) {
   if (!Array.isArray(value)) return "";
   return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
@@ -3884,34 +3923,6 @@ function TalentCandidatePortal({ onBack }) {
     }
   }
 
-  function Field({ label, value, onChange, type = "text", placeholder = "", min, max, dir }) {
-    return (
-      <label style={{ display: "grid", gap: "7px", fontWeight: 800, color: palette.text }}>
-        <span style={{ fontSize: "13px" }}>{label}</span>
-        <input
-          type={type}
-          value={value ?? ""}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-          min={min}
-          max={max}
-          dir={dir}
-          style={{
-            width: "100%",
-            minHeight: "46px",
-            border: `1px solid ${palette.border}`,
-            borderRadius: "12px",
-            padding: "10px 12px",
-            background: "#fff",
-            color: palette.text,
-            font: "inherit",
-            boxSizing: "border-box",
-          }}
-        />
-      </label>
-    );
-  }
-
   if (!authChecked) {
     return (
       <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: palette.navy, color: "#fff" }}>
@@ -3996,13 +4007,13 @@ function TalentCandidatePortal({ onBack }) {
               <div style={{ display: "grid", gap: "13px" }}>
                 {authMode === "signup" && (
                   <>
-                    <Field label={isArabic ? "الاسم الكامل" : "Full Name"} value={authForm.full_name} onChange={(value) => setAuthForm((prev) => ({ ...prev, full_name: value }))} />
-                    <Field label={isArabic ? "رقم الجوال" : "Mobile Number"} value={authForm.phone} onChange={(value) => setAuthForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
+                    <TalentField label={isArabic ? "الاسم الكامل" : "Full Name"} value={authForm.full_name} onChange={(value) => setAuthForm((prev) => ({ ...prev, full_name: value }))} />
+                    <TalentField label={isArabic ? "رقم الجوال" : "Mobile Number"} value={authForm.phone} onChange={(value) => setAuthForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
                   </>
                 )}
-                <Field label={isArabic ? "البريد الإلكتروني" : "Email Address"} type="email" value={authForm.email} onChange={(value) => setAuthForm((prev) => ({ ...prev, email: value }))} dir="ltr" />
-                <Field label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" />
-                {authMode === "signup" && <Field label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" />}
+                <TalentField label={isArabic ? "البريد الإلكتروني" : "Email Address"} type="email" value={authForm.email} onChange={(value) => setAuthForm((prev) => ({ ...prev, email: value }))} dir="ltr" />
+                <TalentField label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" />
+                {authMode === "signup" && <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" />}
               </div>
 
               {authMessage && <div style={{ marginTop: "14px", padding: "12px", borderRadius: "12px", background: authMessage.includes("بنجاح") || authMessage.includes("created") ? "#ecfdf5" : "#fff7ed", color: authMessage.includes("بنجاح") || authMessage.includes("created") ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{authMessage}</div>}
@@ -4087,23 +4098,23 @@ function TalentCandidatePortal({ onBack }) {
                 <h2 style={{ marginTop: 0 }}>{isArabic ? "الملف المهني" : "Professional Profile"}</h2>
                 <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "اكتب معلومات حقيقية ومختصرة؛ سيستخدمها النظام في مطابقة الفرص." : "Use accurate, concise information; it will support employer matching."}</p>
                 <div className="vf-talent-form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "14px" }}>
-                  <Field label={isArabic ? "الاسم الكامل *" : "Full Name *"} value={profileForm.full_name} onChange={(value) => setProfileForm((prev) => ({ ...prev, full_name: value }))} />
-                  <Field label={isArabic ? "رقم الجوال *" : "Mobile Number *"} value={profileForm.phone} onChange={(value) => setProfileForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
-                  <Field label={isArabic ? "الجنسية" : "Nationality"} value={profileForm.nationality} onChange={(value) => setProfileForm((prev) => ({ ...prev, nationality: value }))} />
-                  <Field label={isArabic ? "دولة الإقامة" : "Country of Residence"} value={profileForm.country_of_residence} onChange={(value) => setProfileForm((prev) => ({ ...prev, country_of_residence: value }))} />
-                  <Field label={isArabic ? "المدينة" : "City"} value={profileForm.city} onChange={(value) => setProfileForm((prev) => ({ ...prev, city: value }))} />
-                  <Field label={isArabic ? "المهنة المستهدفة *" : "Target Profession *"} value={profileForm.profession} onChange={(value) => setProfileForm((prev) => ({ ...prev, profession: value }))} />
-                  <Field label={isArabic ? "المسمى الحالي" : "Current Job Title"} value={profileForm.current_job_title} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_job_title: value }))} />
-                  <Field label={isArabic ? "جهة العمل الحالية" : "Current Employer"} value={profileForm.current_company} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_company: value }))} />
-                  <Field label={isArabic ? "سنوات الخبرة" : "Years of Experience"} type="number" min="0" max="80" value={profileForm.years_experience} onChange={(value) => setProfileForm((prev) => ({ ...prev, years_experience: value }))} />
-                  <Field label={isArabic ? "مدة الإشعار بالأيام" : "Notice Period (days)"} type="number" min="0" max="730" value={profileForm.notice_period_days} onChange={(value) => setProfileForm((prev) => ({ ...prev, notice_period_days: value }))} />
-                  <Field label={isArabic ? "الراتب المتوقع" : "Expected Salary"} type="number" min="0" value={profileForm.expected_salary} onChange={(value) => setProfileForm((prev) => ({ ...prev, expected_salary: value }))} />
+                  <TalentField label={isArabic ? "الاسم الكامل *" : "Full Name *"} value={profileForm.full_name} onChange={(value) => setProfileForm((prev) => ({ ...prev, full_name: value }))} />
+                  <TalentField label={isArabic ? "رقم الجوال *" : "Mobile Number *"} value={profileForm.phone} onChange={(value) => setProfileForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
+                  <TalentField label={isArabic ? "الجنسية" : "Nationality"} value={profileForm.nationality} onChange={(value) => setProfileForm((prev) => ({ ...prev, nationality: value }))} />
+                  <TalentField label={isArabic ? "دولة الإقامة" : "Country of Residence"} value={profileForm.country_of_residence} onChange={(value) => setProfileForm((prev) => ({ ...prev, country_of_residence: value }))} />
+                  <TalentField label={isArabic ? "المدينة" : "City"} value={profileForm.city} onChange={(value) => setProfileForm((prev) => ({ ...prev, city: value }))} />
+                  <TalentField label={isArabic ? "المهنة المستهدفة *" : "Target Profession *"} value={profileForm.profession} onChange={(value) => setProfileForm((prev) => ({ ...prev, profession: value }))} />
+                  <TalentField label={isArabic ? "المسمى الحالي" : "Current Job Title"} value={profileForm.current_job_title} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_job_title: value }))} />
+                  <TalentField label={isArabic ? "جهة العمل الحالية" : "Current Employer"} value={profileForm.current_company} onChange={(value) => setProfileForm((prev) => ({ ...prev, current_company: value }))} />
+                  <TalentField label={isArabic ? "سنوات الخبرة" : "Years of Experience"} type="number" min="0" max="80" value={profileForm.years_experience} onChange={(value) => setProfileForm((prev) => ({ ...prev, years_experience: value }))} />
+                  <TalentField label={isArabic ? "مدة الإشعار بالأيام" : "Notice Period (days)"} type="number" min="0" max="730" value={profileForm.notice_period_days} onChange={(value) => setProfileForm((prev) => ({ ...prev, notice_period_days: value }))} />
+                  <TalentField label={isArabic ? "الراتب المتوقع" : "Expected Salary"} type="number" min="0" value={profileForm.expected_salary} onChange={(value) => setProfileForm((prev) => ({ ...prev, expected_salary: value }))} />
                   <label style={{ display: "grid", gap: "7px", fontWeight: 800 }}><span style={{ fontSize: "13px" }}>{isArabic ? "العملة" : "Currency"}</span><select value={profileForm.expected_salary_currency} onChange={(event) => setProfileForm((prev) => ({ ...prev, expected_salary_currency: event.target.value }))} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", background: "#fff", font: "inherit" }}><option value="SAR">SAR</option><option value="USD">USD</option><option value="AED">AED</option><option value="EGP">EGP</option><option value="INR">INR</option><option value="PKR">PKR</option><option value="PHP">PHP</option></select></label>
-                  <Field label={isArabic ? "اللغات — افصل بفاصلة" : "Languages — comma separated"} value={profileForm.languages_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, languages_text: value }))} />
-                  <Field label={isArabic ? "المواقع المفضلة — افصل بفاصلة" : "Preferred Locations — comma separated"} value={profileForm.preferred_locations_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_locations_text: value }))} />
-                  <Field label={isArabic ? "أنواع العمل المفضلة" : "Preferred Employment Types"} value={profileForm.preferred_employment_types_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_employment_types_text: value }))} placeholder={isArabic ? "دوام كامل، عقد، مؤقت" : "Full-time, Contract, Temporary"} />
-                  <Field label="LinkedIn" value={profileForm.linkedin_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, linkedin_url: value }))} dir="ltr" />
-                  <Field label={isArabic ? "رابط الأعمال أو Portfolio" : "Portfolio URL"} value={profileForm.portfolio_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, portfolio_url: value }))} dir="ltr" />
+                  <TalentField label={isArabic ? "اللغات — افصل بفاصلة" : "Languages — comma separated"} value={profileForm.languages_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, languages_text: value }))} />
+                  <TalentField label={isArabic ? "المواقع المفضلة — افصل بفاصلة" : "Preferred Locations — comma separated"} value={profileForm.preferred_locations_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_locations_text: value }))} />
+                  <TalentField label={isArabic ? "أنواع العمل المفضلة" : "Preferred Employment Types"} value={profileForm.preferred_employment_types_text} onChange={(value) => setProfileForm((prev) => ({ ...prev, preferred_employment_types_text: value }))} placeholder={isArabic ? "دوام كامل، عقد، مؤقت" : "Full-time, Contract, Temporary"} />
+                  <TalentField label="LinkedIn" value={profileForm.linkedin_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, linkedin_url: value }))} dir="ltr" />
+                  <TalentField label={isArabic ? "رابط الأعمال أو Portfolio" : "Portfolio URL"} value={profileForm.portfolio_url} onChange={(value) => setProfileForm((prev) => ({ ...prev, portfolio_url: value }))} dir="ltr" />
                 </div>
                 <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "العنوان المهني" : "Professional Headline"}</span><input value={profileForm.headline} onChange={(event) => setProfileForm((prev) => ({ ...prev, headline: event.target.value }))} style={{ minHeight: "46px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px 12px", font: "inherit" }} /></label>
                 <label style={{ display: "grid", gap: "7px", fontWeight: 800, marginTop: "14px" }}><span style={{ fontSize: "13px" }}>{isArabic ? "ملخص مهني" : "Professional Summary"}</span><textarea rows="6" value={profileForm.professional_summary} onChange={(event) => setProfileForm((prev) => ({ ...prev, professional_summary: event.target.value }))} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "12px", font: "inherit", resize: "vertical" }} /></label>
@@ -26610,20 +26621,81 @@ if (!currentUser) {
         <div className="vf-left-content">
           <div className="vf-platform-badge">
             <span>🛡</span>
-            Enterprise Recruitment, Visa & Workforce Operations Platform
+            {loginLanguage === "AR"
+              ? "منصة للشركات والمتقدمين: توظيف، تأشيرات، قوى عاملة وفرص مهنية"
+              : "For companies and candidates: recruitment, visas, workforce and career opportunities"}
           </div>
 
           <section className="vf-hero-copy">
             <h1>
-              Control recruitment.
-              <br />
-              Govern visas. <strong>Mobilize faster.</strong>
+              {loginLanguage === "AR" ? (
+                <>
+                  منصة واحدة للشركات.
+                  <br />
+                  وفرص أوضح <strong>للمتقدمين.</strong>
+                </>
+              ) : (
+                <>
+                  One platform for companies.
+                  <br />
+                  Better access <strong>for candidates.</strong>
+                </>
+              )}
             </h1>
             <p>
-              VisaFlow KSA helps organizations manage manpower requests, agencies,
-              visas, candidates, interviews, mobilization, workforce movement,
-              local content, and executive reporting from one secure workspace.
+              {loginLanguage === "AR"
+                ? "تدير الشركات التوظيف والتأشيرات والقوى العاملة، ويستطيع الباحثون عن عمل إنشاء ملف مهني ورفع سيرهم والوصول إلى فرص الشركات المشتركة وفق موافقتهم."
+                : "Companies manage recruitment, visas and workforce operations, while job seekers build a professional profile, upload their CV and become discoverable to subscribed employers with consent."}
             </p>
+          </section>
+
+          <section
+            aria-label={loginLanguage === "AR" ? "بوابة المتقدمين" : "Candidate portal"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "18px",
+              flexWrap: "wrap",
+              margin: "24px 0 26px",
+              padding: "22px",
+              borderRadius: "22px",
+              background: "linear-gradient(135deg, rgba(18,184,176,.22), rgba(14,58,117,.38))",
+              border: "1px solid rgba(94,234,212,.42)",
+              boxShadow: "0 20px 50px rgba(0,0,0,.16)",
+            }}
+          >
+            <div style={{ minWidth: "260px", flex: "1 1 430px" }}>
+              <div style={{ color: "#67e8f9", fontSize: "12px", fontWeight: 900, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: "7px" }}>
+                {loginLanguage === "AR" ? "للباحثين عن عمل والمتقدمين" : "For job seekers and candidates"}
+              </div>
+              <h2 style={{ margin: "0 0 8px", color: "#fff", fontSize: "clamp(24px, 3vw, 36px)" }}>
+                {loginLanguage === "AR" ? "قدّم سيرتك الذاتية وابدأ ملفك المهني" : "Submit your CV and build your career profile"}
+              </h2>
+              <p style={{ margin: 0, color: "rgba(255,255,255,.82)", lineHeight: 1.75, maxWidth: "720px" }}>
+                {loginLanguage === "AR"
+                  ? "سجّل مجانًا، ارفع سيرتك، أكمل تقييمك ومقابلة الذكاء الاصطناعي، ثم اجعل ملفك متاحًا للشركات بعد موافقتك."
+                  : "Register, upload your CV, complete your assessment and AI interview, then make your profile available to employers with your consent."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openTalentPortal}
+              style={{
+                border: 0,
+                borderRadius: "15px",
+                background: "#fff",
+                color: "#0e3a75",
+                padding: "15px 24px",
+                fontWeight: 950,
+                fontSize: "16px",
+                cursor: "pointer",
+                minWidth: "210px",
+                boxShadow: "0 12px 28px rgba(0,0,0,.2)",
+              }}
+            >
+              {loginLanguage === "AR" ? "✨ دخول منصة المتقدمين" : "✨ Open Candidate Portal"}
+            </button>
           </section>
 
           <section className="vf-feature-cards vf-feature-cards-expanded" aria-label="VisaFlow platform capabilities">
@@ -26688,11 +26760,11 @@ if (!currentUser) {
             )}
           </div>
 
-          <h2>{loginLanguage === "AR" ? "تسجيل الدخول" : "Welcome Back"}</h2>
+          <h2>{loginLanguage === "AR" ? "دخول الشركات" : "Company Login"}</h2>
           <p className="vf-login-subtitle">
             {loginLanguage === "AR"
-              ? "ادخل إلى مساحة عمل شركتك لإدارة عمليات الاستقدام والتأشيرات والقوى العاملة."
-              : "Sign in to manage recruitment, visas, agencies, mobilization, and workforce operations."}
+              ? "هذه البوابة مخصصة لموظفي الشركات والمكاتب. المتقدمون يستخدمون منصة المتقدمين الموضحة في الصفحة."
+              : "This sign-in is for company and agency users. Candidates should use the Candidate Portal shown on this page."}
           </p>
 
           <div className="vf-form-group">
@@ -26773,7 +26845,7 @@ if (!currentUser) {
 
           <div style={{ marginTop: "16px", padding: "15px", borderRadius: "16px", background: "linear-gradient(135deg, #eef8fb, #edf4ff)", border: "1px solid #cfe3ee", textAlign: loginLanguage === "AR" ? "right" : "left" }}>
             <div style={{ color: "#0d2d5a", fontWeight: 900, fontSize: "15px" }}>
-              {loginLanguage === "AR" ? "باحث عن فرصة وظيفية؟" : "Looking for your next opportunity?"}
+              {loginLanguage === "AR" ? "دخول المتقدمين وإنشاء ملف مهني" : "Candidate Login & Career Profile"}
             </div>
             <p style={{ margin: "6px 0 12px", color: "#64748b", fontSize: "12px", lineHeight: 1.6 }}>
               {loginLanguage === "AR"
@@ -26785,7 +26857,7 @@ if (!currentUser) {
               onClick={openTalentPortal}
               style={{ width: "100%", border: 0, borderRadius: "12px", background: "linear-gradient(135deg, #0e3a75, #12b8b0)", color: "#fff", padding: "12px", fontWeight: 900, cursor: "pointer" }}
             >
-              {loginLanguage === "AR" ? "✨ قدم سيرتك الذاتية" : "✨ Join VisaFlow Talent"}
+              {loginLanguage === "AR" ? "✨ افتح منصة المتقدمين" : "✨ Open VisaFlow Talent"}
             </button>
           </div>
 
