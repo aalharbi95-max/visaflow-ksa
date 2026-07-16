@@ -5105,6 +5105,7 @@ const [companyReportRows, setCompanyReportRows] = useState([]);
 const [companyReportLoading, setCompanyReportLoading] = useState(false);
 const [selectedPlatformClientUsers, setSelectedPlatformClientUsers] = useState(null);
 const [platformClientEditingId, setPlatformClientEditingId] = useState(null);
+const [platformClientSaving, setPlatformClientSaving] = useState(false);
 const [subscriptionInvoiceEditingId, setSubscriptionInvoiceEditingId] = useState(null);
 const [supportTicketEditingId, setSupportTicketEditingId] = useState(null);
 
@@ -22979,122 +22980,151 @@ function editPlatformClient(item) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+async function getPlatformProvisionerError(error, data) {
+  if (data?.error) return String(data.error);
+
+  const fallback = String(error?.message || "Platform company provisioning failed.");
+  const response = error?.context;
+  if (!response) return fallback;
+
+  try {
+    if (typeof response.clone === "function" && typeof response.json === "function") {
+      const body = await response.clone().json();
+      return String(body?.error || body?.message || fallback);
+    }
+  } catch {
+    // The Edge Function response may not contain JSON. Keep the original message.
+  }
+
+  return fallback;
+}
+
+async function invokePlatformCompanyProvisioner(body) {
+  const { data, error } = await supabase.functions.invoke(
+    "visaflow-platform-company-provisioner",
+    { body }
+  );
+
+  if (error || data?.ok === false) {
+    throw new Error(await getPlatformProvisionerError(error, data));
+  }
+
+  return data || { ok: true };
+}
+
 async function savePlatformClient() {
   if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
-  if (!platformClientForm.company_name) return alert("Company name is required.");
+  if (platformClientSaving) return;
 
+  const companyName = String(platformClientForm.company_name || "").trim();
+  if (!companyName) return alert("Company name is required.");
+
+  const isNewCompany = !platformClientEditingId;
   const adminName = String(platformClientForm.admin_name || "").trim();
   const adminEmail = String(platformClientForm.admin_email || "").trim().toLowerCase();
   const adminPassword = String(platformClientForm.admin_password || "").trim();
   const adminRole = platformClientForm.admin_role || "Admin";
+  const adminFieldsStarted = Boolean(adminName || adminEmail || adminPassword);
 
-  if (!platformClientEditingId && (adminName || adminEmail || adminPassword)) {
+  // A new client must never be saved without its first secure administrator.
+  if (isNewCompany || adminFieldsStarted) {
     if (!adminName) return alert("Primary Admin Name is required.");
     if (!adminEmail) return alert("Primary Admin Email is required.");
     if (!adminPassword) return alert("Temporary Password is required.");
+    if (adminPassword.length < 8) return alert("Temporary Password must be at least 8 characters.");
   }
 
-  let operationalCompanyId = platformClientForm.operational_company_id || null;
-
-  if (!operationalCompanyId && !platformClientEditingId && adminEmail) {
-    const { data: existingCompany, error: companyLookupError } = await supabase
-      .from("companies")
-      .select("id, name")
-      .eq("name", platformClientForm.company_name)
-      .maybeSingle();
-
-    if (companyLookupError) return alert(companyLookupError.message);
-
-    if (existingCompany?.id) {
-      operationalCompanyId = existingCompany.id;
-    } else {
-      const { data: createdCompany, error: companyCreateError } = await supabase
-        .from("companies")
-        .insert([{
-          name: platformClientForm.company_name,
-          domain: platformClientForm.domain || "",
-          status: "Active",
-          subscription_plan: platformClientForm.subscription_status === "Trial" ? "Trial" : "SaaS",
-          subscription_status: getOperationalCompanySubscriptionStatus(platformClientForm.subscription_status),
-          subscription_start: platformClientForm.start_date || null,
-          subscription_end: platformClientForm.end_date || null,
-          max_users: Number(platformClientForm.users_count || 0) || 5,
-          notes: "Created from Platform Owner / Companies Management",
-        }])
-        .select()
-        .single();
-
-      if (companyCreateError) return alert(companyCreateError.message);
-      operationalCompanyId = createdCompany.id;
-    }
-  }
-
-  const payload = {
-    company_name: platformClientForm.company_name,
-    domain: platformClientForm.domain || "",
+  const companyPayload = {
+    company_name: companyName,
+    domain: String(platformClientForm.domain || "").trim(),
     subscription_status: platformClientForm.subscription_status || "Active",
     users_count: Number(platformClientForm.users_count || 0),
     start_date: platformClientForm.start_date || null,
     end_date: platformClientForm.end_date || null,
     monthly_amount: Number(platformClientForm.monthly_amount || 0),
-    operational_company_id: operationalCompanyId,
   };
 
-  const result = platformClientEditingId
-    ? await supabase.from("platform_clients").update(payload).eq("id", platformClientEditingId)
-    : await supabase.from("platform_clients").insert([payload]);
+  setPlatformClientSaving(true);
 
-  if (result.error) return alert(result.error.message);
+  try {
+    if (isNewCompany) {
+      // The Edge Function uses the service role on the server. It creates the
+      // operational company, platform client, Supabase Auth account and
+      // public.users link as one protected provisioning workflow. If any step
+      // fails, it removes the records already created instead of leaving an
+      // incomplete company in the portfolio.
+      await invokePlatformCompanyProvisioner({
+        action: "create_company",
+        ...companyPayload,
+        admin_name: adminName,
+        admin_email: adminEmail,
+        admin_password: adminPassword,
+        admin_role: adminRole,
+      });
 
-  if (operationalCompanyId) {
-    const { error: operationalCompanyUpdateError } = await supabase
-      .from("companies")
-      .update({
-        name: platformClientForm.company_name,
-        domain: platformClientForm.domain || "",
-        status: "Active",
-        subscription_plan: platformClientForm.subscription_status === "Trial" ? "Trial" : "SaaS",
-        subscription_status: getOperationalCompanySubscriptionStatus(platformClientForm.subscription_status),
-        subscription_start: platformClientForm.start_date || null,
-        subscription_end: platformClientForm.end_date || null,
-        max_users: Number(platformClientForm.users_count || 0) || 5,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", operationalCompanyId);
-
-    if (operationalCompanyUpdateError) return alert(operationalCompanyUpdateError.message);
-  }
-
-  if (!platformClientEditingId && adminEmail) {
-    if (!operationalCompanyId) {
-      return alert("Company saved, but Primary Admin was not created because Operational Company ID is missing.");
+      resetPlatformClientForm();
+      await Promise.all([loadPlatformClients(), loadUsers(), loadCompanies()]);
+      alert("Company and secure Primary Admin created successfully.");
+      return;
     }
 
-    const { data: existingUser, error: existingUserError } = await supabase
-      .from("users")
-      .select("id")
-      .eq("email", adminEmail)
-      .maybeSingle();
+    const operationalCompanyId = platformClientForm.operational_company_id || null;
+    const platformPayload = {
+      ...companyPayload,
+      operational_company_id: operationalCompanyId,
+    };
 
-    if (existingUserError) return alert(existingUserError.message);
-    if (existingUser) return alert("Company saved, but admin email already exists in users.");
+    const { error: clientUpdateError } = await supabase
+      .from("platform_clients")
+      .update(platformPayload)
+      .eq("id", platformClientEditingId);
 
-    const { error: userError } = await supabase.from("users").insert([{
-      name: adminName,
-      email: adminEmail,
-      password: adminPassword,
-      role: adminRole,
-      status: "Active",
-      company_id: operationalCompanyId,
-    }]);
+    if (clientUpdateError) throw clientUpdateError;
 
-    if (userError) return alert(userError.message);
+    if (operationalCompanyId) {
+      const { error: companyUpdateError } = await supabase
+        .from("companies")
+        .update({
+          name: companyName,
+          domain: companyPayload.domain,
+          status: "Active",
+          subscription_plan: companyPayload.subscription_status === "Trial" ? "Trial" : "SaaS",
+          subscription_status: getOperationalCompanySubscriptionStatus(companyPayload.subscription_status),
+          subscription_start: companyPayload.start_date,
+          subscription_end: companyPayload.end_date,
+          max_users: companyPayload.users_count || 5,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", operationalCompanyId);
+
+      if (companyUpdateError) throw companyUpdateError;
+    }
+
+    // Repair path for an existing company that was previously saved without
+    // a user. Open Edit, enter only the Primary Admin fields, then Update.
+    if (adminFieldsStarted) {
+      await invokePlatformCompanyProvisioner({
+        action: "ensure_primary_admin",
+        platform_client_id: platformClientEditingId,
+        operational_company_id: operationalCompanyId,
+        admin_name: adminName,
+        admin_email: adminEmail,
+        admin_password: adminPassword,
+        admin_role: adminRole,
+      });
+    }
+
+    resetPlatformClientForm();
+    await Promise.all([loadPlatformClients(), loadUsers(), loadCompanies()]);
+    alert(adminFieldsStarted
+      ? "Company updated and secure Primary Admin created successfully."
+      : "Company updated successfully.");
+  } catch (error) {
+    console.error("Platform company save failed", error);
+    alert(`Company save failed: ${error?.message || "Unknown error"}`);
+  } finally {
+    setPlatformClientSaving(false);
   }
-
-  resetPlatformClientForm();
-  await loadPlatformClients();
-  await loadUsers();
-  alert(platformClientEditingId ? "Company updated successfully" : "Company and primary admin saved successfully");
 }
 async function extendPlatformClient(client, months = 1) {
   if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
@@ -35001,62 +35031,66 @@ onClick={() => setActiveReport("activityLog")}>
           />
         </div>
 
-        {!platformClientEditingId && (
-          <>
-            <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
-              <h3 style={{ margin: "8px 0 4px" }}>Primary Administrator</h3>
-              <p className="muted">This is the first company admin who can login and add users for his company.</p>
-            </div>
+        <>
+          <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+            <h3 style={{ margin: "8px 0 4px" }}>Primary Administrator</h3>
+            <p className="muted">
+              {platformClientEditingId
+                ? "To repair a company with no linked user, enter the Primary Admin details below. Leave all fields blank when only updating the subscription."
+                : "Required. The company is saved only after its secure Supabase Auth administrator is created and linked successfully."}
+            </p>
+          </div>
 
-            <div>
-              <label>Admin Name</label>
-              <input
-                placeholder="Primary Admin Name"
-                value={platformClientForm.admin_name}
-                onChange={(e) => updateForm(setPlatformClientForm, "admin_name", e.target.value)}
-              />
-            </div>
+          <div>
+            <label>Admin Name {platformClientEditingId ? "(repair only)" : "*"}</label>
+            <input
+              placeholder="Primary Admin Name"
+              value={platformClientForm.admin_name}
+              onChange={(e) => updateForm(setPlatformClientForm, "admin_name", e.target.value)}
+              autoComplete="off"
+            />
+          </div>
 
-            <div>
-              <label>Admin Email / Login</label>
-              <input
-                type="email"
-                placeholder="admin@company.com"
-                value={platformClientForm.admin_email}
-                onChange={(e) => updateForm(setPlatformClientForm, "admin_email", e.target.value)}
-              />
-            </div>
+          <div>
+            <label>Admin Email / Login {platformClientEditingId ? "(repair only)" : "*"}</label>
+            <input
+              type="email"
+              placeholder="admin@company.com"
+              value={platformClientForm.admin_email}
+              onChange={(e) => updateForm(setPlatformClientForm, "admin_email", e.target.value)}
+              autoComplete="off"
+            />
+          </div>
 
-            <div>
-              <label>Temporary Password</label>
-              <input
-                type="text"
-                placeholder="Temporary Password"
-                value={platformClientForm.admin_password}
-                onChange={(e) => updateForm(setPlatformClientForm, "admin_password", e.target.value)}
-              />
-            </div>
+          <div>
+            <label>Temporary Password {platformClientEditingId ? "(repair only)" : "*"}</label>
+            <input
+              type="password"
+              placeholder="Minimum 8 characters"
+              value={platformClientForm.admin_password}
+              onChange={(e) => updateForm(setPlatformClientForm, "admin_password", e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
 
-            <div>
-              <label>Admin Role</label>
-              <select
-                value={platformClientForm.admin_role}
-                onChange={(e) => updateForm(setPlatformClientForm, "admin_role", e.target.value)}
-              >
-                <option>Admin</option>
-                <option>Admin</option>
-                <option>CEO</option>
-                <option>Operations Manager</option>
-                <option>Recruitment Manager</option>
-                <option>Recruitment Officer</option>
-                <option>Viewer</option>
-              </select>
-            </div>
-          </>
-        )}
+          <div>
+            <label>Admin Role</label>
+            <select
+              value={platformClientForm.admin_role}
+              onChange={(e) => updateForm(setPlatformClientForm, "admin_role", e.target.value)}
+            >
+              <option>Admin</option>
+              <option>CEO</option>
+              <option>Operations Manager</option>
+              <option>Recruitment Manager</option>
+              <option>Recruitment Officer</option>
+              <option>Viewer</option>
+            </select>
+          </div>
+        </>
       </div>
       <div className="form-actions">
-        <button className="save-btn" onClick={savePlatformClient}>{platformClientEditingId ? "Update Company" : "Save Company"}</button>
+        <button className="save-btn" disabled={platformClientSaving} onClick={savePlatformClient}>{platformClientSaving ? "Saving securely..." : platformClientEditingId ? "Update Company" : "Save Company"}</button>
         {platformClientEditingId && <button className="ghost-btn" onClick={resetPlatformClientForm}>Cancel</button>}
       </div>
     </div>
