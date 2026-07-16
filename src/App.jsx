@@ -804,6 +804,65 @@ const DEFAULT_AI_INTERVIEW_SESSION_DELIVERY = Object.freeze({
   live_response_timeout_seconds: 60,
 });
 
+function getAIInterviewCampaignDelivery(campaign = {}) {
+  let settings = {};
+  if (campaign?.settings && typeof campaign.settings === "object") {
+    settings = campaign.settings;
+  } else if (typeof campaign?.settings === "string") {
+    try {
+      settings = JSON.parse(campaign.settings) || {};
+    } catch {
+      settings = {};
+    }
+  }
+
+  const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(campaign?.interaction_mode)
+    ? campaign.interaction_mode
+    : AI_INTERVIEW_INTERACTION_MODES.includes(settings.interaction_mode)
+      ? settings.interaction_mode
+      : DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.interaction_mode;
+
+  const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(campaign?.interview_mode)
+    ? campaign.interview_mode
+    : AI_INTERVIEW_MEDIA_MODES.includes(settings.interview_mode)
+      ? settings.interview_mode
+      : DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.interview_mode;
+
+  const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(campaign?.camera_mode)
+    ? campaign.camera_mode
+    : AI_INTERVIEW_CAMERA_MODES.includes(settings.camera_mode)
+      ? settings.camera_mode
+      : DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.camera_mode;
+
+  return {
+    interaction_mode: interactionMode,
+    interview_mode: interviewMode,
+    camera_mode: cameraMode,
+    max_dynamic_follow_ups: Math.max(
+      0,
+      Math.min(
+        3,
+        Number(
+          campaign?.max_dynamic_follow_ups ??
+          settings.max_dynamic_follow_ups ??
+          DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.max_dynamic_follow_ups
+        )
+      )
+    ),
+    live_response_timeout_seconds: Math.max(
+      15,
+      Math.min(
+        180,
+        Number(
+          campaign?.live_response_timeout_seconds ??
+          settings.live_response_timeout_seconds ??
+          DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.live_response_timeout_seconds
+        )
+      )
+    ),
+  };
+}
+
 const EMPTY_AI_INTERVIEW_GENERATION_FORM = {
   template_name: "",
   profession: "",
@@ -24995,6 +25054,17 @@ function getReportStudioVisualModel() {
         created_by_user_id: currentUser?.id || null,
         created_by_name: currentUser?.name || currentUser?.email || "VisaFlow User",
         notes: String(form.notes || "").trim(),
+        interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(form.interaction_mode)
+          ? form.interaction_mode
+          : "Recorded",
+        interview_mode: AI_INTERVIEW_MEDIA_MODES.includes(form.interview_mode)
+          ? form.interview_mode
+          : "Voice",
+        camera_mode: AI_INTERVIEW_CAMERA_MODES.includes(form.camera_mode)
+          ? form.camera_mode
+          : "Off",
+        max_dynamic_follow_ups: Math.max(0, Math.min(3, Number(form.max_dynamic_follow_ups || 0))),
+        live_response_timeout_seconds: Math.max(15, Math.min(180, Number(form.live_response_timeout_seconds || 60))),
         settings: {
           source: "AI Interview Center",
           created_from: window.location.hostname,
@@ -25603,28 +25673,12 @@ function getReportStudioVisualModel() {
       // Production rule: campaign delivery settings are synchronized in PostgreSQL
       // by database triggers during campaign launch. The browser only verifies the result;
       // it must never repair or mutate launched sessions after the RPC has completed.
-      let campaignSettings = {};
-      if (campaign.settings && typeof campaign.settings === "object") {
-        campaignSettings = campaign.settings;
-      } else if (typeof campaign.settings === "string") {
-        try {
-          campaignSettings = JSON.parse(campaign.settings) || {};
-        } catch {
-          campaignSettings = {};
-        }
-      }
-
-      const interactionMode = AI_INTERVIEW_INTERACTION_MODES.includes(campaignSettings.interaction_mode)
-        ? campaignSettings.interaction_mode
-        : "Recorded";
-      const interviewMode = AI_INTERVIEW_MEDIA_MODES.includes(campaignSettings.interview_mode)
-        ? campaignSettings.interview_mode
-        : "Voice";
-      const cameraMode = AI_INTERVIEW_CAMERA_MODES.includes(campaignSettings.camera_mode)
-        ? campaignSettings.camera_mode
-        : "Off";
-      const maxDynamicFollowUps = Math.max(0, Math.min(3, Number(campaignSettings.max_dynamic_follow_ups || 0)));
-      const liveResponseTimeoutSeconds = Math.max(15, Math.min(180, Number(campaignSettings.live_response_timeout_seconds || 60)));
+      const campaignDelivery = getAIInterviewCampaignDelivery(campaign);
+      const interactionMode = campaignDelivery.interaction_mode;
+      const interviewMode = campaignDelivery.interview_mode;
+      const cameraMode = campaignDelivery.camera_mode;
+      const maxDynamicFollowUps = campaignDelivery.max_dynamic_follow_ups;
+      const liveResponseTimeoutSeconds = campaignDelivery.live_response_timeout_seconds;
 
       const { data: linkedCandidateRows, error: linkedCandidateError } = await supabase
         .from("ai_interview_campaign_candidates")
@@ -25823,14 +25877,15 @@ function getReportStudioVisualModel() {
         relatedRequest?.project_name,
         getAIInterviewTemplateName(campaign.template_id),
         campaign.language,
-        campaign.interaction_mode,
-        campaign.interview_mode,
-        campaign.camera_mode,
+        getAIInterviewCampaignDelivery(campaign).interaction_mode,
+        getAIInterviewCampaignDelivery(campaign).interview_mode,
+        getAIInterviewCampaignDelivery(campaign).camera_mode,
         campaign.status,
         campaign.notes,
       ].join(" "));
 
-      const modeLabel = `${campaign.interaction_mode || "Recorded"} / ${campaign.interview_mode || "Voice"}`;
+      const campaignDelivery = getAIInterviewCampaignDelivery(campaign);
+      const modeLabel = `${campaignDelivery.interaction_mode} / ${campaignDelivery.interview_mode}`;
       const matchesQuery = !aiCampaignQuery || searchableText.includes(aiCampaignQuery);
       const matchesStatus = aiCampaignTableFilters.status === "All" || campaign.status === aiCampaignTableFilters.status;
       const matchesProfession = aiCampaignTableFilters.profession === "All" || campaign.profession === aiCampaignTableFilters.profession;
@@ -26131,7 +26186,10 @@ function getReportStudioVisualModel() {
                 filters={[
                   { label: "Status", value: aiCampaignTableFilters.status, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, "status")], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, status: value })) },
                   { label: "Profession", value: aiCampaignTableFilters.profession, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, "profession")], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, profession: value })) },
-                  { label: "Mode", value: aiCampaignTableFilters.mode, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, (campaign) => `${campaign.interaction_mode || "Recorded"} / ${campaign.interview_mode || "Voice"}`)], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, mode: value })) },
+                  { label: "Mode", value: aiCampaignTableFilters.mode, options: ["All", ...getUniqueTableOptions(aiInterviewCampaigns, (campaign) => {
+                    const delivery = getAIInterviewCampaignDelivery(campaign);
+                    return `${delivery.interaction_mode} / ${delivery.interview_mode}`;
+                  })], onChange: (value) => setAICampaignTableFilters((current) => ({ ...current, mode: value })) },
                 ]}
               />
               <div className="table-wrap">
@@ -26159,7 +26217,7 @@ function getReportStudioVisualModel() {
                         <td><b>{campaign.campaign_name}</b><div style={{ fontSize: "12px", color: "#64748b" }}>{campaign.request_no || "No request selected"}</div></td>
                         <td>{campaign.profession || "-"}</td>
                         <td>{getAIInterviewTemplateName(campaign.template_id)}</td>
-                        <td>{campaign.interaction_mode || "Recorded"} / {campaign.interview_mode || "Voice"}</td>
+                        <td>{getAIInterviewCampaignDelivery(campaign).interaction_mode} / {getAIInterviewCampaignDelivery(campaign).interview_mode}</td>
                         <td>{campaign.interview_deadline ? new Date(campaign.interview_deadline).toLocaleString() : "-"}</td>
                         <td>{campaign.total_candidates || 0}</td>
                         <td>{campaign.invitation_sent_count || 0}</td>
