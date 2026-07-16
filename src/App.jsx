@@ -3426,6 +3426,8 @@ function TalentCandidatePortal({ onBack }) {
   const [experiences, setExperiences] = useState([]);
   const [education, setEducation] = useState([]);
   const [certifications, setCertifications] = useState([]);
+  const [resumeVersions, setResumeVersions] = useState([]);
+  const [resumeStudioBusy, setResumeStudioBusy] = useState(false);
 
   const isArabic = portalLanguage === "AR";
   const primaryCv = documents.find((item) => item.document_type === "CV" && item.is_primary) || null;
@@ -3529,7 +3531,7 @@ function TalentCandidatePortal({ onBack }) {
 
     try {
       const candidateRow = await ensureTalentProfile(user);
-      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult] = await Promise.all([
+      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult, resumeVersionsResult] = await Promise.all([
         supabase
           .from("talent_candidate_documents")
           .select("id, candidate_id, document_type, file_name, storage_path, mime_type, size_bytes, is_primary, parse_status, uploaded_at")
@@ -3543,6 +3545,7 @@ function TalentCandidatePortal({ onBack }) {
         supabase.from("talent_candidate_experience").select("*").eq("candidate_id", candidateRow.id).order("sort_order", { ascending: true }),
         supabase.from("talent_candidate_education").select("*").eq("candidate_id", candidateRow.id).order("sort_order", { ascending: true }),
         supabase.from("talent_candidate_certifications").select("*").eq("candidate_id", candidateRow.id).order("issue_date", { ascending: false }),
+        supabase.from("talent_resume_versions").select("*").eq("candidate_id", candidateRow.id).order("version_number", { ascending: false }),
       ]);
 
       if (documentsResult.error) throw documentsResult.error;
@@ -3551,6 +3554,7 @@ function TalentCandidatePortal({ onBack }) {
       if (experienceResult.error) throw experienceResult.error;
       if (educationResult.error) throw educationResult.error;
       if (certificationsResult.error) throw certificationsResult.error;
+      if (resumeVersionsResult.error && !String(resumeVersionsResult.error.message || "").includes("talent_resume_versions")) throw resumeVersionsResult.error;
 
       const nextConsents = { ...EMPTY_TALENT_CONSENTS };
       (consentsResult.data || []).forEach((item) => {
@@ -3567,6 +3571,7 @@ function TalentCandidatePortal({ onBack }) {
       setExperiences(experienceResult.data || []);
       setEducation(educationResult.data || []);
       setCertifications(certificationsResult.data || []);
+      setResumeVersions(resumeVersionsResult.data || []);
       loadedTalentUserRef.current = user.id;
       profileDirtyRef.current = false;
       setWorkspaceHydrated(true);
@@ -3967,6 +3972,51 @@ function TalentCandidatePortal({ onBack }) {
     }
   }
 
+  async function handleGenerateProfessionalResume(versionType = "AI Optimized") {
+    if (!primaryCv?.id) {
+      setWorkspaceMessage(isArabic ? "ارفع السيرة الذاتية أولًا." : "Upload your CV first.");
+      setWorkspaceTab("CV");
+      return;
+    }
+    if (profile?.ai_cv_status !== "Completed") {
+      setWorkspaceMessage(isArabic ? "أكمل تحليل السيرة أولًا قبل إنشاء النسخة الاحترافية." : "Complete AI CV analysis before generating a professional version.");
+      setWorkspaceTab("Analysis");
+      return;
+    }
+    setResumeStudioBusy(true);
+    setWorkspaceMessage(isArabic ? "جاري إعادة بناء السيرة وتحسين توافق ATS..." : "Rebuilding your resume and optimizing ATS compatibility...");
+    try {
+      const { data, error } = await supabase.functions.invoke("visaflow-talent-resume-studio", {
+        body: { document_id: primaryCv.id, version_type: versionType },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || "Resume generation failed");
+      loadedTalentUserRef.current = null;
+      await loadCandidateWorkspace(session.user, { force: true });
+      setWorkspaceTab("Career Studio");
+      setWorkspaceMessage(isArabic ? "تم إنشاء سيرتك الاحترافية بنجاح ✓" : "Your professional resume was generated successfully ✓");
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر إنشاء السيرة الاحترافية." : "Unable to generate professional resume."));
+    } finally {
+      setResumeStudioBusy(false);
+    }
+  }
+
+  async function handleDownloadResumeVersion(version, format) {
+    const path = format === "pdf" ? version.pdf_storage_path : format === "docx" ? version.docx_storage_path : version.html_storage_path;
+    if (!path) {
+      setWorkspaceMessage(isArabic ? "الملف المطلوب غير جاهز." : "The requested file is not ready.");
+      return;
+    }
+    try {
+      const { data, error } = await supabase.storage.from("talent-resume-versions").createSignedUrl(path, 120, { download: true });
+      if (error) throw error;
+      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر تنزيل السيرة." : "Unable to download resume."));
+    }
+  }
+
   async function handleSubmitTalentProfile() {
     if (!profile?.id) return;
     if (!profileForm.full_name || !profileForm.phone || !profileForm.profession) {
@@ -4129,6 +4179,7 @@ function TalentCandidatePortal({ onBack }) {
     ["Profile", isArabic ? "الملف المهني" : "Professional Profile"],
     ["CV", isArabic ? "السيرة الذاتية" : "CV Upload"],
     ["Analysis", isArabic ? "تحليل AI" : "AI Analysis"],
+    ["Career Studio", isArabic ? "استوديو السيرة" : "Career Studio"],
     ["Consent", isArabic ? "الموافقات" : "Consents"],
     ["Review", isArabic ? "المراجعة والإرسال" : "Review & Submit"],
   ];
@@ -4235,7 +4286,39 @@ function TalentCandidatePortal({ onBack }) {
                         <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "فرص التطوير" : "Development Areas"}</h3><ul>{(profile.ai_cv_summary?.development_areas || []).map((x) => <li key={x} style={{ marginBottom: "8px" }}>{x}</li>)}</ul></div>
                       </div>
                       <div style={{ border: `1px solid ${palette.border}`, borderRadius: "15px", padding: "18px" }}><h3>{isArabic ? "وظائف مقترحة" : "Recommended Roles"}</h3><div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>{(profile.ai_cv_summary?.recommended_roles || []).map((x) => <span key={x} style={{ padding: "9px 12px", borderRadius: "10px", background: "#ecfdf5", color: palette.success, fontWeight: 900 }}>{x}</span>)}</div></div>
+                      <div style={{ border: `1px solid ${Number(profile.ai_cv_summary?.ats_score || 0) < 85 ? "#f59e0b" : palette.border}`, borderRadius: "16px", padding: "20px", background: Number(profile.ai_cv_summary?.ats_score || 0) < 85 ? "#fffbeb" : palette.pale }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "16px", alignItems: "center", flexWrap: "wrap" }}>
+                          <div><div style={{ color: palette.cyan, fontSize: "12px", fontWeight: 900 }}>{isArabic ? "AI RESUME RESCUE" : "AI RESUME RESCUE"}</div><h3 style={{ margin: "5px 0" }}>{Number(profile.ai_cv_summary?.ats_score || 0) < 85 ? (isArabic ? "سيرتك تحتاج تحسينًا لتجاوز أنظمة ATS" : "Your resume can be improved for ATS systems") : (isArabic ? "سيرتك قوية — أنشئ نسخة تنفيذية احترافية" : "Your resume is strong — create an executive version")}</h3><p style={{ margin: 0, color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "سيعيد الذكاء الاصطناعي كتابة السيرة دون اختلاق أي معلومات، ويحفظ الأصل وينشئ نسخة جديدة قابلة للتنزيل PDF وWord." : "AI will rewrite the resume without inventing facts, preserve the original, and create a new downloadable PDF and Word version."}</p></div>
+                          <button type="button" onClick={() => handleGenerateProfessionalResume(Number(profile.ai_cv_summary?.ats_score || 0) < 85 ? "AI Optimized" : "Executive")} disabled={resumeStudioBusy} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "13px 18px", fontWeight: 900, cursor: "pointer" }}>{resumeStudioBusy ? (isArabic ? "جاري الإنشاء..." : "Generating...") : (isArabic ? "✨ إنشاء سيرة احترافية" : "✨ Generate Professional Resume")}</button>
+                        </div>
+                      </div>
                     </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {workspaceTab === "Career Studio" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "استوديو السيرة بالذكاء الاصطناعي" : "AI Career Studio"}</h2>
+                <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "أنشئ نسخًا احترافية من سيرتك، قارن قبل وبعد، ثم نزّل PDF أو Word. لن يتم تعديل الملف الأصلي." : "Create professional versions, compare before and after, then download PDF or Word. Your original CV remains unchanged."}</p>
+                {profile?.ai_cv_status !== "Completed" ? (
+                  <div style={{ padding: "24px", borderRadius: "16px", background: palette.pale, textAlign: "center" }}><h3>{isArabic ? "أكمل تحليل السيرة أولًا" : "Complete CV analysis first"}</h3><button type="button" onClick={() => setWorkspaceTab("Analysis")} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 18px", fontWeight: 900 }}>{isArabic ? "فتح التحليل" : "Open Analysis"}</button></div>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "18px" }}>
+                      <button type="button" onClick={() => handleGenerateProfessionalResume("AI Optimized")} disabled={resumeStudioBusy} style={{ border: 0, borderRadius: "12px", background: palette.blue, color: "#fff", padding: "12px 16px", fontWeight: 900 }}>{isArabic ? "إنشاء نسخة ATS محسنة" : "Generate ATS Optimized"}</button>
+                      <button type="button" onClick={() => handleGenerateProfessionalResume("Executive")} disabled={resumeStudioBusy} style={{ border: `1px solid ${palette.border}`, borderRadius: "12px", background: "#fff", color: palette.blue, padding: "12px 16px", fontWeight: 900 }}>{isArabic ? "إنشاء نسخة تنفيذية" : "Generate Executive Version"}</button>
+                    </div>
+                    {resumeVersions.length === 0 ? <div style={{ padding: "24px", background: palette.pale, borderRadius: "16px", textAlign: "center" }}>{isArabic ? "لا توجد نسخ محسنة حتى الآن." : "No enhanced versions yet."}</div> : (
+                      <div style={{ display: "grid", gap: "16px" }}>{resumeVersions.map((version) => (
+                        <article key={version.id} style={{ border: `1px solid ${palette.border}`, borderRadius: "17px", padding: "18px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "14px", flexWrap: "wrap" }}><div><div style={{ color: palette.cyan, fontSize: "12px", fontWeight: 900 }}>VERSION {version.version_number}</div><h3 style={{ margin: "4px 0" }}>{version.title}</h3><span style={{ color: palette.muted }}>{version.status} • {version.created_at ? new Date(version.created_at).toLocaleString(isArabic ? "ar-SA" : "en-US") : ""}</span></div><div style={{ display: "flex", gap: "12px" }}><div style={{ textAlign: "center" }}><span style={{ color: palette.muted, fontSize: "11px" }}>{isArabic ? "قبل" : "Before"}</span><strong style={{ display: "block", fontSize: "24px" }}>{version.source_score ?? "—"}%</strong></div><div style={{ textAlign: "center" }}><span style={{ color: palette.muted, fontSize: "11px" }}>{isArabic ? "بعد" : "After"}</span><strong style={{ display: "block", fontSize: "24px", color: palette.success }}>{version.optimized_score ?? "—"}%</strong></div></div></div>
+                          {version.status === "Completed" && <><div className="vf-talent-metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px", marginTop: "16px" }}>{[["ATS",version.optimized_metrics?.ats],["Clarity",version.optimized_metrics?.clarity],["Impact",version.optimized_metrics?.impact],["Readability",version.optimized_metrics?.readability]].map(([k,v])=><div key={k} style={{ background: palette.pale, borderRadius: "12px", padding: "12px", textAlign: "center" }}><span style={{ color: palette.muted, fontSize: "11px" }}>{k}</span><strong style={{ display: "block", marginTop: "4px" }}>{v ?? "—"}%</strong></div>)}</div><div style={{ marginTop: "14px" }}><strong>{isArabic ? "أبرز التحسينات" : "Key Improvements"}</strong><ul>{(version.improvements || []).slice(0,6).map((x)=><li key={x} style={{ marginTop: "6px" }}>{x}</li>)}</ul></div><div style={{ display: "flex", gap: "9px", flexWrap: "wrap", marginTop: "14px" }}><button type="button" onClick={() => handleDownloadResumeVersion(version,"pdf")} style={{ border: 0, borderRadius: "10px", background: palette.blue, color: "#fff", padding: "10px 14px", fontWeight: 900 }}>📄 PDF</button><button type="button" onClick={() => handleDownloadResumeVersion(version,"docx")} style={{ border: `1px solid ${palette.border}`, borderRadius: "10px", background: "#fff", color: palette.blue, padding: "10px 14px", fontWeight: 900 }}>📝 Word</button><button type="button" onClick={() => handleDownloadResumeVersion(version,"html")} style={{ border: `1px solid ${palette.border}`, borderRadius: "10px", background: "#fff", color: palette.text, padding: "10px 14px", fontWeight: 900 }}>{isArabic ? "معاينة" : "Preview"}</button></div></>}
+                          {version.status === "Failed" && <div style={{ marginTop: "12px", color: palette.danger, fontWeight: 800 }}>{version.error_message || (isArabic ? "فشل إنشاء النسخة" : "Generation failed")}</div>}
+                        </article>
+                      ))}</div>
+                    )}
                   </>
                 )}
               </>
