@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
-import { supabase } from "./supabase";
+import {
+  clearTalentRecoveryProof,
+  establishTalentRecoveryProof,
+  hasTalentRecoveryProof,
+  supabase,
+  talentSupabase,
+} from "./supabase";
 import "./style.css";
 
 
@@ -3384,31 +3390,50 @@ function TalentField({
   max,
   dir,
   autoComplete,
+  showPasswordLabel = "Show password",
+  hidePasswordLabel = "Hide password",
 }) {
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const isPassword = type === "password";
+
   return (
     <label style={{ display: "grid", gap: "7px", fontWeight: 800, color: "#10243e" }}>
       <span style={{ fontSize: "13px" }}>{label}</span>
-      <input
-        type={type}
-        value={value ?? ""}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        min={min}
-        max={max}
-        dir={dir}
-        autoComplete={autoComplete}
-        style={{
-          width: "100%",
-          minHeight: "46px",
-          border: "1px solid #d7e5ee",
-          borderRadius: "12px",
-          padding: "10px 12px",
-          background: "#fff",
-          color: "#10243e",
-          font: "inherit",
-          boxSizing: "border-box",
-        }}
-      />
+      <span style={{ position: "relative", display: "block" }}>
+        <input
+          type={isPassword && passwordVisible ? "text" : type}
+          value={value ?? ""}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          min={min}
+          max={max}
+          dir={dir}
+          autoComplete={autoComplete}
+          style={{
+            width: "100%",
+            minHeight: "46px",
+            border: "1px solid #d7e5ee",
+            borderRadius: "12px",
+            padding: "10px 12px",
+            paddingInlineEnd: isPassword ? "48px" : "12px",
+            background: "#fff",
+            color: "#10243e",
+            font: "inherit",
+            boxSizing: "border-box",
+          }}
+        />
+        {isPassword && (
+          <button
+            type="button"
+            onClick={() => setPasswordVisible((visible) => !visible)}
+            aria-label={passwordVisible ? hidePasswordLabel : showPasswordLabel}
+            title={passwordVisible ? hidePasswordLabel : showPasswordLabel}
+            style={{ position: "absolute", insetInlineEnd: "8px", top: "50%", transform: "translateY(-50%)", width: "34px", height: "34px", border: 0, borderRadius: "8px", background: "transparent", cursor: "pointer", fontSize: "17px" }}
+          >
+            {passwordVisible ? "🙈" : "👁"}
+          </button>
+        )}
+      </span>
     </label>
   );
 }
@@ -3448,13 +3473,101 @@ function calculateTalentCompleteness(profile, hasCv) {
   return Math.min(100, score);
 }
 
+const TALENT_EMAIL_DOMAIN_SUGGESTIONS = {
+  "hot.com": "hotmail.com",
+  "gmal.com": "gmail.com",
+  "hotmil.com": "hotmail.com",
+};
+
+function getTalentEmailSuggestion(email) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const atIndex = normalizedEmail.lastIndexOf("@");
+  if (atIndex < 1) return null;
+  const suggestedDomain = TALENT_EMAIL_DOMAIN_SUGGESTIONS[normalizedEmail.slice(atIndex + 1)];
+  return suggestedDomain ? `${normalizedEmail.slice(0, atIndex + 1)}${suggestedDomain}` : null;
+}
+
+function getTalentAuthErrorMessage(error, isArabic, fallback = "auth") {
+  const value = `${error?.code || ""} ${error?.message || ""} ${error?.error_description || ""}`.toLowerCase();
+  const messages = {
+    invalidCredentials: ["بيانات الدخول غير صحيحة. تحقق من البريد الإلكتروني وكلمة المرور.", "Incorrect sign-in details. Check your email and password."],
+    emailNotConfirmed: ["البريد الإلكتروني غير مؤكد. افتح رسالة التأكيد أو أعد إرسالها.", "Email is not confirmed. Open the confirmation email or resend it."],
+    accountExists: ["يوجد حساب مسجل بهذا البريد مسبقًا. سجّل الدخول أو استعد كلمة المرور.", "An account with this email already exists. Sign in or reset your password."],
+    recoveryExpired: ["انتهت صلاحية رابط الاستعادة. اطلب رابطًا جديدًا.", "The recovery link has expired. Request a new link."],
+    rateLimit: ["تم تجاوز حد إرسال الرسائل. يرجى الانتظار قبل إعادة المحاولة.", "The email sending limit was reached. Please wait before trying again."],
+    invalidRecovery: ["رابط الاستعادة غير صالح. اطلب رابطًا جديدًا.", "The recovery link is invalid. Request a new link."],
+    auth: ["تعذر إكمال العملية. حاول مرة أخرى.", "Unable to complete the request. Please try again."],
+    signup: ["تعذر إنشاء الحساب. حاول مرة أخرى.", "Unable to create the account. Please try again."],
+    recovery: ["تعذر تحديث كلمة المرور. اطلب رابط استعادة جديدًا.", "Unable to update the password. Request a new recovery link."],
+  };
+
+  let key = fallback;
+  if (value.includes("invalid login credentials") || value.includes("invalid_credentials")) key = "invalidCredentials";
+  else if (value.includes("email not confirmed") || value.includes("email_not_confirmed")) key = "emailNotConfirmed";
+  else if (value.includes("already registered") || value.includes("already exists") || value.includes("user_already_exists")) key = "accountExists";
+  else if (value.includes("otp_expired") || value.includes("expired")) key = "recoveryExpired";
+  else if (value.includes("rate limit") || value.includes("rate_limit") || value.includes("over_email_send_rate_limit")) key = "rateLimit";
+  else if (value.includes("invalid token") || value.includes("invalid link") || value.includes("flow_state_not_found") || value.includes("access_denied")) key = "invalidRecovery";
+  const message = messages[key] || messages.auth;
+  return isArabic ? message[0] : message[1];
+}
+
+function getTalentRecoveryUrlState() {
+  try {
+    const search = new URLSearchParams(window.location.search);
+    const hash = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+    const isTalentCallback = search.get("auth_flow") === "candidate";
+    const isTalentRecovery = isTalentCallback && search.get("recovery") === "1";
+    if (!isTalentRecovery) return { requested: false, isTalentCallback, error: null };
+    const errorType = search.get("error") || hash.get("error") || "";
+    const errorCode = search.get("error_code") || hash.get("error_code") || "";
+    const errorDescription = search.get("error_description") || hash.get("error_description") || "";
+    return {
+      requested: true,
+      isTalentCallback: true,
+      error: errorType || errorCode || errorDescription ? { code: errorCode || errorType, message: errorDescription } : null,
+    };
+  } catch {
+    return { requested: false, isTalentCallback: false, error: null };
+  }
+}
+
+function clearTalentAuthCallbackUrl() {
+  try {
+    const url = new URL(window.location.href);
+    [
+      "access_token",
+      "refresh_token",
+      "expires_in",
+      "expires_at",
+      "token_type",
+      "type",
+      "code",
+      "error",
+      "error_code",
+      "error_description",
+      "auth_flow",
+      "recovery",
+    ].forEach((key) => url.searchParams.delete(key));
+    url.searchParams.set("talent", "1");
+    url.hash = "";
+    window.history.replaceState({}, "", url);
+  } catch {
+    // The updated session remains valid even if an embedded browser blocks history changes.
+  }
+}
+
 function TalentCandidatePortal({ onBack }) {
+  const supabase = talentSupabase;
+  const initialRecoveryState = useMemo(() => getTalentRecoveryUrlState(), []);
   const [portalLanguage, setPortalLanguage] = useState("AR");
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [authMode, setAuthMode] = useState("signup");
+  const [authMode, setAuthMode] = useState(initialRecoveryState.requested ? "recovery" : "signin");
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [recoveryForm, setRecoveryForm] = useState({ password: "", confirm_password: "" });
   const [authForm, setAuthForm] = useState({
     full_name: "",
     phone: "",
@@ -3478,6 +3591,9 @@ function TalentCandidatePortal({ onBack }) {
   const loadedTalentUserRef = useRef(null);
   const loadingTalentUserRef = useRef(null);
   const profileDirtyRef = useRef(false);
+  const recoveryProofRef = useRef(false);
+  const forgotPasswordRequestRef = useRef(false);
+  const resendConfirmationRequestRef = useRef(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("Idle");
   const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
@@ -3489,6 +3605,9 @@ function TalentCandidatePortal({ onBack }) {
   const [resumeStudioBusy, setResumeStudioBusy] = useState(false);
 
   const isArabic = portalLanguage === "AR";
+  const emailSuggestion = useMemo(() => getTalentEmailSuggestion(authForm.email), [authForm.email]);
+  const authMessageIsSuccess = ["تم إنشاء", "تم إرسال", "تمت إعادة", "تم استلام", "بنجاح", "created", "sent", "resent", "successfully"]
+    .some((token) => authMessage.toLowerCase().includes(token.toLowerCase()));
   const primaryCv = documents.find((item) => item.document_type === "CV" && item.is_primary) || null;
   const estimatedCompleteness = calculateTalentCompleteness(
     { ...profile, ...profileForm, email: profile?.email || session?.user?.email || "" },
@@ -3690,25 +3809,43 @@ function TalentCandidatePortal({ onBack }) {
 
   useEffect(() => {
     let mounted = true;
-    loadTalentStats();
+    let recoveryCheckTimer = null;
 
-    supabase.auth.getSession().then(({ data }) => {
+    function finishValidRecovery(nextSession) {
       if (!mounted) return;
-      const activeSession = data?.session || null;
-      if (activeSession?.user?.user_metadata?.account_type === "candidate") {
-        setSession(activeSession);
-        loadCandidateWorkspace(activeSession.user);
-      } else {
-        setSession(null);
-      }
+      recoveryProofRef.current = true;
+      setSession(nextSession);
+      setAuthMode("recovery");
+      setRecoveryReady(true);
+      setAuthMessage("");
+      clearTalentAuthCallbackUrl();
       setAuthChecked(true);
-    });
+    }
+
+    function finishInvalidRecovery(error = null) {
+      if (!mounted) return;
+      clearTalentRecoveryProof();
+      recoveryProofRef.current = false;
+      setRecoveryReady(false);
+      setAuthMode("recovery");
+      setAuthMessage(getTalentAuthErrorMessage(error || { code: "invalid_link" }, isArabic, "invalidRecovery"));
+      clearTalentAuthCallbackUrl();
+      setAuthChecked(true);
+    }
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
+      if (event === "PASSWORD_RECOVERY") {
+        if (recoveryCheckTimer) window.clearTimeout(recoveryCheckTimer);
+        const isCandidateRecovery = establishTalentRecoveryProof(event, nextSession);
+        if (isCandidateRecovery) finishValidRecovery(nextSession);
+        else finishInvalidRecovery({ code: "invalid_link" });
+        return;
+      }
+      if (initialRecoveryState.requested) return;
       if (nextSession?.user?.user_metadata?.account_type === "candidate") {
         setSession(nextSession);
-        if (["INITIAL_SESSION", "SIGNED_IN", "USER_UPDATED"].includes(event) && loadedTalentUserRef.current !== nextSession.user.id) {
+        if (!initialRecoveryState.requested && ["INITIAL_SESSION", "SIGNED_IN", "USER_UPDATED"].includes(event) && loadedTalentUserRef.current !== nextSession.user.id) {
           loadCandidateWorkspace(nextSession.user);
         }
       } else {
@@ -3719,11 +3856,58 @@ function TalentCandidatePortal({ onBack }) {
       setAuthChecked(true);
     });
 
+    // Subscribe before getSession. Supabase saves the callback session first and
+    // emits PASSWORD_RECOVERY on a queued timer after initialization completes.
+    loadTalentStats();
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      const activeSession = data?.session || null;
+      const isCandidateSession = activeSession?.user?.user_metadata?.account_type === "candidate";
+
+      if (initialRecoveryState.requested) {
+        setAuthMode("recovery");
+
+        if (initialRecoveryState.error || error) {
+          finishInvalidRecovery(initialRecoveryState.error || error);
+          return;
+        }
+
+        if (isCandidateSession && hasTalentRecoveryProof(activeSession.user.id)) {
+          finishValidRecovery(activeSession);
+          return;
+        }
+
+        // getSession may resolve just before the queued recovery event. Keep the
+        // callback URL intact briefly so the event can establish in-memory proof.
+        recoveryCheckTimer = window.setTimeout(() => {
+          finishInvalidRecovery({ code: "invalid_link" });
+        }, 1500);
+        return;
+      }
+
+      if (isCandidateSession) {
+        setSession(activeSession);
+        loadCandidateWorkspace(activeSession.user);
+      } else {
+        setSession(null);
+      }
+      setAuthChecked(true);
+    });
+
     return () => {
       mounted = false;
+      if (recoveryCheckTimer) window.clearTimeout(recoveryCheckTimer);
       listener?.subscription?.unsubscribe?.();
     };
   }, []);
+
+  function getTalentRedirectUrl({ recovery = false } = {}) {
+    const url = new URL("/", window.location.origin);
+    url.searchParams.set("talent", "1");
+    url.searchParams.set("auth_flow", "candidate");
+    if (recovery) url.searchParams.set("recovery", "1");
+    return url.toString();
+  }
 
   async function handleTalentSignUp() {
     const fullName = String(authForm.full_name || "").trim();
@@ -3747,7 +3931,7 @@ function TalentCandidatePortal({ onBack }) {
     setAuthBusy(true);
     setAuthMessage("");
     try {
-      const redirectUrl = `${window.location.origin}${window.location.pathname}?talent=1`;
+      const redirectUrl = getTalentRedirectUrl();
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -3761,6 +3945,9 @@ function TalentCandidatePortal({ onBack }) {
         },
       });
       if (error) throw error;
+      if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        throw { code: "user_already_exists", message: "User already registered" };
+      }
 
       if (data?.session && data?.user) {
         setSession(data.session);
@@ -3773,7 +3960,7 @@ function TalentCandidatePortal({ onBack }) {
         setAuthMode("signin");
       }
     } catch (error) {
-      setAuthMessage(error?.message || (isArabic ? "تعذر إنشاء الحساب." : "Unable to create the account."));
+      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "signup"));
     } finally {
       setAuthBusy(false);
     }
@@ -3793,19 +3980,120 @@ function TalentCandidatePortal({ onBack }) {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       if (data?.user?.user_metadata?.account_type !== "candidate") {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         throw new Error(isArabic ? "هذا الحساب ليس حساب متقدم." : "This is not a candidate account.");
       }
       setSession(data.session);
       await loadCandidateWorkspace(data.user);
     } catch (error) {
-      setAuthMessage(error?.message || (isArabic ? "تعذر تسجيل الدخول." : "Unable to sign in."));
+      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleTalentForgotPassword() {
+    const email = String(authForm.email || "").trim().toLowerCase();
+    if (!email) {
+      setAuthMessage(isArabic ? "أدخل بريدك الإلكتروني لإرسال رابط الاستعادة." : "Enter your email to receive a recovery link.");
+      return;
+    }
+    if (forgotPasswordRequestRef.current) return;
+
+    forgotPasswordRequestRef.current = true;
+    setAuthBusy(true);
+    setAuthMessage("");
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: getTalentRedirectUrl({ recovery: true }),
+      });
+      if (error) throw error;
+      setAuthMessage(isArabic
+        ? "تم استلام طلب الاستعادة. إذا كان البريد مؤهلًا، فستصلك رسالة تحتوي على رابط تعيين كلمة المرور."
+        : "Password recovery request received. If the email is eligible, a reset link will be sent.");
+    } catch (error) {
+      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+    } finally {
+      forgotPasswordRequestRef.current = false;
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleTalentResendConfirmation() {
+    const email = String(authForm.email || "").trim().toLowerCase();
+    if (!email) {
+      setAuthMessage(isArabic ? "أدخل بريدك الإلكتروني لإعادة إرسال رسالة التأكيد." : "Enter your email to resend the confirmation message.");
+      return;
+    }
+    if (resendConfirmationRequestRef.current) return;
+
+    resendConfirmationRequestRef.current = true;
+    setAuthBusy(true);
+    setAuthMessage("");
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: getTalentRedirectUrl() },
+      });
+      if (error) throw error;
+      setAuthMessage(isArabic ? "تمت إعادة إرسال رسالة تأكيد البريد." : "Confirmation email resent.");
+    } catch (error) {
+      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+    } finally {
+      resendConfirmationRequestRef.current = false;
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleTalentPasswordUpdate() {
+    const password = String(recoveryForm.password || "");
+    const recoveryUserId = session?.user?.user_metadata?.account_type === "candidate" ? session.user.id : null;
+    const hasValidRecovery = recoveryReady
+      && recoveryProofRef.current
+      && hasTalentRecoveryProof(recoveryUserId);
+    if (!hasValidRecovery) {
+      setAuthMessage(getTalentAuthErrorMessage({ code: "invalid_link" }, isArabic, "invalidRecovery"));
+      return;
+    }
+    if (password.length < 8) {
+      setAuthMessage(isArabic ? "كلمة المرور الجديدة يجب ألا تقل عن 8 أحرف." : "New password must be at least 8 characters.");
+      return;
+    }
+    if (password !== recoveryForm.confirm_password) {
+      setAuthMessage(isArabic ? "كلمتا المرور غير متطابقتين." : "Passwords do not match.");
+      return;
+    }
+
+    setAuthBusy(true);
+    setAuthMessage("");
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      clearTalentRecoveryProof();
+      recoveryProofRef.current = false;
+      clearTalentAuthCallbackUrl();
+      setRecoveryReady(false);
+      setRecoveryForm({ password: "", confirm_password: "" });
+      await supabase.auth.signOut({ scope: "local" });
+      setSession(null);
+      setProfile(null);
+      setDocuments([]);
+      setAuthMode("signin");
+      setAuthForm((prev) => ({ ...prev, password: "", confirm_password: "" }));
+      setAuthMessage(isArabic
+        ? "تم تعيين كلمة المرور الجديدة بنجاح. سجّل الدخول باستخدام كلمة المرور الجديدة."
+        : "Your new password was set successfully. Sign in with your new password.");
+    } catch (error) {
+      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "recovery"));
     } finally {
       setAuthBusy(false);
     }
   }
 
   async function handleTalentSignOut() {
+    clearTalentRecoveryProof();
+    recoveryProofRef.current = false;
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);
@@ -4130,12 +4418,16 @@ function TalentCandidatePortal({ onBack }) {
   if (!authChecked) {
     return (
       <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: palette.navy, color: "#fff" }}>
-        <div style={{ fontWeight: 900, fontSize: "18px" }}>VisaFlow Talent — Loading...</div>
+        <div style={{ fontWeight: 900, fontSize: "18px" }}>
+          {initialRecoveryState.requested
+            ? (isArabic ? "جاري التحقق من رابط الاستعادة..." : "Checking the recovery link...")
+            : "VisaFlow Talent — Loading..."}
+        </div>
       </main>
     );
   }
 
-  if (!session) {
+  if (!session || authMode === "recovery") {
     return (
       <main className="vf-talent-page-shell" dir={isArabic ? "rtl" : "ltr"} style={{ minHeight: "100vh", background: `linear-gradient(135deg, ${palette.navy}, ${palette.blue})`, padding: "24px", boxSizing: "border-box", fontFamily: "inherit" }}>
         <div style={{ maxWidth: "1180px", margin: "0 auto" }}>
@@ -4196,35 +4488,82 @@ function TalentCandidatePortal({ onBack }) {
             </section>
 
             <section className="vf-talent-auth-card" style={{ background: "#fff", borderRadius: "24px", padding: "28px", boxShadow: "0 30px 80px rgba(0,0,0,.28)" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", background: palette.pale, padding: "5px", borderRadius: "13px", marginBottom: "22px" }}>
-                <button type="button" onClick={() => { setAuthMode("signup"); setAuthMessage(""); }} style={{ border: 0, borderRadius: "10px", padding: "11px", cursor: "pointer", fontWeight: 900, background: authMode === "signup" ? "#fff" : "transparent", color: authMode === "signup" ? palette.blue : palette.muted, boxShadow: authMode === "signup" ? "0 3px 12px rgba(15,23,42,.08)" : "none" }}>
-                  {isArabic ? "إنشاء حساب" : "Create Account"}
-                </button>
-                <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, borderRadius: "10px", padding: "11px", cursor: "pointer", fontWeight: 900, background: authMode === "signin" ? "#fff" : "transparent", color: authMode === "signin" ? palette.blue : palette.muted, boxShadow: authMode === "signin" ? "0 3px 12px rgba(15,23,42,.08)" : "none" }}>
-                  {isArabic ? "دخول المتقدم" : "Candidate Login"}
-                </button>
-              </div>
+              {!["forgot", "recovery"].includes(authMode) && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", background: palette.pale, padding: "5px", borderRadius: "13px", marginBottom: "22px" }}>
+                  <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, borderRadius: "10px", padding: "11px", cursor: "pointer", fontWeight: 900, background: authMode === "signin" ? "#fff" : "transparent", color: authMode === "signin" ? palette.blue : palette.muted, boxShadow: authMode === "signin" ? "0 3px 12px rgba(15,23,42,.08)" : "none" }}>
+                    {isArabic ? "دخول المتقدم" : "Candidate Login"}
+                  </button>
+                  <button type="button" onClick={() => { setAuthMode("signup"); setAuthMessage(""); }} style={{ border: 0, borderRadius: "10px", padding: "11px", cursor: "pointer", fontWeight: 900, background: authMode === "signup" ? "#fff" : "transparent", color: authMode === "signup" ? palette.blue : palette.muted, boxShadow: authMode === "signup" ? "0 3px 12px rgba(15,23,42,.08)" : "none" }}>
+                    {isArabic ? "إنشاء حساب" : "Create Account"}
+                  </button>
+                </div>
+              )}
 
-              <h2 style={{ margin: "0 0 6px", color: palette.text }}>{authMode === "signup" ? (isArabic ? "ابدأ ملفك المهني" : "Start your career profile") : (isArabic ? "مرحبًا بعودتك" : "Welcome back")}</h2>
-              <p style={{ margin: "0 0 22px", color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "لن نشارك بياناتك الكاملة مع أي شركة دون موافقتك." : "Your full information is never shared with an employer without your consent."}</p>
+              <h2 style={{ margin: "0 0 6px", color: palette.text }}>
+                {authMode === "signup"
+                  ? (isArabic ? "ابدأ ملفك المهني" : "Start your career profile")
+                  : authMode === "forgot"
+                    ? (isArabic ? "استعادة كلمة المرور" : "Reset your password")
+                    : authMode === "recovery"
+                      ? recoveryReady
+                        ? (isArabic ? "تعيين كلمة مرور جديدة" : "Set a new password")
+                        : (isArabic ? "رابط الاستعادة غير صالح أو منتهي الصلاحية" : "Recovery link is invalid or has expired")
+                      : (isArabic ? "مرحبًا بعودتك" : "Welcome back")}
+              </h2>
+              <p style={{ margin: "0 0 22px", color: palette.muted, lineHeight: 1.7 }}>
+                {authMode === "recovery" && !recoveryReady
+                  ? (isArabic ? "اطلب رابط استعادة جديدًا للمتابعة بأمان." : "Request a new recovery link to continue securely.")
+                  : (isArabic ? "لن نشارك بياناتك الكاملة مع أي شركة دون موافقتك." : "Your full information is never shared with an employer without your consent.")}
+              </p>
 
               <div style={{ display: "grid", gap: "13px" }}>
-                {authMode === "signup" && (
+                {authMode === "recovery" && recoveryReady ? (
                   <>
-                    <TalentField label={isArabic ? "الاسم الكامل" : "Full Name"} value={authForm.full_name} onChange={(value) => setAuthForm((prev) => ({ ...prev, full_name: value }))} />
-                    <TalentField label={isArabic ? "رقم الجوال" : "Mobile Number"} value={authForm.phone} onChange={(value) => setAuthForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
+                    <TalentField label={isArabic ? "كلمة المرور الجديدة" : "New Password"} type="password" value={recoveryForm.password} onChange={(value) => setRecoveryForm((prev) => ({ ...prev, password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
+                    <TalentField label={isArabic ? "تأكيد كلمة المرور الجديدة" : "Confirm New Password"} type="password" value={recoveryForm.confirm_password} onChange={(value) => setRecoveryForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
                   </>
-                )}
-                <TalentField label={isArabic ? "البريد الإلكتروني" : "Email Address"} type="email" value={authForm.email} onChange={(value) => setAuthForm((prev) => ({ ...prev, email: value }))} dir="ltr" />
-                <TalentField label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" />
-                {authMode === "signup" && <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" />}
+                ) : authMode !== "recovery" ? (
+                  <>
+                    {authMode === "signup" && (
+                      <>
+                        <TalentField label={isArabic ? "الاسم الكامل" : "Full Name"} value={authForm.full_name} onChange={(value) => setAuthForm((prev) => ({ ...prev, full_name: value }))} />
+                        <TalentField label={isArabic ? "رقم الجوال" : "Mobile Number"} value={authForm.phone} onChange={(value) => setAuthForm((prev) => ({ ...prev, phone: value }))} dir="ltr" />
+                      </>
+                    )}
+                    <TalentField label={isArabic ? "البريد الإلكتروني" : "Email Address"} type="email" value={authForm.email} onChange={(value) => setAuthForm((prev) => ({ ...prev, email: value }))} dir="ltr" autoComplete="email" />
+                    {emailSuggestion && (
+                      <button type="button" onClick={() => setAuthForm((prev) => ({ ...prev, email: emailSuggestion }))} style={{ border: `1px solid ${palette.border}`, borderRadius: "10px", background: "#fff7ed", color: "#9a3412", padding: "9px 11px", cursor: "pointer", textAlign: isArabic ? "right" : "left", fontWeight: 800 }}>
+                        {isArabic ? `تنبيه: هل تقصد ${emailSuggestion}؟` : `Warning: did you mean ${emailSuggestion}?`}
+                      </button>
+                    )}
+                    {authMode !== "forgot" && (
+                      <TalentField label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" autoComplete={authMode === "signup" ? "new-password" : "current-password"} showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
+                    )}
+                    {authMode === "signup" && <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />}
+                  </>
+                ) : null}
               </div>
 
-              {authMessage && <div style={{ marginTop: "14px", padding: "12px", borderRadius: "12px", background: authMessage.includes("بنجاح") || authMessage.includes("created") ? "#ecfdf5" : "#fff7ed", color: authMessage.includes("بنجاح") || authMessage.includes("created") ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{authMessage}</div>}
+              {authMessage && !(authMode === "recovery" && !recoveryReady) && <div style={{ marginTop: "14px", padding: "12px", borderRadius: "12px", background: authMessageIsSuccess ? "#ecfdf5" : "#fff7ed", color: authMessageIsSuccess ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{authMessage}</div>}
 
-              <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : handleTalentSignIn} disabled={authBusy} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy ? "wait" : "pointer", fontWeight: 900, fontSize: "16px" }}>
-                {authBusy ? (isArabic ? "جاري التنفيذ..." : "Please wait...") : authMode === "signup" ? (isArabic ? "إنشاء حساب المتقدم" : "Create Candidate Account") : (isArabic ? "دخول إلى ملفي" : "Open My Profile")}
-              </button>
+              {!(authMode === "recovery" && !recoveryReady) && <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : authMode === "forgot" ? handleTalentForgotPassword : authMode === "recovery" ? handleTalentPasswordUpdate : handleTalentSignIn} disabled={authBusy} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy ? "wait" : "pointer", fontWeight: 900, fontSize: "16px" }}>
+                {authBusy
+                  ? (isArabic ? "جاري التنفيذ..." : "Please wait...")
+                  : authMode === "signup"
+                    ? (isArabic ? "إنشاء حساب المتقدم" : "Create Candidate Account")
+                    : authMode === "forgot"
+                      ? (isArabic ? "إرسال رابط الاستعادة" : "Send Recovery Link")
+                      : authMode === "recovery"
+                        ? (isArabic ? "حفظ كلمة المرور الجديدة" : "Save New Password")
+                        : (isArabic ? "دخول إلى ملفي" : "Open My Profile")}
+              </button>}
+
+              <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap", marginTop: "14px" }}>
+                {authMode === "signin" && <button type="button" onClick={() => { setAuthMode("forgot"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "نسيت كلمة المرور؟" : "Forgot password?"}</button>}
+                {["signin", "signup"].includes(authMode) && <button type="button" onClick={handleTalentResendConfirmation} disabled={authBusy} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "إعادة إرسال تأكيد البريد" : "Resend email confirmation"}</button>}
+                {authMode === "forgot" && <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "العودة لتسجيل الدخول" : "Back to sign in"}</button>}
+                {authMode === "recovery" && !recoveryReady && <button type="button" onClick={() => { clearTalentAuthCallbackUrl(); setAuthMode("forgot"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "طلب رابط استعادة جديد" : "Request a new recovery link"}</button>}
+              </div>
             </section>
           </div>
         </div>
@@ -26908,7 +27247,7 @@ if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
 }
 
-if (!currentUser && talentPortalOpen) {
+if (talentPortalOpen) {
   return <TalentCandidatePortal onBack={closeTalentPortal} />;
 }
 
