@@ -50,9 +50,10 @@ const PAGES = [
  "Platform Dashboard",
 "Platform Intelligence",
 "Client Usage Monitor",
-"Companies Management",
-"Platform Users",
-"Subscription Invoices",
+ "Companies Management",
+ "Platform Users",
+ "Talent Dashboard",
+ "Subscription Invoices",
   "Company Requests Report",
   "Backup Center",
   "Central Support",
@@ -103,6 +104,7 @@ const SIDEBAR_GROUPS = [
   "Client Usage Monitor",
   "Companies Management",
   "Platform Users",
+  "Talent Dashboard",
   "Subscription Invoices",
   "Company Requests Report",
   "Backup Center",
@@ -5412,6 +5414,27 @@ const [systemActivityLogs, setSystemActivityLogs] = useState([]);
 const [platformUsageRows, setPlatformUsageRows] = useState([]);
 const [platformUsageLoading, setPlatformUsageLoading] = useState(false);
 const [platformUsageMessage, setPlatformUsageMessage] = useState("");
+const [ownerTalentStats, setOwnerTalentStats] = useState({
+  registered: null,
+  profileRecords: null,
+  emailConfirmed: null,
+  cvUploaded: null,
+  profileCompleted: null,
+  aiAnalyzed: null,
+  interviewsStarted: null,
+  interviewsCompleted: null,
+  approved: null,
+  published: null,
+});
+const [ownerTalentRecent, setOwnerTalentRecent] = useState([]);
+const [ownerTalentDistributions, setOwnerTalentDistributions] = useState({
+  country_of_residence: [],
+  profession: [],
+  marketplace_status: [],
+});
+const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
+const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
+const [ownerTalentError, setOwnerTalentError] = useState(null);
 const [localContentSettings, setLocalContentSettings] = useState({
   saudi_labor_weight: 100,
   non_saudi_labor_weight: 54,
@@ -5523,6 +5546,7 @@ const PLATFORM_PAGES = [
   "Client Usage Monitor",
   "Companies Management",
   "Platform Users",
+  "Talent Dashboard",
   "Subscription Invoices",
   "Company Requests Report",
   "Backup Center",
@@ -5535,12 +5559,14 @@ const PLATFORM_ACCOUNT_PAGES = [
   "Platform Intelligence",
   "Companies Management",
   "Platform Users",
+  "Talent Dashboard",
   "Subscription Invoices",
   "Company Requests Report",
 ];
 
 const PLATFORM_SUPPORT_PAGES = [
   "Platform Dashboard",
+  "Talent Dashboard",
   "Central Support",
 ];
 
@@ -7960,6 +7986,92 @@ async function loadProfessionAliases() {
     return rows;
   }
 
+  async function loadOwnerTalentDashboard() {
+    if (!isCurrentPlatformUser) {
+      setOwnerTalentRecent([]);
+      setOwnerTalentDistributions({ country_of_residence: [], profession: [], marketplace_status: [] });
+      setOwnerTalentMessage("");
+      setOwnerTalentError(null);
+      return;
+    }
+
+    setOwnerTalentLoading(true);
+    setOwnerTalentMessage("");
+    setOwnerTalentError(null);
+
+    const unavailableStats = {
+      registered: null,
+      profileRecords: null,
+      emailConfirmed: null,
+      cvUploaded: null,
+      profileCompleted: null,
+      aiAnalyzed: null,
+      interviewsStarted: null,
+      interviewsCompleted: null,
+      approved: null,
+      published: null,
+    };
+    const safeMetric = (value) => value === null || value === undefined || Number.isNaN(Number(value))
+      ? null
+      : Number(value);
+
+    try {
+      const [ownerResult, publicStatsResult] = await Promise.all([
+        supabase.rpc("get_owner_talent_dashboard"),
+        supabase.rpc("get_talent_public_stats"),
+      ]);
+
+      if (ownerResult.error) throw ownerResult.error;
+
+      const ownerData = ownerResult.data || {};
+      const publicStatsRow = publicStatsResult.error
+        ? null
+        : (Array.isArray(publicStatsResult.data) ? publicStatsResult.data[0] : publicStatsResult.data);
+      const registered = publicStatsRow ? safeMetric(publicStatsRow.registered_candidates) : null;
+      const profileRecords = safeMetric(ownerData.profile_records);
+
+      setOwnerTalentStats({
+        registered,
+        profileRecords,
+        emailConfirmed: ownerData.email_confirmed_available === false ? null : safeMetric(ownerData.email_confirmed),
+        cvUploaded: safeMetric(ownerData.cv_uploaded),
+        profileCompleted: safeMetric(ownerData.profile_completed),
+        aiAnalyzed: safeMetric(ownerData.ai_analyzed),
+        interviewsStarted: null,
+        interviewsCompleted: publicStatsRow ? safeMetric(publicStatsRow.completed_ai_interviews) : null,
+        approved: safeMetric(ownerData.approved),
+        published: publicStatsRow ? safeMetric(publicStatsRow.marketplace_ready) : null,
+      });
+      setOwnerTalentRecent(Array.isArray(ownerData.latest_profiles) ? ownerData.latest_profiles.slice(0, 10) : []);
+      setOwnerTalentDistributions({
+        country_of_residence: Array.isArray(ownerData.distributions?.country_of_residence) ? ownerData.distributions.country_of_residence : [],
+        profession: Array.isArray(ownerData.distributions?.profession) ? ownerData.distributions.profession : [],
+        marketplace_status: Array.isArray(ownerData.distributions?.marketplace_status) ? ownerData.distributions.marketplace_status : [],
+      });
+
+      if (publicStatsResult.error) {
+        setOwnerTalentError({ code: publicStatsResult.error.code || "PUBLIC_STATS_FAILED", message: publicStatsResult.error.message || "Public talent stats failed." });
+        setOwnerTalentMessage("Unable to load public talent totals / تعذر تحميل إجماليات المرشحين العامة.");
+      } else if (registered !== null && profileRecords !== null && registered > profileRecords) {
+        setOwnerTalentMessage("There are candidate accounts that have not created professional profiles yet. / توجد حسابات مرشحين لم تُنشأ ملفاتهم المهنية بعد.");
+      } else {
+        setOwnerTalentMessage("Talent growth data loaded securely / تم تحميل بيانات نمو المرشحين بأمان.");
+      }
+    } catch (error) {
+      setOwnerTalentStats(unavailableStats);
+      setOwnerTalentRecent([]);
+      setOwnerTalentDistributions({ country_of_residence: [], profession: [], marketplace_status: [] });
+      setOwnerTalentError({
+        code: error?.code || "OWNER_TALENT_DASHBOARD_FAILED",
+        status: error?.status || null,
+        message: error?.message || "Owner talent dashboard RPC failed.",
+      });
+      setOwnerTalentMessage("Unable to load data / تعذر تحميل البيانات.");
+    } finally {
+      setOwnerTalentLoading(false);
+    }
+  }
+
   async function loadSystemActivityLogs() {
     if (!currentUser) {
       setSystemActivityLogs([]);
@@ -8571,6 +8683,11 @@ useEffect(() => {
   if (!currentUser || activePage !== "Client Usage Monitor" || !canManagePlatform) return;
   loadPlatformUsageSummary();
 }, [activePage, currentUser?.id, platformClients.length]);
+
+useEffect(() => {
+  if (!currentUser || activePage !== "Talent Dashboard" || !isCurrentPlatformUser) return;
+  loadOwnerTalentDashboard();
+}, [activePage, currentUser?.id, isCurrentPlatformUser]);
 
 useEffect(() => {
   if (!currentUser || activePage !== "Reports") return;
@@ -23302,6 +23419,33 @@ const platformUsageOverview = useMemo(() => {
   };
 }, [platformUsageRows]);
 
+const ownerTalentCards = [
+  { key: "registered", label: "Registered Candidates", labelAr: "إجمالي المرشحين المسجلين" },
+  { key: "emailConfirmed", label: "Email Confirmed", labelAr: "الحسابات المؤكدة بالبريد" },
+  { key: "cvUploaded", label: "CV Uploaded", labelAr: "المرشحون الذين رفعوا سيرة ذاتية" },
+  { key: "profileCompleted", label: "Profile Completed", labelAr: "الملفات الشخصية المكتملة" },
+  { key: "aiAnalyzed", label: "AI Analyzed", labelAr: "السير المحللة بالذكاء الاصطناعي" },
+  { key: "interviewsStarted", label: "Interviews Started", labelAr: "المقابلات التي بدأت" },
+  { key: "interviewsCompleted", label: "Interviews Completed", labelAr: "المقابلات المكتملة" },
+  { key: "approved", label: "Approved", labelAr: "المرشحون الموافق على نشرهم" },
+  { key: "published", label: "Published", labelAr: "الظاهرون في Talent Marketplace" },
+];
+
+const ownerTalentFunnel = [
+  ["Registered", "registered"],
+  ["Email Confirmed", "emailConfirmed"],
+  ["CV Uploaded", "cvUploaded"],
+  ["Profile Completed", "profileCompleted"],
+  ["AI Analyzed", "aiAnalyzed"],
+  ["Interview Completed", "interviewsCompleted"],
+  ["Approved", "approved"],
+  ["Published", "published"],
+];
+
+const formatOwnerTalentMetric = (value) => value === null || value === undefined
+  ? "Not available / غير متاح"
+  : Number(value).toLocaleString();
+
 function resetPlatformClientForm() {
   setPlatformClientForm(emptyPlatformClient);
   setPlatformClientEditingId(null);
@@ -27873,6 +28017,7 @@ if (!currentUser) {
                   style={{ paddingLeft: "24px" }}
                 >
                   {page}
+                  {page === "Talent Dashboard" && <span style={{ display: "block", marginTop: 2, fontSize: 11, opacity: 0.72 }}>لوحة المرشحين</span>}
                   {page === "Notifications" && unreadNotificationsCount > 0 && (
                     <span
                       style={{
@@ -35143,6 +35288,118 @@ onClick={() => setActiveReport("activityLog")}>
           </>
         )}
 
+
+{activePage === "Talent Dashboard" && isCurrentPlatformUser && (
+  <div className="page-section">
+    <div className="executive-hero" style={{ marginBottom: 18 }}>
+      <div>
+        <p className="eyebrow">Platform Administration</p>
+        <h1>Talent Dashboard</h1>
+        <h2 style={{ margin: "4px 0 10px", fontSize: 22 }}>لوحة المرشحين</h2>
+        <p>Privacy-limited platform growth monitoring. متابعة نمو منصة المرشحين دون عرض السير الذاتية أو الوثائق أو بيانات الاتصال الحساسة أو تفاصيل المقابلات.</p>
+      </div>
+      <div className="hero-actions">
+        <button onClick={loadOwnerTalentDashboard} disabled={ownerTalentLoading}>{ownerTalentLoading ? "Loading..." : "Refresh / تحديث"}</button>
+      </div>
+    </div>
+
+    <div className="stats-grid">
+      {ownerTalentCards.map((card) => (
+        <div className="stat-card" key={card.key}>
+          <h3>{card.label}</h3>
+          <strong style={{ fontSize: ownerTalentStats[card.key] === null ? 17 : undefined }}>{formatOwnerTalentMetric(ownerTalentStats[card.key])}</strong>
+          <span>{card.labelAr}</span>
+        </div>
+      ))}
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <h2>Candidate Growth Funnel / مسار نمو المرشحين</h2>
+      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+        {ownerTalentFunnel.map(([label, key]) => {
+          const value = ownerTalentStats[key];
+          const registered = Number(ownerTalentStats.registered || 0);
+          const percent = value === null || value === undefined || registered <= 0
+            ? 0
+            : Math.min(100, Math.round((Number(value) / registered) * 100));
+          return (
+            <div key={key}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 5 }}>
+                <strong>{label}</strong>
+                <span>{formatOwnerTalentMetric(value)}{value !== null && registered > 0 ? ` (${percent}%)` : ""}</span>
+              </div>
+              <div style={{ height: 9, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
+                <div style={{ width: `${percent}%`, height: "100%", borderRadius: 999, background: "linear-gradient(90deg, #2563eb, #06b6d4)" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+
+    <div className="table-card" style={{ marginTop: 16 }}>
+      <div className="section-title-row">
+        <div>
+          <h2>Latest Candidate Profiles / آخر ملفات المرشحين</h2>
+          <p>Latest 10 candidate profile records only.</p>
+        </div>
+        <button type="button" disabled title="The full candidate directory is not included in phase one." style={{ opacity: 0.45, cursor: "not-allowed" }}>View All Candidates</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Email</th><th>Country</th><th>Target Profession</th><th>Profile Status</th><th>Registered</th></tr>
+        </thead>
+        <tbody>
+          {ownerTalentRecent.length === 0 ? (
+            <tr><td colSpan="6">{ownerTalentLoading ? "Loading..." : ownerTalentError ? "Unable to load data / تعذر تحميل البيانات" : "No candidate profiles are available."}</td></tr>
+          ) : ownerTalentRecent.map((candidate, index) => (
+            <tr key={`${candidate.email || "candidate"}-${candidate.created_at || index}`}>
+              <td>{candidate.full_name || "-"}</td>
+              <td>{candidate.email || "-"}</td>
+              <td>{candidate.country_of_residence || "-"}</td>
+              <td>{candidate.profession || "-"}</td>
+              <td><Badge value={candidate.marketplace_status || "Draft"} /></td>
+              <td>{candidate.created_at ? new Date(candidate.created_at).toLocaleString() : "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <div className="dashboard-grid" style={{ marginTop: 16 }}>
+      {[
+        ["By Country / حسب الدولة", "country_of_residence"],
+        ["By Target Profession / حسب المهنة المستهدفة", "profession"],
+        ["By Profile Status / حسب حالة الملف", "marketplace_status"],
+      ].map(([title, key]) => (
+        <div className="stat-card" key={title}>
+          <h3>{title}</h3>
+          {ownerTalentDistributions[key].length === 0 ? (
+            <span>{ownerTalentError ? "Unable to load data / تعذر تحميل البيانات" : "No data available / لا توجد بيانات"}</span>
+          ) : ownerTalentDistributions[key].map((item) => (
+            <div key={`${key}-${item.value}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 8 }}>
+              <span>{item.value || "Not specified"}</span>
+              <strong style={{ fontSize: 16 }}>{Number(item.count || 0).toLocaleString()}</strong>
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="stat-card">
+        <h3>By Registration Source / حسب مصدر التسجيل</h3>
+        <strong style={{ fontSize: 17 }}>Not available / غير متاح</strong>
+        <span>No registration-source field is documented on talent_candidates.</span>
+      </div>
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <h2>Privacy & metric notes / الخصوصية وملاحظات القياس</h2>
+      <p style={{ color: "#64748b", lineHeight: 1.7, marginBottom: 0 }}>
+        Email confirmation is counted securely inside the owner-only RPC without exposing Auth user details. يتم احتساب تأكيد البريد بأمان داخل RPC المخصص للمالك دون عرض بيانات مستخدمي المصادقة. Interview-started is unavailable because the repository does not document a safe link from talent_candidates to ai_interview_sessions. CV content, phone numbers, identity documents, interview answers, and company operational data are never queried by this page.
+      </p>
+      {ownerTalentMessage && <p style={{ marginTop: 10, color: "#475569" }}>{ownerTalentMessage}</p>}
+    </div>
+  </div>
+)}
 
 {activePage === "Client Usage Monitor" && canManagePlatform && (
   <div className="page-section">
