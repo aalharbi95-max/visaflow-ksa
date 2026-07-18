@@ -4558,8 +4558,17 @@ function TalentCandidatePortal({ onBack }) {
                         : (isArabic ? "دخول إلى ملفي" : "Open My Profile")}
               </button>}
 
+              {authMode === "signin" && (
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode("forgot"); setAuthMessage(""); }}
+                  style={{ display: "block", width: "100%", border: 0, background: "transparent", color: palette.blue, padding: "8px", marginTop: "10px", cursor: "pointer", fontWeight: 900, textAlign: "center" }}
+                >
+                  {isArabic ? "نسيت كلمة المرور؟" : "Forgot password?"}
+                </button>
+              )}
+
               <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap", marginTop: "14px" }}>
-                {authMode === "signin" && <button type="button" onClick={() => { setAuthMode("forgot"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "نسيت كلمة المرور؟" : "Forgot password?"}</button>}
                 {["signin", "signup"].includes(authMode) && <button type="button" onClick={handleTalentResendConfirmation} disabled={authBusy} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "إعادة إرسال تأكيد البريد" : "Resend email confirmation"}</button>}
                 {authMode === "forgot" && <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "العودة لتسجيل الدخول" : "Back to sign in"}</button>}
                 {authMode === "recovery" && !recoveryReady && <button type="button" onClick={() => { clearTalentAuthCallbackUrl(); setAuthMode("forgot"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "طلب رابط استعادة جديد" : "Request a new recovery link"}</button>}
