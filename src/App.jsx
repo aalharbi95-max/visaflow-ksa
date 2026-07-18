@@ -157,6 +157,7 @@ const ROLE_OPTIONS = [
 // Client-facing roles only. Platform roles must never appear inside company Users Management.
 const PLATFORM_ROLE_OPTIONS = ["Platform Owner", "Platform Accounts User", "Platform Support User"];
 const CLIENT_ROLE_OPTIONS = ROLE_OPTIONS.filter((role) => !PLATFORM_ROLE_OPTIONS.includes(role));
+const SAFE_USER_MANAGEMENT_COLUMNS = "id, name, email, role, status, company_id, agency_id, agency_name, auth_user_id, created_at";
 
 const RECRUITMENT_PERFORMANCE_ROLES = [
   "Recruitment Manager",
@@ -7230,7 +7231,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     if (canManagePlatform) {
       const { data, error } = await supabase
         .from("users")
-        .select("*")
+        .select(SAFE_USER_MANAGEMENT_COLUMNS)
         .order("created_at", { ascending: false })
         .range(0, 5000);
 
@@ -7240,7 +7241,6 @@ Cancel = إضافتها كوظيفة مستقلة`
       }
 
       setUsers(data || []);
-      console.log("USERS DATA:", data);
       return;
     }
 
@@ -7251,7 +7251,7 @@ Cancel = إضافتها كوظيفة مستقلة`
 
     const { data: companyUsers, error: companyUsersError } = await supabase
       .from("users")
-      .select("*")
+      .select(SAFE_USER_MANAGEMENT_COLUMNS)
       .eq("company_id", currentCompanyId)
       .order("created_at", { ascending: false })
       .range(0, 5000);
@@ -7280,7 +7280,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     if (agencyUserIds.length > 0) {
       const { data, error } = await supabase
         .from("users")
-        .select("*")
+        .select(SAFE_USER_MANAGEMENT_COLUMNS)
         .in("id", agencyUserIds)
         .range(0, 5000);
 
@@ -11686,7 +11686,7 @@ async function saveUser() {
 
   const { data: existingUser, error: findUserError } = await supabase
     .from("users")
-    .select("*")
+    .select("id, role, agency_id")
     .eq("email", cleanEmail)
     .maybeSingle();
 
@@ -11736,7 +11736,7 @@ async function saveUser() {
       const { data: createdUser, error: createError } = await supabase
         .from("users")
         .insert([{ ...agencyPayload, password: userForm.password.trim() }])
-        .select("*")
+        .select("id")
         .single();
 
       if (createError) return alert(createError.message);
@@ -27185,7 +27185,19 @@ function exportCurrentPage() {
   if (activePage === "Agency Performance") return exportRowsToExcel(calculateAgencyPerformanceRows(), "VisaFlow_Agency_Performance", "Agency Performance");
   if (activePage === "Recruitment Performance") return exportRowsToExcel(calculateRecruitmentPerformanceRows(), "VisaFlow_Recruitment_Performance", "Recruitment Performance");
   if (activePage === "Company Management") return exportRowsToExcel(companies, "VisaFlow_Company_Management", "Companies");
-  if (activePage === "Users Management") return exportRowsToExcel(users, "VisaFlow_Users_Management", "Users");
+  if (activePage === "Users Management") {
+    const safeUserExportRows = users.map((user) => ({
+      name: user.name || "",
+      email: user.email || "",
+      role: user.role || "",
+      status: user.status || "",
+      company_id: user.company_id || "",
+      agency_id: user.agency_id || "",
+      auth_user_id: user.auth_user_id || "",
+      created_at: user.created_at || "",
+    }));
+    return exportRowsToExcel(safeUserExportRows, "VisaFlow_Users_Management", "Users");
+  }
   if (activePage === "Permissions") return exportRowsToExcel(CLIENT_ROLE_OPTIONS.map((role) => ({ role, performance_category: getRolePerformanceCategory(role), included_in_recruitment_performance: isRecruitmentPerformanceRole(role) ? "Yes" : "No", description: ROLE_DESCRIPTIONS[role], pages: (ROLE_PAGES[role] || []).join(", "), actions: (ACTION_PERMISSIONS[role] || []).join(", ") })), "VisaFlow_Permissions", "Permissions");
   if (activePage === "AI Interview Center") {
     const selectedCampaignRows = aiInterviewCampaignCandidates
