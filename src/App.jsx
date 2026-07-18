@@ -27185,8 +27185,11 @@ function exportCurrentPage() {
   if (activePage === "Agency Performance") return exportRowsToExcel(calculateAgencyPerformanceRows(), "VisaFlow_Agency_Performance", "Agency Performance");
   if (activePage === "Recruitment Performance") return exportRowsToExcel(calculateRecruitmentPerformanceRows(), "VisaFlow_Recruitment_Performance", "Recruitment Performance");
   if (activePage === "Company Management") return exportRowsToExcel(companies, "VisaFlow_Company_Management", "Companies");
-  if (activePage === "Users Management") {
-    const safeUserExportRows = users.map((user) => ({
+  if (["Users Management", "Platform Users"].includes(activePage)) {
+    const userRowsToExport = activePage === "Platform Users"
+      ? users.filter((user) => isPlatformRole(user.role))
+      : users;
+    const safeUserExportRows = userRowsToExport.map((user) => ({
       name: user.name || "",
       email: user.email || "",
       role: user.role || "",
@@ -27196,7 +27199,12 @@ function exportCurrentPage() {
       auth_user_id: user.auth_user_id || "",
       created_at: user.created_at || "",
     }));
-    return exportRowsToExcel(safeUserExportRows, "VisaFlow_Users_Management", "Users");
+    const isPlatformUsersExport = activePage === "Platform Users";
+    return exportRowsToExcel(
+      safeUserExportRows,
+      isPlatformUsersExport ? "VisaFlow_Platform_Users" : "VisaFlow_Users_Management",
+      isPlatformUsersExport ? "Platform Users" : "Users",
+    );
   }
   if (activePage === "Permissions") return exportRowsToExcel(CLIENT_ROLE_OPTIONS.map((role) => ({ role, performance_category: getRolePerformanceCategory(role), included_in_recruitment_performance: isRecruitmentPerformanceRole(role) ? "Yes" : "No", description: ROLE_DESCRIPTIONS[role], pages: (ROLE_PAGES[role] || []).join(", "), actions: (ACTION_PERMISSIONS[role] || []).join(", ") })), "VisaFlow_Permissions", "Permissions");
   if (activePage === "AI Interview Center") {
