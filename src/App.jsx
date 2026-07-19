@@ -8782,28 +8782,17 @@ async function loadNotifications() {
   }
 
   async function sendEmailTemplateTest(item) {
-    const defaultEmail = localStorage.getItem("visaflow_last_test_email") || emailSettingsForm.test_email || currentUser?.email || getCompanyEmailRecipient("notifications");
-    const testEmail = String(window.prompt("Enter test recipient email:", defaultEmail || "") || "").trim();
-
-    if (!testEmail) return;
-
-    localStorage.setItem("visaflow_last_test_email", testEmail);
-    setEmailSettingsForm((prev) => ({ ...prev, test_email: testEmail }));
+    if (!currentUser?.email) return alert("A verified signed-in email is required for template testing.");
 
     try {
       await dispatchVisaFlowEmail({
         type: "EMAIL_TEMPLATE_TEST",
-        to: testEmail,
-        subject: renderTemplatePreview(item.subject || "VisaFlow Template Test"),
-        text: renderTemplatePreview(item.body || item.subject || "VisaFlow Template Test"),
-        html: buildEmailCardHtml(renderTemplatePreview(item.subject || "VisaFlow Template Test"), [renderTemplatePreview(item.body || "VisaFlow Template Test")]),
-        payload: {
-          template_key: item.template_key,
+        variables: {
           template_name: item.template_name,
         },
       });
       await loadEmailLogs();
-      alert("Template test email sent.");
+      alert(`Template test email sent to your verified account: ${currentUser.email}`);
     } catch (error) {
       await loadEmailLogs();
       alert(`Template test failed: ${error.message}`);
@@ -11050,11 +11039,7 @@ function isDuplicateRequestNoError(error) {
     try {
       await dispatchVisaFlowEmail({
         type: "AGENCY_REQUEST_RESPONSE_EMAIL",
-        to: getCompanyEmailRecipient("notifications"),
-        subject: responseTitle,
-        text: responseMessage,
-        html: buildEmailCardHtml(responseTitle, [responseMessage], decision === "Accepted" ? "SLA counting has started from the agency acceptance time." : "No SLA will be counted for this rejected request alert."),
-        payload: nextData,
+        identifiers: { notification_event_id: item.id },
       });
     } catch (emailError) {
       console.warn("Agency response email failed", emailError?.message || emailError);
@@ -11237,12 +11222,10 @@ function isDuplicateRequestNoError(error) {
         try {
           await dispatchVisaFlowEmail({
             type: "NEW_REQUEST_AGENCY_ALERT_EMAIL",
-            to: agency.email,
-            replyTo: getCompanyEmailRecipient("notifications"),
-            subject: title,
-            text: message,
-            html: buildEmailCardHtml(title, message.split(/\n+/).filter(Boolean), "Please login to VisaFlow Office Portal > Notifications and Accept or Reject this request. SLA will start only after acceptance."),
-            payload: notificationPayload,
+            identifiers: {
+              request_id: requestAgencyNotification.request.id,
+              agency_id: agency.id,
+            },
           });
           emailSent += 1;
         } catch (emailError) {
@@ -11835,42 +11818,13 @@ function buildEmailCardHtml(title, lines = [], actionText = "") {
   </div>`;
 }
 
-async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, replyTo, payload = {} }) {
-  const recipients = Array.isArray(to) ? to.filter(Boolean) : String(to || "").split(/[;,]/).map((item) => item.trim()).filter(Boolean);
-
-  if (!recipients.length) {
-    await recordEmailLog({
-      type,
-      status: "Skipped",
-      to_email: "",
-      cc_email: cc || "",
-      bcc_email: bcc || "",
-      subject,
-      error_message: "Recipient email is missing",
-      payload,
-    });
-    console.warn("Email skipped because recipient is missing", { type });
-    return { ok: false, skipped: true, reason: "Recipient email is missing" };
-  }
-
+async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} }) {
   try {
     const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
       body: {
-        type,
-        company_id: currentCompanyId,
-        to: recipients,
-        cc,
-        bcc,
-        subject,
-        text,
-        html,
-        replyTo,
-        payload: {
-          ...payload,
-          company_id: currentCompanyId,
-          triggered_by: currentUser?.email || currentUser?.name || "VisaFlow User",
-          triggered_at: new Date().toISOString(),
-        },
+        message_type: type,
+        ...identifiers,
+        variables,
       },
     });
 
@@ -11880,13 +11834,13 @@ async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, r
     await recordEmailLog({
       type,
       status: "Sent",
-      to_email: recipients.join(", "),
-      cc_email: cc || "",
-      bcc_email: bcc || "",
-      subject,
-      provider: data?.provider || companyEmailSettings?.provider || "VisaFlow Dispatcher",
-      message_id: data?.messageId || data?.id || "",
-      payload,
+      to_email: "Resolved securely by Email Dispatcher",
+      cc_email: "",
+      bcc_email: "",
+      subject: type,
+      provider: companyEmailSettings?.provider || "VisaFlow Dispatcher",
+      message_id: "",
+      payload: { identifiers, variables: Object.keys(variables || {}) },
     });
 
     return data || { ok: true };
@@ -11894,12 +11848,12 @@ async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, r
     await recordEmailLog({
       type,
       status: "Failed",
-      to_email: recipients.join(", "),
-      cc_email: cc || "",
-      bcc_email: bcc || "",
-      subject,
+      to_email: "Resolved securely by Email Dispatcher",
+      cc_email: "",
+      bcc_email: "",
+      subject: type,
       error_message: error.message || "Email dispatcher failed",
-      payload,
+      payload: { identifiers, variables: Object.keys(variables || {}) },
     });
     throw error;
   }
@@ -11985,25 +11939,15 @@ async function saveCompanyEmailSettings({ silent = false } = {}) {
 
 async function testCompanyEmailSettings() {
   if (!canManageUsers) return alert("You do not have permission to test email settings.");
-  const testEmail = String(emailSettingsForm.test_email || localStorage.getItem("visaflow_last_test_email") || currentUser?.email || "").trim();
-  if (!testEmail) return alert("Please enter a test recipient email.");
-
-  localStorage.setItem("visaflow_last_test_email", testEmail);
+  if (!currentUser?.email) return alert("A verified signed-in email is required for email testing.");
 
   setEmailSettingsLoading(true);
   setEmailSettingsMessage("Saving settings and sending test email...");
 
   try {
     await saveCompanyEmailSettings({ silent: true });
-    const subject = "VisaFlow Email Settings Test";
-    const text = `This is a test email from VisaFlow for company ${companies[0]?.name || currentCompanyId}. If you received this message, your company email settings are working.`;
     const response = await dispatchVisaFlowEmail({
       type: "COMPANY_EMAIL_TEST",
-      to: testEmail,
-      subject,
-      text,
-      html: buildEmailCardHtml(subject, [text], "This test verifies company SMTP settings."),
-      payload: { test_email: testEmail },
     });
 
     await supabase
@@ -12410,133 +12354,42 @@ function editAgreement(item) {
 }
 
 async function sendAgreementSentEmail(agreement) {
-  const toEmail = getAgencyEmailByName(agreement?.agency_name);
-  if (!toEmail) return { ok: false, skipped: true, reason: "Agency email is missing" };
-  const subject = `VisaFlow Agreement Requires Acceptance - ${agreement?.agreement_no || "Agreement"}`;
-  const text = `Dear ${agreement?.agency_name || "Agency"},
-
-A recruitment agency agreement has been sent to your Office Portal for review and electronic acceptance.
-
-Agreement No: ${agreement?.agreement_no || "-"}
-SLA Days: ${agreement?.sla_days || "-"}
-
-Please login to VisaFlow Office Portal to review and accept the agreement.
-
-VisaFlow KSA`;
+  if (!agreement?.id) throw new Error("A saved agreement record is required before email can be sent.");
   return dispatchVisaFlowEmail({
     type: "AGENCY_AGREEMENT_SENT",
-    to: toEmail,
-    replyTo: getCompanyEmailRecipient("agreements"),
-    subject,
-    text,
-    html: buildEmailCardHtml(subject, [
-      `Dear ${agreement?.agency_name || "Agency"},`,
-      "A recruitment agency agreement has been sent to your Office Portal for review and electronic acceptance.",
-      `Agreement No: ${agreement?.agreement_no || "-"}`,
-      `SLA Days: ${agreement?.sla_days || "-"}`,
-      "Please login to VisaFlow Office Portal to review and accept the agreement.",
-    ]),
-    payload: { agreement_no: agreement?.agreement_no, agency_name: agreement?.agency_name },
+    identifiers: { agreement_id: agreement.id },
   });
 }
 
-async function sendAgreementAcceptedEmail(agreement, signer = "Agency User") {
-  const subject = `Agency Agreement Accepted - ${agreement?.agreement_no || "Agreement"}`;
-  const text = `${agreement?.agency_name || "Agency"} accepted agreement ${agreement?.agreement_no || "-"} electronically. Accepted by: ${signer}.`;
+async function sendAgreementAcceptedEmail(agreement) {
+  if (!agreement?.id) throw new Error("A saved agreement record is required before email can be sent.");
   return dispatchVisaFlowEmail({
     type: "AGENCY_AGREEMENT_ACCEPTED",
-    to: getCompanyEmailRecipient("agreements"),
-    subject,
-    text,
-    html: buildEmailCardHtml(subject, [
-      `${agreement?.agency_name || "Agency"} accepted the agreement electronically.`,
-      `Agreement No: ${agreement?.agreement_no || "-"}`,
-      `Accepted by: ${signer}`,
-    ]),
-    payload: { agreement_no: agreement?.agreement_no, agency_name: agreement?.agency_name, signer },
+    identifiers: { agreement_id: agreement.id },
   });
 }
 
 async function sendPenaltyNoticeEmail(penalty) {
-  const toEmail = getAgencyEmailByName(penalty?.agency_name);
-  if (!toEmail) return { ok: false, skipped: true, reason: "Agency email is missing" };
-  const amount = Number(penalty?.approved_amount ?? penalty?.calculated_amount ?? 0).toLocaleString();
-  const subject = `VisaFlow Penalty Notice - ${penalty?.penalty_no || "Penalty"}`;
-  const text = `Dear ${penalty?.agency_name || "Agency"},
-
-A labor SLA delay penalty has been issued for your review and justification.
-
-Penalty No: ${penalty?.penalty_no || "-"}
-Candidate: ${penalty?.candidate_name || "-"}
-Request No: ${penalty?.request_no || "-"}
-Amount: ${amount} SAR
-
-Please login to Office Portal and submit justification if applicable.`;
+  if (!penalty?.id) throw new Error("A saved penalty record is required before email can be sent.");
   return dispatchVisaFlowEmail({
     type: "AGENCY_PENALTY_SENT",
-    to: toEmail,
-    replyTo: getCompanyEmailRecipient("notifications"),
-    subject,
-    text,
-    html: buildEmailCardHtml(subject, [
-      `Dear ${penalty?.agency_name || "Agency"},`,
-      "A labor SLA delay penalty has been issued for your review and justification.",
-      `Penalty No: ${penalty?.penalty_no || "-"}`,
-      `Candidate: ${penalty?.candidate_name || "-"}`,
-      `Request No: ${penalty?.request_no || "-"}`,
-      `Amount: ${amount} SAR`,
-      "Please login to Office Portal and submit justification if applicable.",
-    ]),
-    payload: { penalty_no: penalty?.penalty_no, agency_name: penalty?.agency_name, amount },
+    identifiers: { penalty_id: penalty.id },
   });
 }
 
-async function sendPenaltyJustificationEmail(penalty, justification) {
-  const subject = `Penalty Justification Submitted - ${penalty?.penalty_no || "Penalty"}`;
-  const text = `${penalty?.agency_name || "Agency"} submitted justification for penalty ${penalty?.penalty_no || "-"}.
-
-Justification:
-${justification}`;
+async function sendPenaltyJustificationEmail(penalty) {
+  if (!penalty?.id) throw new Error("A saved penalty record is required before email can be sent.");
   return dispatchVisaFlowEmail({
     type: "AGENCY_PENALTY_JUSTIFICATION_SUBMITTED",
-    to: getCompanyEmailRecipient("notifications"),
-    subject,
-    text,
-    html: buildEmailCardHtml(subject, [
-      `${penalty?.agency_name || "Agency"} submitted a justification for review.`,
-      `Penalty No: ${penalty?.penalty_no || "-"}`,
-      `Candidate: ${penalty?.candidate_name || "-"}`,
-      `Justification: ${justification}`,
-    ]),
-    payload: { penalty_no: penalty?.penalty_no, agency_name: penalty?.agency_name },
+    identifiers: { penalty_id: penalty.id },
   });
 }
 
-async function sendPenaltyDecisionEmail(penalty, decision, amount, note = "") {
-  const toEmail = getAgencyEmailByName(penalty?.agency_name);
-  if (!toEmail) return { ok: false, skipped: true, reason: "Agency email is missing" };
-  const subject = `Penalty Decision - ${penalty?.penalty_no || "Penalty"} - ${decision}`;
-  const text = `Dear ${penalty?.agency_name || "Agency"},
-
-The company has issued a final decision for penalty ${penalty?.penalty_no || "-"}.
-
-Decision: ${decision}
-Final Amount: ${Number(amount || 0).toLocaleString()} SAR
-Notes: ${note || "-"}`;
+async function sendPenaltyDecisionEmail(penalty) {
+  if (!penalty?.id) throw new Error("A saved penalty record is required before email can be sent.");
   return dispatchVisaFlowEmail({
     type: "AGENCY_PENALTY_DECISION",
-    to: toEmail,
-    replyTo: getCompanyEmailRecipient("notifications"),
-    subject,
-    text,
-    html: buildEmailCardHtml(subject, [
-      `Dear ${penalty?.agency_name || "Agency"},`,
-      `The company has issued a final decision for penalty ${penalty?.penalty_no || "-"}.`,
-      `Decision: ${decision}`,
-      `Final Amount: ${Number(amount || 0).toLocaleString()} SAR`,
-      `Notes: ${note || "-"}`,
-    ]),
-    payload: { penalty_no: penalty?.penalty_no, decision, amount },
+    identifiers: { penalty_id: penalty.id },
   });
 }
 
@@ -12574,7 +12427,9 @@ async function saveAgreement(statusOverride = "") {
         .update(payload)
         .eq("id", agreementEditingId)
         .eq("company_id", currentCompanyId)
-    : await supabase.from("agency_agreements").insert([withCompany(payload)]);
+        .select("id")
+        .single()
+    : await supabase.from("agency_agreements").insert([withCompany(payload)]).select("id").single();
 
   if (result.error) return alert(result.error.message);
 
@@ -12590,7 +12445,7 @@ async function saveAgreement(statusOverride = "") {
     });
 
     try {
-      await sendAgreementSentEmail(payload);
+      await sendAgreementSentEmail({ ...payload, id: result.data?.id || agreementEditingId });
     } catch (emailError) {
       console.warn("Agreement email failed", emailError?.message || emailError);
     }
@@ -15408,101 +15263,13 @@ ${errors.slice(0, 10).join("\n")}` : "")
       return alert(`This interview cannot be sent because its status is ${session.status}.`);
     }
 
-    const linkedCandidate = candidates.find(
-      (candidate) => String(candidate.id || "") === String(session.candidate_id || "")
-    ) || {};
-
-    let recipient = String(session.candidate_email || linkedCandidate.email || "").trim();
-    if (!isValidEmailAddress(recipient)) {
-      recipient = String(window.prompt(
-        `Enter the candidate email for ${session.candidate_name || "this candidate"}:`,
-        recipient
-      ) || "").trim();
-    }
-
-    if (!recipient) return;
-    if (!isValidEmailAddress(recipient)) {
-      return alert("Please enter a valid candidate email address.");
-    }
-
-    const invitationUrl = getAIInterviewInvitationUrl(session);
-    if (!invitationUrl) return alert("Candidate interview link is not available.");
-
-    const template = aiInterviewTemplates.find(
-      (item) => String(item.id || "") === String(session.template_id || "")
-    ) || {};
-    const candidateName = session.candidate_name || "Candidate";
-    const profession = session.profession || "the selected position";
-    const scheduledText = session.scheduled_at
-      ? new Date(session.scheduled_at).toLocaleString()
-      : "Please complete the interview as soon as possible.";
-    const expiryText = session.expires_at
-      ? new Date(session.expires_at).toLocaleString()
-      : "The link remains available until the company closes or expires the session.";
-    const estimatedMinutes = Number(template.duration_minutes || 15);
-    const invitationCameraMode = session.camera_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.camera_mode;
-    const invitationInterviewMode = session.interview_mode || DEFAULT_AI_INTERVIEW_SESSION_DELIVERY.interview_mode;
-    const isVideoInvitation = invitationCameraMode !== "Off" || invitationInterviewMode === "Video";
-    const subject = `AI Interview Invitation - ${profession} / دعوة مقابلة ذكية`;
-
-    const englishLines = [
-      `Dear ${candidateName},`,
-      `You are invited to complete a secure AI ${isVideoInvitation ? "video" : "voice"} interview for the position of ${profession}.`,
-      `Estimated duration: ${estimatedMinutes} minutes.`,
-      `Schedule: ${scheduledText}`,
-      `Link validity: ${expiryText}`,
-      `Before starting, choose a quiet place, use a stable internet connection, allow ${isVideoInvitation ? "camera and microphone" : "microphone"} access, and use the latest Chrome, Edge, or Safari browser.`,
-      "Please answer each question clearly and do not refresh or close the page while recording.",
-      "The final recruitment decision remains with the company.",
-    ];
-
-    const arabicLines = [
-      `عزيزي/عزيزتي ${candidateName}،`,
-      `ندعوك لإجراء مقابلة ${isVideoInvitation ? "فيديو" : "صوتية"} آمنة بالذكاء الاصطناعي لوظيفة ${profession}.`,
-      `المدة التقديرية: ${estimatedMinutes} دقيقة.`,
-      `قبل البدء، اختر مكانًا هادئًا واتصالًا مستقرًا بالإنترنت، واسمح باستخدام ${isVideoInvitation ? "الكاميرا والميكروفون" : "الميكروفون"}، واستخدم أحدث إصدار من Chrome أو Edge أو Safari.`,
-      "يرجى الإجابة بوضوح وعدم تحديث الصفحة أو إغلاقها أثناء التسجيل.",
-      "القرار النهائي للتوظيف يعود إلى الشركة.",
-    ];
-
-    const textBody = [
-      ...englishLines,
-      "",
-      `Start interview: ${invitationUrl}`,
-      "",
-      ...arabicLines,
-      "",
-      `ابدأ المقابلة: ${invitationUrl}`,
-    ].join("\n");
-
-    const actionHtml = `
-      <div style="text-align:center;">
-        <a href="${invitationUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#061b49;color:#ffffff;text-decoration:none;padding:13px 22px;border-radius:10px;font-weight:700;">Start AI Interview / بدء المقابلة الذكية</a>
-        <div style="margin-top:12px;font-size:12px;color:#64748b;word-break:break-all;">${invitationUrl}</div>
-      </div>`;
-
     setAIInterviewInvitationSendingId(session.id);
-    setAIInterviewMessage(`Sending AI interview invitation to ${recipient}...`);
+    setAIInterviewMessage("Sending AI interview invitation to the candidate email stored in the verified session record...");
 
     try {
       await dispatchVisaFlowEmail({
         type: "AI_INTERVIEW_INVITATION",
-        to: recipient,
-        subject,
-        text: textBody,
-        html: buildEmailCardHtml(subject, [...englishLines, "", ...arabicLines], actionHtml),
-        replyTo: getCompanyEmailRecipient("support"),
-        payload: {
-          session_id: session.id,
-          candidate_id: session.candidate_id || "",
-          candidate_name: candidateName,
-          candidate_email: recipient,
-          profession,
-          request_no: session.request_no || "",
-          invitation_url: invitationUrl,
-          scheduled_at: session.scheduled_at || null,
-          expires_at: session.expires_at || null,
-        },
+        identifiers: { interview_session_id: session.id },
       });
 
       const now = new Date().toISOString();
@@ -15513,8 +15280,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
       const { error: updateError } = await supabase
         .from("ai_interview_sessions")
         .update({
-          candidate_email: recipient,
-          invitation_url: invitationUrl,
           invitation_sent_at: now,
           status: nextStatus,
           updated_at: now,
@@ -15526,8 +15291,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
       if (updateError) throw updateError;
 
       await Promise.all([loadAIInterviewSessions(), loadEmailLogs()]);
-      setAIInterviewMessage(`AI interview invitation sent successfully to ${recipient}.`);
-      alert(`AI interview invitation sent successfully to ${recipient}.`);
+      setAIInterviewMessage("AI interview invitation sent to the candidate email stored in the verified session record.");
+      alert("AI interview invitation sent successfully.");
     } catch (error) {
       console.warn("AI interview invitation email failed", error?.message || error);
       setAIInterviewMessage(`AI interview invitation failed: ${error?.message || error}`);
@@ -21073,15 +20838,10 @@ async function prepareAIAgentAssignmentApproval(item, options = {}) {
   try {
     await dispatchVisaFlowEmail({
       type: actionType,
-      to: managerEmail,
-      subject: content.subject,
-      text: content.emailLines.join("\n"),
-      html: buildEmailCardHtml(content.subject, content.emailLines, "This approval was prepared automatically by VisaFlow AI Recruitment Agent."),
-      payload: {
-        request_no: item.request_no,
+      identifiers: { request_id: item.request?.id },
+      variables: {
         recommended_agency: item.bestAgency.agency,
         fit_score: item.bestAgency.fitScore || 0,
-        auto_generated: auto,
       },
     });
   } catch (error) {
@@ -21248,22 +21008,10 @@ async function sendAIAgentAgencyFollowUpTask(task, options = {}) {
     task,
   });
 
-  if (sendEmail && task.agency_email) {
-    await dispatchVisaFlowEmail({
-      type,
-      to: task.agency_email,
-      subject: email.subject,
-      text: email.body,
-      html: buildEmailCardHtml(email.subject, email.body.split("\n"), "This follow-up was generated by VisaFlow AI Recruitment Agent."),
-      payload: {
-        agency: task.agency,
-        request_no: task.request_no,
-        reference: task.reference,
-        priority: task.priority,
-        auto_generated: auto,
-        dedupe_key: actionKey,
-      },
-    });
+  if (sendEmail) {
+    if (!auto) {
+      alert("Agency follow-up email is temporarily restricted until each follow-up type has a verified record contract. The portal notification was created.");
+    }
   }
 
   await writeAIAgentAuditLog({
@@ -21462,6 +21210,7 @@ async function sendOfferEmail() {
   setOfferLoading(true);
   setOfferMessage("");
 
+  const offerData = getCandidateOfferData(offerCandidate);
   const payload = {
     type: "JOB_OFFER_EMAIL",
     to: offerCandidate.email,
@@ -21471,6 +21220,9 @@ async function sendOfferEmail() {
     candidate_name: offerCandidate.candidate_name,
     request_no: offerCandidate.request_no,
     profession: offerCandidate.profession,
+    project: offerData.project,
+    salary: offerData.salary,
+    joining_date: offerData.joiningDate,
     created_by: currentUser?.email || currentUser?.name || "VisaFlow User",
     created_at: new Date().toISOString(),
   };
@@ -21478,12 +21230,11 @@ async function sendOfferEmail() {
   try {
     const emailResult = await dispatchVisaFlowEmail({
       type: "JOB_OFFER_EMAIL",
-      to: offerCandidate.email,
-      subject: offerSubject,
-      text: offerBody,
-      html: buildEmailCardHtml(offerSubject, offerBody.split("\n").filter(Boolean)),
-      replyTo: getCompanyEmailRecipient("support"),
-      payload,
+      identifiers: { candidate_id: offerCandidate.id },
+      variables: {
+        salary: offerData.salary,
+        joining_date: offerData.joiningDate,
+      },
     });
 
     const deliveryStatus = "SENT";
@@ -22891,7 +22642,7 @@ async function recordPlatformLoginDetailsEmailLog({ client, admin, subject, stat
 }
 
 async function sendPlatformClientLoginDetails(client) {
-  if (!canManagePlatform) return alert("You do not have permission to send platform login details.");
+  if (!isPlatformOwner) return alert("Only Platform Owner can send company account setup links.");
   if (!client?.id) return alert("Company record is required.");
 
   const primaryAdmin = getPrimaryAdminForPlatformClient(client);
@@ -22899,53 +22650,19 @@ async function sendPlatformClientLoginDetails(client) {
     return alert("No Primary Admin email was found for this company. Please create or link an Admin user first.");
   }
 
-  const storedPassword = String(primaryAdmin.password || "").trim();
-  const temporaryPassword = storedPassword || String(window.prompt("Temporary password to include in the email:", "") || "").trim();
-
-  if (!temporaryPassword) {
-    return alert("Temporary password is required to send login details.");
-  }
-
   const loginUrl = getPlatformClientLoginUrl(client);
-  const subject = `VisaFlow KSA Login Details - ${client.company_name || "Company"}`;
-  const text = buildPlatformLoginDetailsText({
-    client,
-    admin: primaryAdmin,
-    password: temporaryPassword,
-    loginUrl,
-  });
-  const html = buildPlatformLoginDetailsHtml({
-    client,
-    admin: primaryAdmin,
-    password: temporaryPassword,
-    loginUrl,
-  });
+  const subject = "VisaFlow Company Account Setup";
 
   const confirmed = window.confirm(
-    `Send login details to ${primaryAdmin.email}?\n\nCompany: ${client.company_name || "-"}\nLogin URL: ${loginUrl}`
+    `Send the secure account setup link to ${primaryAdmin.email}?\n\nCompany: ${client.company_name || "-"}\nLogin URL: ${loginUrl}`
   );
   if (!confirmed) return;
 
   try {
     const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
       body: {
-        type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
-        company_id: client.operational_company_id || client.company_id || null,
-        to: [primaryAdmin.email],
-        subject,
-        text,
-        html,
-        payload: {
-          source: "Platform Owner / Companies Management",
-          client_id: client.id || "",
-          company_name: client.company_name || "",
-          admin_user_id: primaryAdmin.id || "",
-          admin_email: primaryAdmin.email || "",
-          login_url: loginUrl,
-          password_in_payload: false,
-          triggered_by: currentUser?.email || currentUser?.name || "Platform Owner",
-          triggered_at: new Date().toISOString(),
-        },
+        message_type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+        target_user_id: primaryAdmin.id,
       },
     });
 
@@ -22957,11 +22674,11 @@ async function sendPlatformClientLoginDetails(client) {
       admin: primaryAdmin,
       subject,
       status: "Sent",
-      messageId: data?.messageId || data?.id || "",
+      messageId: "",
     });
 
     if (canViewEmailAdministration) await loadEmailLogs();
-    alert(`Login details sent to ${primaryAdmin.email}`);
+    alert(`Account setup link sent to ${primaryAdmin.email}`);
   } catch (error) {
     await recordPlatformLoginDetailsEmailLog({
       client,
@@ -35877,7 +35594,14 @@ onClick={() => setActiveReport("activityLog")}>
                   <button onClick={() => extendPlatformClient(item, 1)}>Extend 30d</button>
 <button onClick={() => extendPlatformClient(item, 12)}>Extend 1y</button>
                   <button onClick={() => createSubscriptionInvoiceForClient(item)}>Invoice</button>
-                  <button onClick={() => sendPlatformClientLoginDetails(item)}>Send Login</button>
+                  <button
+                    onClick={() => sendPlatformClientLoginDetails(item)}
+                    disabled={!isPlatformOwner}
+                    title={!isPlatformOwner ? "Platform Owner only" : ""}
+                    style={!isPlatformOwner ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                  >
+                    Send Setup Link
+                  </button>
                   <button onClick={() => openPlatformClientUsers(item)}>Users</button>
                   <button onClick={() => openCompanyRequestsReport(item)}>Report</button>
                   <button className="danger" onClick={() => deletePlatformClient(item.id)}>Delete</button>
