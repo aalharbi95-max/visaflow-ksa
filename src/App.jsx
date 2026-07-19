@@ -159,8 +159,6 @@ const ROLE_OPTIONS = [
 // Client-facing roles only. Platform roles must never appear inside company Users Management.
 const PLATFORM_ROLE_OPTIONS = ["Platform Owner", "Platform Accounts User", "Platform Support User"];
 const CLIENT_ROLE_OPTIONS = ROLE_OPTIONS.filter((role) => !PLATFORM_ROLE_OPTIONS.includes(role));
-const SAFE_USER_MANAGEMENT_COLUMNS = "id, name, email, role, status, company_id, agency_id, agency_name, auth_user_id, created_at";
-
 const RECRUITMENT_PERFORMANCE_ROLES = [
   "Recruitment Manager",
   "Recruitment Officer",
@@ -5259,17 +5257,14 @@ const [showAuthForm,setShowAuthForm] = useState(false);
 
 const [activeReport, setActiveReport] = useState("all");
 const [selectedMobilizationRequestNo, setSelectedMobilizationRequestNo] = useState("");
-const [currentUser, setCurrentUser] = useState(() => {
-  try {
-    return JSON.parse(
-      localStorage.getItem("visaflow_user") ||
-        sessionStorage.getItem("visaflow_user") ||
-        "null"
-    );
-  } catch {
-    return null;
-  }
-});
+// Stored workspace metadata is never trusted as an authenticated identity.
+// The active user is restored only after Supabase Auth and the server RPC agree.
+const [currentUser, setCurrentUser] = useState(null);
+const [workspaceAuthReady, setWorkspaceAuthReady] = useState(false);
+const [validatedWorkspaceKey, setValidatedWorkspaceKey] = useState("");
+const workspaceAuthSequenceRef = useRef(0);
+const workspaceDataGenerationRef = useRef(0);
+const legacyWorkspaceActiveRef = useRef(false);
 const [agencyClientAccess, setAgencyClientAccess] = useState([]);
 const [agencyWorkspaceLoading, setAgencyWorkspaceLoading] = useState(false);
 const [activeAgencyCompanyId, setActiveAgencyCompanyId] = useState(() =>
@@ -5293,6 +5288,14 @@ const currentCompanyId = isCurrentPlatformUser
   : isCurrentAgencyUser
     ? (activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "")
     : (currentUser?.company_id || "");
+
+function getWorkspaceIdentityKey(user = null) {
+  if (!user?.id) return "";
+  const effectiveCompanyId = normalizeUserRole(user.role) === "Agency"
+    ? (user.active_company_id || user.company_id || "")
+    : (user.company_id || "");
+  return [user.id, user.auth_user_id || "legacy", effectiveCompanyId, normalizeUserRole(user.role)].join(":");
+}
 
 function withCompany(payload = {}) {
   if (!currentCompanyId && !isCurrentPlatformUser) {
@@ -5342,9 +5345,6 @@ const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 const [loginLoading, setLoginLoading] = useState(false);
 const [rememberMe, setRememberMe] = useState(true);
 const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
-const [resetEmail, setResetEmail] = useState("");
-const [resetMessage, setResetMessage] = useState("");
-const [resetLoading, setResetLoading] = useState(false);
 const [loginLanguage, setLoginLanguage] = useState("EN");
 const [loginLogoFailed, setLoginLogoFailed] = useState(false);
 const [ssoInfoOpen, setSsoInfoOpen] = useState(false);
@@ -5924,24 +5924,26 @@ function switchAgencyWorkspace(workspace, options = {}) {
 
   const companyId = String(workspace.company_id || "");
   const companyName = workspace.company_name || "Client Workspace";
+  const base = options.user || currentUser || {};
+  const updated = {
+    ...base,
+    active_company_id: companyId,
+    active_company_name: companyName,
+  };
+
+  setWorkspaceAuthReady(false);
+  setValidatedWorkspaceKey("");
+  clearTenantSensitiveState();
 
   sessionStorage.setItem("visaflow_agency_company_id", companyId);
   sessionStorage.setItem("visaflow_agency_company_name", companyName);
   setActiveAgencyCompanyId(companyId);
   setActiveAgencyCompanyName(companyName);
-
-  setCurrentUser((prev) => {
-    const base = prev || options.user || currentUser || {};
-    const updated = {
-      ...base,
-      active_company_id: companyId,
-      active_company_name: companyName,
-    };
-
-    const storage = localStorage.getItem("visaflow_user") ? localStorage : sessionStorage;
-    storage.setItem("visaflow_user", JSON.stringify(updated));
-    return updated;
-  });
+  const storage = localStorage.getItem("visaflow_user") ? localStorage : sessionStorage;
+  storage.setItem("visaflow_user", JSON.stringify(updated));
+  setCurrentUser(updated);
+  setValidatedWorkspaceKey(getWorkspaceIdentityKey(updated));
+  setWorkspaceAuthReady(true);
 
   if (!options.silent) {
     setSearch("");
@@ -6990,8 +6992,133 @@ Cancel = إضافتها كوظيفة مستقلة`
     return candidate.ai_priority || "Pending Review";
   }
 
+  function clearStoredWorkspaceIdentity() {
+    localStorage.removeItem("visaflow_user");
+    sessionStorage.removeItem("visaflow_user");
+    sessionStorage.removeItem("visaflow_agency_company_id");
+    sessionStorage.removeItem("visaflow_agency_company_name");
+  }
+
+  function clearTenantSensitiveState() {
+    workspaceDataGenerationRef.current += 1;
+    setRequests([]);
+    setRequestLines([]);
+    setVisaRecords([]);
+    setVisaBatchLines([]);
+    setVisaAuthorizations([]);
+    setVisaAllocations([]);
+    setAgencies([]);
+    setAgencyAgreements([]);
+    setAgencyScores([]);
+    setAgencyScoreHistory([]);
+    setAgencyPenalties([]);
+    setMarketplaceRequests([]);
+    setMarketplaceDeals([]);
+    setMarketplaceDealWorkers([]);
+    setMarketplaceInvoices([]);
+    setMarketplaceCollections([]);
+    setNotifications([]);
+    setEmailLogs([]);
+    setEmailTemplates([]);
+    setUsers([]);
+    setCompanies([]);
+    setCompanyEmailSettings(null);
+    setEmailSettingsForm(emptyCompanyEmailSettings);
+    setCandidates([]);
+    setCandidateTechnicalProfiles([]);
+    setEducationInstitutions([]);
+    setInterviews([]);
+    setAIInterviewTemplates([]);
+    setAIInterviewQuestions([]);
+    setAIInterviewSessions([]);
+    setAIInterviewAnswers([]);
+    setAIInterviewCampaigns([]);
+    setAIInterviewCampaignCandidates([]);
+    setAIInterviewInvitationJobs([]);
+    setMobilizations([]);
+    setOnboardingValidations([]);
+    setDemobilizations([]);
+    setEmployees([]);
+    setAuditLogs([]);
+    setPlatformClients([]);
+    setSubscriptionInvoices([]);
+    setSupportTickets([]);
+    setSystemBackups([]);
+    setSystemRestoreRequests([]);
+    setSystemActivityLogs([]);
+    setPlatformUsageRows([]);
+    setAiAgentSettings(DEFAULT_AI_AGENT_SETTINGS);
+    setCompanyReportRows([]);
+    setOwnerTalentStats({
+      registered: null,
+      profileRecords: null,
+      emailConfirmed: null,
+      cvUploaded: null,
+      profileCompleted: null,
+      aiAnalyzed: null,
+      interviewsStarted: null,
+      interviewsCompleted: null,
+      approved: null,
+      published: null,
+    });
+    setLocalContentProjectTargets([]);
+    setLocalContentSettings({
+      saudi_labor_weight: 100,
+      non_saudi_labor_weight: 54,
+      default_target_percent: 35,
+      forecast_days: 90,
+      expiring_window_days: 60,
+      default_monthly_penalty_percent: 5,
+    });
+    setOwnerTalentRecent([]);
+    setOwnerTalentDistributions({
+      country_of_residence: [],
+      profession: [],
+      marketplace_status: [],
+    });
+    setSelectedVisa(null);
+    setSelectedRequest(null);
+    setSelectedAIInterviewSessionId("");
+    setSelectedAIInterviewCampaignId("");
+    setSelectedCampaignCandidateIds([]);
+    setSelectedEmployeeIds([]);
+    setMarketplaceSelectedEmployeeIds([]);
+    setSelectedPlatformClientUsers(null);
+    setCompanyReportClient(null);
+    setAiAnswer("");
+    setAiConversation([]);
+    setAiAgentLog("");
+    setReportStudioResult("");
+    setLoading(false);
+  }
+
+  function activateWorkspaceUser(user, { persist = true, legacy = false } = {}) {
+    const normalizedUser = {
+      ...user,
+      role: normalizeUserRole(user?.role),
+    };
+    clearTenantSensitiveState();
+    clearStoredWorkspaceIdentity();
+    setAgencyClientAccess([]);
+    setActiveAgencyCompanyId(normalizedUser.active_company_id || "");
+    setActiveAgencyCompanyName(normalizedUser.active_company_name || "");
+    legacyWorkspaceActiveRef.current = legacy;
+
+    if (persist) {
+      const storage = rememberMe ? localStorage : sessionStorage;
+      storage.setItem("visaflow_user", JSON.stringify(normalizedUser));
+    }
+
+    setCurrentUser(normalizedUser);
+    setValidatedWorkspaceKey(getWorkspaceIdentityKey(normalizedUser));
+    setWorkspaceAuthReady(true);
+  }
+
 
   async function loadAll() {
+    if (!workspaceAuthReady || validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser)) {
+      return;
+    }
     setLoading(true);
     await Promise.all([
       loadRequests(),
@@ -7050,6 +7177,8 @@ Cancel = إضافتها كوظيفة مستقلة`
   }
 
   async function loadTable(table, setter) {
+  const requestGeneration = workspaceDataGenerationRef.current;
+  const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
   const globalTables = ["countries", "professions", "profession_aliases"];
   const agencyNameFields = {
     candidates: "agency",
@@ -7076,6 +7205,11 @@ Cancel = إضافتها كوظيفة مستقلة`
     "invoices",
     "collections",
   ];
+
+  if (!workspaceAuthReady || validatedWorkspaceKey !== requestWorkspaceKey) {
+    setter([]);
+    return;
+  }
 
   if (currentRole === "Agency" && !currentCompanyId && !globalTables.includes(table)) {
     setter([]);
@@ -7125,6 +7259,13 @@ Cancel = إضافتها كوظيفة مستقلة`
 
   const { data, error } = await query;
 
+  if (
+    requestGeneration !== workspaceDataGenerationRef.current ||
+    requestWorkspaceKey !== validatedWorkspaceKey
+  ) {
+    return;
+  }
+
   if (error) {
     alert(`${table}: ${error.message}`);
     return;
@@ -7136,7 +7277,6 @@ Cancel = إضافتها كوظيفة مستقلة`
     rows = rows.filter((item) => isCurrentAgencyPenaltyRecord(item));
   }
 
-  console.log(table, rows?.length, rows);
   setter(rows || []);
 }
 
@@ -7254,75 +7394,20 @@ Cancel = إضافتها كوظيفة مستقلة`
   const loadAgencyPenalties = () => loadTable("agency_penalties", setAgencyPenalties);
   const loadCountries = () => loadTable("countries", setCountries);
   const loadUsers = async () => {
-    if (canManagePlatform) {
-      const { data, error } = await supabase
-        .from("users")
-        .select(SAFE_USER_MANAGEMENT_COLUMNS)
-        .order("created_at", { ascending: false })
-        .range(0, 5000);
-
-      if (error) {
-        alert(`users: ${error.message}`);
-        return;
-      }
-
-      setUsers(data || []);
-      return;
-    }
-
-    if (currentRole === "Agency" || !currentCompanyId) {
+    if (!canManageUsers || !currentUser?.auth_user_id) {
       setUsers([]);
       return;
     }
 
-    const { data: companyUsers, error: companyUsersError } = await supabase
-      .from("users")
-      .select(SAFE_USER_MANAGEMENT_COLUMNS)
-      .eq("company_id", currentCompanyId)
-      .order("created_at", { ascending: false })
-      .range(0, 5000);
+    const { data, error } = await supabase.rpc("list_manageable_app_users");
 
-    if (companyUsersError) {
-      alert(`users: ${companyUsersError.message}`);
+    if (error) {
+      alert("Unable to load users during the security migration.");
+      setUsers([]);
       return;
     }
 
-    const { data: agencyAccessRows, error: agencyAccessError } = await supabase
-      .from("agency_company_user_access")
-      .select("user_id")
-      .eq("company_id", currentCompanyId)
-      .eq("status", "Active")
-      .range(0, 5000);
-
-    if (agencyAccessError) {
-      console.warn("agency_company_user_access users:", agencyAccessError.message);
-      setUsers(companyUsers || []);
-      return;
-    }
-
-    const agencyUserIds = Array.from(new Set((agencyAccessRows || []).map((row) => row.user_id).filter(Boolean)));
-    let agencyUsers = [];
-
-    if (agencyUserIds.length > 0) {
-      const { data, error } = await supabase
-        .from("users")
-        .select(SAFE_USER_MANAGEMENT_COLUMNS)
-        .in("id", agencyUserIds)
-        .range(0, 5000);
-
-      if (error) {
-        console.warn("agency users:", error.message);
-      } else {
-        agencyUsers = data || [];
-      }
-    }
-
-    const merged = new Map();
-    [...(companyUsers || []), ...agencyUsers].forEach((user) => {
-      if (user?.id) merged.set(String(user.id), user);
-    });
-
-    setUsers(Array.from(merged.values()));
+    setUsers(Array.isArray(data) ? data : []);
   };
   const loadCompanies = async () => {
     if (!currentCompanyId) return setCompanies([]);
@@ -8073,7 +8158,13 @@ async function loadProfessionAliases() {
   }
 
   async function loadSystemActivityLogs() {
-    if (!currentUser) {
+    const requestGeneration = workspaceDataGenerationRef.current;
+    const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+    if (
+      !currentUser ||
+      !workspaceAuthReady ||
+      validatedWorkspaceKey !== requestWorkspaceKey
+    ) {
       setSystemActivityLogs([]);
       setActivityLogMessage("Login is required to load activity logs.");
       return [];
@@ -8119,6 +8210,13 @@ async function loadProfessionAliases() {
       const runQuery = async (label, builder) => {
         const result = await builder(baseQuery());
 
+        if (
+          requestGeneration !== workspaceDataGenerationRef.current ||
+          requestWorkspaceKey !== validatedWorkspaceKey
+        ) {
+          return [];
+        }
+
         if (result.error) {
           console.warn(`system_activity_logs ${label}:`, result.error.message);
           errors.push(`${label}: ${result.error.message}`);
@@ -8145,7 +8243,10 @@ async function loadProfessionAliases() {
       }
 
       if (typedRequestNo) {
-        await runQuery("typed request_no", (query) => query.ilike("request_no", `%${typedRequestNo}%`));
+        await runQuery("typed request_no", (query) => {
+          const scopedQuery = query.ilike("request_no", `%${typedRequestNo}%`);
+          return canManagePlatform ? scopedQuery : scopedQuery.eq("company_id", currentCompanyId);
+        });
       }
 
       if (visibleRequestNos.length > 0) {
@@ -8153,7 +8254,10 @@ async function loadProfessionAliases() {
           const requestChunk = visibleRequestNos.slice(index, index + 50);
           await runQuery(
             `visible request_no ${index + 1}-${index + requestChunk.length}`,
-            (query) => query.in("request_no", requestChunk)
+            (query) => {
+              const scopedQuery = query.in("request_no", requestChunk);
+              return canManagePlatform ? scopedQuery : scopedQuery.eq("company_id", currentCompanyId);
+            }
           );
         }
       }
@@ -8251,6 +8355,13 @@ async function loadProfessionAliases() {
   }
 
 async function loadNotifications() {
+  const requestGeneration = workspaceDataGenerationRef.current;
+  const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+  if (!workspaceAuthReady || validatedWorkspaceKey !== requestWorkspaceKey) {
+    setNotifications([]);
+    return [];
+  }
+
   if (!currentCompanyId) {
     console.warn("Notifications blocked: companyId is missing", {
       currentCompanyId,
@@ -8274,15 +8385,12 @@ async function loadNotifications() {
 
   const { data, error } = await query;
 
-  console.log("NOTIFICATIONS DEBUG:", {
-    currentCompanyId,
-    currentRole,
-    userCompanyId: currentUser?.company_id,
-    activeCompanyId: currentUser?.active_company_id,
-    count: data?.length || 0,
-    error,
-    data,
-  });
+  if (
+    requestGeneration !== workspaceDataGenerationRef.current ||
+    requestWorkspaceKey !== validatedWorkspaceKey
+  ) {
+    return [];
+  }
 
   if (error) {
     alert(`Notifications error: ${error.message}`);
@@ -8669,7 +8777,86 @@ async function loadNotifications() {
     await loadNotifications();
   }
 useEffect(() => {
-  if (!currentUser) return;
+  let mounted = true;
+
+  const reconcileAuthenticatedWorkspace = async (session) => {
+    const sequence = ++workspaceAuthSequenceRef.current;
+    setWorkspaceAuthReady(false);
+    setValidatedWorkspaceKey("");
+    clearTenantSensitiveState();
+    clearStoredWorkspaceIdentity();
+    setAgencyClientAccess([]);
+    setActiveAgencyCompanyId("");
+    setActiveAgencyCompanyName("");
+    setCurrentUser(null);
+
+    if (!session?.user?.id) {
+      if (mounted && sequence === workspaceAuthSequenceRef.current) {
+        legacyWorkspaceActiveRef.current = false;
+        setWorkspaceAuthReady(true);
+      }
+      return;
+    }
+
+    const { data: linkedUser, error } = await supabase.rpc("get_authenticated_app_user");
+    if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
+
+    if (
+      error ||
+      !linkedUser?.id ||
+      !linkedUser?.auth_user_id ||
+      String(linkedUser.auth_user_id) !== String(session.user.id)
+    ) {
+      legacyWorkspaceActiveRef.current = false;
+      await supabase.auth.signOut();
+      if (mounted && sequence === workspaceAuthSequenceRef.current) {
+        setWorkspaceAuthReady(true);
+      }
+      return;
+    }
+
+    activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+  };
+
+  const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+    if (!mounted) return;
+    if (event === "SIGNED_OUT" && legacyWorkspaceActiveRef.current) return;
+    if (["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "USER_UPDATED"].includes(event)) {
+      reconcileAuthenticatedWorkspace(session);
+    }
+  });
+
+  supabase.auth.getSession().then(({ data }) => {
+    if (!mounted) return;
+    reconcileAuthenticatedWorkspace(data?.session || null);
+  });
+
+  return () => {
+    mounted = false;
+    authListener?.subscription?.unsubscribe();
+  };
+}, []);
+
+useEffect(() => {
+  if (!currentUser || !validatedWorkspaceKey) return;
+  if (validatedWorkspaceKey === getWorkspaceIdentityKey(currentUser)) return;
+  setWorkspaceAuthReady(false);
+  setValidatedWorkspaceKey("");
+  clearTenantSensitiveState();
+}, [
+  currentUser?.id,
+  currentUser?.auth_user_id,
+  currentUser?.company_id,
+  currentUser?.active_company_id,
+  validatedWorkspaceKey,
+]);
+
+useEffect(() => {
+  if (
+    !currentUser ||
+    !workspaceAuthReady ||
+    validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser)
+  ) return;
 
   if (currentRole === "Agency") {
     loadAgencyClientAccess(currentUser, true);
@@ -8677,7 +8864,7 @@ useEffect(() => {
   }
 
   loadAll();
-}, [currentUser?.id, currentCompanyId]);
+}, [currentUser?.id, currentUser?.auth_user_id, currentCompanyId, workspaceAuthReady, validatedWorkspaceKey]);
 
 useEffect(() => {
   if (!currentUser || activePage !== "Client Usage Monitor" || !canManagePlatform) return;
@@ -11758,184 +11945,7 @@ function cancelCompanyEdit() {
   });
 }
 async function saveUser() {
-  if (!canManageUsers) return alert("You do not have permission to manage users.");
-  if (!userForm.name) return alert("User name is required.");
-  if (!userForm.email) return alert("Email is required.");
-
-  const savingPlatformUser =
-    canManagePlatformAccounts && activePage === "Platform Users";
-
-  const effectiveRole = savingPlatformUser
-    ? (isPlatformRole(userForm.role) ? userForm.role : "Platform Accounts User")
-    : (isPlatformRole(userForm.role) ? "Viewer" : (userForm.role || "Viewer"));
-
-  if (!savingPlatformUser && isPlatformRole(userForm.role)) {
-    return alert("Platform roles can only be managed from Platform Users by a platform account.");
-  }
-
-  if (userEditingId) {
-    const { data: targetUser, error: targetUserError } = await supabase
-      .from("users")
-      .select("id, role, company_id, agency_id, agency_name")
-      .eq("id", userEditingId)
-      .maybeSingle();
-
-    if (targetUserError) return alert(targetUserError.message);
-    if (!targetUser) return alert("User was not found.");
-    if (!canCurrentUserEditTargetUser(targetUser)) {
-      return alert("You cannot edit this user from the current workspace.");
-    }
-  }
-
-  const cleanEmail = userForm.email.trim().toLowerCase();
-  const selectedAgency = effectiveRole === "Agency"
-    ? agencies.find((agency) => String(agency.id || "") === String(userForm.agency_id || "")) ||
-      agencies.find((agency) => normalize(agency.name) === normalize(userForm.agency_name))
-    : null;
-
-  if (effectiveRole === "Agency" && !selectedAgency?.id) {
-    return alert("Please select the agency for this Agency user.");
-  }
-
-  if (!savingPlatformUser && !isPlatformRole(effectiveRole) && effectiveRole !== "Agency" && !currentCompanyId) {
-    return alert("Company ID is missing. User save was blocked to prevent cross-company data mixing.");
-  }
-
-  const { data: existingUser, error: findUserError } = await supabase
-    .from("users")
-    .select("id, role, agency_id")
-    .eq("email", cleanEmail)
-    .maybeSingle();
-
-  if (findUserError) return alert(findUserError.message);
-
-  if (existingUser && String(existingUser.id) !== String(userEditingId || "")) {
-    if (effectiveRole !== "Agency") {
-      return alert("Email already exists in the platform.");
-    }
-
-    if (normalizeUserRole(existingUser.role) !== "Agency") {
-      return alert("This email is already used by an internal company/platform user and cannot be linked as an agency user.");
-    }
-
-    if (existingUser.agency_id && String(existingUser.agency_id) !== String(selectedAgency.id)) {
-      return alert("This email is already linked to another agency and cannot be linked to the selected agency.");
-    }
-  }
-
-  if (!existingUser && !userEditingId && !userForm.password) {
-    return alert("Password is required for new users.");
-  }
-
-  if (effectiveRole === "Agency") {
-    let agencyUserId = userEditingId || existingUser?.id || null;
-
-    const agencyPayload = {
-      name: userForm.name,
-      email: cleanEmail,
-      role: "Agency",
-      status: userForm.status || "Active",
-      company_id: null,
-      agency_id: selectedAgency.id,
-      agency_name: selectedAgency.name || userForm.agency_name || "",
-    };
-
-    if (userForm.password) agencyPayload.password = userForm.password.trim();
-
-    if (agencyUserId) {
-      const { error: updateError } = await supabase
-        .from("users")
-        .update(agencyPayload)
-        .eq("id", agencyUserId);
-
-      if (updateError) return alert(updateError.message);
-    } else {
-      const { data: createdUser, error: createError } = await supabase
-        .from("users")
-        .insert([{ ...agencyPayload, password: userForm.password.trim() }])
-        .select("id")
-        .single();
-
-      if (createError) return alert(createError.message);
-      agencyUserId = createdUser.id;
-    }
-
-    const { error: memberError } = await supabase
-      .from("agency_members")
-      .upsert(
-        [{ agency_id: selectedAgency.id, user_id: agencyUserId, role: "Agency User", status: userForm.status || "Active" }],
-        { onConflict: "agency_id,user_id" }
-      );
-
-    if (memberError) return alert(memberError.message);
-
-    const { error: companyAccessError } = await supabase
-      .from("company_agency_access")
-      .upsert(
-        [{
-          company_id: currentCompanyId,
-          agency_id: selectedAgency.id,
-          status: "Active",
-          can_view_requests: true,
-          can_upload_candidates: true,
-          can_update_candidates: true,
-          can_view_interviews: true,
-        }],
-        { onConflict: "company_id,agency_id" }
-      );
-
-    if (companyAccessError) return alert(companyAccessError.message);
-
-    const { error: userAccessError } = await supabase
-      .from("agency_company_user_access")
-      .upsert(
-        [{
-          company_id: currentCompanyId,
-          agency_id: selectedAgency.id,
-          user_id: agencyUserId,
-          role: "Agency User",
-          status: userForm.status || "Active",
-          can_view_requests: true,
-          can_upload_candidates: true,
-          can_update_candidates: true,
-          can_view_interviews: true,
-        }],
-        { onConflict: "company_id,agency_id,user_id" }
-      );
-
-    if (userAccessError) return alert(userAccessError.message);
-
-    resetUserEditingState();
-    await loadUsers();
-    await loadAgencies();
-    alert("Agency user access has been saved for this company.");
-    return;
-  }
-
-  const payload = {
-    name: userForm.name,
-    email: cleanEmail,
-    role: effectiveRole,
-    status: userForm.status || "Active",
-    agency_id: null,
-    agency_name: "",
-  };
-
-  if (userForm.password) payload.password = userForm.password.trim();
-
-  const isInternalPlatformUser = isPlatformRole(payload.role);
-  const userPayload = isInternalPlatformUser
-    ? { ...payload, company_id: null }
-    : withCompany(payload);
-
-  const result = userEditingId
-    ? await supabase.from("users").update(userPayload).eq("id", userEditingId)
-    : await supabase.from("users").insert([userPayload]);
-
-  if (result.error) return alert(result.error.message);
-
-  resetUserEditingState();
-  await loadUsers();
+  alert("User management is temporarily restricted during the security migration.");
 }
 
 async function findExistingAgencyByName(name) {
@@ -12051,34 +12061,7 @@ async function saveAgency() {
 }
 
 async function deleteUser(id) {
-  if (!canManageUsers) return alert("You do not have permission to delete users.");
-
-  const { data: targetUser, error: targetUserError } = await supabase
-    .from("users")
-    .select("id, role, company_id, agency_id, agency_name")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (targetUserError) return alert(targetUserError.message);
-  if (!targetUser) return alert("User was not found.");
-  if (!canCurrentUserEditTargetUser(targetUser)) {
-    return alert("You cannot delete this user from the current workspace.");
-  }
-
-  if (!canEditPlatformUsers && normalizeUserRole(targetUser.role) === "Agency") {
-    return alert("Agency users are shared portal accounts. Disable or remove access instead of deleting globally.");
-  }
-
-  if (!window.confirm("Delete this user?")) return;
-
-  const { error } = await supabase
-    .from("users")
-    .delete()
-    .eq("id", id);
-
-  if (error) return alert(error.message);
-
-  loadUsers();
+  alert("User management is temporarily restricted during the security migration.");
 }
 
   async function deleteAgency(id) {
@@ -17094,45 +17077,6 @@ function openRequestDetails(item) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-async function handleForgotPasswordSubmit() {
-  const email = resetEmail.trim().toLowerCase();
-
-  if (!email) {
-    setResetMessage("Please enter your email address.");
-    return;
-  }
-
-  setResetLoading(true);
-  setResetMessage("");
-
-  try {
-    const { data } = await supabase
-      .from("users")
-      .select("id, name, email, status")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (!data) {
-      setResetMessage("If this email exists, the system administrator will be notified.");
-    } else if (data.status !== "Active") {
-      setResetMessage("This account is inactive. Please contact the system administrator.");
-    } else {
-      await triggerExternalNotification("PASSWORD_RESET_REQUEST", {
-        user_id: data.id,
-        name: data.name,
-        email: data.email,
-        source: "Login Page",
-      });
-
-      setResetMessage("Password reset request sent. Please contact the system administrator.");
-    }
-  } catch (error) {
-    setResetMessage(error?.message || "Unable to submit password reset request.");
-  } finally {
-    setResetLoading(false);
-  }
-}
-
 function resetChangePasswordForm() {
   setChangePasswordForm({
     current_password: "",
@@ -17143,6 +17087,10 @@ function resetChangePasswordForm() {
 }
 
 function openChangePasswordModal() {
+  if (!currentUser?.auth_user_id) {
+    alert("Legacy password changes are temporarily restricted during the security migration.");
+    return;
+  }
   resetChangePasswordForm();
   setChangePasswordOpen(true);
 }
@@ -17197,24 +17145,7 @@ async function handleChangePasswordSubmit() {
 
       if (updateError) throw updateError;
     } else {
-      const { data: legacyUser, error: legacyError } = await supabase
-        .from("users")
-        .select("id")
-        .eq("id", currentUser.id)
-        .eq("email", currentUser.email)
-        .eq("password", currentPassword)
-        .maybeSingle();
-
-      if (legacyError) throw legacyError;
-      if (!legacyUser) throw new Error("Current password is incorrect.");
-
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({ password: newPassword })
-        .eq("id", currentUser.id)
-        .eq("email", currentUser.email);
-
-      if (updateError) throw updateError;
+      throw new Error("Legacy password changes are temporarily restricted during the security migration.");
     }
 
     setChangePasswordForm({
@@ -17241,86 +17172,57 @@ async function handleLogin() {
 
   setLoginLoading(true);
   resetUserEditingState();
+  clearTenantSensitiveState();
+  clearStoredWorkspaceIdentity();
+  setAgencyClientAccess([]);
+  setActiveAgencyCompanyId("");
+  setActiveAgencyCompanyName("");
 
   try {
-    // Migration-safe login:
-    // 1) If the user is already linked to Supabase Auth, require Supabase Auth password.
-    // 2) If the user is not linked yet, keep the old custom login temporarily.
-    const { data: existingUser, error: existingUserError } = await supabase
-      .from("users")
-      .select("id, email, role, auth_user_id")
-      .eq("email", email)
-      .maybeSingle();
-
-    if (existingUserError) {
-      console.warn("Login user lookup failed:", existingUserError.message);
-      alert("Login failed. Please try again.");
-      return;
-    }
-
-    if (!existingUser) {
-      alert("Invalid email or password");
-      return;
-    }
-
-    // Security: platform roles must never use the temporary legacy-password fallback.
-    // This prevents any company Admin from creating a legacy Platform user and entering the owner area.
-    if (!existingUser.auth_user_id && isPlatformRole(existingUser.role)) {
-      alert("Platform users must login through secure Supabase Auth. Please contact the platform owner.");
-      return;
-    }
+    // Prefer Supabase Auth. The temporary legacy RPC is only reached when Auth fails.
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     let userData = null;
 
-    if (existingUser.auth_user_id) {
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (authError || !authData?.user?.id) {
-        console.warn("Supabase Auth login failed:", authError?.message || authError);
-        alert("Invalid email or password");
-        return;
-      }
-
-      const { data: linkedUser, error: linkedUserError } = await supabase
-        .from("users")
-        .select("id, name, email, role, agency_id, agency_name, status, is_active, company_id, auth_user_id")
-        .eq("auth_user_id", authData.user.id)
-        .maybeSingle();
+    if (!authError && authData?.user?.id) {
+      const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
+        "get_authenticated_app_user"
+      );
 
       if (linkedUserError || !linkedUser) {
         await supabase.auth.signOut();
-        alert("This authenticated account is not linked to a VisaFlow user.");
+        alert("Invalid email or password");
         return;
       }
 
       userData = linkedUser;
     } else {
-      const { data: legacyUser, error: legacyUserError } = await supabase
-        .from("users")
-        .select("id, name, email, role, agency_id, agency_name, status, is_active, company_id, auth_user_id")
-        .eq("email", email)
-        .eq("password", password)
-        .maybeSingle();
+      // A legacy browser session must not inherit a different Supabase Auth identity.
+      legacyWorkspaceActiveRef.current = true;
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        legacyWorkspaceActiveRef.current = false;
+        alert("Login failed. Please try again.");
+        return;
+      }
 
-      if (legacyUserError || !legacyUser) {
+      const { data: legacyResult, error: legacyError } = await supabase.rpc(
+        "legacy_app_login",
+        { p_email: email, p_password: password }
+      );
+
+      if (legacyError || !legacyResult?.ok || !legacyResult?.user) {
+        legacyWorkspaceActiveRef.current = false;
+        setWorkspaceAuthReady(true);
         alert("Invalid email or password");
         return;
       }
 
-      if (isPlatformRole(legacyUser.role)) {
-        alert("Platform users must login through secure Supabase Auth. Please contact the platform owner.");
-        return;
-      }
-
-      userData = legacyUser;
-    }
-
-    if (isPlatformRole(userData?.role) && !userData?.auth_user_id) {
-      alert("Platform users must be linked to Supabase Auth before login.");
-      return;
+      userData = legacyResult.user;
     }
 
     const userStatus = String(userData.status || "").trim().toLowerCase();
@@ -17346,13 +17248,6 @@ async function handleLogin() {
 
       const companyStatus = String(companyData?.status || "").trim().toLowerCase();
       const subscriptionStatus = String(companyData?.subscription_status || "").trim().toLowerCase();
-
-      console.log("Company Check:", {
-        userCompanyId: userData.company_id,
-        companyData,
-        companyStatus,
-        subscriptionStatus,
-      });
 
       // Important:
       // If companyData is null, the frontend likely cannot read the companies table
@@ -17404,21 +17299,10 @@ async function handleLogin() {
       }
     }
 
-    const storage = rememberMe ? localStorage : sessionStorage;
-    localStorage.removeItem("visaflow_user");
-    sessionStorage.removeItem("visaflow_user");
-    storage.setItem("visaflow_user", JSON.stringify(loggedUser));
-
-    try {
-      await supabase
-        .from("users")
-        .update({ last_login: new Date().toISOString() })
-        .eq("id", loggedUser.id);
-    } catch (lastLoginError) {
-      console.warn("last_login update failed", lastLoginError?.message || lastLoginError);
-    }
-
-    setCurrentUser(loggedUser);
+    activateWorkspaceUser(loggedUser, {
+      persist: true,
+      legacy: !loggedUser.auth_user_id,
+    });
     setActivePage((ROLE_PAGES[loggedUser.role] || ROLE_PAGES.Viewer)[0]);
   } finally {
     setLoginLoading(false);
@@ -17426,20 +17310,23 @@ async function handleLogin() {
 }
 
 async function handleLogout() {
+  legacyWorkspaceActiveRef.current = false;
+  setWorkspaceAuthReady(false);
+  setValidatedWorkspaceKey("");
+  clearTenantSensitiveState();
+  clearStoredWorkspaceIdentity();
+  setAgencyClientAccess([]);
+  setActiveAgencyCompanyId("");
+  setActiveAgencyCompanyName("");
+  setCurrentUser(null);
+
   try {
     await supabase.auth.signOut();
   } catch (error) {
     console.warn("Supabase sign out failed", error?.message || error);
   }
 
-  localStorage.removeItem("visaflow_user");
-  sessionStorage.removeItem("visaflow_user");
-  sessionStorage.removeItem("visaflow_agency_company_id");
-  sessionStorage.removeItem("visaflow_agency_company_name");
-  setAgencyClientAccess([]);
-  setActiveAgencyCompanyId("");
-  setActiveAgencyCompanyName("");
-  setCurrentUser(null);
+  setWorkspaceAuthReady(true);
   resetUserEditingState();
   setLoginForm({ email: "", password: "" });
   setChangePasswordOpen(false);
@@ -27424,6 +27311,24 @@ if (talentPortalOpen) {
   return <TalentCandidatePortal onBack={closeTalentPortal} />;
 }
 
+const activeWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+if (
+  !workspaceAuthReady ||
+  (currentUser && (!activeWorkspaceKey || validatedWorkspaceKey !== activeWorkspaceKey))
+) {
+  return (
+    <main className="vf-login-shell">
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <div className="vf-login-card" style={{ maxWidth: "520px", textAlign: "center" }}>
+          <h2>VisaFlow KSA</h2>
+          <p>Securing your workspace...</p>
+          <p>جاري التحقق من مساحة العمل الآمنة...</p>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 if (!currentUser) {
   const showMicrosoftSso = false; // Feature flag: enable only after real Microsoft SSO implementation.
 
@@ -27678,8 +27583,6 @@ if (!currentUser) {
               type="button"
               className="vf-forgot-link"
               onClick={() => {
-                setResetEmail(loginForm.email || "");
-                setResetMessage("");
                 setForgotPasswordOpen(true);
               }}
             >
@@ -27774,36 +27677,14 @@ if (!currentUser) {
         {forgotPasswordOpen && (
           <div className="vf-reset-overlay">
             <div className="vf-reset-modal">
-              <h3>{loginLanguage === "AR" ? "نسيت كلمة المرور" : "Forgot Password"}</h3>
+              <h3>{loginLanguage === "AR" ? "استعادة كلمة المرور" : "Password Recovery"}</h3>
               <p>
                 {loginLanguage === "AR"
-                  ? "أدخل بريدك الإلكتروني وسيتم إشعار مسؤول النظام."
-                  : "Enter your email and the system administrator will be notified."}
+                  ? "استعادة كلمة المرور تتم مؤقتًا عن طريق إدارة المنصة."
+                  : "Password recovery is temporarily handled by the platform administrator."}
               </p>
 
-              <input
-                type="email"
-                placeholder={loginLanguage === "AR" ? "أدخل بريدك الإلكتروني" : "Enter your email"}
-                value={resetEmail}
-                onChange={(e) => setResetEmail(e.target.value)}
-              />
-
-              {resetMessage && <div className="vf-reset-message">{resetMessage}</div>}
-
               <div className="vf-reset-actions">
-                <button
-                  type="button"
-                  onClick={handleForgotPasswordSubmit}
-                  disabled={resetLoading}
-                >
-                  {resetLoading
-                    ? loginLanguage === "AR"
-                      ? "جاري الإرسال..."
-                      : "Sending..."
-                    : loginLanguage === "AR"
-                      ? "إرسال الطلب"
-                      : "Send Request"}
-                </button>
                 <button
                   type="button"
                   className="secondary"
@@ -27865,7 +27746,14 @@ if (!currentUser) {
             )}
 
             <div className="actions-line" style={{ marginTop: "18px", justifyContent: "center" }}>
-              <button type="button" className="new-btn" onClick={openChangePasswordModal}>
+              <button
+                type="button"
+                className="new-btn"
+                onClick={openChangePasswordModal}
+                disabled={!currentUser?.auth_user_id}
+                title={!currentUser?.auth_user_id ? "Temporarily restricted during the security migration" : ""}
+                style={!currentUser?.auth_user_id ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+              >
                 Change Password
               </button>
               <button type="button" className="light-btn" onClick={handleLogout}>
@@ -27974,10 +27862,16 @@ if (!currentUser) {
             </select>
           </div>
         )}
-        <button
+<button
   className="light-btn"
-  style={{ marginTop: "10px", width: "100%" }}
+  style={{
+    marginTop: "10px",
+    width: "100%",
+    ...(!currentUser?.auth_user_id ? { opacity: 0.45, cursor: "not-allowed" } : {}),
+  }}
   onClick={openChangePasswordModal}
+  disabled={!currentUser?.auth_user_id}
+  title={!currentUser?.auth_user_id ? "Temporarily restricted during the security migration" : ""}
 >
   Change Password
 </button>
@@ -28069,7 +27963,15 @@ if (!currentUser) {
               <button className="new-btn" onClick={() => setActivePage("Notifications")}>🔔 {unreadNotificationsCount}</button>
               {canExport && <button className="new-btn" onClick={exportCurrentPage}>Export Excel</button>}
               <button className="new-btn" onClick={loadAll}>Refresh</button>
-              <button className="light-btn" onClick={openChangePasswordModal}>Change Password</button>
+              <button
+                className="light-btn"
+                onClick={openChangePasswordModal}
+                disabled={!currentUser?.auth_user_id}
+                title={!currentUser?.auth_user_id ? "Temporarily restricted during the security migration" : ""}
+                style={!currentUser?.auth_user_id ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+              >
+                Change Password
+              </button>
               <button className="light-btn" onClick={handleLogout}>Logout</button>
             </div>
           )}
@@ -34178,6 +34080,11 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 {activePage === "Users Management" && canManageUsers && (
   <>
     <FormCard title={userEditingId ? "Edit User" : "Add User"}>
+      <p style={{ padding: "12px", borderRadius: "10px", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>
+        User management is temporarily restricted during the security migration.<br />
+        إدارة المستخدمين مقيدة مؤقتًا أثناء الترحيل الأمني.
+      </p>
+      <fieldset disabled style={{ border: 0, padding: 0, margin: 0, opacity: 0.55, cursor: "not-allowed" }}>
       <div className="form-grid">
         <Input
           placeholder="Full Name"
@@ -34260,6 +34167,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
   </button>
 )}
       </div>
+      </fieldset>
     </FormCard>
 
     <TableCard title="Users List">
@@ -34284,10 +34192,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <td>{user.role === "Agency" ? (user.agency_name || "Not Linked") : "-"}</td>
               <td>{user.status}</td>
               <td>
-  <button className="small-btn" onClick={() => editUser(user)}>
+  <button className="small-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
     Edit
   </button>
-  <button className="danger-btn" onClick={() => deleteUser(user.id)}>
+  <button className="danger-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
     Delete
   </button>
 </td>
@@ -35870,7 +35778,11 @@ onClick={() => setActiveReport("activityLog")}>
 
     <div className="card">
       <h3>{userEditingId ? "Edit Platform User" : "Add Platform User"}</h3>
-
+      <p style={{ padding: "12px", borderRadius: "10px", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>
+        User management is temporarily restricted during the security migration.<br />
+        إدارة المستخدمين مقيدة مؤقتًا أثناء الترحيل الأمني.
+      </p>
+      <fieldset disabled style={{ border: 0, padding: 0, margin: 0, opacity: 0.55, cursor: "not-allowed" }}>
       <div className="form-grid">
         <input
           placeholder="Full Name"
@@ -35921,6 +35833,7 @@ onClick={() => setActiveReport("activityLog")}>
           </button>
         )}
       </div>
+      </fieldset>
     </div>
 
     <div className="card">
@@ -35960,8 +35873,8 @@ onClick={() => setActiveReport("activityLog")}>
                   <td><Badge value={user.status || "Active"} /></td>
                   <td>{user.company_id || "-"}</td>
                   <td>
-                    <button onClick={() => editUser(user)}>Edit</button>
-                    <button className="danger" onClick={() => deleteUser(user.id)}>
+                    <button disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>Edit</button>
+                    <button className="danger" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
                       Delete
                     </button>
                   </td>
