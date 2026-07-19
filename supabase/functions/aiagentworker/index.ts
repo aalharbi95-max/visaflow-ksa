@@ -27,9 +27,60 @@ type AgentSettings = {
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-visaflow-worker-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+const MAX_BODY_BYTES = 8 * 1024;
+const ALLOWED_MODES = new Set(["queue_only", "queue_or_scheduled", "scheduled"]);
+
+// Cron transition contract: invoke this function with POST and the
+// x-visaflow-worker-secret header backed by AI_AGENT_WORKER_SECRET.
+// Do not use SUPABASE_SERVICE_ROLE_KEY as the scheduler invocation secret.
+
+function secureEqual(left: string, right: string) {
+  const a = new TextEncoder().encode(left);
+  const b = new TextEncoder().encode(right);
+  if (!a.length || a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let index = 0; index < a.length; index += 1) mismatch |= a[index] ^ b[index];
+  return mismatch === 0;
+}
+
+function getBearerToken(req: Request) {
+  const match = (req.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || "";
+}
+
+async function authenticateWorkerCaller(req: Request, adminClient: any) {
+  const configuredSecret = Deno.env.get("AI_AGENT_WORKER_SECRET") || "";
+  const suppliedSecret = req.headers.get("x-visaflow-worker-secret") || "";
+  if (configuredSecret && suppliedSecret && secureEqual(suppliedSecret, configuredSecret)) {
+    return { kind: "internal" as const, actorId: "internal-scheduler" };
+  }
+
+  const jwt = getBearerToken(req);
+  if (!jwt) return { error: "unauthorized", status: 401 } as const;
+  const { data: authData, error: authError } = await adminClient.auth.getUser(jwt);
+  if (authError || !authData?.user?.id) return { error: "unauthorized", status: 401 } as const;
+
+  const { data: linkedUsers, error: linkedError } = await adminClient
+    .from("users")
+    .select("id, auth_user_id, role, status, is_active, company_id")
+    .eq("auth_user_id", authData.user.id)
+    .limit(2);
+  if (linkedError) {
+    console.error("AI Agent worker caller lookup failed", linkedError.message);
+    return { error: "forbidden", status: 403 } as const;
+  }
+  if ((linkedUsers || []).length !== 1) return { error: "forbidden", status: 403 } as const;
+
+  const actor = linkedUsers[0];
+  if (actor.status !== "Active" || actor.is_active !== true || actor.role !== "Platform Owner" || actor.company_id !== null) {
+    return { error: "forbidden", status: 403 } as const;
+  }
+  return { kind: "platform_owner" as const, actorId: String(actor.id) };
+}
 
 function jsonResponse(body: Json, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -245,19 +296,27 @@ async function sendViaDispatcher(supabase: any, payload: Json) {
   // This avoids nested Edge Function client errors and keeps the worker fail-safe.
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    if (!supabaseUrl || !serviceRoleKey) {
-      return { ok: false, skipped: true, error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" };
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+    const emailDispatcherSecret = Deno.env.get("VISAFLOW_EMAIL_DISPATCHER_SECRET") || "";
+    if (!supabaseUrl || !anonKey || !emailDispatcherSecret) {
+      return { ok: false, skipped: true, error: "Email dispatcher is not configured" };
     }
 
     const response = await fetch(`${supabaseUrl}/functions/v1/visaflow-email-dispatcher`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        apikey: serviceRoleKey,
+        Authorization: `Bearer ${anonKey}`,
+        apikey: anonKey,
+        "x-visaflow-email-secret": emailDispatcherSecret,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload || {}),
+      body: JSON.stringify({
+        message_type: String(payload.type || ""),
+        company_id: payload.company_id || null,
+        request_id: payload.request_id || undefined,
+        agency_id: payload.agency_id || undefined,
+        variables: (payload.variables && typeof payload.variables === "object") ? payload.variables : {},
+      }),
     });
 
     const text = await response.text();
@@ -265,7 +324,7 @@ async function sendViaDispatcher(supabase: any, payload: Json) {
     try { data = text ? JSON.parse(text) : {}; } catch (_) { data = { raw: text }; }
 
     if (!response.ok || data?.ok === false) {
-      return { ok: false, status: response.status, error: String(data?.error || data?.message || text || "Email dispatcher failed"), data };
+      return { ok: false, status: response.status, error: String(data?.error || "Email dispatcher failed") };
     }
 
     return data || { ok: true };
@@ -513,11 +572,8 @@ async function processManagerApprovals(supabase: any, settings: AgentSettings, r
       const managerEmailResult = await sendViaDispatcher(supabase, {
         company_id: settings.company_id,
         type: actionType,
-        to: managerEmail,
-        subject: content.subject,
-        text: content.lines.join("\n"),
-        html: buildEmailCardHtml(content.subject, content.lines, "This approval was prepared automatically by VisaFlow AI Recruitment Agent."),
-        payload: { request_no: item.request_no, recommended_agency: item.bestAgency.agency, fit_score: item.bestAgency.fitScore, auto_generated: true },
+        request_id: item.request?.id,
+        variables: { recommended_agency: item.bestAgency.agency, fit_score: item.bestAgency.fitScore },
       });
 
       await audit(supabase, {
@@ -893,18 +949,11 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
           const agencyEmailResult = await sendViaDispatcher(supabase, {
             company_id: settings.company_id,
             type: "AI_AGENT_AGENCY_DAILY_DIGEST_EMAIL",
-            to: digest.agency_email,
-            subject: email.subject,
-            text: email.body,
-            html: buildEmailCardHtml(email.subject, email.body.split("\n"), "This is one daily digest that groups all pending updates for your office."),
-            payload: {
-              agency: digest.agency,
-              agency_id: digest.agency_id || null,
+            agency_id: digest.agency_id || null,
+            variables: {
               request_nos: digest.request_nos || [],
               pending_items: digest.tasks?.length || 0,
               highest_priority: digest.highest_priority || "Medium",
-              auto_generated: true,
-              digest: true,
             },
           });
           if (!agencyEmailResult?.ok) emailSkipped++;
@@ -1013,37 +1062,41 @@ async function getActiveSettings(supabase: any, companyId = "") {
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (!["POST", "GET"].includes(req.method)) return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
+  if (req.method !== "POST") return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
   if (!supabaseUrl || !serviceRoleKey) {
-    return jsonResponse({ ok: false, error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" }, 500);
+    console.error("AI Agent worker server configuration is incomplete");
+    return jsonResponse({ ok: false, error: "server_configuration_error" }, 500);
   }
 
-  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
-  const runId = crypto.randomUUID();
-  let body: Json = {};
-  try { body = req.method === "POST" ? await req.json() : {}; } catch (_) { body = {}; }
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  const caller = await authenticateWorkerCaller(req, supabase);
+  if ("error" in caller) return jsonResponse({ ok: false, error: caller.error }, caller.status);
 
-  const mode = String(body.mode || new URL(req.url).searchParams.get("mode") || "queue_or_scheduled");
-  const companyId = String(body.company_id || new URL(req.url).searchParams.get("company_id") || "");
-  const jobLimit = clamp(safeNumber(body.job_limit, 5), 1, 25);
-  const companyLimit = clamp(safeNumber(body.company_limit, 10), 1, 100);
+  const declaredLength = Number(req.headers.get("content-length") || 0);
+  if (declaredLength > MAX_BODY_BYTES) return jsonResponse({ ok: false, error: "request_too_large" }, 413);
+  const rawBody = await req.text();
+  if (new TextEncoder().encode(rawBody).length > MAX_BODY_BYTES) {
+    return jsonResponse({ ok: false, error: "request_too_large" }, 413);
+  }
+
+  let body: Json = {};
+  try { body = rawBody ? JSON.parse(rawBody) : {}; } catch (_) {
+    return jsonResponse({ ok: false, error: "invalid_request" }, 400);
+  }
+
+  const mode = String(body.mode || "queue_or_scheduled");
+  if (!ALLOWED_MODES.has(mode)) return jsonResponse({ ok: false, error: "invalid_request" }, 400);
+  const jobLimit = clamp(Math.trunc(safeNumber(body.job_limit, 5)), 1, 10);
+  const companyLimit = clamp(Math.trunc(safeNumber(body.company_limit, 10)), 1, 25);
+  const runId = crypto.randomUUID();
   const results: Row[] = [];
 
   try {
-    await audit(supabase, {
-      companyId: companyId || "00000000-0000-0000-0000-000000000000",
-      runId,
-      actionType: "AI_AGENT_WORKER_RUN",
-      actionKey: `worker_run:${runId}`,
-      status: "started",
-      severity: "info",
-      title: "AI Agent worker started",
-      details: { mode, company_id: companyId || null, job_limit: jobLimit, company_limit: companyLimit },
-    }).catch(() => null);
-
     if (mode === "queue_only" || mode === "queue_or_scheduled") {
       const jobs = await claimQueuedJobs(supabase, jobLimit);
       for (const job of jobs) {
@@ -1075,30 +1128,33 @@ serve(async (req) => {
       }
 
       if (jobs.length > 0 || mode === "queue_only") {
-        return jsonResponse({ ok: true, run_id: runId, mode, processed: results.length, results });
+        return jsonResponse({
+          ok: true,
+          mode,
+          processed: results.length,
+          succeeded: results.filter((item) => item.ok).length,
+          failed: results.filter((item) => !item.ok).length,
+        });
       }
     }
 
     // Scheduled mode: if no queued jobs exist, process active companies directly.
-    const settingsRows = await getActiveSettings(supabase, companyId);
+    const settingsRows = await getActiveSettings(supabase);
     for (const settings of settingsRows.slice(0, companyLimit)) {
       const result = await processCompany(supabase, settings, runId);
       results.push({ ok: true, result });
     }
 
-    return jsonResponse({ ok: true, run_id: runId, mode: "scheduled", processed: results.length, results });
+    return jsonResponse({
+      ok: true,
+      mode: "scheduled",
+      processed: results.length,
+      succeeded: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await audit(supabase, {
-      companyId: companyId || "00000000-0000-0000-0000-000000000000",
-      runId,
-      actionType: "AI_AGENT_WORKER_RUN",
-      actionKey: `worker_run:${runId}`,
-      status: "failed",
-      severity: "error",
-      title: "AI Agent worker failed",
-      errorMessage: message,
-    }).catch(() => null);
-    return jsonResponse({ ok: false, run_id: runId, error: message }, 500);
+    console.error("AI Agent worker run failed", { runId, caller: caller.kind, message });
+    return jsonResponse({ ok: false, error: "worker_failed" }, 500);
   }
 });
