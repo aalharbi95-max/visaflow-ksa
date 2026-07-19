@@ -1235,6 +1235,11 @@ function generateContractUrl(candidate) {
 }
 
 async function triggerExternalNotification(type, data = {}) {
+  const { data: authState } = await supabase.auth.getSession();
+  if (!authState?.session?.user?.id) {
+    return { ok: false, skipped: true, reason: "auth_required" };
+  }
+
   const payload = {
     company_id: data.company_id || null,
     user_id: data.user_id || null,
@@ -1264,13 +1269,12 @@ async function triggerExternalNotification(type, data = {}) {
     .select("id, company_id, agency_id, agency_name, request_no, type, title, response_status, sla_started_at, sla_days, sla_due_at, created_at");
 
   if (insertError) {
-    console.error("notification_events insert failed", insertError.message, payload);
+    console.error("notification_events insert failed", insertError.message);
     throw new Error(`Notification Center insert failed: ${insertError.message}`);
   }
 
   const webhookUrl = import.meta.env?.VITE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) {
-    console.log("Notification Center record created", insertedRows?.[0] || payload);
     return { ok: true, notification: insertedRows?.[0] || null, webhook: "not_configured", payload };
   }
 
@@ -5276,6 +5280,8 @@ const [activeAgencyCompanyName, setActiveAgencyCompanyName] = useState(() =>
 const DEFAULT_COMPANY_ID = "";
 const rawCurrentRole = String(currentUser?.role || "").trim();
 const isCurrentAgencyUser = rawCurrentRole.toLowerCase() === "agency";
+const secureLogFeaturesAvailable = Boolean(currentUser?.auth_user_id);
+const agencyLegacyActionsRestricted = isCurrentAgencyUser && !secureLogFeaturesAvailable;
 
 const isCurrentPlatformUser = [
   "platform owner",
@@ -5708,9 +5714,12 @@ const ROLE_PAGES = {
   ],
 };
 
-const visiblePages = currentRole === "Platform Owner"
+const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
+const visiblePages = secureLogFeaturesAvailable
+  ? roleVisiblePages
+  : roleVisiblePages.filter((page) => page !== "Notifications");
 const roleActions = ACTION_PERMISSIONS[currentRole] || ACTION_PERMISSIONS.Viewer;
 const hasAction = (action) => roleActions.includes(action);
 
@@ -7390,7 +7399,50 @@ Cancel = إضافتها كوظيفة مستقلة`
   }
   const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
-  const loadAgencyScoreHistory = () => loadTable("agency_score_history", setAgencyScoreHistory);
+  async function loadAgencyScoreHistory() {
+    const requestGeneration = workspaceDataGenerationRef.current;
+    const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+
+    if (
+      !secureLogFeaturesAvailable ||
+      !currentCompanyId ||
+      !workspaceAuthReady ||
+      validatedWorkspaceKey !== requestWorkspaceKey
+    ) {
+      setAgencyScoreHistory([]);
+      return [];
+    }
+
+    let query = supabase
+      .from("agency_score_history")
+      .select("id, company_id, agency_id, sla_score, quality_score, response_score, mobilization_score, update_score, agreement_score, agreement_sla_days, update_frequency_days, delayed_candidates, average_delay_days, penalty_exposure, agreement_no, total_score, rank, created_at")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (currentRole === "Agency") {
+      if (!currentUser?.agency_id) {
+        setAgencyScoreHistory([]);
+        return [];
+      }
+      query = query.eq("agency_id", currentUser.agency_id);
+    }
+
+    const { data, error } = await query;
+    if (
+      requestGeneration !== workspaceDataGenerationRef.current ||
+      requestWorkspaceKey !== validatedWorkspaceKey
+    ) return [];
+
+    if (error) {
+      console.warn("agency_score_history:", error.message);
+      setAgencyScoreHistory([]);
+      return [];
+    }
+
+    setAgencyScoreHistory(data || []);
+    return data || [];
+  }
   const loadAgencyPenalties = () => loadTable("agency_penalties", setAgencyPenalties);
   const loadCountries = () => loadTable("countries", setCountries);
   const loadUsers = async () => {
@@ -7835,38 +7887,105 @@ async function loadProfessionAliases() {
   const loadMarketplaceDealWorkers = () => loadTable("marketplace_deal_workers", setMarketplaceDealWorkers);
   const loadMarketplaceInvoices = () => loadTable("invoices", setMarketplaceInvoices);
   const loadMarketplaceCollections = () => loadTable("collections", setMarketplaceCollections);
-  const loadAuditLogs = () => loadTable("request_audit_logs", setAuditLogs);
+  async function loadAuditLogs() {
+    const requestGeneration = workspaceDataGenerationRef.current;
+    const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
 
-  async function loadPlatformTable(table, setter) {
-    if (!canManagePlatform) {
+    if (
+      !secureLogFeaturesAvailable ||
+      !currentCompanyId ||
+      currentRole === "Agency" ||
+      !workspaceAuthReady ||
+      validatedWorkspaceKey !== requestWorkspaceKey
+    ) {
+      setAuditLogs([]);
+      return [];
+    }
+
+    const { data, error } = await supabase
+      .from("request_audit_logs")
+      .select("id, company_id, request_id, action, details, changed_by, created_at")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+
+    if (
+      requestGeneration !== workspaceDataGenerationRef.current ||
+      requestWorkspaceKey !== validatedWorkspaceKey
+    ) return [];
+
+    if (error) {
+      console.warn("request_audit_logs:", error.message);
+      setAuditLogs([]);
+      return [];
+    }
+
+    setAuditLogs(data || []);
+    return data || [];
+  }
+
+  async function loadPlatformTable(table, setter, columns = "*") {
+    const requestGeneration = workspaceDataGenerationRef.current;
+    const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+    if (
+      !canManagePlatform ||
+      !workspaceAuthReady ||
+      validatedWorkspaceKey !== requestWorkspaceKey
+    ) {
       setter([]);
-      return;
+      return [];
     }
 
     const { data, error } = await supabase
       .from(table)
-      .select("*")
+      .select(columns)
       .order("created_at", { ascending: false })
       .range(0, 5000);
+
+    if (
+      requestGeneration !== workspaceDataGenerationRef.current ||
+      requestWorkspaceKey !== validatedWorkspaceKey
+    ) return [];
 
     if (error) {
       console.warn(`${table}:`, error.message);
       setter([]);
-      return;
+      return [];
     }
 
     setter(data || []);
+    return data || [];
   }
 
   const loadPlatformClients = () => loadPlatformTable("platform_clients", setPlatformClients);
   const loadSubscriptionInvoices = () => loadPlatformTable("subscription_invoices", setSubscriptionInvoices);
-  const loadSupportTickets = () => loadPlatformTable("support_tickets", setSupportTickets);
-  const loadSystemBackups = () => loadPlatformTable("system_backups", setSystemBackups);
+  const loadSupportTickets = () => loadPlatformTable(
+    "support_tickets",
+    setSupportTickets,
+    "id, client_id, ticket_no, title, description, status, priority, created_by, resolved_at, created_at"
+  );
+  const loadSystemBackups = () => loadPlatformTable(
+    "system_backups",
+    setSystemBackups,
+    "id, client_id, company_id, backup_type, status, file_url, file_name, file_size, tables_count, records_count, storage_bucket, storage_path, signed_url, signed_url_expires_at, requested_by_user_id, created_by, notes, metadata, created_at, completed_at"
+  );
   const loadSystemRestoreRequests = () =>
-    isPlatformOwner ? loadPlatformTable("system_restore_requests", setSystemRestoreRequests) : setSystemRestoreRequests([]);
+    isPlatformOwner
+      ? loadPlatformTable(
+          "system_restore_requests",
+          setSystemRestoreRequests,
+          "id, company_id, backup_id, restore_scope, restore_mode, status, reason, client_request_reference, requested_by_user_id, requested_by_name, pre_restore_backup_id, metadata, created_at, completed_at"
+        )
+      : setSystemRestoreRequests([]);
 
   async function loadPlatformUsageSummary() {
-    if (!canManagePlatform) {
+    const requestGeneration = workspaceDataGenerationRef.current;
+    const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+    if (
+      !canManagePlatform ||
+      !workspaceAuthReady ||
+      validatedWorkspaceKey !== requestWorkspaceKey
+    ) {
       setPlatformUsageRows([]);
       setPlatformUsageMessage("");
       return [];
@@ -8061,6 +8180,11 @@ async function loadProfessionAliases() {
       };
     }).sort((a, b) => Number(b.actions_this_month || 0) - Number(a.actions_this_month || 0));
 
+    if (
+      requestGeneration !== workspaceDataGenerationRef.current ||
+      requestWorkspaceKey !== validatedWorkspaceKey
+    ) return [];
+
     setPlatformUsageRows(rows);
     setPlatformUsageMessage(
       errors.length
@@ -8162,11 +8286,22 @@ async function loadProfessionAliases() {
     const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
     if (
       !currentUser ||
+      !secureLogFeaturesAvailable ||
       !workspaceAuthReady ||
       validatedWorkspaceKey !== requestWorkspaceKey
     ) {
       setSystemActivityLogs([]);
-      setActivityLogMessage("Login is required to load activity logs.");
+      setActivityLogMessage(
+        secureLogFeaturesAvailable
+          ? "Login is required to load activity logs."
+          : "Log and audit features are temporarily unavailable during the security migration."
+      );
+      return [];
+    }
+
+    if (currentRole === "Agency") {
+      setSystemActivityLogs([]);
+      setActivityLogMessage("Agency activity access is unavailable because this log has no documented agency ownership key.");
       return [];
     }
 
@@ -8264,16 +8399,6 @@ async function loadProfessionAliases() {
 
       let rows = Array.from(rowsById.values());
 
-      if (!canManagePlatform && rows.length > 0) {
-        const allowedRequestNos = new Set(visibleRequestNos.map((item) => String(item)));
-        rows = rows.filter((item) => {
-          const sameCompany = currentCompanyId && String(item.company_id || "") === String(currentCompanyId);
-          const sameVisibleRequest = item.request_no && allowedRequestNos.has(String(item.request_no));
-          const sameTypedRequest = typedRequestNo && String(item.request_no || "").toLowerCase().includes(typedRequestNo.toLowerCase());
-          return sameCompany || sameVisibleRequest || sameTypedRequest;
-        });
-      }
-
       rows = rows.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
       setSystemActivityLogs(rows);
@@ -8357,7 +8482,11 @@ async function loadProfessionAliases() {
 async function loadNotifications() {
   const requestGeneration = workspaceDataGenerationRef.current;
   const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
-  if (!workspaceAuthReady || validatedWorkspaceKey !== requestWorkspaceKey) {
+  if (
+    !secureLogFeaturesAvailable ||
+    !workspaceAuthReady ||
+    validatedWorkspaceKey !== requestWorkspaceKey
+  ) {
     setNotifications([]);
     return [];
   }
@@ -8414,7 +8543,15 @@ async function loadNotifications() {
   return rows;
 }
   async function loadEmailLogs() {
-    if (!currentCompanyId || currentRole === "Agency") {
+    const requestGeneration = workspaceDataGenerationRef.current;
+    const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+    if (
+      !secureLogFeaturesAvailable ||
+      !currentCompanyId ||
+      currentRole === "Agency" ||
+      !workspaceAuthReady ||
+      validatedWorkspaceKey !== requestWorkspaceKey
+    ) {
       setEmailLogs([]);
       return [];
     }
@@ -8422,10 +8559,15 @@ async function loadNotifications() {
     try {
       const { data, error } = await supabase
         .from("email_logs")
-        .select("*")
+        .select("id, company_id, type, status, to_email, subject, provider, message_id, error_message, created_at")
         .eq("company_id", currentCompanyId)
         .order("created_at", { ascending: false })
         .limit(100);
+
+      if (
+        requestGeneration !== workspaceDataGenerationRef.current ||
+        requestWorkspaceKey !== validatedWorkspaceKey
+      ) return [];
 
       if (error) {
         console.warn("email_logs:", error.message);
@@ -8434,6 +8576,7 @@ async function loadNotifications() {
       }
 
       setEmailLogs(data || []);
+      return data || [];
     } catch (error) {
       console.warn("email_logs load failed", error?.message || error);
       setEmailLogs([]);
@@ -8668,6 +8811,7 @@ async function loadNotifications() {
   }
 
   async function recordEmailLog(row = {}) {
+    if (!secureLogFeaturesAvailable) return;
     try {
       await supabase.from("email_logs").insert([
         withCompany({
@@ -8736,7 +8880,7 @@ async function loadNotifications() {
   }), [emailLogs]);
 
   async function markNotificationRead(id) {
-    if (!id) return;
+    if (!id || !secureLogFeaturesAvailable) return;
     const { error } = await supabase
       .from("notification_events")
       .update({ status: "Read", read_at: new Date().toISOString() })
@@ -8748,6 +8892,7 @@ async function loadNotifications() {
   }
 
   async function markAllNotificationsRead() {
+    if (!secureLogFeaturesAvailable) return;
     let query = supabase
       .from("notification_events")
       .update({ status: "Read", read_at: new Date().toISOString() })
@@ -8764,7 +8909,7 @@ async function loadNotifications() {
   }
 
   async function deleteNotification(id) {
-    if (!id) return;
+    if (!id || !secureLogFeaturesAvailable) return;
     if (!window.confirm("Delete this notification?")) return;
 
     const { error } = await supabase
@@ -10556,7 +10701,7 @@ function isDuplicateRequestNoError(error) {
 }
 
   async function addAudit(requestId, action, details) {
-    if (!requestId) return;
+    if (!requestId || !secureLogFeaturesAvailable) return;
     await supabase.from("request_audit_logs").insert([withCompany({ request_id: requestId, action, details, changed_by: "Recruitment" })]);
     loadAuditLogs();
   }
@@ -10814,6 +10959,9 @@ function isDuplicateRequestNoError(error) {
   }
 
   async function handleAgencyRequestNotificationResponse(item, decision) {
+    if (!secureLogFeaturesAvailable) {
+      return alert("Log and audit features are temporarily unavailable during the security migration.");
+    }
     if (!item?.id) return alert("Notification was not found.");
     if (currentRole !== "Agency") return alert("Only agency users can accept or reject this request alert.");
     if (!isAgencyRequestNotification(item)) return alert("This notification is not an agency request alert.");
@@ -11100,7 +11248,7 @@ function isDuplicateRequestNoError(error) {
         } catch (emailError) {
           emailFailed += 1;
           emailErrors.push(`${agency.name || agency.email}: ${emailError.message}`);
-          console.warn("Agency notification email failed", agency.email, emailError.message);
+          console.warn("Agency notification email failed", emailError.message);
         }
       }
 
@@ -11701,7 +11849,7 @@ async function dispatchVisaFlowEmail({ type, to, cc, bcc, subject, text, html, r
       error_message: "Recipient email is missing",
       payload,
     });
-    console.warn("Email skipped because recipient is missing", { type, subject, payload });
+    console.warn("Email skipped because recipient is missing", { type });
     return { ok: false, skipped: true, reason: "Recipient email is missing" };
   }
 
@@ -12783,7 +12931,7 @@ async function deleteAgreement(id) {
         if (error) throw error;
       }
 
-      await supabase.from("notification_events").insert([withCompany({
+      if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
         user_id: null,
         agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
         type: "OFFICE_BULK_CANDIDATE_UPDATE",
@@ -13107,7 +13255,7 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
       }
     }
 
-    await supabase.from("notification_events").insert([withCompany({
+    if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
       user_id: null,
       agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
       type: candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
@@ -13696,7 +13844,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       }
     }
 
-    await supabase.from("notification_events").insert([withCompany({
+    if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
       user_id: null,
       agency_id: currentUser?.agency_id || null,
       type: "AGENCY_TALENT_POOL_UPLOAD",
@@ -13773,6 +13921,15 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   async function getAgencyAcceptedRequestAccess(requestNo = "") {
     if (currentRole !== "Agency" || !requestNo || !currentCompanyId || !currentUser?.agency_id) {
       return { allowed: currentRole !== "Agency", notification: null, lines: [] };
+    }
+
+    if (!secureLogFeaturesAvailable) {
+      return {
+        allowed: false,
+        notification: null,
+        lines: [],
+        reason: "Log and audit features are temporarily unavailable during the security migration.",
+      };
     }
 
     const { data, error } = await supabase
@@ -18361,6 +18518,9 @@ function getAgencySlaEscalationAlerts() {
 }
 
 async function generateSlaEscalationNotifications() {
+  if (!secureLogFeaturesAvailable) {
+    return alert("Log and audit features are temporarily unavailable during the security migration.");
+  }
   const alerts = getAgencySlaEscalationAlerts();
   if (!alerts.length) return alert("No update compliance alerts. All agency updates are within the configured update frequency rule.");
 
@@ -18576,6 +18736,9 @@ function calculateAgencyPerformanceRows() {
 }
 async function saveAgencyPerformanceSnapshot() {
   if (!canManageAgencyAgreements) return alert("You do not have permission to calculate agency performance.");
+  if (!secureLogFeaturesAvailable) {
+    return alert("Log and audit features are temporarily unavailable during the security migration.");
+  }
 
   const rows = calculateAgencyPerformanceRows().filter((row) => row.agency_id && row.hasAssignedWork);
   if (!rows.length) return alert("No agency performance data to save.");
@@ -20364,7 +20527,7 @@ async function writeAIAgentAuditLog({
   details = {},
   errorMessage = "",
 } = {}) {
-  if (!currentCompanyId) return;
+  if (!currentCompanyId || !secureLogFeaturesAvailable) return;
 
   try {
     await supabase.from("ai_agent_audit_logs").insert([{
@@ -20828,7 +20991,7 @@ Suggested action: approve and notify agency to submit first candidate batch with
 }
 
 async function hasAIAgentAssignmentApproval(item) {
-  if (!currentCompanyId || !item?.request_no) return false;
+  if (!currentCompanyId || !item?.request_no || !secureLogFeaturesAvailable) return false;
 
   const { data, error } = await supabase
     .from("notification_events")
@@ -21023,7 +21186,7 @@ async function runAIAgentAutoManagerApprovals({ limit = getAIAgentMaxAutoActions
 }
 
 async function hasAIAgentFollowUpToday(task, type = "AI_AGENT_AUTO_AGENCY_FOLLOWUP") {
-  if (!currentCompanyId || !task) return false;
+  if (!currentCompanyId || !task || !secureLogFeaturesAvailable) return false;
 
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
@@ -23760,7 +23923,7 @@ async function saveSupportTicket() {
 }
 
 async function deleteSupportTicket(id) {
-  if (!canManagePlatform) return alert("You do not have permission to manage support tickets.");
+  if (!isPlatformOwner) return alert("Only Platform Owner can delete support tickets.");
   if (!window.confirm("Delete this ticket?")) return;
   const { error } = await supabase.from("support_tickets").delete().eq("id", id);
   if (error) return alert(error.message);
@@ -27957,10 +28120,22 @@ if (!currentUser) {
                 </span>
               )}
               {["Candidates", "Office Portal"].includes(activePage) && canUseCandidateUploadTemplate && <button className="new-btn" onClick={downloadCandidateUploadTemplate}>Download Candidate Template</button>}
-              {["Candidates", "Office Portal"].includes(activePage) && canUseCandidateUploadTemplate && <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Candidate Excel</button>}
+              {["Candidates", "Office Portal"].includes(activePage) && canUseCandidateUploadTemplate && (
+                <button
+                  className="new-btn"
+                  onClick={startExcelUploadFromCandidates}
+                  disabled={agencyLegacyActionsRestricted}
+                  title={agencyLegacyActionsRestricted ? "Agency account security migration required" : ""}
+                  style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                >
+                  Upload Candidate Excel
+                </button>
+              )}
               {activePage === "Employees" && canManageEmployees && <button className="new-btn" onClick={downloadEmployeesTemplate}>Download Template</button>}
               {activePage === "Employees" && canManageEmployees && <button className="new-btn" onClick={startEmployeesExcelUpload}>Import Employees</button>}
+              {secureLogFeaturesAvailable && (
               <button className="new-btn" onClick={() => setActivePage("Notifications")}>🔔 {unreadNotificationsCount}</button>
+              )}
               {canExport && <button className="new-btn" onClick={exportCurrentPage}>Export Excel</button>}
               <button className="new-btn" onClick={loadAll}>Refresh</button>
               <button
@@ -27976,6 +28151,18 @@ if (!currentUser) {
             </div>
           )}
         </div>
+
+        {!secureLogFeaturesAvailable && (
+          <div style={{ margin: "14px 0", padding: "14px 16px", borderRadius: "14px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", fontWeight: 800 }}>
+            {agencyLegacyActionsRestricted
+              ? "Agency portal actions are temporarily restricted until the account security migration is completed."
+              : "Log and audit features are temporarily unavailable during the security migration."}
+            <br />
+            {agencyLegacyActionsRestricted
+              ? "إجراءات بوابة الوكالة مقيدة مؤقتًا حتى اكتمال ترحيل أمان الحساب."
+              : "ميزات السجلات والتدقيق غير متاحة مؤقتًا أثناء الترحيل الأمني."}
+          </div>
+        )}
 
         {changePasswordOpen && (
           <div className="vf-reset-overlay">
@@ -28101,8 +28288,8 @@ if (!currentUser) {
                             <div className="row-actions">
                               {currentRole === "Agency" && isAgencyRequestNotification(item) && getAgencyRequestDecision(item) === "Pending" && (
                                 <>
-                                  <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Accepted")}>Accept</button>
-                                  <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Rejected")}>Reject</button>
+                                  <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Accepted")} disabled={agencyLegacyActionsRestricted} style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}>Accept</button>
+                                  <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Rejected")} disabled={agencyLegacyActionsRestricted} style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}>Reject</button>
                                 </>
                               )}
                               {getNotificationStatus(item) !== "Read" && (
@@ -32593,7 +32780,15 @@ Save Authorization
     {canManageOfficePortal && (
       <div className="actions-line" style={{ margin: "0 0 14px" }}>
         <button className="new-btn" onClick={downloadCandidateUploadTemplate}>Download Candidate Template</button>
-        <button className="new-btn" onClick={startExcelUploadFromCandidates}>Upload Candidate Excel</button>
+        <button
+          className="new-btn"
+          onClick={startExcelUploadFromCandidates}
+          disabled={agencyLegacyActionsRestricted}
+          title={agencyLegacyActionsRestricted ? "Agency account security migration required" : ""}
+          style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+        >
+          Upload Candidate Excel
+        </button>
         <span className="badge" title="AI results are company-only">AI results are hidden from agency users</span>
       </div>
     )}
@@ -36279,7 +36474,10 @@ onClick={() => setActiveReport("activityLog")}>
               <td><Badge value={item.priority || "Medium"} /></td>
               <td><Badge value={item.status || "Open"} /></td>
               <td>{item.created_by || "-"}</td>
-              <td className="actions"><button onClick={() => editSupportTicket(item)}>Edit</button><button onClick={() => deleteSupportTicket(item.id)}>Delete</button></td>
+              <td className="actions">
+                <button onClick={() => editSupportTicket(item)}>Edit</button>
+                {isPlatformOwner && <button onClick={() => deleteSupportTicket(item.id)}>Delete</button>}
+              </td>
             </tr>
           ))}
         </tbody>
