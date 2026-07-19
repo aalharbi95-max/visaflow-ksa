@@ -16,6 +16,24 @@ drop policy if exists audit_insert_public
 drop policy if exists "audit logs company access"
   on public.request_audit_logs;
 
+drop policy if exists notification_events_delete_tenant_policy
+  on public.notification_events;
+
+drop policy if exists notification_events_insert_tenant_policy
+  on public.notification_events;
+
+drop policy if exists notification_events_select_tenant_policy
+  on public.notification_events;
+
+drop policy if exists notification_events_update_tenant_policy
+  on public.notification_events;
+
+drop policy if exists talent_candidate_events_insert_own
+  on public.talent_candidate_events;
+
+drop policy if exists talent_candidate_events_select_own
+  on public.talent_candidate_events;
+
 alter table public.system_activity_logs enable row level security;
 alter table public.request_audit_logs enable row level security;
 alter table public.notification_events enable row level security;
