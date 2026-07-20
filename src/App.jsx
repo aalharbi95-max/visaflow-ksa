@@ -5,9 +5,13 @@ import {
   clearTalentRecoveryProof,
   establishTalentRecoveryProof,
   hasTalentRecoveryProof,
-  supabase,
   talentSupabase,
+  workspaceSupabase as supabase,
 } from "./supabase";
+import {
+  reportSafeAuthDiagnostics,
+  verifyWorkspaceAuthSession,
+} from "./authSession.mjs";
 import "./style.css";
 
 
@@ -8913,7 +8917,7 @@ async function loadNotifications() {
 useEffect(() => {
   let mounted = true;
 
-  const reconcileAuthenticatedWorkspace = async (session) => {
+  const reconcileAuthenticatedWorkspace = async (sessionFromEvent) => {
     const sequence = ++workspaceAuthSequenceRef.current;
     setWorkspaceAuthReady(false);
     setValidatedWorkspaceKey("");
@@ -8924,7 +8928,7 @@ useEffect(() => {
     setActiveAgencyCompanyName("");
     setCurrentUser(null);
 
-    if (!session?.user?.id) {
+    if (!sessionFromEvent?.user?.id) {
       if (mounted && sequence === workspaceAuthSequenceRef.current) {
         legacyWorkspaceActiveRef.current = false;
         setWorkspaceAuthReady(true);
@@ -8932,17 +8936,41 @@ useEffect(() => {
       return;
     }
 
+    const verifiedAuth = await verifyWorkspaceAuthSession(supabase.auth);
+    if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
+    reportSafeAuthDiagnostics(
+      verifiedAuth.session,
+      null,
+      "workspace_reconcile_auth",
+      verifiedAuth.authUser
+    );
+    if (
+      !verifiedAuth.isVerified ||
+      String(verifiedAuth.authUser.id) !== String(sessionFromEvent.user.id)
+    ) {
+      legacyWorkspaceActiveRef.current = false;
+      setWorkspaceAuthReady(true);
+      return;
+    }
+
     const { data: linkedUser, error } = await supabase.rpc("get_authenticated_app_user");
     if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
 
-    if (
-      error ||
-      !linkedUser?.id ||
-      !linkedUser?.auth_user_id ||
-      String(linkedUser.auth_user_id) !== String(session.user.id)
-    ) {
+    const linkedUserMatchesSession = Boolean(
+      !error &&
+      linkedUser?.id &&
+      linkedUser?.auth_user_id &&
+      String(linkedUser.auth_user_id) === String(verifiedAuth.authUser.id)
+    );
+    reportSafeAuthDiagnostics(
+      verifiedAuth.session,
+      linkedUser,
+      "workspace_reconcile_user",
+      verifiedAuth.authUser
+    );
+
+    if (!linkedUserMatchesSession) {
       legacyWorkspaceActiveRef.current = false;
-      await supabase.auth.signOut();
       if (mounted && sequence === workspaceAuthSequenceRef.current) {
         setWorkspaceAuthReady(true);
       }
@@ -8956,13 +8984,10 @@ useEffect(() => {
     if (!mounted) return;
     if (event === "SIGNED_OUT" && legacyWorkspaceActiveRef.current) return;
     if (["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "USER_UPDATED"].includes(event)) {
-      reconcileAuthenticatedWorkspace(session);
+      // Run outside the auth callback so workspace queries cannot contend with
+      // Supabase Auth's internal session persistence lock.
+      window.setTimeout(() => reconcileAuthenticatedWorkspace(session), 0);
     }
-  });
-
-  supabase.auth.getSession().then(({ data }) => {
-    if (!mounted) return;
-    reconcileAuthenticatedWorkspace(data?.session || null);
   });
 
   return () => {
@@ -11820,9 +11845,21 @@ function buildEmailCardHtml(title, lines = [], actionText = "") {
 
 async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} }) {
   try {
-    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-    const accessToken = sessionData?.session?.access_token || "";
-    if (sessionError || !sessionData?.session?.user?.id || !accessToken) {
+    const verifiedAuth = await verifyWorkspaceAuthSession(supabase.auth);
+    const { session, error: sessionError } = verifiedAuth;
+    reportSafeAuthDiagnostics(
+      session,
+      currentUser,
+      "email_dispatch",
+      verifiedAuth.authUser
+    );
+    const accessToken = session?.access_token || "";
+    const authUserMatchesCurrentUser = Boolean(
+      verifiedAuth.authUser?.id &&
+      currentUser?.auth_user_id &&
+      String(verifiedAuth.authUser.id) === String(currentUser.auth_user_id)
+    );
+    if (sessionError || !verifiedAuth.isVerified || !authUserMatchesCurrentUser || !accessToken) {
       throw new Error(
         "Secure authentication session is required. Please sign out and sign in again.\n" +
         "يلزم تسجيل دخول آمن. سجّل الخروج ثم ادخل مرة أخرى."
@@ -17122,18 +17159,33 @@ async function handleLogin() {
     let userData = null;
 
     if (!authError && authData?.user?.id) {
-      const { data: verifiedSessionData, error: verifiedSessionError } = await supabase.auth.getSession();
-      const verifiedSession = verifiedSessionData?.session || null;
+      const verifiedSession = authData.session || null;
       if (
-        verifiedSessionError ||
         !verifiedSession?.access_token ||
         !verifiedSession?.user?.id ||
         String(verifiedSession.user.id) !== String(authData.user.id)
       ) {
-        await supabase.auth.signOut();
         alert(
           "Secure authentication session is required. Please sign out and sign in again.\n" +
           "يلزم تسجيل دخول آمن. سجّل الخروج ثم ادخل مرة أخرى."
+        );
+        return;
+      }
+
+      const persistedAuth = await verifyWorkspaceAuthSession(supabase.auth);
+      if (
+        !persistedAuth.isVerified ||
+        String(persistedAuth.authUser.id) !== String(verifiedSession.user.id)
+      ) {
+        reportSafeAuthDiagnostics(
+          persistedAuth.session,
+          null,
+          "password_sign_in_persistence_failed",
+          persistedAuth.authUser
+        );
+        alert(
+          "Secure authentication session could not be persisted. Please try signing in again.\n" +
+          "تعذر حفظ جلسة تسجيل الدخول الآمنة. حاول تسجيل الدخول مرة أخرى."
         );
         return;
       }
@@ -17142,8 +17194,18 @@ async function handleLogin() {
         "get_authenticated_app_user"
       );
 
-      if (linkedUserError || !linkedUser) {
-        await supabase.auth.signOut();
+      reportSafeAuthDiagnostics(
+        persistedAuth.session,
+        linkedUser,
+        "password_sign_in",
+        persistedAuth.authUser
+      );
+
+      if (
+        linkedUserError ||
+        !linkedUser?.auth_user_id ||
+        String(linkedUser.auth_user_id) !== String(verifiedSession.user.id)
+      ) {
         alert("Invalid email or password");
         return;
       }
