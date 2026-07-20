@@ -11820,7 +11820,19 @@ function buildEmailCardHtml(title, lines = [], actionText = "") {
 
 async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} }) {
   try {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token || "";
+    if (sessionError || !sessionData?.session?.user?.id || !accessToken) {
+      throw new Error(
+        "Secure authentication session is required. Please sign out and sign in again.\n" +
+        "يلزم تسجيل دخول آمن. سجّل الخروج ثم ادخل مرة أخرى."
+      );
+    }
+
     const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: {
         message_type: type,
         ...identifiers,
@@ -17110,6 +17122,22 @@ async function handleLogin() {
     let userData = null;
 
     if (!authError && authData?.user?.id) {
+      const { data: verifiedSessionData, error: verifiedSessionError } = await supabase.auth.getSession();
+      const verifiedSession = verifiedSessionData?.session || null;
+      if (
+        verifiedSessionError ||
+        !verifiedSession?.access_token ||
+        !verifiedSession?.user?.id ||
+        String(verifiedSession.user.id) !== String(authData.user.id)
+      ) {
+        await supabase.auth.signOut();
+        alert(
+          "Secure authentication session is required. Please sign out and sign in again.\n" +
+          "يلزم تسجيل دخول آمن. سجّل الخروج ثم ادخل مرة أخرى."
+        );
+        return;
+      }
+
       const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
         "get_authenticated_app_user"
       );
@@ -22659,15 +22687,10 @@ async function sendPlatformClientLoginDetails(client) {
   if (!confirmed) return;
 
   try {
-    const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
-      body: {
-        message_type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
-        target_user_id: primaryAdmin.id,
-      },
+    await dispatchVisaFlowEmail({
+      type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+      identifiers: { target_user_id: primaryAdmin.id },
     });
-
-    if (error) throw new Error(error.message || "Email dispatcher failed");
-    if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
 
     await recordPlatformLoginDetailsEmailLog({
       client,
