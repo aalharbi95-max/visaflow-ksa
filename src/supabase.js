@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = 'https://zeocbftriydodzfgixjv.supabase.co'
 const supabaseKey = 'sb_publishable_b5oQYxCWh6pwJsf8zDvDFA_HEcuoHCj'
+export const WORKSPACE_AUTH_STORAGE_KEY = 'visaflow-workspace-auth'
 
 function isTalentAuthUrl(url) {
   return url.searchParams.get('auth_flow') === 'candidate'
@@ -11,12 +12,17 @@ function isImplicitAuthCallback(params) {
   return Boolean(params.access_token || params.error_description)
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
+export const workspaceSupabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
+    storageKey: WORKSPACE_AUTH_STORAGE_KEY,
+    storage: typeof window === 'undefined' ? undefined : window.localStorage,
+    persistSession: true,
+    autoRefreshToken: true,
     // Preserve normal company callbacks while excluding explicitly marked candidate links.
     detectSessionInUrl: (url, params) => !isTalentAuthUrl(url) && isImplicitAuthCallback(params),
   },
 })
+export const supabase = workspaceSupabase
 
 // Keep candidate authentication independent from the company workspace session.
 export const talentSupabase = createClient(supabaseUrl, supabaseKey, {
