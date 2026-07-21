@@ -1201,6 +1201,14 @@ main.vf-login-shell {
   margin-bottom: 8px;
 }
 
+.vf-field-label {
+  display: block;
+  margin: 14px 0 7px;
+  color: #071d49;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .vf-reset-message {
   margin: 10px 0;
   padding: 10px 12px;
