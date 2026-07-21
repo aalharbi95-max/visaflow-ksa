@@ -13,6 +13,11 @@ import {
   reportSafeAuthDiagnostics,
   verifyWorkspaceAuthSession,
 } from "./authSession.mjs";
+import {
+  buildPublicViewUrl,
+  getPublicViewFromLocation,
+  PUBLIC_VIEW,
+} from "./publicNavigation.mjs";
 import "./style.css";
 
 
@@ -4451,7 +4456,7 @@ function TalentCandidatePortal({ onBack }) {
                 {isArabic ? "English" : "العربية"}
               </button>
               <button type="button" onClick={onBack} style={{ border: 0, background: "rgba(255,255,255,.12)", color: "#fff", borderRadius: "10px", padding: "9px 13px", cursor: "pointer", fontWeight: 800 }}>
-                {isArabic ? "عودة لدخول الشركات" : "Company Login"}
+                {isArabic ? "العودة إلى موقع VisaFlow" : "Back to VisaFlow website"}
               </button>
             </div>
           </header>
@@ -4872,15 +4877,390 @@ function TalentCandidatePortal({ onBack }) {
 }
 
 
+const PUBLIC_LANDING_COPY = {
+  AR: {
+    dir: "rtl",
+    language: "English",
+    nav: {
+      home: "الرئيسية",
+      companies: "حلول الشركات",
+      talent: "منصة المواهب",
+      interviews: "المقابلات الذكية",
+      about: "عن المنصة",
+      login: "تسجيل الدخول",
+      demo: "اطلب تجربة مجانية",
+      menu: "فتح قائمة التنقل",
+    },
+    hero: {
+      eyebrow: "منصة سعودية متكاملة لرحلة التوظيف والاستقدام",
+      title: "منصة التوظيف والاستقدام الذكية في المملكة",
+      text: "أدر عمليات التوظيف، والمقابلات بالذكاء الاصطناعي، والتأشيرات، والمرشحين، والتعبئة الوظيفية من مكان واحد.",
+      promise: "من الطلب إلى المباشرة… رحلة توظيف واحدة، ذكية ومتكاملة.",
+      company: "ابدأ تجربة شركتك",
+      candidate: "سجّل كباحث عن عمل",
+      trust: ["صلاحيات حسب الدور", "عزل بيانات الشركات", "قرار بشري مدعوم بالذكاء الاصطناعي"],
+    },
+    mockup: {
+      label: "نظرة تشغيلية",
+      title: "مركز قيادة التوظيف",
+      live: "متابعة مباشرة",
+      cards: [
+        ["مرشحون جدد", "بانتظار المراجعة"],
+        ["مقابلات ذكية مكتملة", "حالة محدثة"],
+        ["نسبة إنجاز التعبئة", "متابعة مستمرة"],
+        ["تنبيه متابعة جديد", "يتطلب إجراء"],
+      ],
+      pipeline: "رحلة المرشح",
+      stages: ["الترشيح", "المقابلة", "التأشيرة", "المباشرة"],
+    },
+    paths: {
+      eyebrow: "اختر مسارك",
+      title: "مساحة عمل مناسبة لكل طرف في رحلة التوظيف",
+      text: "ادخل إلى المسار المتاح فعليًا في VisaFlow دون خلط جلسات الشركات والمرشحين.",
+      items: [
+        { icon: "🏢", title: "الشركات", text: "إدارة التوظيف والاستقدام والتأشيرات.", action: "ابدأ كشركة", kind: "login" },
+        { icon: "◎", title: "المرشحون", text: "أنشئ ملفك المهني وارفع سيرتك الذاتية.", action: "انضم إلى المواهب", kind: "talent" },
+        { icon: "◆", title: "الوكالات", text: "إدارة المرشحين والطلبات والمتابعة.", action: "دخول الوكالة", kind: "login" },
+      ],
+    },
+    capabilities: {
+      eyebrow: "إمكانات VisaFlow",
+      title: "منظومة واحدة تربط الطلب بالنتيجة",
+      items: [
+        ["طلبات التوظيف", "إدارة الاحتياج والموافقات وخطوط الطلب."],
+        ["المرشحون والمواهب", "قاعدة موحدة للملفات المهنية وخطوات التقييم."],
+        ["المقابلات الذكية", "تجربة مقابلة منظمة ومدعومة بالذكاء الاصطناعي."],
+        ["التأشيرات والتفويضات", "متابعة دورة التأشيرة والتخصيص والتفويض."],
+        ["التعبئة والمباشرة", "متابعة الوصول والانضمام والتحقق بعد المباشرة."],
+        ["بوابة الوكالات", "إدارة تقديم المرشحين والطلبات والمتابعة."],
+        ["التقارير التنفيذية", "مؤشرات تشغيلية تساعد الفرق على اتخاذ القرار."],
+        ["الأمان والصلاحيات", "عزل بيانات الشركات ووصول مضبوط حسب الدور."],
+      ],
+    },
+    journey: {
+      eyebrow: "رحلة العمل",
+      title: "سير واضح من الاحتياج إلى متابعة الأداء",
+      steps: ["طلب توظيف", "اختيار المرشحين", "مقابلة ذكية", "التأشيرة والتفويض", "الوصول والمباشرة", "متابعة الأداء"],
+    },
+    talent: {
+      eyebrow: "منصة المواهب",
+      title: "سيرتك الذاتية ليست مجرد ملف",
+      text: "أنشئ ملفًا مهنيًا، واحصل على تحليل ذكي لسيرتك الذاتية، وأظهر للشركات المناسبة مع التحكم في مشاركة بياناتك.",
+      community: "انضم إلى مجتمع المواهب المتنامي.",
+      action: "أنشئ ملفك المهني",
+      items: ["رفع وتحليل السيرة الذاتية", "بناء الملف المهني", "تقييم المهارات", "المقابلة الذكية", "التحكم في مشاركة البيانات"],
+    },
+    agents: {
+      eyebrow: "المستقبل التشغيلي",
+      title: "فريق يعمل معك على مدار الساعة",
+      text: "مساعدون أذكياء يدعمون فرق التوظيف في الفرز والمقابلات والمتابعة والتحليل والتنبيهات ضمن رحلة عمل واحدة.",
+      items: ["موظف فرز السير الذاتية", "موظف المقابلات", "موظف متابعة الوكالات", "محلل التوظيف ومؤشرات الأداء", "موظف التنبيهات والتقارير"],
+    },
+    governance: {
+      eyebrow: "الأمان والحوكمة",
+      title: "ثقة مدمجة في كل مساحة عمل",
+      items: ["عزل بيانات كل شركة", "صلاحيات حسب الدور", "سجل العمليات", "موافقات المرشح وخصوصية بياناته", "الذكاء الاصطناعي يقدم التوصية والقرار النهائي للإنسان"],
+    },
+    cta: {
+      title: "حوّل رحلة التوظيف من إجراءات متفرقة إلى عملية واحدة واضحة وذكية.",
+      demo: "اطلب تجربة مجانية",
+      talent: "انضم إلى منصة المواهب",
+    },
+    footer: { platform: "المنصة", solutions: "الحلول", support: "الدعم", contact: "تواصل مع الدعم", rights: "VisaFlow KSA. جميع الحقوق محفوظة." },
+  },
+  EN: {
+    dir: "ltr",
+    language: "عربي",
+    nav: {
+      home: "Home",
+      companies: "Company Solutions",
+      talent: "Talent Platform",
+      interviews: "Smart Interviews",
+      about: "About",
+      login: "Sign in",
+      demo: "Request a free demo",
+      menu: "Open navigation menu",
+    },
+    hero: {
+      eyebrow: "A Saudi platform for connected recruitment and mobilization",
+      title: "The intelligent recruitment and workforce platform for Saudi Arabia",
+      text: "Manage recruitment, AI-assisted interviews, visas, candidates, and workforce mobilization from one place.",
+      promise: "From request to joining—one connected, intelligent hiring journey.",
+      company: "Start your company journey",
+      candidate: "Register as a job seeker",
+      trust: ["Role-based access", "Company data isolation", "Human decisions supported by AI"],
+    },
+    mockup: {
+      label: "Operational overview",
+      title: "Recruitment command center",
+      live: "Live workflow",
+      cards: [
+        ["New candidates", "Awaiting review"],
+        ["Completed smart interviews", "Status updated"],
+        ["Mobilization progress", "Continuously tracked"],
+        ["New follow-up alert", "Action required"],
+      ],
+      pipeline: "Candidate journey",
+      stages: ["Shortlist", "Interview", "Visa", "Joining"],
+    },
+    paths: {
+      eyebrow: "Choose your path",
+      title: "A focused workspace for every participant",
+      text: "Enter a real VisaFlow path while keeping company and candidate sessions separate.",
+      items: [
+        { icon: "🏢", title: "Companies", text: "Manage recruitment, mobilization, and visas.", action: "Start as a company", kind: "login" },
+        { icon: "◎", title: "Candidates", text: "Build your professional profile and upload your CV.", action: "Join VisaFlow Talent", kind: "talent" },
+        { icon: "◆", title: "Agencies", text: "Manage candidates, requests, and follow-up.", action: "Agency sign in", kind: "login" },
+      ],
+    },
+    capabilities: {
+      eyebrow: "VisaFlow capabilities",
+      title: "One operating system from request to outcome",
+      items: [
+        ["Recruitment requests", "Manage demand, approvals, and request lines."],
+        ["Candidates and talent", "A unified base for profiles and evaluation steps."],
+        ["AI-assisted interviews", "Structured interviews supported by artificial intelligence."],
+        ["Visas and authorizations", "Track visa inventory, allocation, and authorization."],
+        ["Mobilization and joining", "Follow arrival, joining, and post-joining validation."],
+        ["Agency portal", "Manage candidate submissions, requests, and follow-up."],
+        ["Executive reporting", "Operational indicators that support better decisions."],
+        ["Security and access", "Tenant isolation and controlled role-based access."],
+      ],
+    },
+    journey: {
+      eyebrow: "How work flows",
+      title: "A clear path from workforce demand to performance",
+      steps: ["Recruitment request", "Candidate selection", "Smart interview", "Visa and authorization", "Arrival and joining", "Performance follow-up"],
+    },
+    talent: {
+      eyebrow: "VisaFlow Talent",
+      title: "Your CV is more than a file",
+      text: "Build a professional profile, receive intelligent CV analysis, and become visible to relevant companies while controlling how your data is shared.",
+      community: "Join a growing talent community.",
+      action: "Build your career profile",
+      items: ["CV upload and analysis", "Professional profile builder", "Skills assessment", "Smart interview", "Data-sharing controls"],
+    },
+    agents: {
+      eyebrow: "The operational future",
+      title: "A team that works with you around the clock",
+      text: "Intelligent assistants that support recruitment teams across screening, interviews, follow-up, analysis, and alerts in one connected workflow.",
+      items: ["CV screening assistant", "Interview assistant", "Agency follow-up assistant", "Recruitment and KPI analyst", "Alerts and reporting assistant"],
+    },
+    governance: {
+      eyebrow: "Security and governance",
+      title: "Trust built into every workspace",
+      items: ["Company-level data isolation", "Role-based permissions", "Operational audit trail", "Candidate consent and data privacy", "AI recommends; people make the final decision"],
+    },
+    cta: {
+      title: "Turn fragmented hiring procedures into one clear, intelligent process.",
+      demo: "Request a free demo",
+      talent: "Join VisaFlow Talent",
+    },
+    footer: { platform: "Platform", solutions: "Solutions", support: "Support", contact: "Contact support", rights: "VisaFlow KSA. All rights reserved." },
+  },
+};
+
+function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const copy = PUBLIC_LANDING_COPY[language] || PUBLIC_LANDING_COPY.AR;
+  const isArabic = language === "AR";
+  const demoHref = `mailto:support@visaflowksa.com?subject=${encodeURIComponent(isArabic ? "طلب تجربة VisaFlow KSA" : "VisaFlow KSA demo request")}`;
+  const handleAnchorClick = () => setMobileMenuOpen(false);
+
+  return (
+    <div className="vf-public" dir={copy.dir} lang={isArabic ? "ar" : "en"}>
+      <a className="vf-public-skip" href="#main-content">{isArabic ? "انتقل إلى المحتوى" : "Skip to content"}</a>
+      <header className="vf-public-header">
+        <a className="vf-public-brand" href="#home" aria-label="VisaFlow KSA" onClick={handleAnchorClick}>
+          <img src="/visaflow-logo-transparent.png" alt="" />
+          <span><strong>VisaFlow</strong><small>KSA</small></span>
+        </a>
+        <button
+          type="button"
+          className="vf-public-menu-button"
+          aria-label={copy.nav.menu}
+          aria-expanded={mobileMenuOpen}
+          onClick={() => setMobileMenuOpen((open) => !open)}
+        >
+          <span />
+          <span />
+          <span />
+        </button>
+        <nav className={`vf-public-nav ${mobileMenuOpen ? "open" : ""}`} aria-label={isArabic ? "التنقل الرئيسي" : "Main navigation"}>
+          <a href="#home" onClick={handleAnchorClick}>{copy.nav.home}</a>
+          <a href="#solutions" onClick={handleAnchorClick}>{copy.nav.companies}</a>
+          <a href="#talent" onClick={handleAnchorClick}>{copy.nav.talent}</a>
+          <a href="#interviews" onClick={handleAnchorClick}>{copy.nav.interviews}</a>
+          <a href="#about" onClick={handleAnchorClick}>{copy.nav.about}</a>
+          <div className="vf-public-mobile-actions">
+            <button type="button" onClick={() => { handleAnchorClick(); onLogin(); }}>{copy.nav.login}</button>
+            <a href={demoHref} onClick={handleAnchorClick}>{copy.nav.demo}</a>
+          </div>
+        </nav>
+        <div className="vf-public-header-actions">
+          <button type="button" className="vf-public-language" onClick={onLanguageChange}>{copy.language}</button>
+          <button type="button" className="vf-public-login" onClick={onLogin}>{copy.nav.login}</button>
+          <a className="vf-public-demo" href={demoHref}>{copy.nav.demo}</a>
+        </div>
+      </header>
+
+      <main id="main-content">
+        <section className="vf-public-hero" id="home">
+          <div className="vf-public-hero-glow vf-public-hero-glow-a" />
+          <div className="vf-public-hero-glow vf-public-hero-glow-b" />
+          <div className="vf-public-container vf-public-hero-grid">
+            <div className="vf-public-hero-copy">
+              <div className="vf-public-eyebrow"><span />{copy.hero.eyebrow}</div>
+              <h1>{copy.hero.title}</h1>
+              <p className="vf-public-lead">{copy.hero.text}</p>
+              <p className="vf-public-promise">{copy.hero.promise}</p>
+              <div className="vf-public-button-row">
+                <a className="vf-public-primary" href={demoHref}>{copy.hero.company}</a>
+                <button type="button" className="vf-public-secondary" onClick={onTalent}>{copy.hero.candidate}</button>
+              </div>
+              <ul className="vf-public-trust-list">
+                {copy.hero.trust.map((item) => <li key={item}><span>✓</span>{item}</li>)}
+              </ul>
+            </div>
+
+            <div className="vf-public-product" aria-label={copy.mockup.title}>
+              <div className="vf-public-product-topbar">
+                <div className="vf-public-product-brand"><span>VF</span><div><small>{copy.mockup.label}</small><strong>{copy.mockup.title}</strong></div></div>
+                <span className="vf-public-live"><i />{copy.mockup.live}</span>
+              </div>
+              <div className="vf-public-product-grid">
+                {copy.mockup.cards.map(([title, status], index) => (
+                  <article key={title}>
+                    <span className={`vf-public-metric-icon metric-${index + 1}`}>{["＋", "◉", "↗", "!"][index]}</span>
+                    <div><small>{title}</small><strong>{status}</strong></div>
+                  </article>
+                ))}
+              </div>
+              <div className="vf-public-pipeline-card">
+                <div className="vf-public-pipeline-heading"><strong>{copy.mockup.pipeline}</strong><span>{copy.mockup.live}</span></div>
+                <div className="vf-public-pipeline-line">
+                  {copy.mockup.stages.map((stage, index) => <div key={stage} className={index < 3 ? "active" : ""}><i /><span>{stage}</span></div>)}
+                </div>
+              </div>
+              <div className="vf-public-floating-note"><span>✓</span><div><strong>{copy.mockup.cards[3][0]}</strong><small>{copy.mockup.cards[3][1]}</small></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="vf-public-section vf-public-paths" id="solutions">
+          <div className="vf-public-container">
+            <div className="vf-public-section-heading">
+              <span className="vf-public-kicker">{copy.paths.eyebrow}</span>
+              <h2>{copy.paths.title}</h2>
+              <p>{copy.paths.text}</p>
+            </div>
+            <div className="vf-public-path-grid">
+              {copy.paths.items.map((item) => (
+                <article key={item.title}>
+                  <span className="vf-public-path-icon">{item.icon}</span>
+                  <h3>{item.title}</h3>
+                  <p>{item.text}</p>
+                  <button type="button" onClick={item.kind === "talent" ? onTalent : onLogin}>{item.action}<span aria-hidden="true">↗</span></button>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="vf-public-section vf-public-capabilities" id="interviews">
+          <div className="vf-public-container">
+            <div className="vf-public-section-heading compact">
+              <span className="vf-public-kicker">{copy.capabilities.eyebrow}</span>
+              <h2>{copy.capabilities.title}</h2>
+            </div>
+            <div className="vf-public-capability-grid">
+              {copy.capabilities.items.map(([title, text], index) => (
+                <article key={title}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <h3>{title}</h3>
+                  <p>{text}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="vf-public-section vf-public-journey">
+          <div className="vf-public-container">
+            <div className="vf-public-section-heading compact">
+              <span className="vf-public-kicker">{copy.journey.eyebrow}</span>
+              <h2>{copy.journey.title}</h2>
+            </div>
+            <div className="vf-public-journey-grid">
+              {copy.journey.steps.map((step, index) => <article key={step}><span>{index + 1}</span><strong>{step}</strong><i aria-hidden="true">{isArabic ? "←" : "→"}</i></article>)}
+            </div>
+          </div>
+        </section>
+
+        <section className="vf-public-section vf-public-talent" id="talent">
+          <div className="vf-public-container vf-public-talent-grid">
+            <div className="vf-public-talent-visual" aria-hidden="true">
+              <div className="vf-public-profile-card">
+                <div className="vf-public-profile-head"><span>VF</span><div><i /><i /></div></div>
+                <div className="vf-public-profile-lines"><i /><i /><i /></div>
+                <div className="vf-public-skill-pills"><span>CV</span><span>AI</span><span>Skills</span></div>
+              </div>
+              <div className="vf-public-analysis-card"><span>✓</span><div><strong>{copy.talent.items[0]}</strong><small>{copy.mockup.live}</small></div></div>
+            </div>
+            <div className="vf-public-talent-copy">
+              <span className="vf-public-kicker">{copy.talent.eyebrow}</span>
+              <h2>{copy.talent.title}</h2>
+              <p>{copy.talent.text}</p>
+              <ul>{copy.talent.items.map((item) => <li key={item}><span>✓</span>{item}</li>)}</ul>
+              <strong className="vf-public-community">{copy.talent.community}</strong>
+              <button type="button" className="vf-public-primary" onClick={onTalent}>{copy.talent.action}</button>
+            </div>
+          </div>
+        </section>
+
+        <section className="vf-public-section vf-public-agents">
+          <div className="vf-public-container">
+            <div className="vf-public-section-heading">
+              <span className="vf-public-kicker">{copy.agents.eyebrow}</span>
+              <h2>{copy.agents.title}</h2>
+              <p>{copy.agents.text}</p>
+            </div>
+            <div className="vf-public-agent-grid">
+              {copy.agents.items.map((item, index) => <article key={item}><div className="vf-public-agent-avatar">{["CV", "AI", "AG", "KPI", "!"][index]}</div><h3>{item}</h3></article>)}
+            </div>
+          </div>
+        </section>
+
+        <section className="vf-public-section vf-public-governance" id="about">
+          <div className="vf-public-container vf-public-governance-grid">
+            <div><span className="vf-public-kicker">{copy.governance.eyebrow}</span><h2>{copy.governance.title}</h2></div>
+            <div className="vf-public-governance-list">{copy.governance.items.map((item, index) => <article key={item}><span>{["▦", "⌘", "≡", "◉", "◇"][index]}</span><strong>{item}</strong></article>)}</div>
+          </div>
+        </section>
+
+        <section className="vf-public-cta">
+          <div className="vf-public-container"><div><span>VisaFlow KSA</span><h2>{copy.cta.title}</h2></div><div className="vf-public-button-row"><a className="vf-public-primary light" href={demoHref}>{copy.cta.demo}</a><button type="button" className="vf-public-secondary light" onClick={onTalent}>{copy.cta.talent}</button></div></div>
+        </section>
+      </main>
+
+      <footer className="vf-public-footer">
+        <div className="vf-public-container vf-public-footer-grid">
+          <div className="vf-public-footer-brand"><div className="vf-public-brand"><img src="/visaflow-logo-transparent.png" alt="" /><span><strong>VisaFlow</strong><small>KSA</small></span></div><p>{copy.hero.promise}</p></div>
+          <div><strong>{copy.footer.platform}</strong><a href="#home">{copy.nav.home}</a><a href="#about">{copy.nav.about}</a><a href="#talent">{copy.nav.talent}</a></div>
+          <div><strong>{copy.footer.solutions}</strong><a href="#solutions">{copy.nav.companies}</a><a href="#interviews">{copy.nav.interviews}</a><a href={demoHref}>{copy.nav.demo}</a></div>
+          <div><strong>{copy.footer.support}</strong><a href="mailto:support@visaflowksa.com">{copy.footer.contact}</a><button type="button" onClick={onLogin}>{copy.nav.login}</button></div>
+        </div>
+        <div className="vf-public-container vf-public-footer-bottom"><span>© {new Date().getFullYear()} {copy.footer.rights}</span><span>support@visaflowksa.com</span></div>
+      </footer>
+    </div>
+  );
+}
+
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
+  const [publicView, setPublicView] = useState(() => getPublicViewFromLocation(window.location));
   const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      return params.get("talent") === "1" || window.location.hash === "#talent";
-    } catch {
-      return false;
-    }
+    return getPublicViewFromLocation(window.location) === PUBLIC_VIEW.TALENT;
   });
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
@@ -5358,7 +5738,7 @@ const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 const [loginLoading, setLoginLoading] = useState(false);
 const [rememberMe, setRememberMe] = useState(true);
 const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
-const [loginLanguage, setLoginLanguage] = useState("EN");
+const [loginLanguage, setLoginLanguage] = useState("AR");
 const [loginLogoFailed, setLoginLogoFailed] = useState(false);
 const [ssoInfoOpen, setSsoInfoOpen] = useState(false);
 const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -17391,30 +17771,48 @@ async function handleLogout() {
 }
 
 
-function openTalentPortal() {
+function navigatePublicView(nextView, { replace = false } = {}) {
   try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("talent", "1");
-    window.history.pushState({}, "", url);
+    const nextUrl = buildPublicViewUrl(window.location.href, nextView);
+    window.history[replace ? "replaceState" : "pushState"]({}, "", nextUrl);
   } catch {
-    window.location.hash = "talent";
+    window.location.hash = nextView === PUBLIC_VIEW.LANDING ? "" : nextView;
   }
-  setTalentPortalOpen(true);
+  setPublicView(nextView);
+  setTalentPortalOpen(nextView === PUBLIC_VIEW.TALENT);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function closeTalentPortal() {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("talent");
-    if (url.hash === "#talent") url.hash = "";
-    window.history.pushState({}, "", url);
-  } catch {
-    window.location.hash = "";
-  }
-  setTalentPortalOpen(false);
-  window.scrollTo({ top: 0, behavior: "smooth" });
+function openCompanyLogin() {
+  navigatePublicView(PUBLIC_VIEW.LOGIN);
 }
+
+function openLandingPage() {
+  navigatePublicView(PUBLIC_VIEW.LANDING);
+}
+
+function openTalentPortal() {
+  navigatePublicView(PUBLIC_VIEW.TALENT);
+}
+
+function closeTalentPortal() {
+  navigatePublicView(PUBLIC_VIEW.LANDING);
+}
+
+useEffect(() => {
+  const syncPublicRoute = () => {
+    const nextView = getPublicViewFromLocation(window.location);
+    setPublicView(nextView);
+    setTalentPortalOpen(nextView === PUBLIC_VIEW.TALENT);
+  };
+
+  window.addEventListener("popstate", syncPublicRoute);
+  window.addEventListener("hashchange", syncPublicRoute);
+  return () => {
+    window.removeEventListener("popstate", syncPublicRoute);
+    window.removeEventListener("hashchange", syncPublicRoute);
+  };
+}, []);
 
 function exportRowsToExcel(rows, fileName, sheetName = "Data") {
   if (!rows || rows.length === 0) {
@@ -27338,6 +27736,17 @@ if (
   );
 }
 
+if (!currentUser && publicView === PUBLIC_VIEW.LANDING) {
+  return (
+    <PublicLandingPage
+      language={loginLanguage}
+      onLanguageChange={() => setLoginLanguage((language) => language === "AR" ? "EN" : "AR")}
+      onLogin={openCompanyLogin}
+      onTalent={openTalentPortal}
+    />
+  );
+}
+
 if (!currentUser) {
   const showMicrosoftSso = false; // Feature flag: enable only after real Microsoft SSO implementation.
 
@@ -27499,6 +27908,13 @@ if (!currentUser) {
       </section>
 
       <section className="vf-login-right">
+        <a
+          className="vf-back-to-public"
+          href={buildPublicViewUrl(window.location.href, PUBLIC_VIEW.LANDING)}
+        >
+          <span aria-hidden="true">{loginLanguage === "AR" ? "→" : "←"}</span>
+          {loginLanguage === "AR" ? "العودة إلى الصفحة الرئيسية" : "Back to the public website"}
+        </a>
         <div className="vf-login-language">
           <button
             type="button"
