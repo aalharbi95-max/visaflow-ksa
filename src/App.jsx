@@ -9,6 +9,7 @@ import {
   workspaceSupabase as supabase,
 } from "./supabase";
 import {
+  classifyWorkspaceAuthTransition,
   reportSafeAuthDiagnostics,
   verifyWorkspaceAuthSession,
 } from "./authSession.mjs";
@@ -5273,6 +5274,8 @@ const [validatedWorkspaceKey, setValidatedWorkspaceKey] = useState("");
 const workspaceAuthSequenceRef = useRef(0);
 const workspaceDataGenerationRef = useRef(0);
 const legacyWorkspaceActiveRef = useRef(false);
+const currentWorkspaceUserRef = useRef(null);
+const workspaceAuthReadyRef = useRef(false);
 const [agencyClientAccess, setAgencyClientAccess] = useState([]);
 const [agencyWorkspaceLoading, setAgencyWorkspaceLoading] = useState(false);
 const [activeAgencyCompanyId, setActiveAgencyCompanyId] = useState(() =>
@@ -7116,6 +7119,8 @@ Cancel = إضافتها كوظيفة مستقلة`
     setActiveAgencyCompanyId(normalizedUser.active_company_id || "");
     setActiveAgencyCompanyName(normalizedUser.active_company_name || "");
     legacyWorkspaceActiveRef.current = legacy;
+    currentWorkspaceUserRef.current = normalizedUser;
+    workspaceAuthReadyRef.current = true;
 
     if (persist) {
       const storage = rememberMe ? localStorage : sessionStorage;
@@ -8917,8 +8922,35 @@ async function loadNotifications() {
 useEffect(() => {
   let mounted = true;
 
-  const reconcileAuthenticatedWorkspace = async (sessionFromEvent) => {
+  const reconcileAuthenticatedWorkspace = async (event, sessionFromEvent) => {
     const sequence = ++workspaceAuthSequenceRef.current;
+    const activeWorkspaceUser = currentWorkspaceUserRef.current;
+    const transition = classifyWorkspaceAuthTransition({
+      event,
+      currentAuthUserId: activeWorkspaceUser?.auth_user_id,
+      nextAuthUserId: sessionFromEvent?.user?.id,
+      workspaceReady: workspaceAuthReadyRef.current,
+    });
+
+    if (transition.shouldPreserveWorkspace) {
+      const verifiedAuth = await verifyWorkspaceAuthSession(supabase.auth);
+      if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
+      reportSafeAuthDiagnostics(
+        verifiedAuth.session,
+        activeWorkspaceUser,
+        `workspace_continuity_${String(event || "unknown").toLowerCase()}`,
+        verifiedAuth.authUser
+      );
+      if (
+        verifiedAuth.isVerified &&
+        String(verifiedAuth.authUser.id) === String(activeWorkspaceUser.auth_user_id)
+      ) {
+        return;
+      }
+    }
+
+    workspaceAuthReadyRef.current = false;
+    currentWorkspaceUserRef.current = null;
     setWorkspaceAuthReady(false);
     setValidatedWorkspaceKey("");
     clearTenantSensitiveState();
@@ -8929,6 +8961,7 @@ useEffect(() => {
     setCurrentUser(null);
 
     if (!sessionFromEvent?.user?.id) {
+      if (transition.shouldResetPage) setActivePage("Dashboard");
       if (mounted && sequence === workspaceAuthSequenceRef.current) {
         legacyWorkspaceActiveRef.current = false;
         setWorkspaceAuthReady(true);
@@ -8978,15 +9011,19 @@ useEffect(() => {
     }
 
     activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+    if (transition.shouldResetPage) {
+      const nextRole = normalizeUserRole(linkedUser.role);
+      setActivePage((ROLE_PAGES[nextRole] || ROLE_PAGES.Viewer)[0]);
+    }
   };
 
   const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
     if (!mounted) return;
     if (event === "SIGNED_OUT" && legacyWorkspaceActiveRef.current) return;
-    if (["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "USER_UPDATED"].includes(event)) {
+    if (["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "TOKEN_REFRESHED", "USER_UPDATED"].includes(event)) {
       // Run outside the auth callback so workspace queries cannot contend with
       // Supabase Auth's internal session persistence lock.
-      window.setTimeout(() => reconcileAuthenticatedWorkspace(session), 0);
+      window.setTimeout(() => reconcileAuthenticatedWorkspace(event, session), 0);
     }
   });
 
@@ -8995,6 +9032,11 @@ useEffect(() => {
     authListener?.subscription?.unsubscribe();
   };
 }, []);
+
+useEffect(() => {
+  currentWorkspaceUserRef.current = currentUser;
+  workspaceAuthReadyRef.current = workspaceAuthReady;
+}, [currentUser, workspaceAuthReady]);
 
 useEffect(() => {
   if (!currentUser || !validatedWorkspaceKey) return;
@@ -17323,6 +17365,8 @@ async function handleLogin() {
 
 async function handleLogout() {
   legacyWorkspaceActiveRef.current = false;
+  currentWorkspaceUserRef.current = null;
+  workspaceAuthReadyRef.current = false;
   setWorkspaceAuthReady(false);
   setValidatedWorkspaceKey("");
   clearTenantSensitiveState();
