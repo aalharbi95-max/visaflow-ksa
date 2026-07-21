@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  classifyWorkspaceAuthTransition,
   getSafeAuthDiagnostics,
   getSessionWithSingleRefresh,
   reportSafeAuthDiagnostics,
@@ -88,6 +89,43 @@ test("email session lookup refreshes exactly once when storage has no session", 
   assert.equal(refreshCalls, 1);
 });
 
+test("TOKEN_REFRESHED for the same user preserves the current workspace page", () => {
+  const transition = classifyWorkspaceAuthTransition({
+    event: "TOKEN_REFRESHED",
+    currentAuthUserId: "owner-auth-id",
+    nextAuthUserId: "owner-auth-id",
+    workspaceReady: true,
+  });
+
+  assert.equal(transition.shouldPreserveWorkspace, true);
+  assert.equal(transition.shouldResetPage, false);
+});
+
+test("repeated SIGNED_IN for the same user preserves the current workspace page", () => {
+  const transition = classifyWorkspaceAuthTransition({
+    event: "SIGNED_IN",
+    currentAuthUserId: "owner-auth-id",
+    nextAuthUserId: "owner-auth-id",
+    workspaceReady: true,
+  });
+
+  assert.equal(transition.shouldPreserveWorkspace, true);
+  assert.equal(transition.shouldResetPage, false);
+});
+
+test("a different authenticated user resets the page and requires full reconciliation", () => {
+  const transition = classifyWorkspaceAuthTransition({
+    event: "SIGNED_IN",
+    currentAuthUserId: "first-auth-id",
+    nextAuthUserId: "second-auth-id",
+    workspaceReady: true,
+  });
+
+  assert.equal(transition.isSameAuthenticatedUser, false);
+  assert.equal(transition.shouldPreserveWorkspace, false);
+  assert.equal(transition.shouldResetPage, true);
+});
+
 test("browser auth contract persists the workspace session and keeps cleanup scoped", async () => {
   const [appSource, supabaseSource] = await Promise.all([
     readFile(new URL("./App.jsx", import.meta.url), "utf8"),
@@ -119,7 +157,7 @@ test("browser auth contract persists the workspace session and keeps cleanup sco
   );
   assert.doesNotMatch(successfulAuthSource, /auth\.signOut\(/);
   assert.doesNotMatch(appSource, /localStorage\.clear\(|sessionStorage\.clear\(/);
-  assert.match(appSource, /\["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "USER_UPDATED"\]/);
+  assert.match(appSource, /\["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "TOKEN_REFRESHED", "USER_UPDATED"\]/);
   assert.match(dispatcherSource, /verifyWorkspaceAuthSession\(supabase\.auth\)/);
   assert.match(dispatcherSource, /Authorization: `Bearer \$\{accessToken\}`/);
   assert.match(

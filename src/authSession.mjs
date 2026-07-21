@@ -59,3 +59,35 @@ export async function verifyWorkspaceAuthSession(auth) {
     isVerified: Boolean(session?.access_token && sessionUserMatchesVerifiedUser),
   };
 }
+
+const CONTINUITY_AUTH_EVENTS = new Set([
+  "INITIAL_SESSION",
+  "SIGNED_IN",
+  "TOKEN_REFRESHED",
+  "USER_UPDATED",
+]);
+
+export function classifyWorkspaceAuthTransition({
+  event,
+  currentAuthUserId = "",
+  nextAuthUserId = "",
+  workspaceReady = false,
+}) {
+  const currentId = String(currentAuthUserId || "");
+  const nextId = String(nextAuthUserId || "");
+  const isSameAuthenticatedUser = Boolean(currentId && nextId && currentId === nextId);
+  const shouldPreserveWorkspace = Boolean(
+    workspaceReady &&
+    isSameAuthenticatedUser &&
+    CONTINUITY_AUTH_EVENTS.has(event)
+  );
+
+  return {
+    isSameAuthenticatedUser,
+    shouldPreserveWorkspace,
+    shouldResetPage: Boolean(
+      event === "SIGNED_OUT" ||
+      (nextId && currentId !== nextId)
+    ),
+  };
+}
