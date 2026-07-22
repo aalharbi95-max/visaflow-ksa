@@ -80,15 +80,11 @@ function enforceRateLimit(key: string) {
   rateBuckets.set(key, recent);
 }
 
-async function sha256Hex(value: string) {
-  const bytes = new TextEncoder().encode(value);
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(hash)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function buildInviteRedirectUrl(token: string) {
+function buildInviteRedirectUrl(invitationId: string) {
   const url = new URL("/", VISAFLOW_ORIGIN);
-  url.searchParams.set("agency_invite", token);
+  // This is a non-secret routing marker. Invitation authorization is derived
+  // only from the Supabase Auth session and auth.uid() on the server.
+  url.searchParams.set("agency_activation", invitationId);
   return url.toString();
 }
 
@@ -97,12 +93,13 @@ async function lookupAuthUserByEmail(admin: any, email: string) {
     p_email: email,
   });
   if (lookupError) throw lookupError;
+  if (identity?.ambiguous) throw new RequestFailure(409, "identity_review_required");
   if (!identity?.id) return null;
 
   const { data, error } = await admin.auth.admin.getUserById(identity.id);
   const authUser = data?.user || null;
   if (error || !authUser?.id || normalizeEmail(authUser.email) !== email) {
-    throw new RequestFailure(409, "auth_identity_mismatch");
+    throw new RequestFailure(409, "identity_review_required");
   }
   return authUser;
 }
@@ -238,20 +235,25 @@ Deno.serve(async (req) => {
       agencyId,
       pendingInvitation,
     });
-    if (!policy.allowed) throw new RequestFailure(409, policy.error);
+    if (!policy.allowed) {
+      const publicCode = [
+        "unlinked_auth_account",
+        "trusted_auth_migration_required",
+        "auth_identity_mismatch",
+      ].includes(policy.error)
+        ? "identity_review_required"
+        : policy.error;
+      throw new RequestFailure(409, publicCode);
+    }
 
     let authUser = existingAuthUser;
     let createdAuthUserId = "";
-    let invitationToken = "";
-    let invitationTokenHash = "";
-    if (["invite_new", "resend"].includes(policy.action)) {
-      invitationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
-      invitationTokenHash = await sha256Hex(invitationToken);
-    }
-
+    const invitationId = ["invite_new", "resend"].includes(policy.action)
+      ? crypto.randomUUID()
+      : null;
     if (policy.action === "invite_new") {
       const { data: inviteData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-        redirectTo: buildInviteRedirectUrl(invitationToken),
+        redirectTo: buildInviteRedirectUrl(invitationId!),
         data: { account_type: "agency", full_name: name, agency_id: agencyId },
       });
       if (inviteError || !inviteData?.user?.id) {
@@ -285,14 +287,14 @@ Deno.serve(async (req) => {
         p_name: name,
         p_agency_id: agencyId,
         p_company_id: actor.companyId,
-        p_invitation_token_hash: invitationTokenHash || null,
+        p_invitation_id: invitationId,
         p_delivery_kind: policy.action === "resend" ? "resend" : policy.action === "invite_new" ? "invite" : null,
       });
       if (linkError || !linkedUser?.user_id) throw linkError || new Error("missing_linked_user");
 
       if (policy.action === "resend") {
         const { error: resendError } = await admin.auth.resetPasswordForEmail(email, {
-          redirectTo: buildInviteRedirectUrl(invitationToken),
+          redirectTo: buildInviteRedirectUrl(invitationId!),
         });
         if (resendError) {
           console.error("Agency invitation resend failed", safeProviderError(resendError));

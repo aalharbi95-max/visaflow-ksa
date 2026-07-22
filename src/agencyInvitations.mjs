@@ -1,4 +1,4 @@
-export const AGENCY_INVITE_QUERY_PARAM = "agency_invite";
+export const AGENCY_ACTIVATION_QUERY_PARAM = "agency_activation";
 
 export function normalizeAgencyInviteEmail(value) {
   return String(value || "").trim().toLowerCase();
@@ -12,8 +12,8 @@ export function isValidAgencyInviteEmail(value) {
 export function getAgencyInviteUrlState(locationLike = {}) {
   const search = new URLSearchParams(locationLike.search || "");
   const hash = new URLSearchParams(String(locationLike.hash || "").replace(/^#/, ""));
-  const token = String(search.get(AGENCY_INVITE_QUERY_PARAM) || "").trim();
-  const inviteRequested = Boolean(token) || hash.get("type") === "invite";
+  const activationId = String(search.get(AGENCY_ACTIVATION_QUERY_PARAM) || "").trim();
+  const inviteRequested = Boolean(activationId);
   const error = search.get("error_description") || hash.get("error_description") || search.get("error") || hash.get("error") || "";
 
   let decodedError = "";
@@ -27,21 +27,21 @@ export function getAgencyInviteUrlState(locationLike = {}) {
 
   return {
     requested: inviteRequested,
-    token,
+    activationId,
     error: decodedError,
   };
 }
 
-export function clearAgencyInviteTokenFromUrl(locationLike = window.location, historyLike = window.history) {
+export function clearAgencyActivationMarkerFromUrl(locationLike = window.location, historyLike = window.history) {
   const url = new URL(locationLike.href);
-  url.searchParams.delete(AGENCY_INVITE_QUERY_PARAM);
+  url.searchParams.delete(AGENCY_ACTIVATION_QUERY_PARAM);
   historyLike.replaceState({}, "", url.toString());
 }
 
 export function clearAgencyInviteCallbackUrl(locationLike = window.location, historyLike = window.history) {
   const url = new URL(locationLike.href);
   [
-    AGENCY_INVITE_QUERY_PARAM,
+    AGENCY_ACTIVATION_QUERY_PARAM,
     "code",
     "token_hash",
     "type",
@@ -65,10 +65,12 @@ const INVITATION_ERROR_MESSAGES = {
   incompatible_role: "This email belongs to an internal or incompatible user and cannot be linked as an agency user.",
   agency_mismatch: "This agency user belongs to a different agency and cannot be reassigned.",
   inactive_agency_user: "This agency user is inactive. Reactivate the account through an approved administrator workflow before linking it.",
-  auth_identity_mismatch: "The authentication identity does not match the agency user record. Contact platform support.",
+  auth_identity_mismatch: "This email cannot be invited automatically. Contact a trusted administrator for identity review.",
+  auth_identity_ambiguous: "This email cannot be invited automatically. Contact a trusted administrator for identity review.",
+  identity_review_required: "This email cannot be invited automatically. Contact a trusted administrator for identity review.",
   auth_directory_limit: "The authentication directory could not be verified safely. Contact platform support.",
-  unlinked_auth_account: "This email already has an authentication account, but it is not a verified agency user.",
-  trusted_auth_migration_required: "This email has a legacy agency record and a separate authentication account. A trusted administrator must migrate and verify the identity before access can be granted.",
+  unlinked_auth_account: "This email cannot be invited automatically. Contact a trusted administrator for identity review.",
+  trusted_auth_migration_required: "This email cannot be invited automatically. Contact a trusted administrator for identity review.",
   invitation_in_progress: "Another invitation request created this authentication account. Wait briefly, then retry.",
   resend_failed: "The invitation was renewed securely, but the replacement email could not be sent. Please retry.",
   duplicate_app_user: "More than one application user uses this email. Contact platform support before inviting.",

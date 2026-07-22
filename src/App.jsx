@@ -20,7 +20,7 @@ import {
 } from "./publicNavigation.mjs";
 import {
   clearAgencyInviteCallbackUrl,
-  clearAgencyInviteTokenFromUrl,
+  clearAgencyActivationMarkerFromUrl,
   getAgencyInvitationErrorMessage,
   getAgencyInvitationSuccessMessage,
   getAgencyInviteUrlState,
@@ -30,10 +30,10 @@ import {
 import "./style.css";
 
 const INITIAL_AGENCY_INVITE_URL_STATE = getAgencyInviteUrlState(window.location);
-if (INITIAL_AGENCY_INVITE_URL_STATE.requested && INITIAL_AGENCY_INVITE_URL_STATE.token) {
-  // Capture the token once, then remove it before React renders page content or
-  // subresources. Supabase callback credentials remain in the fragment.
-  clearAgencyInviteTokenFromUrl();
+if (INITIAL_AGENCY_INVITE_URL_STATE.requested) {
+  // The marker is not a credential. Remove it before React renders as an
+  // additional privacy measure while preserving Supabase callback data.
+  clearAgencyActivationMarkerFromUrl();
 }
 
 const PAGES = [
@@ -5095,14 +5095,9 @@ function AgencyInvitePasswordSetup({ inviteState }) {
     const verifyInviteSession = async (session) => {
       if (!mounted || !session?.user?.id || verifiedUserIdRef.current === session.user.id) return;
 
-      if (!inviteState.token) {
-        rejectInvite("This invitation link is invalid or has expired.");
-        return;
-      }
-
       const { data: invitation, error: invitationError } = await supabase.rpc(
-        "verify_agency_user_invitation",
-        { p_token: inviteState.token },
+        "verify_pending_agency_user_invitation",
+        { p_invitation_id: inviteState.activationId },
       );
       if (invitationError || !invitation?.valid) {
         rejectInvite("This invitation link is invalid, expired, or already used.");
@@ -5151,7 +5146,7 @@ function AgencyInvitePasswordSetup({ inviteState }) {
       if (expiryTimer) window.clearTimeout(expiryTimer);
       listener?.subscription?.unsubscribe();
     };
-  }, [inviteState.error, inviteState.token]);
+  }, [inviteState.activationId, inviteState.error]);
 
   async function submitPassword(event) {
     event.preventDefault();
@@ -5181,8 +5176,8 @@ function AgencyInvitePasswordSetup({ inviteState }) {
       }
 
       const { data: invitation, error: invitationError } = await supabase.rpc(
-        "verify_agency_user_invitation",
-        { p_token: inviteState.token },
+        "verify_pending_agency_user_invitation",
+        { p_invitation_id: inviteState.activationId },
       );
       if (invitationError || !invitation?.valid) {
         throw new Error("The secure invitation is invalid, expired, or already used.");
@@ -5192,8 +5187,8 @@ function AgencyInvitePasswordSetup({ inviteState }) {
       if (error) throw error;
 
       const { data: consumed, error: consumeError } = await supabase.rpc(
-        "consume_agency_user_invitation",
-        { p_token: inviteState.token },
+        "consume_pending_agency_user_invitation",
+        { p_invitation_id: inviteState.activationId },
       );
       if (consumeError || !consumed?.consumed) {
         throw new Error("Password was created, but the invitation could not be finalized. Reload this link to retry safely.");

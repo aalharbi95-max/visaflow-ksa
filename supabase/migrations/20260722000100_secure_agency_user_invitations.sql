@@ -3,6 +3,33 @@
 
 do $block$
 begin
+  if to_regclass('public.users') is null
+    or to_regclass('public.agency_members') is null
+    or to_regclass('public.agency_company_user_access') is null
+    or to_regclass('public.company_agency_access') is null then
+    raise exception 'Cannot enable agency invitations: required application tables are missing';
+  end if;
+
+  if exists (
+    select 1
+    from (values
+      ('users', 'id'), ('users', 'email'), ('users', 'auth_user_id'),
+      ('agency_members', 'agency_id'), ('agency_members', 'user_id'),
+      ('agency_company_user_access', 'company_id'),
+      ('agency_company_user_access', 'agency_id'),
+      ('agency_company_user_access', 'user_id')
+    ) as required(table_name, column_name)
+    where not exists (
+      select 1
+      from information_schema.columns as column_info
+      where column_info.table_schema = 'public'
+        and column_info.table_name = required.table_name
+        and column_info.column_name = required.column_name
+    )
+  ) then
+    raise exception 'Cannot enable agency invitations: required application columns are missing';
+  end if;
+
   if exists (
     select 1
     from public.users
@@ -22,6 +49,20 @@ begin
   ) then
     raise exception 'Cannot enable agency invitations: duplicate auth_user_id values exist in public.users';
   end if;
+
+  if exists (
+    select 1 from public.agency_members
+    group by agency_id, user_id having count(*) > 1
+  ) then
+    raise exception 'Cannot enable agency invitations: duplicate agency memberships exist';
+  end if;
+
+  if exists (
+    select 1 from public.agency_company_user_access
+    group by company_id, agency_id, user_id having count(*) > 1
+  ) then
+    raise exception 'Cannot enable agency invitations: duplicate agency company user access rows exist';
+  end if;
 end;
 $block$;
 
@@ -35,11 +76,58 @@ create unique index if not exists users_auth_user_id_unique
   on public.users (auth_user_id)
   where auth_user_id is not null;
 
+create unique index if not exists agency_members_agency_id_user_id_unique
+  on public.agency_members (agency_id, user_id);
+
+create unique index if not exists agency_company_user_access_company_agency_user_unique
+  on public.agency_company_user_access (company_id, agency_id, user_id);
+
+do $block$
+begin
+  if not exists (
+    select 1
+    from pg_index as index_info
+    join pg_class as table_info on table_info.oid = index_info.indrelid
+    join pg_namespace as schema_info on schema_info.oid = table_info.relnamespace
+    where schema_info.nspname = 'public'
+      and table_info.relname = 'agency_members'
+      and index_info.indisunique
+      and index_info.indpred is null
+      and (
+        select array_agg(attribute.attname order by key_column.ordinality)
+        from unnest(index_info.indkey::smallint[]) with ordinality as key_column(attnum, ordinality)
+        join pg_attribute as attribute
+          on attribute.attrelid = table_info.oid and attribute.attnum = key_column.attnum
+      ) = array['agency_id', 'user_id']::name[]
+  ) then
+    raise exception 'Required unique index for agency_members is missing or incompatible';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_index as index_info
+    join pg_class as table_info on table_info.oid = index_info.indrelid
+    join pg_namespace as schema_info on schema_info.oid = table_info.relnamespace
+    where schema_info.nspname = 'public'
+      and table_info.relname = 'agency_company_user_access'
+      and index_info.indisunique
+      and index_info.indpred is null
+      and (
+        select array_agg(attribute.attname order by key_column.ordinality)
+        from unnest(index_info.indkey::smallint[]) with ordinality as key_column(attnum, ordinality)
+        join pg_attribute as attribute
+          on attribute.attrelid = table_info.oid and attribute.attnum = key_column.attnum
+      ) = array['company_id', 'agency_id', 'user_id']::name[]
+  ) then
+    raise exception 'Required unique index for agency_company_user_access is missing or incompatible';
+  end if;
+end;
+$block$;
+
 create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.agency_user_invitations (
-  id uuid primary key default gen_random_uuid(),
-  token_hash text not null unique,
+  id uuid primary key default extensions.gen_random_uuid(),
   auth_user_id uuid not null references auth.users(id) on delete cascade,
   agency_id text not null,
   company_id text not null,
@@ -48,10 +136,36 @@ create table if not exists public.agency_user_invitations (
   invalidated_at timestamptz,
   delivery_kind text not null default 'invite'
     check (delivery_kind in ('invite', 'resend')),
-  created_at timestamptz not null default now(),
-  constraint agency_user_invitations_token_hash_format
-    check (token_hash ~ '^[0-9a-f]{64}$')
+  created_at timestamptz not null default now()
 );
+
+-- Make a repeated application converge from earlier review-only revisions.
+alter table public.agency_user_invitations
+  add column if not exists invalidated_at timestamptz,
+  add column if not exists delivery_kind text not null default 'invite';
+alter table public.agency_user_invitations drop column if exists token_hash;
+
+do $block$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.agency_user_invitations'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) like '%delivery_kind%invite%resend%'
+  ) then
+    alter table public.agency_user_invitations
+      add constraint agency_user_invitations_delivery_kind_check
+      check (delivery_kind in ('invite', 'resend'));
+  end if;
+end;
+$block$;
+
+drop function if exists public.verify_agency_user_invitation(text);
+drop function if exists public.consume_agency_user_invitation(text);
+drop function if exists public.verify_pending_agency_user_invitation();
+drop function if exists public.consume_pending_agency_user_invitation();
+drop function if exists public.link_agency_invited_user(uuid, text, text, text, text, text, text);
+drop function if exists public.link_agency_invited_user(uuid, text, text, text, text, text);
 
 alter table public.agency_user_invitations enable row level security;
 revoke all on table public.agency_user_invitations from public, anon, authenticated;
@@ -60,8 +174,115 @@ create unique index if not exists agency_user_invitations_one_active_per_user
   on public.agency_user_invitations (auth_user_id)
   where consumed_at is null and invalidated_at is null;
 
--- Indexed, service-only lookup. Email locates a candidate identity but never proves
--- authorization; the Edge Function must still require an exact public.users.auth_user_id match.
+do $block$
+begin
+  if not exists (
+    select 1
+    from pg_index as index_info
+    join pg_class as table_info on table_info.oid = index_info.indrelid
+    join pg_namespace as schema_info on schema_info.oid = table_info.relnamespace
+    where schema_info.nspname = 'public'
+      and table_info.relname = 'agency_user_invitations'
+      and index_info.indisunique
+      and index_info.indisvalid
+      and index_info.indisready
+      and pg_get_expr(index_info.indpred, index_info.indrelid) ilike '%consumed_at IS NULL%'
+      and pg_get_expr(index_info.indpred, index_info.indrelid) ilike '%invalidated_at IS NULL%'
+      and (
+        select array_agg(attribute.attname order by key_column.ordinality)
+        from unnest(index_info.indkey::smallint[]) with ordinality as key_column(attnum, ordinality)
+        join pg_attribute as attribute
+          on attribute.attrelid = table_info.oid and attribute.attnum = key_column.attnum
+      ) = array['auth_user_id']::name[]
+  ) then
+    raise exception 'Required unique active-invitation index is missing or incompatible';
+  end if;
+end;
+$block$;
+
+-- Maintain a private, indexed projection of Auth identities. Multiple rows may
+-- share an email so lookup can fail closed on ambiguous SSO identities.
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+
+create table if not exists private.auth_identity_directory (
+  auth_user_id uuid primary key references auth.users(id) on delete cascade,
+  normalized_email text not null,
+  updated_at timestamptz not null default now()
+);
+
+revoke all on table private.auth_identity_directory from public, anon, authenticated;
+
+create index if not exists auth_identity_directory_normalized_email_idx
+  on private.auth_identity_directory (normalized_email);
+
+do $block$
+begin
+  if not exists (
+    select 1
+    from pg_index as index_info
+    join pg_class as table_info on table_info.oid = index_info.indrelid
+    join pg_namespace as schema_info on schema_info.oid = table_info.relnamespace
+    where schema_info.nspname = 'private'
+      and table_info.relname = 'auth_identity_directory'
+      and index_info.indisvalid
+      and index_info.indisready
+      and index_info.indpred is null
+      and (
+        select array_agg(attribute.attname order by key_column.ordinality)
+        from unnest(index_info.indkey::smallint[]) with ordinality as key_column(attnum, ordinality)
+        join pg_attribute as attribute
+          on attribute.attrelid = table_info.oid and attribute.attnum = key_column.attnum
+      ) = array['normalized_email']::name[]
+  ) then
+    raise exception 'Required Auth identity directory email index is missing or incompatible';
+  end if;
+end;
+$block$;
+
+create or replace function private.sync_auth_identity_directory()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+begin
+  if tg_op = 'DELETE' then
+    delete from private.auth_identity_directory where auth_user_id = old.id;
+    return old;
+  end if;
+
+  if nullif(btrim(new.email), '') is null then
+    delete from private.auth_identity_directory where auth_user_id = new.id;
+  else
+    insert into private.auth_identity_directory (auth_user_id, normalized_email, updated_at)
+    values (new.id, lower(btrim(new.email)), now())
+    on conflict (auth_user_id) do update
+    set normalized_email = excluded.normalized_email,
+        updated_at = excluded.updated_at;
+  end if;
+
+  return new;
+end;
+$function$;
+
+revoke all on function private.sync_auth_identity_directory() from public, anon, authenticated;
+
+drop trigger if exists sync_agency_auth_identity_directory on auth.users;
+create trigger sync_agency_auth_identity_directory
+after insert or update of email or delete on auth.users
+for each row execute function private.sync_auth_identity_directory();
+
+insert into private.auth_identity_directory (auth_user_id, normalized_email, updated_at)
+select auth_user.id, lower(btrim(auth_user.email)), now()
+from auth.users as auth_user
+where nullif(btrim(auth_user.email), '') is not null
+on conflict (auth_user_id) do update
+set normalized_email = excluded.normalized_email,
+    updated_at = excluded.updated_at;
+
+-- Service-only lookup through the private indexed directory. Email only locates
+-- candidate identities; authorization still requires an exact Auth ID match.
 create or replace function public.lookup_auth_identity_by_email(p_email text)
 returns jsonb
 language plpgsql
@@ -70,19 +291,30 @@ set search_path = ''
 as $function$
 declare
   clean_email text := lower(btrim(p_email));
-  result jsonb;
+  identity_ids uuid[];
 begin
   if nullif(clean_email, '') is null or length(clean_email) > 254 then
     return null;
   end if;
 
-  select jsonb_build_object('id', auth_user.id, 'email', lower(auth_user.email))
-  into result
-  from auth.users as auth_user
-  where lower(auth_user.email) = clean_email
-  limit 1;
+  select coalesce(array_agg(candidate.auth_user_id order by candidate.auth_user_id), '{}'::uuid[])
+  into identity_ids
+  from (
+    select directory.auth_user_id
+    from private.auth_identity_directory as directory
+    where directory.normalized_email = clean_email
+    order by directory.auth_user_id
+    limit 2
+  ) as candidate;
 
-  return result;
+  if cardinality(identity_ids) = 0 then
+    return null;
+  end if;
+  if cardinality(identity_ids) > 1 then
+    return jsonb_build_object('ambiguous', true);
+  end if;
+
+  return jsonb_build_object('id', identity_ids[1], 'ambiguous', false);
 end;
 $function$;
 
@@ -95,7 +327,7 @@ create or replace function public.link_agency_invited_user(
   p_name text,
   p_agency_id text,
   p_company_id text,
-  p_invitation_token_hash text,
+  p_invitation_id uuid,
   p_delivery_kind text
 )
 returns jsonb
@@ -127,7 +359,7 @@ begin
     select 1
     from auth.users as auth_user
     where auth_user.id = p_auth_user_id
-      and lower(auth_user.email) = clean_email
+      and auth_user.email = clean_email
   ) then
     raise exception 'authentication identity mismatch' using errcode = '42501';
   end if;
@@ -221,11 +453,10 @@ begin
       can_update_candidates = excluded.can_update_candidates,
       can_view_interviews = excluded.can_view_interviews;
 
-  if nullif(btrim(p_invitation_token_hash), '') is not null then
-    if p_invitation_token_hash !~ '^[0-9a-f]{64}$' then
-      raise exception 'invalid invitation token hash' using errcode = '22023';
+  if p_delivery_kind is not null then
+    if p_invitation_id is null then
+      raise exception 'invitation delivery requires an identifier' using errcode = '22023';
     end if;
-
     if p_delivery_kind not in ('invite', 'resend') then
       raise exception 'invalid invitation delivery kind' using errcode = '22023';
     end if;
@@ -237,13 +468,13 @@ begin
       and invalidated_at is null;
 
     insert into public.agency_user_invitations (
-      token_hash, auth_user_id, agency_id, company_id, delivery_kind
+      id, auth_user_id, agency_id, company_id, delivery_kind
     ) values (
-      p_invitation_token_hash, p_auth_user_id,
-      selected_agency_id::text, selected_company_id::text, p_delivery_kind
+      p_invitation_id, p_auth_user_id, selected_agency_id::text,
+      selected_company_id::text, p_delivery_kind
     );
-  elsif p_delivery_kind is not null then
-    raise exception 'delivery kind requires an invitation token' using errcode = '22023';
+  elsif p_invitation_id is not null then
+    raise exception 'invitation identifier requires a delivery kind' using errcode = '22023';
   end if;
 
   return jsonb_build_object(
@@ -254,12 +485,12 @@ begin
 end;
 $function$;
 
-revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) from public;
-revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) from anon;
-revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) from authenticated;
-grant execute on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) to service_role;
+revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, uuid, text) from public;
+revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, uuid, text) from anon;
+revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, uuid, text) from authenticated;
+grant execute on function public.link_agency_invited_user(uuid, text, text, text, text, uuid, text) to service_role;
 
-create or replace function public.verify_agency_user_invitation(p_token text)
+create or replace function public.verify_pending_agency_user_invitation(p_invitation_id uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -268,14 +499,14 @@ as $function$
 declare
   invitation_id public.agency_user_invitations.id%type;
 begin
-  if auth.uid() is null or nullif(btrim(p_token), '') is null then
+  if auth.uid() is null or p_invitation_id is null then
     return jsonb_build_object('valid', false);
   end if;
 
   select invitation.id
   into invitation_id
   from public.agency_user_invitations as invitation
-  where invitation.token_hash = encode(extensions.digest(convert_to(p_token, 'UTF8'), 'sha256'), 'hex')
+  where invitation.id = p_invitation_id
     and invitation.auth_user_id = auth.uid()
     and invitation.consumed_at is null
     and invitation.invalidated_at is null
@@ -303,7 +534,7 @@ begin
 end;
 $function$;
 
-create or replace function public.consume_agency_user_invitation(p_token text)
+create or replace function public.consume_pending_agency_user_invitation(p_invitation_id uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -312,13 +543,13 @@ as $function$
 declare
   affected_rows bigint;
 begin
-  if auth.uid() is null or nullif(btrim(p_token), '') is null then
+  if auth.uid() is null or p_invitation_id is null then
     return jsonb_build_object('consumed', false);
   end if;
 
   update public.agency_user_invitations as invitation
   set consumed_at = now()
-  where invitation.token_hash = encode(extensions.digest(convert_to(p_token, 'UTF8'), 'sha256'), 'hex')
+  where invitation.id = p_invitation_id
     and invitation.auth_user_id = auth.uid()
     and invitation.consumed_at is null
     and invitation.invalidated_at is null
@@ -337,10 +568,10 @@ begin
 end;
 $function$;
 
-revoke all on function public.verify_agency_user_invitation(text) from public, anon;
-grant execute on function public.verify_agency_user_invitation(text) to authenticated;
-revoke all on function public.consume_agency_user_invitation(text) from public, anon;
-grant execute on function public.consume_agency_user_invitation(text) to authenticated;
+revoke all on function public.verify_pending_agency_user_invitation(uuid) from public, anon;
+grant execute on function public.verify_pending_agency_user_invitation(uuid) to authenticated;
+revoke all on function public.consume_pending_agency_user_invitation(uuid) from public, anon;
+grant execute on function public.consume_pending_agency_user_invitation(uuid) to authenticated;
 
 -- Retain consumed, superseded, and expired invitations for 90 days by default.
 -- Run this service-role-only function from a trusted scheduled job; it refuses
