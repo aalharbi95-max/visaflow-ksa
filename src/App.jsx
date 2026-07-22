@@ -18,8 +18,23 @@ import {
   getPublicViewFromLocation,
   PUBLIC_VIEW,
 } from "./publicNavigation.mjs";
+import {
+  clearAgencyInviteCallbackUrl,
+  clearAgencyActivationMarkerFromUrl,
+  getAgencyInvitationErrorMessage,
+  getAgencyInvitationSuccessMessage,
+  getAgencyInviteUrlState,
+  isValidAgencyInviteEmail,
+  normalizeAgencyInviteEmail,
+} from "./agencyInvitations.mjs";
 import "./style.css";
 
+const INITIAL_AGENCY_INVITE_URL_STATE = getAgencyInviteUrlState(window.location);
+if (INITIAL_AGENCY_INVITE_URL_STATE.requested) {
+  // The marker is not a credential. Remove it before React renders as an
+  // additional privacy measure while preserving Supabase callback data.
+  clearAgencyActivationMarkerFromUrl();
+}
 
 const PAGES = [
   "Executive Dashboard",
@@ -5060,6 +5075,184 @@ const PUBLIC_LANDING_COPY = {
   },
 };
 
+function AgencyInvitePasswordSetup({ inviteState }) {
+  const [status, setStatus] = useState("checking");
+  const [message, setMessage] = useState(inviteState.error || "");
+  const [form, setForm] = useState({ password: "", confirmPassword: "" });
+  const [busy, setBusy] = useState(false);
+  const verifiedUserIdRef = useRef("");
+
+  useEffect(() => {
+    let mounted = true;
+    let expiryTimer = null;
+
+    const rejectInvite = (text) => {
+      if (!mounted) return;
+      setStatus("invalid");
+      setMessage(text || "This invitation link is invalid or has expired.");
+    };
+
+    const verifyInviteSession = async (session) => {
+      if (!mounted || !session?.user?.id || verifiedUserIdRef.current === session.user.id) return;
+
+      const { data: invitation, error: invitationError } = await supabase.rpc(
+        "verify_pending_agency_user_invitation",
+        { p_invitation_id: inviteState.activationId },
+      );
+      if (invitationError || !invitation?.valid) {
+        rejectInvite("This invitation link is invalid, expired, or already used.");
+        return;
+      }
+
+      const { data: authUser, error } = await supabase.rpc("get_authenticated_app_user");
+      if (!mounted) return;
+      if (
+        error ||
+        !authUser?.auth_user_id ||
+        String(authUser.auth_user_id) !== String(session.user.id) ||
+        String(authUser.role || "") !== "Agency"
+      ) {
+        rejectInvite("This invitation is not linked to a valid agency user.");
+        return;
+      }
+
+      verifiedUserIdRef.current = session.user.id;
+      if (expiryTimer) window.clearTimeout(expiryTimer);
+      setStatus("ready");
+      setMessage("");
+    };
+
+    if (inviteState.error) {
+      rejectInvite(inviteState.error);
+      return () => { mounted = false; };
+    }
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user?.id) window.setTimeout(() => verifyInviteSession(session), 0);
+    });
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) rejectInvite("Unable to verify this invitation securely.");
+      else if (data?.session?.user?.id) verifyInviteSession(data.session);
+    });
+
+    expiryTimer = window.setTimeout(() => {
+      if (!verifiedUserIdRef.current) rejectInvite("This invitation link is invalid or has expired.");
+    }, 8000);
+
+    return () => {
+      mounted = false;
+      if (expiryTimer) window.clearTimeout(expiryTimer);
+      listener?.subscription?.unsubscribe();
+    };
+  }, [inviteState.activationId, inviteState.error]);
+
+  async function submitPassword(event) {
+    event.preventDefault();
+    const password = String(form.password || "");
+    if (status !== "ready" || !verifiedUserIdRef.current) return;
+    if (password.length < 8) return setMessage("Password must be at least 8 characters.");
+    if (password !== form.confirmPassword) return setMessage("Password and confirmation do not match.");
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const verifiedAuth = await verifyWorkspaceAuthSession(supabase.auth);
+      if (
+        !verifiedAuth.isVerified ||
+        String(verifiedAuth.authUser?.id || "") !== String(verifiedUserIdRef.current)
+      ) {
+        throw new Error("The secure invitation session has expired.");
+      }
+
+      const { data: authUser, error: appUserError } = await supabase.rpc("get_authenticated_app_user");
+      if (
+        appUserError ||
+        String(authUser?.role || "") !== "Agency" ||
+        String(authUser?.auth_user_id || "") !== String(verifiedUserIdRef.current)
+      ) {
+        throw new Error("The invitation is not linked to a valid agency user.");
+      }
+
+      const { data: invitation, error: invitationError } = await supabase.rpc(
+        "verify_pending_agency_user_invitation",
+        { p_invitation_id: inviteState.activationId },
+      );
+      if (invitationError || !invitation?.valid) {
+        throw new Error("The secure invitation is invalid, expired, or already used.");
+      }
+
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+
+      const { data: consumed, error: consumeError } = await supabase.rpc(
+        "consume_pending_agency_user_invitation",
+        { p_invitation_id: inviteState.activationId },
+      );
+      if (consumeError || !consumed?.consumed) {
+        throw new Error("Password was created, but the invitation could not be finalized. Reload this link to retry safely.");
+      }
+
+      clearAgencyInviteCallbackUrl();
+      setStatus("complete");
+      setMessage("Password created successfully. Opening your agency workspace...");
+      window.setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      setMessage(error?.message || "Unable to create the password from this invitation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="vf-login-shell">
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <form className="vf-login-card" style={{ maxWidth: "520px" }} onSubmit={submitPassword}>
+          <div className="vf-login-logo">
+            <img className="vf-login-card-logo" src="/visaflow-logo.png" alt="VisaFlow KSA" />
+          </div>
+          <h2>Agency Account Invitation</h2>
+          <p className="vf-login-subtitle">Create your password securely to activate access to the assigned agency workspace.</p>
+
+          {status === "checking" && <div className="vf-reset-message">Checking the secure invitation...</div>}
+          {status === "invalid" && <div className="vf-reset-message" style={{ background: "#fff1f2", color: "#be123c" }}>{message}</div>}
+          {status === "complete" && <div className="vf-reset-message" style={{ background: "#ecfdf5", color: "#047857" }}>{message}</div>}
+
+          {status === "ready" && (
+            <>
+              <label className="vf-field-label" htmlFor="agency-invite-password">New password</label>
+              <input
+                id="agency-invite-password"
+                type="password"
+                autoComplete="new-password"
+                value={form.password}
+                onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                required
+                minLength={8}
+              />
+              <label className="vf-field-label" htmlFor="agency-invite-password-confirm">Confirm new password</label>
+              <input
+                id="agency-invite-password-confirm"
+                type="password"
+                autoComplete="new-password"
+                value={form.confirmPassword}
+                onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+                required
+                minLength={8}
+              />
+              {message && <div className="vf-reset-message" style={{ background: "#fff7ed", color: "#9a3412" }}>{message}</div>}
+              <button type="submit" className="save-btn" disabled={busy} style={{ width: "100%", marginTop: "18px" }}>
+                {busy ? "Creating password..." : "Create Password & Continue"}
+              </button>
+            </>
+          )}
+        </form>
+      </section>
+    </main>
+  );
+}
+
 function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const copy = PUBLIC_LANDING_COPY[language] || PUBLIC_LANDING_COPY.AR;
@@ -5259,6 +5452,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [publicView, setPublicView] = useState(() => getPublicViewFromLocation(window.location));
+  const [agencyInviteUrlState] = useState(INITIAL_AGENCY_INVITE_URL_STATE);
   const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
     return getPublicViewFromLocation(window.location) === PUBLIC_VIEW.TALENT;
   });
@@ -6894,6 +7088,10 @@ async function saveSelectedAllocations() {
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
   const [agencyEditingId, setAgencyEditingId] = useState(null);
+  const [agencyInviteTarget, setAgencyInviteTarget] = useState(null);
+  const [agencyInviteForm, setAgencyInviteForm] = useState({ name: "", email: "" });
+  const [agencyInviteLoading, setAgencyInviteLoading] = useState(false);
+  const [agencyInviteMessage, setAgencyInviteMessage] = useState("");
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
@@ -12212,6 +12410,76 @@ async function saveVisa() {
       status: item.status || "Active",
     });
     setActivePage("Agencies");
+  }
+
+  function openAgencyUserInvite(agency) {
+    if (!canManageUsers || currentRole !== "Admin") {
+      alert("Only a company administrator can invite agency users.");
+      return;
+    }
+    if (!agency?.id || String(agency.status || "") !== "Active") {
+      alert("Only active agencies can receive user invitations.");
+      return;
+    }
+    setAgencyInviteTarget(agency);
+    setAgencyInviteForm({
+      name: String(agency.contact_person || "").trim(),
+      email: normalizeAgencyInviteEmail(agency.email),
+    });
+    setAgencyInviteMessage("");
+  }
+
+  function closeAgencyUserInvite() {
+    if (agencyInviteLoading) return;
+    setAgencyInviteTarget(null);
+    setAgencyInviteForm({ name: "", email: "" });
+    setAgencyInviteMessage("");
+  }
+
+  async function inviteAgencyUser(event) {
+    event.preventDefault();
+    const name = String(agencyInviteForm.name || "").trim();
+    const email = normalizeAgencyInviteEmail(agencyInviteForm.email);
+
+    if (!agencyInviteTarget?.id) return setAgencyInviteMessage("Select an agency before inviting a user.");
+    if (!name) return setAgencyInviteMessage("Enter the user's full name.");
+    if (!isValidAgencyInviteEmail(email)) return setAgencyInviteMessage("Enter a valid email address.");
+
+    setAgencyInviteLoading(true);
+    setAgencyInviteMessage("");
+    try {
+      const verifiedAuth = await verifyWorkspaceAuthSession(supabase.auth);
+      if (
+        !verifiedAuth.isVerified ||
+        !verifiedAuth.session?.access_token ||
+        String(verifiedAuth.authUser?.id || "") !== String(currentUser?.auth_user_id || "")
+      ) {
+        throw new Error("A secure administrator session is required. Please sign out and sign in again.");
+      }
+
+      const { data, error } = await supabase.functions.invoke("invite-agency-user", {
+        body: { agency_id: agencyInviteTarget.id, name, email },
+      });
+
+      if (error) {
+        let publicCode = data?.error || "";
+        try {
+          const responseBody = await error.context?.json();
+          publicCode = responseBody?.error || publicCode;
+        } catch {
+          // The public error code may already be available in data.
+        }
+        throw new Error(getAgencyInvitationErrorMessage(publicCode, error.message));
+      }
+      if (!data?.ok) throw new Error(getAgencyInvitationErrorMessage(data?.error));
+
+      setAgencyInviteMessage(getAgencyInvitationSuccessMessage(data.mode));
+      setAgencyInviteForm((current) => ({ ...current, email }));
+    } catch (error) {
+      setAgencyInviteMessage(error?.message || "Unable to invite this agency user.");
+    } finally {
+      setAgencyInviteLoading(false);
+    }
   }
 
 function editCompany(company) {
@@ -27714,6 +27982,10 @@ if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
 }
 
+if (agencyInviteUrlState.requested) {
+  return <AgencyInvitePasswordSetup inviteState={agencyInviteUrlState} />;
+}
+
 if (talentPortalOpen) {
   return <TalentCandidatePortal onBack={closeTalentPortal} />;
 }
@@ -34679,7 +34951,43 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <div className="actions-line"><button className="save-btn" onClick={saveAgency}>{agencyEditingId ? "Update Agency" : "Save Agency"}</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
             </FormCard>
             )}
-            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions">{canManageAgencies ? <><button onClick={() => editAgency(item)}>Edit</button><button className="danger" onClick={() => deleteAgency(item.id)}>Delete</button></> : "-"}</td></tr>)}</tbody></table></TableCard>
+            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions">{canManageAgencies ? <><button onClick={() => editAgency(item)}>Edit</button>{canManageUsers && currentRole === "Admin" && <button className="save-btn" onClick={() => openAgencyUserInvite(item)} disabled={item.status !== "Active"}>Invite User</button>}<button className="danger" onClick={() => deleteAgency(item.id)}>Delete</button></> : "-"}</td></tr>)}</tbody></table></TableCard>
+
+            {agencyInviteTarget && (
+              <div className="vf-reset-overlay" role="dialog" aria-modal="true" aria-labelledby="agency-invite-title">
+                <form className="vf-reset-modal" onSubmit={inviteAgencyUser}>
+                  <h3 id="agency-invite-title">Invite Agency User</h3>
+                  <p>Invite a user to <strong>{agencyInviteTarget.name}</strong>. New users receive a secure password-setup email; existing agency users are linked without changing their password.</p>
+                  <label className="vf-field-label" htmlFor="agency-invite-name">Full name</label>
+                  <input
+                    id="agency-invite-name"
+                    value={agencyInviteForm.name}
+                    onChange={(event) => setAgencyInviteForm((current) => ({ ...current, name: event.target.value }))}
+                    autoComplete="name"
+                    maxLength={160}
+                    required
+                  />
+                  <label className="vf-field-label" htmlFor="agency-invite-email">Email</label>
+                  <input
+                    id="agency-invite-email"
+                    type="email"
+                    dir="ltr"
+                    value={agencyInviteForm.email}
+                    onChange={(event) => setAgencyInviteForm((current) => ({ ...current, email: event.target.value }))}
+                    autoComplete="email"
+                    maxLength={254}
+                    required
+                  />
+                  {agencyInviteMessage && <div className="vf-reset-message">{agencyInviteMessage}</div>}
+                  <div className="vf-reset-actions">
+                    <button type="button" className="secondary" onClick={closeAgencyUserInvite} disabled={agencyInviteLoading}>Cancel</button>
+                    <button type="submit" className="save-btn" disabled={agencyInviteLoading}>
+                      {agencyInviteLoading ? "Sending secure invitation..." : "Invite User"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
           </>
         )}
 
