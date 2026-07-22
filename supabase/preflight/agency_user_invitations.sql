@@ -7,9 +7,11 @@ select count(*) as missing_required_columns_count
 from (values
   ('users', 'id'), ('users', 'email'), ('users', 'auth_user_id'),
   ('agency_members', 'agency_id'), ('agency_members', 'user_id'),
+  ('agency_members', 'status'),
   ('agency_company_user_access', 'company_id'),
   ('agency_company_user_access', 'agency_id'),
-  ('agency_company_user_access', 'user_id')
+  ('agency_company_user_access', 'user_id'),
+  ('agency_company_user_access', 'status')
 ) as required(table_name, column_name)
 where not exists (
   select 1

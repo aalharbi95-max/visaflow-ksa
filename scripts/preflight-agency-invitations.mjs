@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 const migration = readFileSync(new URL("../supabase/migrations/20260722000100_secure_agency_user_invitations.sql", import.meta.url), "utf8");
 const edge = readFileSync(new URL("../supabase/functions/invite-agency-user/index.ts", import.meta.url), "utf8");
 const policy = readFileSync(new URL("../supabase/functions/_shared/agencyInvitationPolicy.mjs", import.meta.url), "utf8");
+const databaseContract = readFileSync(new URL("../supabase/tests/agency_user_invitations_contract.sql", import.meta.url), "utf8");
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
 const checks = [
@@ -26,12 +27,24 @@ const checks = [
   ["superseded invitations are retained as invalidated", /set invalidated_at = now\(\)/],
   ["invitation verification checks expiry", /invitation\.expires_at > now\(\)/],
   ["activation identifier is bound to auth.uid", /verify_pending_agency_user_invitation\(p_invitation_id uuid\)[\s\S]+invitation\.id = p_invitation_id[\s\S]+invitation\.auth_user_id = auth\.uid\(\)/],
+  ["verification requires active agency membership", /verify_pending_agency_user_invitation\(p_invitation_id uuid\)[\s\S]+join public\.agency_members[\s\S]+membership\.status = 'Active'/],
+  ["consumption serializes and locks its invitation", /consume_pending_agency_user_invitation\(p_invitation_id uuid\)[\s\S]+pg_advisory_xact_lock[\s\S]+for update/],
+  ["consumption rechecks active membership and company access", /consume_pending_agency_user_invitation\(p_invitation_id uuid\)[\s\S]+public\.agency_members[\s\S]+public\.agency_company_user_access/],
   ["cleanup retains at least 30 days", /p_retention_days < 30/],
   ["cleanup is explicitly service-role only", /revoke all on function public\.cleanup_agency_user_invitations\(integer\) from public, anon, authenticated;\s*grant execute on function public\.cleanup_agency_user_invitations\(integer\) to service_role;/],
   ["cross-agency identity remains blocked", /agency_mismatch/],
 ];
 
 const failures = checks.filter(([, pattern]) => !pattern.test(migration) && !pattern.test(policy));
+const databaseContractChecks = [
+  ["database contract is pgTAP", /select plan\(37\)[\s\S]+select \* from finish\(\)/],
+  ["database contract covers removed and inactive membership", /verify rejects a deleted agency membership[\s\S]+direct consume rejects an inactive agency membership/],
+  ["database contract covers removed and inactive company access", /verify rejects deleted company access[\s\S]+direct consume rejects inactive company access/],
+  ["database contract covers direct consumption", /direct consume independently validates and consumes a valid invitation/],
+];
+for (const [label, pattern] of databaseContractChecks) {
+  if (!pattern.test(databaseContract)) failures.push([label, pattern]);
+}
 if (/listUsers/.test(edge)) failures.push(["Edge Function must not enumerate Auth users", /never/]);
 if (/console\.error\([^\n]+\.message/.test(edge)) failures.push(["Edge Function must not log provider messages", /never/]);
 if (!/lookup_auth_identity_by_email/.test(edge)) failures.push(["Edge Function must use indexed Auth lookup", /never/]);
@@ -45,6 +58,7 @@ if (failures.length) {
 }
 
 for (const [label] of checks) console.log(`PASS: ${label}`);
+for (const [label] of databaseContractChecks) console.log(`PASS: ${label}`);
 console.log("PASS: Edge Function does not enumerate the Auth directory");
 console.log("PASS: Email redirect contains no application invitation secret");
 console.log("PASS: Referrer-Policy is no-referrer");

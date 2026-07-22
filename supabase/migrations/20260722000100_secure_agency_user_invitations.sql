@@ -15,9 +15,11 @@ begin
     from (values
       ('users', 'id'), ('users', 'email'), ('users', 'auth_user_id'),
       ('agency_members', 'agency_id'), ('agency_members', 'user_id'),
+      ('agency_members', 'status'),
       ('agency_company_user_access', 'company_id'),
       ('agency_company_user_access', 'agency_id'),
-      ('agency_company_user_access', 'user_id')
+      ('agency_company_user_access', 'user_id'),
+      ('agency_company_user_access', 'status')
     ) as required(table_name, column_name)
     where not exists (
       select 1
@@ -514,6 +516,10 @@ begin
     and exists (
       select 1
       from public.users as app_user
+      join public.agency_members as membership
+        on membership.user_id = app_user.id
+       and membership.agency_id::text = invitation.agency_id
+       and membership.status = 'Active'
       where app_user.auth_user_id = auth.uid()
         and app_user.role = 'Agency'
         and app_user.status = 'Active'
@@ -541,27 +547,76 @@ security definer
 set search_path = ''
 as $function$
 declare
+  locked_invitation public.agency_user_invitations%rowtype;
+  target_user_id public.users.id%type;
   affected_rows bigint;
 begin
   if auth.uid() is null or p_invitation_id is null then
     return jsonb_build_object('consumed', false);
   end if;
 
+  -- Serialize consumption with invite/resend rotation for this Auth identity.
+  perform pg_advisory_xact_lock(hashtextextended(auth.uid()::text, 0));
+
+  select invitation.*
+  into locked_invitation
+  from public.agency_user_invitations as invitation
+  where invitation.id = p_invitation_id
+    and invitation.auth_user_id = auth.uid()
+  for update;
+
+  if locked_invitation.id is null then
+    return jsonb_build_object('consumed', false);
+  end if;
+
+  if locked_invitation.consumed_at is not null
+    or locked_invitation.invalidated_at is not null
+    or locked_invitation.expires_at <= now() then
+    return jsonb_build_object('consumed', false);
+  end if;
+
+  select app_user.id
+  into target_user_id
+  from public.users as app_user
+  where app_user.auth_user_id = auth.uid()
+    and app_user.role = 'Agency'
+    and app_user.status = 'Active'
+    and app_user.is_active is true
+    and app_user.agency_id::text = locked_invitation.agency_id
+  for update;
+
+  if target_user_id is null then
+    return jsonb_build_object('consumed', false);
+  end if;
+
+  perform 1
+  from public.agency_members as membership
+  where membership.user_id = target_user_id
+    and membership.agency_id::text = locked_invitation.agency_id
+    and membership.status = 'Active'
+  for update;
+  if not found then
+    return jsonb_build_object('consumed', false);
+  end if;
+
+  perform 1
+  from public.agency_company_user_access as access
+  where access.user_id = target_user_id
+    and access.agency_id::text = locked_invitation.agency_id
+    and access.company_id::text = locked_invitation.company_id
+    and access.status = 'Active'
+  for update;
+  if not found then
+    return jsonb_build_object('consumed', false);
+  end if;
+
   update public.agency_user_invitations as invitation
   set consumed_at = now()
-  where invitation.id = p_invitation_id
+  where invitation.id = locked_invitation.id
     and invitation.auth_user_id = auth.uid()
     and invitation.consumed_at is null
     and invitation.invalidated_at is null
-    and invitation.expires_at > now()
-    and exists (
-      select 1
-      from public.users as app_user
-      where app_user.auth_user_id = auth.uid()
-        and app_user.role = 'Agency'
-        and app_user.status = 'Active'
-        and app_user.is_active is true
-    );
+    and invitation.expires_at > now();
 
   get diagnostics affected_rows = row_count;
   return jsonb_build_object('consumed', affected_rows = 1);

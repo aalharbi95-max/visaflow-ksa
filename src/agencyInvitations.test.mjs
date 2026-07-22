@@ -160,6 +160,10 @@ test("acceptance verifies expiry, updates the password, and consumes the one-tim
   assert.match(migrationSource, /invitation\.expires_at > now\(\)/);
   assert.match(migrationSource, /verify_pending_agency_user_invitation\(p_invitation_id uuid\)/);
   assert.match(migrationSource, /consume_pending_agency_user_invitation\(p_invitation_id uuid\)/);
+  assert.match(migrationSource, /join public\.agency_members as membership/);
+  assert.match(migrationSource, /membership\.status = 'Active'/);
+  assert.match(migrationSource, /perform pg_advisory_xact_lock\(hashtextextended\(auth\.uid\(\)::text, 0\)\)/);
+  assert.match(migrationSource, /from public\.agency_company_user_access as access/);
   assert.ok(appSource.indexOf("supabase.auth.updateUser({ password })") < appSource.indexOf('"consume_pending_agency_user_invitation"'));
 });
 
@@ -201,11 +205,15 @@ test("cleanup and Auth lookup cannot be executed by anon or authenticated", () =
   assert.match(databaseContractSource, /has_function_privilege\('authenticated'/);
 });
 
-test("database contract covers expiry, invalidation, uniqueness, acceptance, and conflict targets", () => {
-  assert.match(databaseContractSource, /Expired invitation was accepted/);
-  assert.match(databaseContractSource, /Expected exactly one active invitation/);
+test("pgTAP database contract covers membership, access, expiry, uniqueness, and acceptance", () => {
+  assert.match(databaseContractSource, /select plan\(37\)/);
+  assert.match(databaseContractSource, /verify rejects a deleted agency membership/);
+  assert.match(databaseContractSource, /direct consume rejects inactive company access/);
+  assert.match(databaseContractSource, /direct consume rejects an expired invitation/);
+  assert.match(databaseContractSource, /exactly one active invitation remains/);
   assert.match(databaseContractSource, /consume_pending_agency_user_invitation/);
   assert.match(databaseContractSource, /on conflict \(agency_id, user_id\) do update/);
   assert.match(databaseContractSource, /on conflict \(company_id, agency_id, user_id\) do update/);
+  assert.match(databaseContractSource, /select \* from finish\(\)/);
   assert.match(databaseContractSource, /rollback;/);
 });
