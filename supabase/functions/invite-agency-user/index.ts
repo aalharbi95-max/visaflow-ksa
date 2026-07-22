@@ -1,5 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { classifyAgencyInvitation } from "../_shared/agencyInvitationPolicy.mjs";
+import {
+  classifyAgencyInvitation,
+  getAgencyInvitationAction,
+} from "../_shared/agencyInvitationPolicy.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,6 +32,12 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
   });
+}
+
+function safeProviderError(error: any) {
+  const code = String(error?.code || "provider_error").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+  const status = Number.isInteger(error?.status) ? error.status : undefined;
+  return status ? { code, status } : { code };
 }
 
 function requireSecret(name: string) {
@@ -83,16 +92,33 @@ function buildInviteRedirectUrl(token: string) {
   return url.toString();
 }
 
-async function findAuthUserByEmail(admin: any, email: string) {
-  for (let page = 1; page <= 100; page += 1) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
-    if (error) throw error;
-    const users = data?.users || [];
-    const matched = users.find((user: any) => normalizeEmail(user.email) === email);
-    if (matched) return matched;
-    if (users.length < 1000) return null;
+async function lookupAuthUserByEmail(admin: any, email: string) {
+  const { data: identity, error: lookupError } = await admin.rpc("lookup_auth_identity_by_email", {
+    p_email: email,
+  });
+  if (lookupError) throw lookupError;
+  if (!identity?.id) return null;
+
+  const { data, error } = await admin.auth.admin.getUserById(identity.id);
+  const authUser = data?.user || null;
+  if (error || !authUser?.id || normalizeEmail(authUser.email) !== email) {
+    throw new RequestFailure(409, "auth_identity_mismatch");
   }
-  throw new RequestFailure(503, "auth_directory_limit");
+  return authUser;
+}
+
+async function getPendingInvitation(admin: any, authUserId: string) {
+  const { data, error } = await admin
+    .from("agency_user_invitations")
+    .select("id, auth_user_id, expires_at, consumed_at, invalidated_at")
+    .eq("auth_user_id", authUserId)
+    .is("consumed_at", null)
+    .is("invalidated_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
 }
 
 async function getAuthenticatedAdmin(req: Request, admin: any) {
@@ -190,11 +216,27 @@ Deno.serve(async (req) => {
     if ((appUsers || []).length > 1) throw new RequestFailure(409, "duplicate_app_user");
 
     const existingAppUser = appUsers?.[0] || null;
-    const existingAuthUser = await findAuthUserByEmail(admin, email);
-    const policy = classifyAgencyInvitation({
+    const preliminaryPolicy = classifyAgencyInvitation({
+      appUser: existingAppUser,
+      authUser: null,
+      agencyId,
+    });
+    if (
+      !preliminaryPolicy.allowed &&
+      ["incompatible_role", "inactive_agency_user", "agency_mismatch"].includes(preliminaryPolicy.error)
+    ) {
+      throw new RequestFailure(409, preliminaryPolicy.error);
+    }
+
+    const existingAuthUser = await lookupAuthUserByEmail(admin, email);
+    const pendingInvitation = existingAuthUser
+      ? await getPendingInvitation(admin, String(existingAuthUser.id))
+      : null;
+    const policy = getAgencyInvitationAction({
       appUser: existingAppUser,
       authUser: existingAuthUser,
       agencyId,
+      pendingInvitation,
     });
     if (!policy.allowed) throw new RequestFailure(409, policy.error);
 
@@ -202,15 +244,20 @@ Deno.serve(async (req) => {
     let createdAuthUserId = "";
     let invitationToken = "";
     let invitationTokenHash = "";
-    if (!authUser) {
+    if (["invite_new", "resend"].includes(policy.action)) {
       invitationToken = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
       invitationTokenHash = await sha256Hex(invitationToken);
+    }
+
+    if (policy.action === "invite_new") {
       const { data: inviteData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
         redirectTo: buildInviteRedirectUrl(invitationToken),
         data: { account_type: "agency", full_name: name, agency_id: agencyId },
       });
       if (inviteError || !inviteData?.user?.id) {
-        console.error("Agency invitation send failed", inviteError?.message || "missing invited user");
+        const racedAuthUser = await lookupAuthUserByEmail(admin, email).catch(() => null);
+        if (racedAuthUser) throw new RequestFailure(409, "invitation_in_progress");
+        console.error("Agency invitation send failed", safeProviderError(inviteError));
         throw new RequestFailure(502, "invite_failed");
       }
       authUser = inviteData.user;
@@ -239,22 +286,43 @@ Deno.serve(async (req) => {
         p_agency_id: agencyId,
         p_company_id: actor.companyId,
         p_invitation_token_hash: invitationTokenHash || null,
+        p_delivery_kind: policy.action === "resend" ? "resend" : policy.action === "invite_new" ? "invite" : null,
       });
       if (linkError || !linkedUser?.user_id) throw linkError || new Error("missing_linked_user");
 
-      const mode = createdAuthUserId ? "invited" : existingAccess ? "already_linked" : "linked_existing";
+      if (policy.action === "resend") {
+        const { error: resendError } = await admin.auth.resetPasswordForEmail(email, {
+          redirectTo: buildInviteRedirectUrl(invitationToken),
+        });
+        if (resendError) {
+          console.error("Agency invitation resend failed", safeProviderError(resendError));
+          throw new RequestFailure(502, "resend_failed");
+        }
+      }
+
+      const mode = createdAuthUserId
+        ? "invited"
+        : policy.action === "resend"
+          ? "resent"
+          : existingAccess
+            ? "already_linked"
+            : "linked_existing";
       return jsonResponse({ ok: true, mode, agency_id: agencyId });
     } catch (error) {
       if (createdAuthUserId) {
         const { error: rollbackError } = await admin.auth.admin.deleteUser(createdAuthUserId);
-        if (rollbackError) console.error("Unable to roll back incomplete agency invitation", rollbackError.message);
+        if (rollbackError) {
+          console.error("Unable to roll back incomplete agency invitation", safeProviderError(rollbackError));
+        }
       }
       throw error;
     }
   } catch (error) {
     if (error instanceof SyntaxError) return jsonResponse({ error: "invalid_json" }, 400);
     if (error instanceof RequestFailure) return jsonResponse({ error: error.publicCode }, error.status);
-    console.error("Unexpected agency invitation failure", error instanceof Error ? error.message : error);
+    console.error("Unexpected agency invitation failure", {
+      kind: error instanceof Error ? error.name : "UnknownError",
+    });
     return jsonResponse({ error: "internal_error" }, 500);
   }
 });

@@ -45,6 +45,9 @@ create table if not exists public.agency_user_invitations (
   company_id text not null,
   expires_at timestamptz not null default (now() + interval '24 hours'),
   consumed_at timestamptz,
+  invalidated_at timestamptz,
+  delivery_kind text not null default 'invite'
+    check (delivery_kind in ('invite', 'resend')),
   created_at timestamptz not null default now(),
   constraint agency_user_invitations_token_hash_format
     check (token_hash ~ '^[0-9a-f]{64}$')
@@ -53,13 +56,47 @@ create table if not exists public.agency_user_invitations (
 alter table public.agency_user_invitations enable row level security;
 revoke all on table public.agency_user_invitations from public, anon, authenticated;
 
+create unique index if not exists agency_user_invitations_one_active_per_user
+  on public.agency_user_invitations (auth_user_id)
+  where consumed_at is null and invalidated_at is null;
+
+-- Indexed, service-only lookup. Email locates a candidate identity but never proves
+-- authorization; the Edge Function must still require an exact public.users.auth_user_id match.
+create or replace function public.lookup_auth_identity_by_email(p_email text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  clean_email text := lower(btrim(p_email));
+  result jsonb;
+begin
+  if nullif(clean_email, '') is null or length(clean_email) > 254 then
+    return null;
+  end if;
+
+  select jsonb_build_object('id', auth_user.id, 'email', lower(auth_user.email))
+  into result
+  from auth.users as auth_user
+  where lower(auth_user.email) = clean_email
+  limit 1;
+
+  return result;
+end;
+$function$;
+
+revoke all on function public.lookup_auth_identity_by_email(text) from public, anon, authenticated;
+grant execute on function public.lookup_auth_identity_by_email(text) to service_role;
+
 create or replace function public.link_agency_invited_user(
   p_auth_user_id uuid,
   p_email text,
   p_name text,
   p_agency_id text,
   p_company_id text,
-  p_invitation_token_hash text
+  p_invitation_token_hash text,
+  p_delivery_kind text
 )
 returns jsonb
 language plpgsql
@@ -70,6 +107,7 @@ declare
   target_user_id public.users.id%type;
   target_user_role public.users.role%type;
   target_user_agency_id public.users.agency_id%type;
+  target_user_auth_user_id public.users.auth_user_id%type;
   selected_agency_id public.agencies.id%type;
   selected_agency_name public.agencies.name%type;
   selected_company_id public.companies.id%type;
@@ -81,6 +119,17 @@ begin
     or nullif(btrim(p_agency_id), '') is null
     or nullif(btrim(p_company_id), '') is null then
     raise exception 'invalid invitation link request' using errcode = '22023';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_auth_user_id::text, 0));
+
+  if not exists (
+    select 1
+    from auth.users as auth_user
+    where auth_user.id = p_auth_user_id
+      and lower(auth_user.email) = clean_email
+  ) then
+    raise exception 'authentication identity mismatch' using errcode = '42501';
   end if;
 
   select agency.id, agency.name
@@ -109,8 +158,8 @@ begin
     raise exception 'agency is not linked to company' using errcode = '42501';
   end if;
 
-  select app_user.id, app_user.role, app_user.agency_id
-  into target_user_id, target_user_role, target_user_agency_id
+  select app_user.id, app_user.role, app_user.agency_id, app_user.auth_user_id
+  into target_user_id, target_user_role, target_user_agency_id, target_user_auth_user_id
   from public.users as app_user
   where lower(btrim(app_user.email)) = clean_email;
 
@@ -120,6 +169,12 @@ begin
     end if;
     if target_user_agency_id is not null and target_user_agency_id <> selected_agency_id then
       raise exception 'agency mismatch' using errcode = '42501';
+    end if;
+    if target_user_auth_user_id is not null and target_user_auth_user_id <> p_auth_user_id then
+      raise exception 'authentication identity mismatch' using errcode = '42501';
+    end if;
+    if target_user_auth_user_id is null and p_delivery_kind is distinct from 'invite' then
+      raise exception 'trusted authentication migration required' using errcode = '42501';
     end if;
 
     update public.users
@@ -171,16 +226,24 @@ begin
       raise exception 'invalid invitation token hash' using errcode = '22023';
     end if;
 
-    delete from public.agency_user_invitations
+    if p_delivery_kind not in ('invite', 'resend') then
+      raise exception 'invalid invitation delivery kind' using errcode = '22023';
+    end if;
+
+    update public.agency_user_invitations
+    set invalidated_at = now()
     where auth_user_id = p_auth_user_id
-      and consumed_at is null;
+      and consumed_at is null
+      and invalidated_at is null;
 
     insert into public.agency_user_invitations (
-      token_hash, auth_user_id, agency_id, company_id
+      token_hash, auth_user_id, agency_id, company_id, delivery_kind
     ) values (
       p_invitation_token_hash, p_auth_user_id,
-      selected_agency_id::text, selected_company_id::text
+      selected_agency_id::text, selected_company_id::text, p_delivery_kind
     );
+  elsif p_delivery_kind is not null then
+    raise exception 'delivery kind requires an invitation token' using errcode = '22023';
   end if;
 
   return jsonb_build_object(
@@ -191,10 +254,10 @@ begin
 end;
 $function$;
 
-revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text) from public;
-revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text) from anon;
-revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text) from authenticated;
-grant execute on function public.link_agency_invited_user(uuid, text, text, text, text, text) to service_role;
+revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) from public;
+revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) from anon;
+revoke all on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) from authenticated;
+grant execute on function public.link_agency_invited_user(uuid, text, text, text, text, text, text) to service_role;
 
 create or replace function public.verify_agency_user_invitation(p_token text)
 returns jsonb
@@ -215,6 +278,7 @@ begin
   where invitation.token_hash = encode(extensions.digest(convert_to(p_token, 'UTF8'), 'sha256'), 'hex')
     and invitation.auth_user_id = auth.uid()
     and invitation.consumed_at is null
+    and invitation.invalidated_at is null
     and invitation.expires_at > now()
     and exists (
       select 1
@@ -257,6 +321,7 @@ begin
   where invitation.token_hash = encode(extensions.digest(convert_to(p_token, 'UTF8'), 'sha256'), 'hex')
     and invitation.auth_user_id = auth.uid()
     and invitation.consumed_at is null
+    and invitation.invalidated_at is null
     and invitation.expires_at > now()
     and exists (
       select 1
@@ -276,3 +341,42 @@ revoke all on function public.verify_agency_user_invitation(text) from public, a
 grant execute on function public.verify_agency_user_invitation(text) to authenticated;
 revoke all on function public.consume_agency_user_invitation(text) from public, anon;
 grant execute on function public.consume_agency_user_invitation(text) to authenticated;
+
+-- Retain consumed, superseded, and expired invitations for 90 days by default.
+-- Run this service-role-only function from a trusted scheduled job; it refuses
+-- retention periods shorter than 30 days so recent audit evidence is preserved.
+create or replace function public.cleanup_agency_user_invitations(p_retention_days integer default 90)
+returns bigint
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  deleted_rows bigint;
+  cutoff timestamptz;
+begin
+  if p_retention_days < 30 or p_retention_days > 3650 then
+    raise exception 'retention must be between 30 and 3650 days' using errcode = '22023';
+  end if;
+
+  cutoff := now() - make_interval(days => p_retention_days);
+
+  delete from public.agency_user_invitations as invitation
+  where (invitation.consumed_at is not null and invitation.consumed_at < cutoff)
+     or (invitation.invalidated_at is not null and invitation.invalidated_at < cutoff)
+     or (
+       invitation.consumed_at is null
+       and invitation.invalidated_at is null
+       and invitation.expires_at < cutoff
+     );
+
+  get diagnostics deleted_rows = row_count;
+  return deleted_rows;
+end;
+$function$;
+
+comment on function public.cleanup_agency_user_invitations(integer) is
+  'Deletes consumed, invalidated, or long-expired agency invitation audit rows after a minimum 30-day retention period. Schedule with a trusted service-role job.';
+
+revoke all on function public.cleanup_agency_user_invitations(integer) from public, anon, authenticated;
+grant execute on function public.cleanup_agency_user_invitations(integer) to service_role;

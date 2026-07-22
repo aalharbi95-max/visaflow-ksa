@@ -20,6 +20,7 @@ import {
 } from "./publicNavigation.mjs";
 import {
   clearAgencyInviteCallbackUrl,
+  clearAgencyInviteTokenFromUrl,
   getAgencyInvitationErrorMessage,
   getAgencyInvitationSuccessMessage,
   getAgencyInviteUrlState,
@@ -28,6 +29,12 @@ import {
 } from "./agencyInvitations.mjs";
 import "./style.css";
 
+const INITIAL_AGENCY_INVITE_URL_STATE = getAgencyInviteUrlState(window.location);
+if (INITIAL_AGENCY_INVITE_URL_STATE.requested && INITIAL_AGENCY_INVITE_URL_STATE.token) {
+  // Capture the token once, then remove it before React renders page content or
+  // subresources. Supabase callback credentials remain in the fragment.
+  clearAgencyInviteTokenFromUrl();
+}
 
 const PAGES = [
   "Executive Dashboard",
@@ -5450,6 +5457,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [publicView, setPublicView] = useState(() => getPublicViewFromLocation(window.location));
+  const [agencyInviteUrlState] = useState(INITIAL_AGENCY_INVITE_URL_STATE);
   const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
     return getPublicViewFromLocation(window.location) === PUBLIC_VIEW.TALENT;
   });
@@ -27979,7 +27987,6 @@ if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
 }
 
-const agencyInviteUrlState = getAgencyInviteUrlState(window.location);
 if (agencyInviteUrlState.requested) {
   return <AgencyInvitePasswordSetup inviteState={agencyInviteUrlState} />;
 }

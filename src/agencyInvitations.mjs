@@ -32,6 +32,12 @@ export function getAgencyInviteUrlState(locationLike = {}) {
   };
 }
 
+export function clearAgencyInviteTokenFromUrl(locationLike = window.location, historyLike = window.history) {
+  const url = new URL(locationLike.href);
+  url.searchParams.delete(AGENCY_INVITE_QUERY_PARAM);
+  historyLike.replaceState({}, "", url.toString());
+}
+
 export function clearAgencyInviteCallbackUrl(locationLike = window.location, historyLike = window.history) {
   const url = new URL(locationLike.href);
   [
@@ -62,6 +68,9 @@ const INVITATION_ERROR_MESSAGES = {
   auth_identity_mismatch: "The authentication identity does not match the agency user record. Contact platform support.",
   auth_directory_limit: "The authentication directory could not be verified safely. Contact platform support.",
   unlinked_auth_account: "This email already has an authentication account, but it is not a verified agency user.",
+  trusted_auth_migration_required: "This email has a legacy agency record and a separate authentication account. A trusted administrator must migrate and verify the identity before access can be granted.",
+  invitation_in_progress: "Another invitation request created this authentication account. Wait briefly, then retry.",
+  resend_failed: "The invitation was renewed securely, but the replacement email could not be sent. Please retry.",
   duplicate_app_user: "More than one application user uses this email. Contact platform support before inviting.",
   invalid_email: "Enter a valid email address.",
   invalid_name: "Enter the user's full name.",
@@ -76,5 +85,6 @@ export function getAgencyInvitationErrorMessage(code, fallback = "Unable to invi
 export function getAgencyInvitationSuccessMessage(mode) {
   if (mode === "already_linked") return "This agency user already has access to the company.";
   if (mode === "linked_existing") return "Existing agency user linked to this company. Their password was not changed.";
+  if (mode === "resent") return "A replacement invitation was sent. Earlier invitation links are no longer valid.";
   return "Secure invitation sent. The user can set a password from the email link.";
 }
