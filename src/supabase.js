@@ -1,4 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
+import {
+  clearWorkspaceRecoveryLocalState,
+  getWorkspaceRecoveryUrlState,
+} from './workspaceRecovery.mjs'
 
 const supabaseUrl = 'https://zeocbftriydodzfgixjv.supabase.co'
 const supabaseKey = 'sb_publishable_b5oQYxCWh6pwJsf8zDvDFA_HEcuoHCj'
@@ -8,9 +12,25 @@ function isTalentAuthUrl(url) {
   return url.searchParams.get('auth_flow') === 'candidate'
 }
 
-function isImplicitAuthCallback(params) {
-  return Boolean(params.access_token || params.error_description)
+const browserAuthUrl = typeof window === 'undefined' ? null : new URL(window.location.href)
+const workspaceRecoveryRequested = Boolean(
+  browserAuthUrl && getWorkspaceRecoveryUrlState(browserAuthUrl).requested
+)
+
+if (workspaceRecoveryRequested) {
+  clearWorkspaceRecoveryLocalState({
+    localStorage: window.localStorage,
+    sessionStorage: window.sessionStorage,
+    workspaceAuthStorageKey: WORKSPACE_AUTH_STORAGE_KEY,
+  })
 }
+
+const workspaceDetectsAuthCallback = Boolean(
+  browserAuthUrl && !isTalentAuthUrl(browserAuthUrl)
+)
+const talentDetectsAuthCallback = Boolean(
+  browserAuthUrl && isTalentAuthUrl(browserAuthUrl)
+)
 
 export const workspaceSupabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
@@ -18,8 +38,8 @@ export const workspaceSupabase = createClient(supabaseUrl, supabaseKey, {
     storage: typeof window === 'undefined' ? undefined : window.localStorage,
     persistSession: true,
     autoRefreshToken: true,
-    // Preserve normal company callbacks while excluding explicitly marked candidate links.
-    detectSessionInUrl: (url, params) => !isTalentAuthUrl(url) && isImplicitAuthCallback(params),
+    // Exactly one client may consume the callback; candidate links stay isolated.
+    detectSessionInUrl: workspaceDetectsAuthCallback,
   },
 })
 export const supabase = workspaceSupabase
@@ -28,13 +48,36 @@ export const supabase = workspaceSupabase
 export const talentSupabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
     storageKey: 'visaflow-talent-auth',
+    storage: typeof window === 'undefined' ? undefined : window.localStorage,
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: (url, params) => isTalentAuthUrl(url) && isImplicitAuthCallback(params),
+    detectSessionInUrl: talentDetectsAuthCallback,
   },
 })
 
 let talentRecoveryUserId = null
+let workspaceRecoveryUserId = null
+
+function isWorkspaceUser(user) {
+  const accountType = String(user?.user_metadata?.account_type || '').toLowerCase()
+  return Boolean(user?.id) && accountType !== 'candidate'
+}
+
+export function establishWorkspaceRecoveryProof(event, session) {
+  const valid = event === 'PASSWORD_RECOVERY'
+    && workspaceRecoveryRequested
+    && isWorkspaceUser(session?.user)
+  workspaceRecoveryUserId = valid ? session.user.id : null
+  return valid
+}
+
+export function hasWorkspaceRecoveryProof(userId) {
+  return Boolean(userId && workspaceRecoveryUserId === userId)
+}
+
+export function clearWorkspaceRecoveryProof() {
+  workspaceRecoveryUserId = null
+}
 
 export function establishTalentRecoveryProof(event, session) {
   const isCandidateRecovery = event === 'PASSWORD_RECOVERY'
@@ -57,6 +100,14 @@ talentSupabase.auth.onAuthStateChange((event, session) => {
     setTimeout(() => {
       talentSupabase.auth.signOut({ scope: 'local' })
     }, 0)
+  }
+})
+
+workspaceSupabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY') {
+    establishWorkspaceRecoveryProof(event, session)
+  } else if (event === 'SIGNED_OUT') {
+    clearWorkspaceRecoveryProof()
   }
 })
 
