@@ -1,7 +1,7 @@
 export const WORKSPACE_RECOVERY_SUCCESS_MESSAGE =
   "Password updated successfully. Sign in using your new password.";
 
-const SUCCESS_KEY = "visaflow-workspace-recovery-success";
+const COMPLETED_KEY = "visaflow-workspace-recovery-completed";
 const WORKSPACE_IDENTITY_KEYS = [
   "visaflow_user",
   "visaflow_workspace_display",
@@ -160,10 +160,12 @@ export async function completeWorkspacePasswordRecovery({
 }
 
 export async function finalizeWorkspaceRecoverySuccess({
+  auth,
+  localStorage,
+  sessionStorage,
   clearRecoveryProof,
   cleanCallbackUrl,
   storeSuccessMessage,
-  signOut,
   redirectToLogin,
   logger = console.warn,
 }) {
@@ -179,17 +181,59 @@ export async function finalizeWorkspaceRecoverySuccess({
     }
   };
 
-  await attempt("proof cleanup", clearRecoveryProof);
-  await attempt("URL cleanup", cleanCallbackUrl);
   await attempt("success message storage", () =>
     storeSuccessMessage?.(WORKSPACE_RECOVERY_SUCCESS_MESSAGE)
   );
-  await attempt("local sign-out", signOut);
+  await attempt("proof cleanup", clearRecoveryProof);
+  await attempt("URL cleanup", cleanCallbackUrl);
+
+  let signOutFailed = false;
+  try {
+    const result = await auth?.signOut?.({ scope: "local" });
+    if (result?.error) throw result.error;
+  } catch (error) {
+    signOutFailed = true;
+    errors.push({ step: "local sign-out", error });
+    logger?.(
+      "Workspace recovery local sign-out failed after password update",
+      error
+    );
+  }
+
+  let sessionRemained = true;
+  try {
+    const { data, error } = (await auth?.getSession?.()) || {};
+    if (error) throw error;
+    sessionRemained = Boolean(data?.session);
+  } catch (error) {
+    errors.push({ step: "session verification", error });
+    logger?.(
+      "Workspace recovery session verification failed after password update",
+      error
+    );
+  }
+
+  const usedManualCleanup = signOutFailed || sessionRemained;
+  if (usedManualCleanup) {
+    await attempt("manual workspace cleanup", () =>
+      clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage })
+    );
+  } else {
+    // Auth storage is already gone, but workspace identity metadata must also
+    // be removed before the login page can render.
+    await attempt("workspace identity cleanup", () =>
+      clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage })
+    );
+  }
+
   await attempt("login redirect", redirectToLogin);
 
   return {
     success: true,
     passwordUpdated: true,
+    sessionVerifiedAbsent: !sessionRemained,
+    workspaceSessionBlocked: !sessionRemained || usedManualCleanup,
+    usedManualCleanup,
     redirected: !errors.some(({ step }) => step === "login redirect"),
     cleanupErrors: errors.map(({ step }) => step),
   };
@@ -198,7 +242,7 @@ export async function finalizeWorkspaceRecoverySuccess({
 export function storeWorkspaceRecoverySuccess(storage, message) {
   try {
     storage?.setItem(
-      SUCCESS_KEY,
+      COMPLETED_KEY,
       message || WORKSPACE_RECOVERY_SUCCESS_MESSAGE
     );
   } catch {
@@ -208,10 +252,28 @@ export function storeWorkspaceRecoverySuccess(storage, message) {
 
 export function consumeWorkspaceRecoverySuccess(storage) {
   try {
-    const message = storage?.getItem(SUCCESS_KEY) || "";
-    storage?.removeItem(SUCCESS_KEY);
+    const message = storage?.getItem(COMPLETED_KEY) || "";
+    storage?.removeItem(COMPLETED_KEY);
     return message;
   } catch {
     return "";
+  }
+}
+
+export function getWorkspaceRecoveryLoginGuard({
+  storage,
+  locationLike,
+} = {}) {
+  try {
+    const url = toUrl(locationLike);
+    if (url.searchParams.get("login") !== "1") {
+      return { active: false, message: "" };
+    }
+    const message = storage?.getItem(COMPLETED_KEY) || "";
+    if (!message) return { active: false, message: "" };
+    storage?.removeItem(COMPLETED_KEY);
+    return { active: true, message };
+  } catch {
+    return { active: false, message: "" };
   }
 }

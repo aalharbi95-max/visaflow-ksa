@@ -8,7 +8,9 @@ import {
   finalizeWorkspaceRecoverySuccess,
   getCleanWorkspaceRecoveryUrl,
   getWorkspaceRecoveryErrorMessage,
+  getWorkspaceRecoveryLoginGuard,
   getWorkspaceRecoveryUrlState,
+  storeWorkspaceRecoverySuccess,
   WORKSPACE_RECOVERY_SUCCESS_MESSAGE,
 } from "./workspaceRecovery.mjs";
 
@@ -83,8 +85,16 @@ test("a stale session cannot update the password without PASSWORD_RECOVERY proof
   assert.equal(updates, 0);
 });
 
-test("a successful password update remains successful when local sign-out fails", async () => {
+test("successful update signs out, verifies the session, and redirects to login", async () => {
   const events = [];
+  const localStorage = memoryStorage({
+    "visaflow-workspace-auth": "recovery-session",
+    "visaflow-talent-auth": "candidate-session",
+    visaflow_user: "office",
+  });
+  const sessionStorage = memoryStorage({
+    visaflow_agency_company_id: "company",
+  });
   const updateResult = await completeWorkspacePasswordRecovery({
     auth: {
       updateUser: async (payload) => {
@@ -102,32 +112,110 @@ test("a successful password update remains successful when local sign-out fails"
   assert.equal(updateResult.passwordUpdated, true);
   assert.equal(updateResult.message, WORKSPACE_RECOVERY_SUCCESS_MESSAGE);
 
-  const warnings = [];
   const cleanupResult = await finalizeWorkspaceRecoverySuccess({
+    auth: {
+      signOut: async (options) => {
+        events.push(["signout", options]);
+        localStorage.removeItem("visaflow-workspace-auth");
+        return { error: null };
+      },
+      getSession: async () => {
+        events.push(["get-session"]);
+        return { data: { session: null }, error: null };
+      },
+    },
+    localStorage,
+    sessionStorage,
     clearRecoveryProof: () => events.push(["clear-proof"]),
     cleanCallbackUrl: () => events.push(["clean-url"]),
-    storeSuccessMessage: (value) => events.push(["success", value]),
-    signOut: async () => {
-      events.push(["signout", { scope: "local" }]);
-      return { error: new Error("local sign-out failed") };
+    storeSuccessMessage: (value) => {
+      events.push(["success", value]);
+      storeWorkspaceRecoverySuccess(sessionStorage, value);
     },
     redirectToLogin: () => events.push(["redirect", "/?login=1"]),
-    logger: (...args) => warnings.push(args),
   });
 
   assert.equal(cleanupResult.success, true);
   assert.equal(cleanupResult.passwordUpdated, true);
   assert.equal(cleanupResult.redirected, true);
-  assert.deepEqual(cleanupResult.cleanupErrors, ["local sign-out"]);
-  assert.equal(warnings.length, 1);
+  assert.equal(cleanupResult.sessionVerifiedAbsent, true);
+  assert.equal(cleanupResult.workspaceSessionBlocked, true);
+  assert.equal(cleanupResult.usedManualCleanup, false);
+  assert.equal(localStorage.getItem("visaflow-workspace-auth"), null);
+  assert.equal(localStorage.getItem("visaflow-talent-auth"), "candidate-session");
   assert.deepEqual(events, [
     ["update", { password: "correct horse battery staple" }],
+    ["success", WORKSPACE_RECOVERY_SUCCESS_MESSAGE],
     ["clear-proof"],
     ["clean-url"],
-    ["success", WORKSPACE_RECOVERY_SUCCESS_MESSAGE],
     ["signout", { scope: "local" }],
+    ["get-session"],
     ["redirect", "/?login=1"],
   ]);
+
+  const loginGuard = getWorkspaceRecoveryLoginGuard({
+    storage: sessionStorage,
+    locationLike: "https://visaflowksa.com/?login=1",
+  });
+  assert.deepEqual(loginGuard, {
+    active: true,
+    message: WORKSPACE_RECOVERY_SUCCESS_MESSAGE,
+  });
+  assert.equal(
+    getWorkspaceRecoveryLoginGuard({
+      storage: sessionStorage,
+      locationLike: "https://visaflowksa.com/?login=1",
+    }).active,
+    false
+  );
+});
+
+test("failed sign-out clears only workspace storage and still redirects", async () => {
+  const events = [];
+  const warnings = [];
+  const localStorage = memoryStorage({
+    "visaflow-workspace-auth": "stale-workspace-session",
+    "visaflow-talent-auth": "candidate-session",
+    visaflow_user: "office",
+  });
+  const sessionStorage = memoryStorage({
+    visaflow_agency_company_id: "company",
+    visaflow_agency_company_name: "Agency workspace",
+  });
+
+  const result = await finalizeWorkspaceRecoverySuccess({
+    auth: {
+      signOut: async () => ({
+        error: new Error("local sign-out failed"),
+      }),
+      getSession: async () => ({
+        data: { session: { user: { id: "stale-user" } } },
+        error: null,
+      }),
+    },
+    localStorage,
+    sessionStorage,
+    clearRecoveryProof: () => events.push("clear-proof"),
+    cleanCallbackUrl: () => events.push("clean-url"),
+    storeSuccessMessage: (message) =>
+      storeWorkspaceRecoverySuccess(sessionStorage, message),
+    redirectToLogin: () => events.push("redirect"),
+    logger: (...args) => warnings.push(args),
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.passwordUpdated, true);
+  assert.equal(result.usedManualCleanup, true);
+  assert.equal(result.sessionVerifiedAbsent, false);
+  assert.equal(result.workspaceSessionBlocked, true);
+  assert.equal(result.redirected, true);
+  assert.equal(localStorage.getItem("visaflow-workspace-auth"), null);
+  assert.equal(localStorage.getItem("visaflow_user"), null);
+  assert.equal(sessionStorage.getItem("visaflow_agency_company_id"), null);
+  assert.equal(sessionStorage.getItem("visaflow_agency_company_name"), null);
+  assert.equal(localStorage.getItem("visaflow-talent-auth"), "candidate-session");
+  assert.deepEqual(events, ["clear-proof", "clean-url", "redirect"]);
+  assert.equal(warnings.length, 1);
 });
 
 test("callback cleanup removes tokens and keeps login", () => {
@@ -139,7 +227,7 @@ test("callback cleanup removes tokens and keeps login", () => {
   assert.equal(url.hash, "");
 });
 
-test("App blocks workspace reconciliation and portal rendering during recovery", async () => {
+test("App blocks stale workspace reconciliation until a verified manual login", async () => {
   const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
   const reconcileStart = app.indexOf("const reconcileAuthenticatedWorkspace");
   const authEffectStart = app.lastIndexOf(
@@ -151,8 +239,22 @@ test("App blocks workspace reconciliation and portal rendering during recovery",
     reconcileStart
   );
   assert.match(effect, /workspaceRecoveryRequested/);
+  assert.match(effect, /workspaceRecoveryLoginGuard/);
+  assert.match(effect, /clearWorkspaceRecoveryLocalState/);
   assert.ok(
     app.indexOf("return <WorkspacePasswordRecoveryScreen") <
       app.indexOf('if (currentRole === "Agency" && !currentCompanyId)')
+  );
+
+  const loginStart = app.indexOf("async function handleLogin()");
+  const loginEnd = app.indexOf("async function handleLogout()", loginStart);
+  const login = app.slice(loginStart, loginEnd);
+  assert.ok(
+    login.indexOf("setWorkspaceRecoveryLoginGuard(false)") >
+      login.indexOf("const loggedUser =")
+  );
+  assert.ok(
+    login.indexOf("setWorkspaceRecoveryLoginGuard(false)") <
+      login.indexOf("activateWorkspaceUser(loggedUser")
   );
 });

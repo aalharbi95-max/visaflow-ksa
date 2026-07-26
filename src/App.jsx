@@ -29,11 +29,12 @@ import {
 } from "./agencyPerformance.mjs";
 import {
   buildWorkspaceRecoveryRedirectUrl,
+  clearWorkspaceRecoveryLocalState,
   completeWorkspacePasswordRecovery,
-  consumeWorkspaceRecoverySuccess,
   finalizeWorkspaceRecoverySuccess,
   getCleanWorkspaceRecoveryUrl,
   getWorkspaceRecoveryErrorMessage,
+  getWorkspaceRecoveryLoginGuard,
   getWorkspaceRecoveryUrlState,
   storeWorkspaceRecoverySuccess,
 } from "./workspaceRecovery.mjs";
@@ -5024,11 +5025,13 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
     // final; cleanup failures must never be reported as recovery failures.
     setMessage(result.message);
     const cleanup = await finalizeWorkspaceRecoverySuccess({
+      auth: supabase.auth,
+      localStorage,
+      sessionStorage,
       clearRecoveryProof: clearWorkspaceRecoveryProof,
       cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
       storeSuccessMessage: (value) =>
         storeWorkspaceRecoverySuccess(sessionStorage, value),
-      signOut: () => supabase.auth.signOut({ scope: "local" }),
       redirectToLogin: () => {
         const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
         window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
@@ -5492,6 +5495,16 @@ function App() {
     []
   );
   const workspaceRecoveryRequested = workspaceRecoveryState.requested;
+  const workspaceRecoveryLoginState = useMemo(
+    () =>
+      getWorkspaceRecoveryLoginGuard({
+        storage: sessionStorage,
+        locationLike: window.location,
+      }),
+    []
+  );
+  const [workspaceRecoveryLoginGuard, setWorkspaceRecoveryLoginGuard] =
+    useState(workspaceRecoveryLoginState.active);
   const [activePage, setActivePage] = useState("Dashboard");
   const [publicView, setPublicView] = useState(() => getPublicViewFromLocation(window.location));
   const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
@@ -5884,7 +5897,9 @@ const [selectedMobilizationRequestNo, setSelectedMobilizationRequestNo] = useSta
 // Stored workspace metadata is never trusted as an authenticated identity.
 // The active user is restored only after Supabase Auth and the server RPC agree.
 const [currentUser, setCurrentUser] = useState(null);
-const [workspaceAuthReady, setWorkspaceAuthReady] = useState(false);
+const [workspaceAuthReady, setWorkspaceAuthReady] = useState(
+  workspaceRecoveryLoginGuard
+);
 const [validatedWorkspaceKey, setValidatedWorkspaceKey] = useState("");
 const workspaceAuthSequenceRef = useRef(0);
 const workspaceDataGenerationRef = useRef(0);
@@ -5975,8 +5990,8 @@ const [rememberMe, setRememberMe] = useState(true);
 const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
 const [workspaceRecoveryEmail, setWorkspaceRecoveryEmail] = useState("");
 const [workspaceRecoveryLoading, setWorkspaceRecoveryLoading] = useState(false);
-const [workspaceRecoveryMessage, setWorkspaceRecoveryMessage] = useState(() =>
-  consumeWorkspaceRecoverySuccess(sessionStorage)
+const [workspaceRecoveryMessage, setWorkspaceRecoveryMessage] = useState(
+  workspaceRecoveryLoginState.message
 );
 const [loginLanguage, setLoginLanguage] = useState("AR");
 const [loginLogoFailed, setLoginLogoFailed] = useState(false);
@@ -9542,13 +9557,14 @@ async function loadNotifications() {
 useEffect(() => {
   let mounted = true;
 
-  if (workspaceRecoveryRequested) {
+  if (workspaceRecoveryRequested || workspaceRecoveryLoginGuard) {
     workspaceAuthReadyRef.current = false;
     currentWorkspaceUserRef.current = null;
-    setWorkspaceAuthReady(false);
+    setWorkspaceAuthReady(workspaceRecoveryLoginGuard);
     setValidatedWorkspaceKey("");
     clearTenantSensitiveState();
     clearStoredWorkspaceIdentity();
+    clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage });
     setAgencyClientAccess([]);
     setActiveAgencyCompanyId("");
     setActiveAgencyCompanyName("");
@@ -9667,7 +9683,7 @@ useEffect(() => {
     mounted = false;
     authListener?.subscription?.unsubscribe();
   };
-}, [workspaceRecoveryRequested]);
+}, [workspaceRecoveryRequested, workspaceRecoveryLoginGuard]);
 
 useEffect(() => {
   currentWorkspaceUserRef.current = currentUser;
@@ -9691,6 +9707,7 @@ useEffect(() => {
 useEffect(() => {
   if (
     workspaceRecoveryRequested ||
+    workspaceRecoveryLoginGuard ||
     !currentUser ||
     !workspaceAuthReady ||
     validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser)
@@ -9704,6 +9721,7 @@ useEffect(() => {
   loadAll();
 }, [
   workspaceRecoveryRequested,
+  workspaceRecoveryLoginGuard,
   currentUser?.id,
   currentUser?.auth_user_id,
   currentCompanyId,
@@ -18044,6 +18062,8 @@ async function handleLogin() {
       }
     }
 
+    // Only a fully verified manual sign-in may end the post-recovery guard.
+    setWorkspaceRecoveryLoginGuard(false);
     activateWorkspaceUser(loggedUser, {
       persist: true,
       legacy: !loggedUser.auth_user_id,
