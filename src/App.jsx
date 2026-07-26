@@ -3,8 +3,11 @@ import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import {
   clearTalentRecoveryProof,
+  clearWorkspaceRecoveryProof,
   establishTalentRecoveryProof,
+  establishWorkspaceRecoveryProof,
   hasTalentRecoveryProof,
+  hasWorkspaceRecoveryProof,
   talentSupabase,
   workspaceSupabase as supabase,
 } from "./supabase";
@@ -18,6 +21,21 @@ import {
   getPublicViewFromLocation,
   PUBLIC_VIEW,
 } from "./publicNavigation.mjs";
+import {
+  calculateAgencyMobilizationScore,
+  calculateApplicableWeightedScore,
+  calculateInterviewQuality,
+  formatOptionalPercentage,
+} from "./agencyPerformance.mjs";
+import {
+  buildWorkspaceRecoveryRedirectUrl,
+  completeWorkspacePasswordRecovery,
+  consumeWorkspaceRecoverySuccess,
+  getCleanWorkspaceRecoveryUrl,
+  getWorkspaceRecoveryErrorMessage,
+  getWorkspaceRecoveryUrlState,
+  storeWorkspaceRecoverySuccess,
+} from "./workspaceRecovery.mjs";
 import "./style.css";
 
 
@@ -345,7 +363,6 @@ const OFFICE_STATUSES = [
   "Departure",
   "Arrived KSA",
   "Arrived",
-  "Joined",
   "KSA Medical Failed",
   "Refused to Work",
   "Absconded",
@@ -4876,6 +4893,204 @@ function TalentCandidatePortal({ onBack }) {
   );
 }
 
+function clearWorkspaceRecoveryCallbackUrl() {
+  try {
+    const url = getCleanWorkspaceRecoveryUrl(window.location.href);
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
+  const isArabic = language === "AR";
+  const initialState = useMemo(
+    () => getWorkspaceRecoveryUrlState(window.location),
+    []
+  );
+  const [checking, setChecking] = useState(true);
+  const [ready, setReady] = useState(false);
+  const [session, setSession] = useState(null);
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    let timer = null;
+
+    const reject = (error) => {
+      if (!mounted) return;
+      setReady(false);
+      setChecking(false);
+      setMessage(
+        getWorkspaceRecoveryErrorMessage(
+          error || { code: "invalid_token" },
+          isArabic
+        )
+      );
+    };
+
+    const accept = (nextSession) => {
+      const user = nextSession?.user;
+      if (
+        !user?.id ||
+        user.user_metadata?.account_type === "candidate" ||
+        !establishWorkspaceRecoveryProof("PASSWORD_RECOVERY", nextSession)
+      ) {
+        reject({ code: "invalid_token" });
+        return;
+      }
+      if (!mounted) return;
+      setSession(nextSession);
+      setReady(true);
+      setChecking(false);
+      setMessage("");
+    };
+
+    if (initialState.error) {
+      reject(initialState.error);
+      return undefined;
+    }
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (event, nextSession) => {
+        if (event !== "PASSWORD_RECOVERY") return;
+        if (timer) window.clearTimeout(timer);
+        accept(nextSession);
+      }
+    );
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) return reject(error);
+      const activeSession = data?.session;
+      if (
+        activeSession?.user?.id &&
+        hasWorkspaceRecoveryProof(activeSession.user.id)
+      ) {
+        setSession(activeSession);
+        setReady(true);
+        setChecking(false);
+        return;
+      }
+      // A persisted session is deliberately insufficient. Give Supabase a
+      // short window to emit PASSWORD_RECOVERY for the URL callback.
+      timer = window.setTimeout(
+        () => reject({ code: "invalid_token" }),
+        1800
+      );
+    });
+
+    return () => {
+      mounted = false;
+      if (timer) window.clearTimeout(timer);
+      listener?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  async function updatePassword() {
+    setSaving(true);
+    setMessage("");
+    try {
+      await completeWorkspacePasswordRecovery({
+        auth: supabase.auth,
+        userId: session?.user?.id || "",
+        password,
+        confirmation,
+        hasRecoveryProof: hasWorkspaceRecoveryProof,
+        clearRecoveryProof: clearWorkspaceRecoveryProof,
+        cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
+        storeSuccessMessage: (value) =>
+          storeWorkspaceRecoverySuccess(sessionStorage, value),
+      });
+      const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
+      window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
+    } catch (error) {
+      if (error?.code === "password_too_short") {
+        setMessage(
+          isArabic ? "استخدم كلمة مرور لا تقل عن 12 حرفًا." : error.message
+        );
+      } else if (error?.code === "password_mismatch") {
+        setMessage(
+          isArabic ? "كلمتا المرور غير متطابقتين." : error.message
+        );
+      } else {
+        setMessage(getWorkspaceRecoveryErrorMessage(error, isArabic));
+      }
+      setSaving(false);
+    }
+  }
+
+  function requestNewLink() {
+    clearWorkspaceRecoveryProof();
+    const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
+    window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
+  }
+
+  return (
+    <main className="vf-login-shell" dir={isArabic ? "rtl" : "ltr"}>
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <div className="vf-login-card" style={{ maxWidth: "520px" }}>
+          <div className="vf-login-logo">
+            <img src="/visaflow-logo.png" alt="VisaFlow KSA" className="vf-login-card-logo" />
+          </div>
+          <h2>{isArabic ? "تعيين كلمة مرور جديدة" : "Set a New Password"}</h2>
+          <p className="vf-login-subtitle">
+            {checking
+              ? isArabic
+                ? "جاري التحقق من رابط الاستعادة الآمن..."
+                : "Checking the secure recovery link..."
+              : ready
+                ? isArabic
+                  ? "أنشئ كلمة مرور قوية لحساب الشركة أو المكتب."
+                  : "Create a strong password for your company or agency account."
+                : isArabic
+                  ? "لا يمكن استخدام رابط الاستعادة الحالي."
+                  : "The current recovery link cannot be used."}
+          </p>
+
+          {ready && (
+            <>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder={isArabic ? "كلمة المرور الجديدة — 12 حرفًا على الأقل" : "New Password — at least 12 characters"}
+                autoComplete="new-password"
+              />
+              <input
+                type="password"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                placeholder={isArabic ? "تأكيد كلمة المرور الجديدة" : "Confirm New Password"}
+                autoComplete="new-password"
+              />
+            </>
+          )}
+
+          {message && <div className="vf-reset-message">{message}</div>}
+          <div className="vf-reset-actions">
+            {ready ? (
+              <button type="button" disabled={saving} onClick={updatePassword}>
+                {saving
+                  ? isArabic ? "جاري الحفظ..." : "Saving..."
+                  : isArabic ? "حفظ كلمة المرور" : "Save New Password"}
+              </button>
+            ) : (
+              <button type="button" disabled={checking} onClick={requestNewLink}>
+                {isArabic ? "طلب رابط جديد" : "Request a New Link"}
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 
 const PUBLIC_LANDING_COPY = {
   AR: {
@@ -5257,6 +5472,11 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
 }
 
 function App() {
+  const workspaceRecoveryState = useMemo(
+    () => getWorkspaceRecoveryUrlState(window.location),
+    []
+  );
+  const workspaceRecoveryRequested = workspaceRecoveryState.requested;
   const [activePage, setActivePage] = useState("Dashboard");
   const [publicView, setPublicView] = useState(() => getPublicViewFromLocation(window.location));
   const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
@@ -5738,6 +5958,11 @@ const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 const [loginLoading, setLoginLoading] = useState(false);
 const [rememberMe, setRememberMe] = useState(true);
 const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+const [workspaceRecoveryEmail, setWorkspaceRecoveryEmail] = useState("");
+const [workspaceRecoveryLoading, setWorkspaceRecoveryLoading] = useState(false);
+const [workspaceRecoveryMessage, setWorkspaceRecoveryMessage] = useState(() =>
+  consumeWorkspaceRecoverySuccess(sessionStorage)
+);
 const [loginLanguage, setLoginLanguage] = useState("AR");
 const [loginLogoFailed, setLoginLogoFailed] = useState(false);
 const [ssoInfoOpen, setSsoInfoOpen] = useState(false);
@@ -9302,6 +9527,22 @@ async function loadNotifications() {
 useEffect(() => {
   let mounted = true;
 
+  if (workspaceRecoveryRequested) {
+    workspaceAuthReadyRef.current = false;
+    currentWorkspaceUserRef.current = null;
+    setWorkspaceAuthReady(false);
+    setValidatedWorkspaceKey("");
+    clearTenantSensitiveState();
+    clearStoredWorkspaceIdentity();
+    setAgencyClientAccess([]);
+    setActiveAgencyCompanyId("");
+    setActiveAgencyCompanyName("");
+    setCurrentUser(null);
+    return () => {
+      mounted = false;
+    };
+  }
+
   const reconcileAuthenticatedWorkspace = async (event, sessionFromEvent) => {
     const sequence = ++workspaceAuthSequenceRef.current;
     const activeWorkspaceUser = currentWorkspaceUserRef.current;
@@ -9411,7 +9652,7 @@ useEffect(() => {
     mounted = false;
     authListener?.subscription?.unsubscribe();
   };
-}, []);
+}, [workspaceRecoveryRequested]);
 
 useEffect(() => {
   currentWorkspaceUserRef.current = currentUser;
@@ -9434,6 +9675,7 @@ useEffect(() => {
 
 useEffect(() => {
   if (
+    workspaceRecoveryRequested ||
     !currentUser ||
     !workspaceAuthReady ||
     validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser)
@@ -9445,7 +9687,14 @@ useEffect(() => {
   }
 
   loadAll();
-}, [currentUser?.id, currentUser?.auth_user_id, currentCompanyId, workspaceAuthReady, validatedWorkspaceKey]);
+}, [
+  workspaceRecoveryRequested,
+  currentUser?.id,
+  currentUser?.auth_user_id,
+  currentCompanyId,
+  workspaceAuthReady,
+  validatedWorkspaceKey,
+]);
 
 useEffect(() => {
   if (!currentUser || activePage !== "Client Usage Monitor" || !canManagePlatform) return;
@@ -17554,6 +17803,53 @@ async function handleChangePasswordSubmit() {
   }
 }
 
+async function handleWorkspacePasswordRecoveryRequest() {
+  const email = String(
+    workspaceRecoveryEmail || loginForm.email || ""
+  ).trim().toLowerCase();
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+    setWorkspaceRecoveryMessage(
+      loginLanguage === "AR"
+        ? "أدخل بريدًا إلكترونيًا صحيحًا."
+        : "Enter a valid email address."
+    );
+    return;
+  }
+
+  setWorkspaceRecoveryLoading(true);
+  setWorkspaceRecoveryMessage("");
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: buildWorkspaceRecoveryRedirectUrl(window.location.origin),
+    });
+
+    if (error) {
+      const value = `${error.code || ""} ${error.message || ""}`.toLowerCase();
+      if (
+        value.includes("rate limit") ||
+        value.includes("rate_limit") ||
+        value.includes("over_email_send_rate_limit")
+      ) {
+        throw error;
+      }
+      // Enumeration-safe: delivery failures do not disclose account existence.
+      console.warn("Workspace recovery request was not delivered");
+    }
+
+    setWorkspaceRecoveryMessage(
+      loginLanguage === "AR"
+        ? "تم استلام طلب الاستعادة. إذا كان البريد مرتبطًا بحساب شركة أو مكتب، فسيصلك رابط آمن لتعيين كلمة مرور جديدة."
+        : "Recovery request received. If the email belongs to a company or agency account, a secure reset link will be sent."
+    );
+  } catch (error) {
+    setWorkspaceRecoveryMessage(
+      getWorkspaceRecoveryErrorMessage(error, loginLanguage === "AR")
+    );
+  } finally {
+    setWorkspaceRecoveryLoading(false);
+  }
+}
+
 async function handleLogin() {
   const email = loginForm.email.trim().toLowerCase();
   const password = loginForm.password.trim();
@@ -18865,6 +19161,40 @@ function calculateAgencyPerformanceRows() {
       const activeAgreement = agreementPolicy.agreement;
       const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
       const agencyInterviews = interviews.filter((interview) => normalize(interview.agency) === normalize(agencyName));
+
+      const candidateRequiresInterview = (candidate) => {
+        const request = requests.find(
+          (item) => String(item.request_no || "") === String(candidate.request_no || "")
+        );
+        const line = request
+          ? getRequestLinesForRequest(request).find((item) =>
+              candidateMatchesRequestLine(candidate, item)
+            )
+          : null;
+        return normalize(
+          line?.interview_required || request?.interview_required || "Required"
+        ) !== "no interview";
+      };
+
+      const interviewMatchesCandidate = (interview, candidate) =>
+        String(interview.candidate_id || "") === String(candidate.id || "") ||
+        Boolean(
+          interview.passport_no &&
+          candidate.passport_no &&
+          String(interview.passport_no) === String(candidate.passport_no)
+        ) ||
+        Boolean(
+          interview.candidate_name &&
+          candidate.candidate_name &&
+          normalize(interview.candidate_name) === normalize(candidate.candidate_name)
+        );
+
+      const interviewQuality = calculateInterviewQuality({
+        candidates: agencyCandidates,
+        interviews: agencyInterviews,
+        requiresInterview: candidateRequiresInterview,
+        interviewMatchesCandidate,
+      });
       const agencyAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName));
       const activeAuthorizations = agencyAuthorizations.filter((authorization) => !["cancelled", "canceled", "closed", "completed"].includes(normalize(authorization.status || "Open")));
       const signedAgreement = Boolean(activeAgreement);
@@ -18888,6 +19218,9 @@ function calculateAgencyPerformanceRows() {
           candidates: 0,
           passedInterviews: 0,
           rejectedInterviews: 0,
+          interview_required_candidates: 0,
+          no_interview_candidates: 0,
+          quality_applicable: false,
           arrived: 0,
           joined: 0,
           failed: 0,
@@ -18911,10 +19244,13 @@ function calculateAgencyPerformanceRows() {
         };
       }
 
-      const totalInterviewed = agencyInterviews.length;
-      const passedInterviews = agencyInterviews.filter((interview) => interview.status === "Passed").length;
-      const rejectedInterviews = agencyInterviews.filter((interview) => ["Rejected", "Interview Failed"].includes(interview.status)).length;
-      const arrived = agencyCandidates.filter((candidate) => ["Arrived KSA", "Arrived", "Joined"].includes(candidate.status)).length;
+      const passedInterviews = interviewQuality.passedInterviews;
+      const rejectedInterviews = interviewQuality.rejectedInterviews;
+      const arrived = agencyCandidates.filter(
+        (candidate) =>
+          candidate.arrival_date ||
+          ["Arrived KSA", "Arrived"].includes(candidate.status)
+      ).length;
       const joined = agencyCandidates.filter((candidate) => candidate.status === "Joined").length;
       const failed = agencyCandidates.filter((candidate) => ["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "KSA Medical Failed", "Refused to Work", "Absconded"].includes(candidate.status)).length;
 
@@ -18922,8 +19258,8 @@ function calculateAgencyPerformanceRows() {
       const submitted = agencyCandidates.length;
       const submittedPercent = authorizedQty ? Math.min(Math.round((submitted / authorizedQty) * 100), 100) : submitted ? 100 : 0;
 
-      const qualityScore = totalInterviewed ? Math.round((passedInterviews / totalInterviewed) * 100) : submitted ? 70 : 0;
-      const mobilizationScore = passedInterviews ? Math.round((joined / passedInterviews) * 100) : arrived ? 70 : 0;
+      const qualityScore = interviewQuality.score;
+      const mobilizationScore = calculateAgencyMobilizationScore(agencyCandidates);
       const rejectionScore = submitted ? Math.max(0, 100 - Math.round((failed / submitted) * 100)) : 0;
       const responseScore = submittedPercent;
 
@@ -18963,15 +19299,19 @@ function calculateAgencyPerformanceRows() {
       const validationPassed = validationRows.filter((validation) => validation.final_result === "Passed Validation").length;
       const validationFailed = validationRows.filter((validation) => ["Failed Validation", "Replacement Required"].includes(validation.final_result)).length;
 
-      const baseTotalScore = Math.round(
-        slaScore * 0.30 +
-        responseScore * 0.10 +
-        qualityScore * 0.20 +
-        rejectionScore * 0.10 +
-        mobilizationScore * 0.15 +
-        updateScore * 0.10 +
-        agreementScore * 0.05
-      );
+      const baseTotalScore = calculateApplicableWeightedScore([
+        { score: slaScore, weight: 0.30 },
+        { score: responseScore, weight: 0.10 },
+        {
+          score: qualityScore,
+          weight: 0.20,
+          applicable: interviewQuality.applicable,
+        },
+        { score: rejectionScore, weight: 0.10 },
+        { score: mobilizationScore, weight: 0.15 },
+        { score: updateScore, weight: 0.10 },
+        { score: agreementScore, weight: 0.05 },
+      ]) ?? 0;
 
       const totalScore = Math.max(0, Math.min(100, baseTotalScore + validationImpactScore));
 
@@ -19002,6 +19342,9 @@ function calculateAgencyPerformanceRows() {
         candidates: submitted,
         passedInterviews,
         rejectedInterviews,
+        interview_required_candidates: interviewQuality.applicableCandidates.length,
+        no_interview_candidates: interviewQuality.excludedCandidates.length,
+        quality_applicable: interviewQuality.applicable,
         arrived,
         joined,
         failed,
@@ -19044,7 +19387,7 @@ async function saveAgencyPerformanceSnapshot() {
     company_id: currentCompanyId,
     agency_id: row.agency_id,
     sla_score: row.sla_score,
-    quality_score: row.quality_score,
+    quality_score: row.quality_applicable ? row.quality_score : null,
     response_score: row.response_score,
     mobilization_score: row.mobilization_score,
     update_score: row.update_score,
@@ -19069,7 +19412,7 @@ async function saveAgencyPerformanceSnapshot() {
       agency_name: row.agency_name,
       sla_score: row.sla_score,
       update_score: row.update_score,
-      quality_score: row.quality_score,
+      quality_score: row.quality_applicable ? row.quality_score : null,
       arrival_score: row.mobilization_score,
       agreement_sla_days: row.agreement_sla_days,
       update_frequency_days: row.update_frequency_days,
@@ -27710,6 +28053,9 @@ function exportCurrentPage() {
 }
 
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+if (workspaceRecoveryRequested) {
+  return <WorkspacePasswordRecoveryScreen language={loginLanguage} />;
+}
 if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
 }
@@ -28008,12 +28354,18 @@ if (!currentUser) {
               type="button"
               className="vf-forgot-link"
               onClick={() => {
+                setWorkspaceRecoveryEmail(loginForm.email || "");
+                setWorkspaceRecoveryMessage("");
                 setForgotPasswordOpen(true);
               }}
             >
               {loginLanguage === "AR" ? "نسيت كلمة المرور؟" : "Forgot Password?"}
             </button>
           </div>
+
+          {workspaceRecoveryMessage && !forgotPasswordOpen && (
+            <div className="vf-reset-message">{workspaceRecoveryMessage}</div>
+          )}
 
           <button
             type="button"
@@ -28101,19 +28453,49 @@ if (!currentUser) {
 
         {forgotPasswordOpen && (
           <div className="vf-reset-overlay">
-            <div className="vf-reset-modal">
+            <div className="vf-reset-modal" dir={loginLanguage === "AR" ? "rtl" : "ltr"}>
               <h3>{loginLanguage === "AR" ? "استعادة كلمة المرور" : "Password Recovery"}</h3>
               <p>
                 {loginLanguage === "AR"
-                  ? "استعادة كلمة المرور تتم مؤقتًا عن طريق إدارة المنصة."
-                  : "Password recovery is temporarily handled by the platform administrator."}
+                  ? "أدخل بريد حساب الشركة أو المكتب. سنرسل رابطًا آمنًا لتعيين كلمة مرور جديدة."
+                  : "Enter the company or agency account email. We will send a secure link to set a new password."}
               </p>
+
+              <input
+                type="email"
+                value={workspaceRecoveryEmail}
+                onChange={(event) => setWorkspaceRecoveryEmail(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" &&
+                  handleWorkspacePasswordRecoveryRequest()
+                }
+                placeholder={loginLanguage === "AR" ? "البريد الإلكتروني" : "Email address"}
+                autoComplete="email"
+                dir="ltr"
+              />
+
+              {workspaceRecoveryMessage && (
+                <div className="vf-reset-message">{workspaceRecoveryMessage}</div>
+              )}
 
               <div className="vf-reset-actions">
                 <button
                   type="button"
+                  onClick={handleWorkspacePasswordRecoveryRequest}
+                  disabled={workspaceRecoveryLoading}
+                >
+                  {workspaceRecoveryLoading
+                    ? loginLanguage === "AR" ? "جاري الإرسال..." : "Sending..."
+                    : loginLanguage === "AR" ? "إرسال رابط الاستعادة" : "Send Recovery Link"}
+                </button>
+                <button
+                  type="button"
                   className="secondary"
-                  onClick={() => setForgotPasswordOpen(false)}
+                  onClick={() => {
+                    setForgotPasswordOpen(false);
+                    setWorkspaceRecoveryMessage("");
+                  }}
+                  disabled={workspaceRecoveryLoading}
                 >
                   {loginLanguage === "AR" ? "إغلاق" : "Close"}
                 </button>
@@ -33868,7 +34250,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                 <td>{item.sla_score}%</td>
                 <td>{item.response_score}%</td>
-                <td>{item.quality_score}%</td>
+                <td>{item.quality_applicable ? formatOptionalPercentage(item.quality_score) : `N/A (${item.no_interview_candidates || 0} No Interview)`}</td>
                 <td>{item.rejection_score}%</td>
                 <td>{item.mobilization_score}%</td>
                 <td>{item.update_score}%</td>
@@ -33956,7 +34338,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   <td>{item.delayed_candidates || 0}</td>
                   <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                   <td>{item.sla_score || 0}%</td>
-                  <td>{item.quality_score || 0}%</td>
+                  <td>{formatOptionalPercentage(item.quality_score)}</td>
                   <td>{item.response_score || 0}%</td>
                   <td>{item.mobilization_score || 0}%</td>
                   <td>{item.update_score || 0}%</td>
@@ -34273,7 +34655,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                   <td>{item.sla_score || 0}%</td>
                   <td>{item.update_score || 0}%</td>
-                  <td>{item.quality_score || 0}%</td>
+                  <td>{formatOptionalPercentage(item.quality_score)}</td>
                   <td>{item.arrival_score || 0}%</td>
                   <td><b>{item.total_score || 0}%</b></td>
                   <td>{item.updated_at ? new Date(item.updated_at).toLocaleDateString("en-GB") : "-"}</td>
