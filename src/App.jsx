@@ -22,6 +22,11 @@ import {
   PUBLIC_VIEW,
 } from "./publicNavigation.mjs";
 import {
+  getUiDirection,
+  resolveUiLanguage,
+  shouldShowLanguageToggle,
+} from "./languagePolicy.mjs";
+import {
   calculateAgencyMobilizationScore,
   calculateApplicableWeightedScore,
   calculateInterviewQuality,
@@ -40,6 +45,8 @@ import {
 } from "./workspaceRecovery.mjs";
 import "./style.css";
 
+const UI_DIRECTION = getUiDirection();
+const SHOW_LANGUAGE_TOGGLE = shouldShowLanguageToggle();
 
 const PAGES = [
   "Executive Dashboard",
@@ -5295,13 +5302,15 @@ const PUBLIC_LANDING_COPY = {
 
 function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const copy = PUBLIC_LANDING_COPY[language] || PUBLIC_LANDING_COPY.AR;
-  const isArabic = language === "AR";
+  const effectiveLanguage = resolveUiLanguage({ preferredLanguage: language });
+  const copy =
+    PUBLIC_LANDING_COPY[effectiveLanguage] || PUBLIC_LANDING_COPY.EN;
+  const isArabic = effectiveLanguage === "AR";
   const demoHref = `mailto:support@visaflowksa.com?subject=${encodeURIComponent(isArabic ? "طلب تجربة VisaFlow KSA" : "VisaFlow KSA demo request")}`;
   const handleAnchorClick = () => setMobileMenuOpen(false);
 
   return (
-    <div className="vf-public" dir={copy.dir} lang={isArabic ? "ar" : "en"}>
+    <div className="vf-public" dir={getUiDirection(effectiveLanguage)} lang="en">
       <a className="vf-public-skip" href="#main-content">{isArabic ? "انتقل إلى المحتوى" : "Skip to content"}</a>
       <header className="vf-public-header">
         <a className="vf-public-brand" href="#home" aria-label="VisaFlow KSA" onClick={handleAnchorClick}>
@@ -5331,7 +5340,9 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
           </div>
         </nav>
         <div className="vf-public-header-actions">
-          <button type="button" className="vf-public-language" onClick={onLanguageChange}>{copy.language}</button>
+          {SHOW_LANGUAGE_TOGGLE && (
+            <button type="button" className="vf-public-language" onClick={onLanguageChange}>{copy.language}</button>
+          )}
           <button type="button" className="vf-public-login" onClick={onLogin}>{copy.nav.login}</button>
           <a className="vf-public-demo" href={demoHref}>{copy.nav.demo}</a>
         </div>
@@ -5993,7 +6004,13 @@ const [workspaceRecoveryLoading, setWorkspaceRecoveryLoading] = useState(false);
 const [workspaceRecoveryMessage, setWorkspaceRecoveryMessage] = useState(
   workspaceRecoveryLoginState.message
 );
-const [loginLanguage, setLoginLanguage] = useState("AR");
+const [loginLanguage, setLoginLanguage] = useState(() =>
+  resolveUiLanguage({
+    localStorage,
+    sessionStorage,
+    locationLike: window.location,
+  })
+);
 const [loginLogoFailed, setLoginLogoFailed] = useState(false);
 const [ssoInfoOpen, setSsoInfoOpen] = useState(false);
 const [showLoginPassword, setShowLoginPassword] = useState(false);
@@ -28105,7 +28122,7 @@ if (
   (currentUser && (!activeWorkspaceKey || validatedWorkspaceKey !== activeWorkspaceKey))
 ) {
   return (
-    <main className="vf-login-shell">
+    <main className="vf-login-shell" dir={UI_DIRECTION} lang="en">
       <section className="vf-login-right" style={{ width: "100%" }}>
         <div className="vf-login-card" style={{ maxWidth: "520px", textAlign: "center" }}>
           <h2>VisaFlow KSA</h2>
@@ -28175,7 +28192,7 @@ if (!currentUser) {
   ];
 
   return (
-    <main className="vf-login-shell">
+    <main className="vf-login-shell" dir={UI_DIRECTION} lang="en">
       <section className="vf-login-left">
         <div className="vf-orb vf-orb-a" />
         <div className="vf-orb vf-orb-b" />
@@ -28296,22 +28313,24 @@ if (!currentUser) {
           <span aria-hidden="true">{loginLanguage === "AR" ? "→" : "←"}</span>
           {loginLanguage === "AR" ? "العودة إلى الصفحة الرئيسية" : "Back to the public website"}
         </a>
-        <div className="vf-login-language">
-          <button
-            type="button"
-            className={loginLanguage === "EN" ? "active" : ""}
-            onClick={() => setLoginLanguage("EN")}
-          >
-            EN
-          </button>
-          <button
-            type="button"
-            className={loginLanguage === "AR" ? "active" : ""}
-            onClick={() => setLoginLanguage("AR")}
-          >
-            عربي
-          </button>
-        </div>
+        {SHOW_LANGUAGE_TOGGLE && (
+          <div className="vf-login-language">
+            <button
+              type="button"
+              className={loginLanguage === "EN" ? "active" : ""}
+              onClick={() => setLoginLanguage("EN")}
+            >
+              EN
+            </button>
+            <button
+              type="button"
+              className={loginLanguage === "AR" ? "active" : ""}
+              onClick={() => setLoginLanguage("AR")}
+            >
+              عربي
+            </button>
+          </div>
+        )}
 
         <div className="vf-login-card">
           <div className="vf-login-logo">
@@ -28545,7 +28564,7 @@ if (!currentUser) {
 
   if (currentRole === "Agency" && !currentCompanyId) {
     return (
-      <main className="vf-login-shell">
+      <main className="vf-login-shell" dir={UI_DIRECTION} lang="en">
         <section className="vf-login-right" style={{ width: "100%" }}>
           <div className="vf-login-card" style={{ maxWidth: "680px" }}>
             <div className="vf-login-logo">
@@ -28664,7 +28683,7 @@ if (!currentUser) {
   }
 
   return (
-    <div className="layout">
+    <div className="layout" dir={UI_DIRECTION} lang="en">
       <input ref={candidateExcelInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleExcelUpload} />
       <input ref={requestExcelInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleExcelUpload} />
       <input ref={employeeExcelInputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleEmployeesExcelUpload} />
