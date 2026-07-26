@@ -132,9 +132,6 @@ export async function completeWorkspacePasswordRecovery({
   password,
   confirmation,
   hasRecoveryProof,
-  clearRecoveryProof,
-  cleanCallbackUrl,
-  storeSuccessMessage,
 }) {
   if (!userId || !hasRecoveryProof?.(userId)) {
     const error = new Error("The recovery link is invalid.");
@@ -155,11 +152,47 @@ export async function completeWorkspacePasswordRecovery({
   const { error: updateError } = await auth.updateUser({ password });
   if (updateError) throw updateError;
 
-  clearRecoveryProof?.();
-  cleanCallbackUrl?.();
-  await auth.signOut({ scope: "local" });
-  storeSuccessMessage?.(WORKSPACE_RECOVERY_SUCCESS_MESSAGE);
-  return WORKSPACE_RECOVERY_SUCCESS_MESSAGE;
+  return {
+    success: true,
+    passwordUpdated: true,
+    message: WORKSPACE_RECOVERY_SUCCESS_MESSAGE,
+  };
+}
+
+export async function finalizeWorkspaceRecoverySuccess({
+  clearRecoveryProof,
+  cleanCallbackUrl,
+  storeSuccessMessage,
+  signOut,
+  redirectToLogin,
+  logger = console.warn,
+}) {
+  const errors = [];
+  const attempt = async (step, action) => {
+    if (typeof action !== "function") return;
+    try {
+      const result = await action();
+      if (result?.error) throw result.error;
+    } catch (error) {
+      errors.push({ step, error });
+      logger?.(`Workspace recovery ${step} failed after password update`, error);
+    }
+  };
+
+  await attempt("proof cleanup", clearRecoveryProof);
+  await attempt("URL cleanup", cleanCallbackUrl);
+  await attempt("success message storage", () =>
+    storeSuccessMessage?.(WORKSPACE_RECOVERY_SUCCESS_MESSAGE)
+  );
+  await attempt("local sign-out", signOut);
+  await attempt("login redirect", redirectToLogin);
+
+  return {
+    success: true,
+    passwordUpdated: true,
+    redirected: !errors.some(({ step }) => step === "login redirect"),
+    cleanupErrors: errors.map(({ step }) => step),
+  };
 }
 
 export function storeWorkspaceRecoverySuccess(storage, message) {

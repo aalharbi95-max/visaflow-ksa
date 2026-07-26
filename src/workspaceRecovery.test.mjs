@@ -5,6 +5,7 @@ import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
   completeWorkspacePasswordRecovery,
+  finalizeWorkspaceRecoverySuccess,
   getCleanWorkspaceRecoveryUrl,
   getWorkspaceRecoveryErrorMessage,
   getWorkspaceRecoveryUrlState,
@@ -82,16 +83,12 @@ test("a stale session cannot update the password without PASSWORD_RECOVERY proof
   assert.equal(updates, 0);
 });
 
-test("successful recovery updates, cleans, signs out locally, and stores success", async () => {
+test("a successful password update remains successful when local sign-out fails", async () => {
   const events = [];
-  const message = await completeWorkspacePasswordRecovery({
+  const updateResult = await completeWorkspacePasswordRecovery({
     auth: {
       updateUser: async (payload) => {
         events.push(["update", payload]);
-        return { error: null };
-      },
-      signOut: async (options) => {
-        events.push(["signout", options]);
         return { error: null };
       },
     },
@@ -99,17 +96,37 @@ test("successful recovery updates, cleans, signs out locally, and stores success
     password: "correct horse battery staple",
     confirmation: "correct horse battery staple",
     hasRecoveryProof: () => true,
+  });
+
+  assert.equal(updateResult.success, true);
+  assert.equal(updateResult.passwordUpdated, true);
+  assert.equal(updateResult.message, WORKSPACE_RECOVERY_SUCCESS_MESSAGE);
+
+  const warnings = [];
+  const cleanupResult = await finalizeWorkspaceRecoverySuccess({
     clearRecoveryProof: () => events.push(["clear-proof"]),
     cleanCallbackUrl: () => events.push(["clean-url"]),
     storeSuccessMessage: (value) => events.push(["success", value]),
+    signOut: async () => {
+      events.push(["signout", { scope: "local" }]);
+      return { error: new Error("local sign-out failed") };
+    },
+    redirectToLogin: () => events.push(["redirect", "/?login=1"]),
+    logger: (...args) => warnings.push(args),
   });
-  assert.equal(message, WORKSPACE_RECOVERY_SUCCESS_MESSAGE);
+
+  assert.equal(cleanupResult.success, true);
+  assert.equal(cleanupResult.passwordUpdated, true);
+  assert.equal(cleanupResult.redirected, true);
+  assert.deepEqual(cleanupResult.cleanupErrors, ["local sign-out"]);
+  assert.equal(warnings.length, 1);
   assert.deepEqual(events, [
     ["update", { password: "correct horse battery staple" }],
     ["clear-proof"],
     ["clean-url"],
-    ["signout", { scope: "local" }],
     ["success", WORKSPACE_RECOVERY_SUCCESS_MESSAGE],
+    ["signout", { scope: "local" }],
+    ["redirect", "/?login=1"],
   ]);
 });
 

@@ -31,6 +31,7 @@ import {
   buildWorkspaceRecoveryRedirectUrl,
   completeWorkspacePasswordRecovery,
   consumeWorkspaceRecoverySuccess,
+  finalizeWorkspaceRecoverySuccess,
   getCleanWorkspaceRecoveryUrl,
   getWorkspaceRecoveryErrorMessage,
   getWorkspaceRecoveryUrlState,
@@ -4994,20 +4995,15 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
   async function updatePassword() {
     setSaving(true);
     setMessage("");
+    let result;
     try {
-      await completeWorkspacePasswordRecovery({
+      result = await completeWorkspacePasswordRecovery({
         auth: supabase.auth,
         userId: session?.user?.id || "",
         password,
         confirmation,
         hasRecoveryProof: hasWorkspaceRecoveryProof,
-        clearRecoveryProof: clearWorkspaceRecoveryProof,
-        cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
-        storeSuccessMessage: (value) =>
-          storeWorkspaceRecoverySuccess(sessionStorage, value),
       });
-      const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
-      window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
     } catch (error) {
       if (error?.code === "password_too_short") {
         setMessage(
@@ -5021,7 +5017,26 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
         setMessage(getWorkspaceRecoveryErrorMessage(error, isArabic));
       }
       setSaving(false);
+      return;
     }
+
+    // updateUser succeeded. From this point onward the password change is
+    // final; cleanup failures must never be reported as recovery failures.
+    setMessage(result.message);
+    const cleanup = await finalizeWorkspaceRecoverySuccess({
+      clearRecoveryProof: clearWorkspaceRecoveryProof,
+      cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
+      storeSuccessMessage: (value) =>
+        storeWorkspaceRecoverySuccess(sessionStorage, value),
+      signOut: () => supabase.auth.signOut({ scope: "local" }),
+      redirectToLogin: () => {
+        const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
+        window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
+      },
+      logger: (...args) => console.warn(...args),
+    });
+
+    if (!cleanup.redirected) setSaving(false);
   }
 
   function requestNewLink() {
