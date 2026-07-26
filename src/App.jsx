@@ -2,9 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import {
+  clearWorkspaceRecoveryProof,
   clearTalentRecoveryProof,
   establishTalentRecoveryProof,
+  establishWorkspaceRecoveryProof,
   hasTalentRecoveryProof,
+  hasWorkspaceRecoveryProof,
+  interviewSupabase,
   talentSupabase,
   workspaceSupabase as supabase,
 } from "./supabase";
@@ -18,6 +22,36 @@ import {
   getPublicViewFromLocation,
   PUBLIC_VIEW,
 } from "./publicNavigation.mjs";
+import {
+  exchangeInterviewInvitation,
+  getInterviewMediaReadUrl,
+  loadInterviewPortalState,
+  readAndClearInterviewInvitation,
+  transitionInterviewPortal,
+  uploadInterviewMedia,
+} from "./interviewPortalApi.mjs";
+import {
+  AUTH_AUDIENCE,
+  assertSafeWorkspaceContext,
+  authUserMatchesAudience,
+  selectRememberedAgencyWorkspace,
+  toWorkspaceDisplayCache,
+} from "./securityContracts.mjs";
+import {
+  calculateAgencyMobilizationScore,
+  calculateApplicableWeightedScore,
+  calculateInterviewQuality,
+  formatOptionalPercentage,
+} from "./agencyPerformance.mjs";
+import {
+  buildWorkspaceRecoveryRedirectUrl,
+  completeWorkspacePasswordRecovery,
+  consumeWorkspaceRecoverySuccess,
+  getCleanWorkspaceRecoveryUrl,
+  getWorkspaceRecoveryErrorMessage,
+  getWorkspaceRecoveryUrlState,
+  storeWorkspaceRecoverySuccess,
+} from "./workspaceRecovery.mjs";
 import "./style.css";
 
 
@@ -345,7 +379,6 @@ const OFFICE_STATUSES = [
   "Departure",
   "Arrived KSA",
   "Arrived",
-  "Joined",
   "KSA Medical Failed",
   "Refused to Work",
   "Absconded",
@@ -1419,14 +1452,275 @@ function normalizeAIAgentSettings(row = {}) {
 }
 
 
-const AI_INTERVIEW_AUDIO_BUCKET = "ai-interview-audio";
-
+let cachedInterviewInvitation;
 function getAIInterviewAccessToken() {
+  if (cachedInterviewInvitation === undefined) cachedInterviewInvitation = readAndClearInterviewInvitation();
+  return cachedInterviewInvitation;
+}
+
+function getWorkspaceUpgradeId() {
   try {
-    return new URLSearchParams(window.location.search).get("ai_interview") || "";
+    const value = new URLSearchParams(window.location.search).get("upgrade_id") || "";
+    return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value) ? value : "";
   } catch {
     return "";
   }
+}
+
+function WorkspaceUpgradeScreen({ upgradeId }) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [message, setMessage] = useState("Set a new password to secure your VisaFlow Workspace account.");
+  const [saving, setSaving] = useState(false);
+
+  async function completeUpgrade() {
+    if (password.length < 12) return setMessage("Use at least 12 characters for the new password.");
+    if (password !== confirmation) return setMessage("The password confirmation does not match.");
+    setSaving(true);
+    try {
+      const verified = await verifyWorkspaceAuthSession(supabase.auth);
+      if (!verified.isVerified) throw new Error("Open the latest secure setup link from your email.");
+      const { error: passwordError } = await supabase.auth.updateUser({ password });
+      if (passwordError) throw passwordError;
+      const { error: linkError } = await supabase.rpc("complete_workspace_auth_upgrade", { p_upgrade_id: upgradeId });
+      if (linkError) throw new Error("This secure setup link is invalid or expired.");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("upgrade_id");
+      url.searchParams.delete("auth_flow");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+      window.location.reload();
+    } catch (error) {
+      setMessage(error?.message || "The account could not be secured.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="login-page" dir="ltr">
+      <section className="login-card">
+        <h1>Secure your VisaFlow account</h1>
+        <p>{message}</p>
+        <Input type="password" placeholder="New password" value={password} onChange={setPassword} />
+        <Input type="password" placeholder="Confirm password" value={confirmation} onChange={setConfirmation} />
+        <button className="save-btn" disabled={saving} onClick={completeUpgrade}>{saving ? "Securing..." : "Set password and continue"}</button>
+      </section>
+    </main>
+  );
+}
+
+
+function getWorkspaceRecoveryRedirectUrl() {
+  return buildWorkspaceRecoveryRedirectUrl(window.location.origin);
+}
+
+function clearWorkspaceRecoveryCallbackUrl() {
+  try {
+    const url = getCleanWorkspaceRecoveryUrl(window.location.href);
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    return url;
+  } catch {
+    // Keep the valid Auth session even if an embedded browser blocks history changes.
+    return null;
+  }
+}
+
+function WorkspacePasswordRecoveryScreen({ language = "AR" }) {
+  const isArabic = language === "AR";
+  const initialState = useMemo(
+    () => getWorkspaceRecoveryUrlState(window.location),
+    []
+  );
+  const [checking, setChecking] = useState(true);
+  const [ready, setReady] = useState(false);
+  const [session, setSession] = useState(null);
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    let recoveryTimer = null;
+
+    const acceptRecoverySession = (nextSession) => {
+      const user = nextSession?.user || null;
+      if (!user?.id || !authUserMatchesAudience(user, AUTH_AUDIENCE.WORKSPACE)) return false;
+      if (!establishWorkspaceRecoveryProof("PASSWORD_RECOVERY", nextSession)) return false;
+      if (!mounted) return true;
+      setSession(nextSession);
+      setReady(true);
+      setChecking(false);
+      setMessage("");
+      return true;
+    };
+
+    const rejectRecoverySession = (error = null) => {
+      if (!mounted) return;
+      setReady(false);
+      setChecking(false);
+      setMessage(getWorkspaceRecoveryErrorMessage(error || { code: "invalid_link" }, isArabic));
+    };
+
+    if (initialState.error) {
+      rejectRecoverySession(initialState.error);
+      return undefined;
+    }
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (!mounted || event !== "PASSWORD_RECOVERY") return;
+      if (recoveryTimer) window.clearTimeout(recoveryTimer);
+      if (!acceptRecoverySession(nextSession)) rejectRecoverySession({ code: "invalid_link" });
+    });
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) {
+        rejectRecoverySession(error);
+        return;
+      }
+
+      const activeSession = data?.session || null;
+      const userId = activeSession?.user?.id || "";
+      if (
+        userId &&
+        authUserMatchesAudience(activeSession.user, AUTH_AUDIENCE.WORKSPACE) &&
+        hasWorkspaceRecoveryProof(userId)
+      ) {
+        setSession(activeSession);
+        setReady(true);
+        setChecking(false);
+        return;
+      }
+
+      // Supabase can emit PASSWORD_RECOVERY just after getSession resolves.
+      recoveryTimer = window.setTimeout(() => rejectRecoverySession({ code: "invalid_link" }), 1800);
+    });
+
+    return () => {
+      mounted = false;
+      if (recoveryTimer) window.clearTimeout(recoveryTimer);
+      listener?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  async function updateWorkspacePassword() {
+    const activeUserId = session?.user?.id || "";
+    if (!ready || !activeUserId || !hasWorkspaceRecoveryProof(activeUserId)) {
+      setMessage(getWorkspaceRecoveryErrorMessage({ code: "invalid_link" }, isArabic));
+      return;
+    }
+    if (password.length < 12) {
+      setMessage(isArabic ? "استخدم كلمة مرور لا تقل عن 12 حرفًا." : "Use a password with at least 12 characters.");
+      return;
+    }
+    if (password !== confirmation) {
+      setMessage(isArabic ? "كلمتا المرور غير متطابقتين." : "The password confirmation does not match.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    try {
+      await completeWorkspacePasswordRecovery({
+        auth: supabase.auth,
+        userId: activeUserId,
+        password,
+        confirmation,
+        hasRecoveryProof: hasWorkspaceRecoveryProof,
+        clearRecoveryProof: clearWorkspaceRecoveryProof,
+        cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
+        storeSuccessMessage: (successMessage) =>
+          storeWorkspaceRecoverySuccess(sessionStorage, successMessage),
+      });
+      const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
+      window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
+    } catch (error) {
+      if (error?.code === "password_too_short") {
+        setMessage(isArabic ? "استخدم كلمة مرور لا تقل عن 12 حرفًا." : error.message);
+      } else if (error?.code === "password_mismatch") {
+        setMessage(isArabic ? "كلمتا المرور غير متطابقتين." : error.message);
+      } else {
+        setMessage(getWorkspaceRecoveryErrorMessage(error, isArabic));
+      }
+      setSaving(false);
+    }
+  }
+
+  function requestNewLink() {
+    clearWorkspaceRecoveryProof();
+    clearWorkspaceRecoveryCallbackUrl();
+    window.location.reload();
+  }
+
+  return (
+    <main className="vf-login-shell" dir={isArabic ? "rtl" : "ltr"}>
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <div className="vf-login-card" style={{ maxWidth: "520px" }}>
+          <div className="vf-login-logo">
+            <img src="/visaflow-logo.png" alt="VisaFlow KSA" className="vf-login-card-logo" />
+          </div>
+          <h2>{isArabic ? "تعيين كلمة مرور جديدة" : "Set a New Password"}</h2>
+          <p className="vf-login-subtitle">
+            {checking
+              ? (isArabic ? "جاري التحقق من رابط الاستعادة الآمن..." : "Checking the secure recovery link...")
+              : ready
+                ? (isArabic ? "أنشئ كلمة مرور قوية لحساب الشركة أو المكتب." : "Create a strong password for your company or agency account.")
+                : (isArabic ? "لا يمكن استخدام رابط الاستعادة الحالي." : "The current recovery link cannot be used.")}
+          </p>
+
+          {ready && (
+            <>
+              <div className="vf-form-group">
+                <label>{isArabic ? "كلمة المرور الجديدة" : "New Password"}</label>
+                <div className="vf-input-box">
+                  <span className="vf-input-icon">🔒</span>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="new-password"
+                    placeholder={isArabic ? "12 حرفًا على الأقل" : "At least 12 characters"}
+                  />
+                </div>
+              </div>
+              <div className="vf-form-group">
+                <label>{isArabic ? "تأكيد كلمة المرور" : "Confirm Password"}</label>
+                <div className="vf-input-box">
+                  <span className="vf-input-icon">🔒</span>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                    autoComplete="new-password"
+                    placeholder={isArabic ? "أعد كتابة كلمة المرور" : "Repeat the new password"}
+                  />
+                </div>
+              </div>
+              <label className="vf-remember" style={{ marginTop: 8 }}>
+                <input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} />
+                <span>{isArabic ? "إظهار كلمة المرور" : "Show password"}</span>
+              </label>
+            </>
+          )}
+
+          {message && <div className="vf-reset-message">{message}</div>}
+
+          <div className="vf-reset-actions" style={{ marginTop: 18 }}>
+            {ready ? (
+              <button type="button" onClick={updateWorkspacePassword} disabled={saving || checking}>
+                {saving ? (isArabic ? "جاري الحفظ..." : "Saving...") : (isArabic ? "حفظ كلمة المرور" : "Save New Password")}
+              </button>
+            ) : (
+              <button type="button" onClick={requestNewLink} disabled={checking}>
+                {isArabic ? "طلب رابط جديد" : "Request a New Link"}
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function getRecordingExtension(mimeType = "", isVideo = false) {
@@ -1439,6 +1733,7 @@ function getRecordingExtension(mimeType = "", isVideo = false) {
 }
 
 function isAIInterviewVideoRecording(answerOrPath = "") {
+  if (typeof answerOrPath === "object" && answerOrPath?.media_type) return answerOrPath.media_type === "video";
   const path = typeof answerOrPath === "string"
     ? answerOrPath
     : (answerOrPath?.audio_storage_path || answerOrPath?.video_storage_path || "");
@@ -1457,6 +1752,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const [template, setTemplate] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState([]);
+  const [capabilityId, setCapabilityId] = useState(() => sessionStorage.getItem("visaflow-interview-capability") || "");
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [participationConsentChecked, setParticipationConsentChecked] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
@@ -1563,13 +1859,13 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setCurrentAudioUrl("");
     setCurrentMediaType(isAIInterviewVideoRecording(savedAnswer) ? "video" : "audio");
 
-    if (savedAnswer?.audio_storage_path) {
-      createCandidateSignedAudioUrl(savedAnswer.audio_storage_path).then(setCurrentAudioUrl).catch(() => setCurrentAudioUrl(""));
+    if (savedAnswer?.has_media && savedAnswer?.id) {
+      createCandidateSignedAudioUrl(savedAnswer.id).then(setCurrentAudioUrl).catch(() => setCurrentAudioUrl(""));
     }
   }, [currentQuestionIndex, currentQuestion?.id, answers.length, session?.id]);
 
   async function loadCandidateInterviewPortal() {
-    if (!accessToken) {
+    if (!accessToken && !capabilityId) {
       setPortalError("The AI interview link is missing or invalid.");
       setPortalLoading(false);
       return;
@@ -1579,66 +1875,24 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setPortalError("");
 
     try {
-      const { data: sessionRow, error: sessionError } = await supabase
-        .from("ai_interview_sessions")
-        .select("*")
-        .eq("access_token", accessToken)
-        .maybeSingle();
-
-      if (sessionError) throw sessionError;
-      if (!sessionRow) throw new Error("This AI interview session was not found.");
-
-      const expiryDate = sessionRow.expires_at ? new Date(sessionRow.expires_at) : null;
-      if (expiryDate && expiryDate < new Date() && !["Completed", "Cancelled"].includes(sessionRow.status)) {
-        await supabase
-          .from("ai_interview_sessions")
-          .update({ status: "Expired", updated_at: new Date().toISOString() })
-          .eq("id", sessionRow.id);
-        sessionRow.status = "Expired";
+      let activeCapability = capabilityId;
+      if (accessToken) {
+        // A newly opened invitation must never inherit another interview's
+        // anonymous Auth identity or cached capability from this tab.
+        sessionStorage.removeItem("visaflow-interview-capability");
+        await interviewSupabase.auth.signOut({ scope: "local" }).catch(() => {});
+        const exchanged = await exchangeInterviewInvitation(interviewSupabase, accessToken);
+        activeCapability = exchanged.capability_id;
+        sessionStorage.setItem("visaflow-interview-capability", activeCapability);
+        setCapabilityId(activeCapability);
+        cachedInterviewInvitation = "";
+      } else if (!activeCapability) {
+        throw new Error("This interview link is missing or invalid.");
       }
-
-      const [templateResult, questionsResult, answersResult] = await Promise.all([
-        supabase
-          .from("ai_interview_templates")
-          .select("*")
-          .eq("id", sessionRow.template_id)
-          .maybeSingle(),
-        supabase
-          .from("ai_interview_questions")
-          .select("*")
-          .eq("template_id", sessionRow.template_id)
-          .eq("is_active", true)
-          .order("question_order", { ascending: true }),
-        supabase
-          .from("ai_interview_answers")
-          .select("*")
-          .eq("session_id", sessionRow.id)
-          .order("question_order", { ascending: true }),
-      ]);
-
-      if (templateResult.error) throw templateResult.error;
-      if (questionsResult.error) throw questionsResult.error;
-      if (answersResult.error) throw answersResult.error;
-
-      const questionRows = questionsResult.data || [];
-      const answerRows = answersResult.data || [];
-      let nextSession = sessionRow;
-
-      if (["Created", "Invitation Pending", "Invited"].includes(sessionRow.status)) {
-        const now = new Date().toISOString();
-        const { data: openedSession, error: openError } = await supabase
-          .from("ai_interview_sessions")
-          .update({
-            status: sessionRow.consent_required === false || sessionRow.consent_accepted ? "Ready" : "Opened",
-            first_opened_at: sessionRow.first_opened_at || now,
-            updated_at: now,
-          })
-          .eq("id", sessionRow.id)
-          .select("*")
-          .single();
-
-        if (!openError && openedSession) nextSession = openedSession;
-      }
+      const state = await loadInterviewPortalState(interviewSupabase, activeCapability);
+      const nextSession = state.session;
+      const questionRows = state.questions || [];
+      const answerRows = state.answers || [];
 
       const completedOrders = new Set(
         answerRows
@@ -1650,7 +1904,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
       );
 
       setSession(nextSession);
-      setTemplate(templateResult.data || null);
+      setTemplate(state.template || null);
       setQuestions(questionRows);
       setAnswers(answerRows);
       setParticipationConsentChecked(Boolean(nextSession.participation_consent_accepted));
@@ -1663,20 +1917,39 @@ function AIInterviewCandidatePortal({ accessToken }) {
       realtimeQuestionOrderRef.current = Number(questionRows[nextQuestionIndex]?.question_order || nextSession.current_question_order || 1);
       interviewStartedAtRef.current = nextSession.started_at ? new Date(nextSession.started_at) : null;
     } catch (error) {
-      console.warn("AI interview portal load failed", error?.message || error);
-      setPortalError(error?.message || "The AI interview portal could not be loaded.");
+      sessionStorage.removeItem("visaflow-interview-capability");
+      setCapabilityId("");
+      interviewSupabase.auth.signOut({ scope: "local" }).catch(() => {});
+      setPortalError(error?.message || "This interview link is invalid, expired, or already used.");
     } finally {
       setPortalLoading(false);
     }
   }
 
-  async function createCandidateSignedAudioUrl(path) {
-    if (!path) return "";
-    const { data, error } = await supabase.storage
-      .from(AI_INTERVIEW_AUDIO_BUCKET)
-      .createSignedUrl(path, 60 * 60);
-    if (error) throw error;
-    return data?.signedUrl || "";
+  function applyPortalState(state) {
+    if (state?.session) setSession(state.session);
+    if (state?.template) setTemplate(state.template);
+    if (state?.questions) setQuestions(state.questions);
+    if (state?.answers) setAnswers(state.answers);
+    return state;
+  }
+
+  async function secureTransition(action, payload = {}) {
+    if (!capabilityId) throw new Error("The secure interview session is unavailable.");
+    const state = await transitionInterviewPortal(
+      interviewSupabase,
+      capabilityId,
+      action,
+      payload,
+      window.crypto?.randomUUID?.() || `${Date.now()}`,
+    );
+    return applyPortalState(state);
+  }
+
+  async function createCandidateSignedAudioUrl(answerId) {
+    if (!answerId || !capabilityId) return "";
+    const result = await getInterviewMediaReadUrl(interviewSupabase, capabilityId, answerId);
+    return result.signed_url || "";
   }
 
   async function acceptConsent() {
@@ -1689,35 +1962,17 @@ function AIInterviewCandidatePortal({ accessToken }) {
     }
 
     setPortalMessage("");
-    const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from("ai_interview_sessions")
-      .update({
-        participation_consent_accepted: true,
-        participation_consent_accepted_at: now,
-        consent_accepted: true,
-        consent_accepted_at: now,
-        consent_user_agent: navigator.userAgent || "",
+    try {
+      await secureTransition("accept_consent", {
+        participation_consent: true,
+        recording_consent: true,
         evaluation_email_consent: Boolean(evaluationSummaryConsentChecked),
-        evaluation_email_consent_at: evaluationSummaryConsentChecked ? now : null,
         employer_sharing_consent: Boolean(employerSharingConsentChecked),
-        employer_sharing_consent_at: employerSharingConsentChecked ? now : null,
-        consent_version: "visaflow-ai-pilot-v1",
-        participation_declined_at: null,
-        status: microphoneReady ? "Ready" : "Consent Pending",
-        updated_at: now,
-      })
-      .eq("id", session.id)
-      .eq("access_token", accessToken)
-      .select("*")
-      .single();
-
-    if (error) {
+      });
+    } catch (error) {
       setPortalMessage(error.message);
       return;
     }
-
-    setSession(data);
     setPortalMessage(tr(
       "Your pilot participation choices were saved successfully.",
       "تم حفظ اختيارات المشاركة في التجربة بنجاح."
@@ -1735,24 +1990,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setPortalMessage("");
 
     try {
-      const now = new Date().toISOString();
-      const { data, error } = await supabase
-        .from("ai_interview_sessions")
-        .update({
-          status: "Cancelled",
-          participation_declined_at: now,
-          participation_consent_accepted: false,
-          employer_sharing_consent: false,
-          evaluation_email_consent: false,
-          updated_at: now,
-        })
-        .eq("id", session.id)
-        .eq("access_token", accessToken)
-        .select("*")
-        .single();
-
-      if (error) throw error;
-      setSession(data);
+      await secureTransition("decline");
       setPortalMessage(tr(
         "Your choice was saved. No interview recording will take place.",
         "تم حفظ اختيارك، ولن يتم إجراء أو تسجيل المقابلة."
@@ -1825,26 +2063,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     try {
       await ensureCaptureStream({ withVideo: cameraReady });
-      const now = new Date().toISOString();
-      const nextStatus = session.consent_required !== false && !session.consent_accepted
-        ? "Consent Pending"
-        : "Ready";
-
-      const { data, error } = await supabase
-        .from("ai_interview_sessions")
-        .update({
-          microphone_test_passed: true,
-          status: nextStatus,
-          updated_at: now,
-        })
-        .eq("id", session.id)
-        .eq("access_token", accessToken)
-        .select("*")
-        .single();
-
-      if (error) throw error;
+      await secureTransition("microphone_test");
       setMicrophoneReady(true);
-      setSession(data);
       setPortalMessage(tr("Microphone access is working.", "تم التحقق من عمل الميكروفون."));
     } catch (error) {
       setPortalMessage(error?.message || tr("Microphone test failed.", "فشل اختبار الميكروفون."));
@@ -1859,6 +2079,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     try {
       await ensureCaptureStream({ withVideo: true });
+      await secureTransition("camera_test");
       setCameraReady(true);
       setCameraSkipped(false);
       setMicrophoneReady(true);
@@ -1983,20 +2204,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
             return;
           }
 
-          const extension = getRecordingExtension(mimeType, isVideo);
-          const randomPart = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const mediaLabel = isVideo ? "live-video" : "live-audio";
-          const storagePath = `${session.company_id}/${session.id}/question-${questionOrder}-${mediaLabel}-${randomPart}.${extension}`;
-          const { error: uploadError } = await supabase.storage
-            .from(AI_INTERVIEW_AUDIO_BUCKET)
-            .upload(storagePath, blob, {
-              contentType: mimeType,
-              cacheControl: "3600",
-              upsert: false,
-            });
-
-          if (uploadError) throw uploadError;
-          resolve({ path: storagePath, durationSeconds, isVideo, startedAt: startedAt?.toISOString?.() || "" });
+          const question = questions.find((item) => Number(item.question_order) === Number(questionOrder));
+          if (!question?.id || !capabilityId) throw new Error("The interview question is unavailable.");
+          const uploaded = await uploadInterviewMedia(interviewSupabase, capabilityId, question.id, blob);
+          resolve({ uploadId: uploaded.upload_id, durationSeconds, isVideo, startedAt: startedAt?.toISOString?.() || "" });
         } catch (error) {
           console.warn("Live interview media upload failed", error?.message || error);
           resolve({ path: "", durationSeconds: 0, isVideo: false, startedAt: startedAt?.toISOString?.() || "" });
@@ -2027,7 +2238,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     await saveCandidateAnswerRecord({
       question,
-      audioStoragePath: mediaResult.path,
+      uploadId: mediaResult.uploadId,
       audioDurationSeconds: mediaResult.durationSeconds,
       answerStatus: "Answered",
       transcriptionStatus: "Completed",
@@ -2041,14 +2252,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
     const nextOrder = Math.min(questionOrder + 1, questions.length || questionOrder);
     realtimeQuestionOrderRef.current = nextOrder;
     setCurrentQuestionIndex(Math.max(0, nextOrder - 1));
-    const { data: advancedSession } = await supabase
-      .from("ai_interview_sessions")
-      .update({ current_question_order: nextOrder, updated_at: new Date().toISOString() })
-      .eq("id", session.id)
-      .eq("access_token", accessToken)
-      .select("*")
-      .maybeSingle();
-    if (advancedSession) setSession(advancedSession);
+    await secureTransition("set_question", { question_order: nextOrder });
 
     sendRealtimeEvent({
       type: "conversation.item.create",
@@ -2075,42 +2279,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     await stopLiveMediaSegmentAndUpload(realtimeQuestionOrderRef.current, true);
 
-    const { data: answerRows, error: answerError } = await supabase
-      .from("ai_interview_answers")
-      .select("*")
-      .eq("session_id", session.id)
-      .order("question_order", { ascending: true });
-    if (answerError) throw answerError;
-
-    const finalAnswers = answerRows || [];
-    const finalAnswered = finalAnswers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
-    const finalSkipped = finalAnswers.filter((answer) => answer.answer_status === "Skipped").length;
-    const now = new Date();
-    const startedAt = interviewStartedAtRef.current || (session.started_at ? new Date(session.started_at) : now);
-    const durationSeconds = Math.max(0, Math.round((now - startedAt) / 1000));
-
-    const { data, error } = await supabase
-      .from("ai_interview_sessions")
-      .update({
-        status: "Completed",
-        completed_at: now.toISOString(),
-        current_question_order: questions.length,
-        total_questions: questions.length,
-        answered_questions: finalAnswered,
-        skipped_questions: finalSkipped,
-        interview_duration_seconds: durationSeconds,
-        review_status: "Pending Human Review",
-        ai_recommendation: "Pending Analysis",
-        updated_at: now.toISOString(),
-      })
-      .eq("id", session.id)
-      .eq("access_token", accessToken)
-      .select("*")
-      .single();
-
-    if (error) throw error;
+    const completedState = await secureTransition("complete");
+    const finalAnswers = completedState.answers || [];
     setAnswers(finalAnswers);
-    setSession(data);
+    setSession(completedState.session);
     setLivePhase(tr("Interview completed", "تم إكمال المقابلة"));
 
     sendRealtimeEvent({
@@ -2285,25 +2457,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     try {
       const stream = await ensureCaptureStream({ withVideo: cameraReady });
-      const now = new Date().toISOString();
       const firstQuestionOrder = Number(currentQuestion?.question_order || realtimeQuestionOrderRef.current || 1);
-      const { data: startedSession, error: startError } = await supabase
-        .from("ai_interview_sessions")
-        .update({
-          status: "In Progress",
-          started_at: session.started_at || now,
-          current_question_order: firstQuestionOrder,
-          total_questions: questions.length,
-          updated_at: now,
-        })
-        .eq("id", session.id)
-        .eq("access_token", accessToken)
-        .select("*")
-        .single();
-      if (startError) throw startError;
-
+      const startedState = await secureTransition("start", { question_order: firstQuestionOrder });
+      const startedSession = startedState.session;
       setSession(startedSession);
-      interviewStartedAtRef.current = new Date(startedSession.started_at || now);
+      interviewStartedAtRef.current = new Date(startedSession.started_at || new Date().toISOString());
       realtimeQuestionOrderRef.current = firstQuestionOrder;
 
       const peerConnection = new RTCPeerConnection();
@@ -2356,11 +2514,15 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
+      const { data: interviewAuth } = await interviewSupabase.auth.getSession();
+      const interviewJwt = interviewAuth?.session?.access_token || "";
+      if (!interviewJwt) throw new Error("The secure interview session is unavailable.");
       const response = await fetch(getRealtimeFunctionUrl(), {
         method: "POST",
         headers: {
           "Content-Type": "application/sdp",
-          "X-AI-Interview-Token": accessToken,
+          "Authorization": `Bearer ${interviewJwt}`,
+          "X-Interview-Capability": capabilityId,
         },
         body: offer.sdp || "",
       });
@@ -2411,25 +2573,10 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     try {
       await ensureCaptureStream({ withVideo: cameraReady });
-      const now = new Date().toISOString();
       const firstQuestionOrder = Number(currentQuestion?.question_order || 1);
-      const { data, error } = await supabase
-        .from("ai_interview_sessions")
-        .update({
-          status: "In Progress",
-          started_at: session.started_at || now,
-          current_question_order: firstQuestionOrder,
-          total_questions: questions.length,
-          updated_at: now,
-        })
-        .eq("id", session.id)
-        .eq("access_token", accessToken)
-        .select("*")
-        .single();
-
-      if (error) throw error;
-      interviewStartedAtRef.current = new Date(data.started_at || now);
-      setSession(data);
+      const startedState = await secureTransition("start", { question_order: firstQuestionOrder });
+      interviewStartedAtRef.current = new Date(startedState.session.started_at || new Date().toISOString());
+      setSession(startedState.session);
       setPortalMessage("");
     } catch (error) {
       setPortalMessage(error?.message || tr("The interview could not be started.", "تعذر بدء المقابلة."));
@@ -2553,30 +2700,16 @@ function AIInterviewCandidatePortal({ accessToken }) {
         1,
         Math.round((Date.now() - (recordingStartedAtRef.current?.getTime?.() || Date.now())) / 1000)
       );
-      const extension = getRecordingExtension(mimeType, isVideo);
-      const randomPart = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const mediaLabel = isVideo ? "video" : "audio";
-      const storagePath = `${session.company_id}/${session.id}/question-${question.question_order}-${mediaLabel}-${randomPart}.${extension}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from(AI_INTERVIEW_AUDIO_BUCKET)
-        .upload(storagePath, blob, {
-          contentType: mimeType,
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-      if (uploadError) throw new Error(`${isVideo ? "Video" : "Audio"} upload failed: ${uploadError.message}`);
-
-      await saveCandidateAnswerRecord({
+      const uploaded = await uploadInterviewMedia(interviewSupabase, capabilityId, question.id, blob);
+      const savedAnswer = await saveCandidateAnswerRecord({
         question,
-        audioStoragePath: storagePath,
+        uploadId: uploaded.upload_id,
         audioDurationSeconds: durationSeconds,
         answerStatus: "Answered",
         transcriptionStatus: "Pending",
       });
 
-      const signedUrl = await createCandidateSignedAudioUrl(storagePath).catch(() => "");
+      const signedUrl = await createCandidateSignedAudioUrl(savedAnswer?.id).catch(() => "");
       setCurrentAudioUrl(signedUrl);
       setCurrentMediaType(isVideo ? "video" : "audio");
       setCurrentAnswerSaved(true);
@@ -2596,7 +2729,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
   async function saveCandidateAnswerRecord({
     question,
-    audioStoragePath = "",
+    uploadId = "",
     audioDurationSeconds = 0,
     answerStatus = "Answered",
     transcriptionStatus = "Pending",
@@ -2604,90 +2737,17 @@ function AIInterviewCandidatePortal({ accessToken }) {
     answerLanguage = "",
     answerStartedAt = "",
   }) {
-    const now = new Date().toISOString();
     const questionOrder = Number(question.question_order || currentQuestionIndex + 1);
-    const payload = {
-      company_id: session.company_id,
-      session_id: session.id,
+    const state = await secureTransition(answerStatus === "Skipped" ? "skip_answer" : "save_answer", {
       question_id: question.id || null,
-      question_order: questionOrder,
-      question_text_snapshot: question.question_text || question.question_text_en || question.question_text_ar || "Question",
-      question_type: question.question_type || "Open Question",
-      competency: question.competency || "General",
-      asked_at: questionAskedAtRef.current || now,
-      answer_started_at: answerStartedAt || recordingStartedAtRef.current?.toISOString?.() || now,
-      answer_completed_at: now,
       answer_text: String(answerText || ""),
       answer_language: answerLanguage || (portalLanguage === "AR" ? "Arabic" : "English"),
-      audio_storage_path: audioStoragePath,
+      upload_id: uploadId || null,
       audio_duration_seconds: Number(audioDurationSeconds || 0),
+      answer_started_at: answerStartedAt || recordingStartedAtRef.current?.toISOString?.() || "",
       transcription_status: transcriptionStatus,
-      answer_status: answerStatus,
-      updated_at: now,
-    };
-
-    const { data: existingRows, error: existingError } = await supabase
-      .from("ai_interview_answers")
-      .select("id")
-      .eq("session_id", session.id)
-      .eq("question_order", questionOrder)
-      .limit(1);
-
-    if (existingError) throw existingError;
-
-    let saveResult;
-    if (existingRows?.[0]?.id) {
-      saveResult = await supabase
-        .from("ai_interview_answers")
-        .update(payload)
-        .eq("id", existingRows[0].id)
-        .select("*")
-        .single();
-    } else {
-      saveResult = await supabase
-        .from("ai_interview_answers")
-        .insert([payload])
-        .select("*")
-        .single();
-    }
-
-    if (saveResult.error) throw saveResult.error;
-    await refreshCandidateInterviewProgress(questionOrder);
-    return saveResult.data;
-  }
-
-  async function refreshCandidateInterviewProgress(currentOrder = 0) {
-    const { data: answerRows, error: answersError } = await supabase
-      .from("ai_interview_answers")
-      .select("*")
-      .eq("session_id", session.id)
-      .order("question_order", { ascending: true });
-
-    if (answersError) throw answersError;
-
-    const nextAnswers = answerRows || [];
-    const nextAnsweredCount = nextAnswers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
-    const nextSkippedCount = nextAnswers.filter((answer) => answer.answer_status === "Skipped").length;
-    const now = new Date().toISOString();
-
-    const { data: sessionRow, error: sessionError } = await supabase
-      .from("ai_interview_sessions")
-      .update({
-        status: "In Progress",
-        current_question_order: Number(currentOrder || 0),
-        total_questions: questions.length,
-        answered_questions: nextAnsweredCount,
-        skipped_questions: nextSkippedCount,
-        updated_at: now,
-      })
-      .eq("id", session.id)
-      .eq("access_token", accessToken)
-      .select("*")
-      .single();
-
-    if (sessionError) throw sessionError;
-    setAnswers(nextAnswers);
-    setSession(sessionRow);
+    });
+    return (state.answers || []).find((item) => Number(item.question_order) === questionOrder) || null;
   }
 
   async function skipCurrentQuestion() {
@@ -2732,15 +2792,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setRecordingSeconds(0);
     questionAskedAtRef.current = new Date().toISOString();
 
-    const { data, error } = await supabase
-      .from("ai_interview_sessions")
-      .update({ current_question_order: nextOrder, updated_at: new Date().toISOString() })
-      .eq("id", session.id)
-      .eq("access_token", accessToken)
-      .select("*")
-      .single();
-
-    if (!error && data) setSession(data);
+    await secureTransition("set_question", { question_order: nextOrder });
   }
 
   async function completeCandidateInterview() {
@@ -2750,42 +2802,9 @@ function AIInterviewCandidatePortal({ accessToken }) {
     setPortalMessage(tr("Completing your interview...", "جاري إنهاء المقابلة..."));
 
     try {
-      const { data: answerRows, error: answerError } = await supabase
-        .from("ai_interview_answers")
-        .select("*")
-        .eq("session_id", session.id)
-        .order("question_order", { ascending: true });
-      if (answerError) throw answerError;
-
-      const finalAnswers = answerRows || [];
-      const finalAnswered = finalAnswers.filter((answer) => ["Answered", "Analyzed"].includes(answer.answer_status)).length;
-      const finalSkipped = finalAnswers.filter((answer) => answer.answer_status === "Skipped").length;
-      const now = new Date();
-      const startedAt = interviewStartedAtRef.current || (session.started_at ? new Date(session.started_at) : now);
-      const durationSeconds = Math.max(0, Math.round((now - startedAt) / 1000));
-
-      const { data, error } = await supabase
-        .from("ai_interview_sessions")
-        .update({
-          status: "Completed",
-          completed_at: now.toISOString(),
-          current_question_order: questions.length,
-          total_questions: questions.length,
-          answered_questions: finalAnswered,
-          skipped_questions: finalSkipped,
-          interview_duration_seconds: durationSeconds,
-          review_status: "Pending Human Review",
-          ai_recommendation: "Pending Analysis",
-          updated_at: now.toISOString(),
-        })
-        .eq("id", session.id)
-        .eq("access_token", accessToken)
-        .select("*")
-        .single();
-
-      if (error) throw error;
-      setAnswers(finalAnswers);
-      setSession(data);
+      const completedState = await secureTransition("complete");
+      setAnswers(completedState.answers || []);
+      setSession(completedState.session);
       setPortalMessage("");
       stopCaptureStream();
     } catch (error) {
@@ -5257,6 +5276,11 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
 }
 
 function App() {
+  const workspaceRecoveryUrlState = useMemo(
+    () => getWorkspaceRecoveryUrlState(window.location),
+    []
+  );
+  const workspaceRecoveryRequested = workspaceRecoveryUrlState.requested;
   const [activePage, setActivePage] = useState("Dashboard");
   const [publicView, setPublicView] = useState(() => getPublicViewFromLocation(window.location));
   const [talentPortalOpen, setTalentPortalOpen] = useState(() => {
@@ -5658,12 +5682,10 @@ const currentWorkspaceUserRef = useRef(null);
 const workspaceAuthReadyRef = useRef(false);
 const [agencyClientAccess, setAgencyClientAccess] = useState([]);
 const [agencyWorkspaceLoading, setAgencyWorkspaceLoading] = useState(false);
-const [activeAgencyCompanyId, setActiveAgencyCompanyId] = useState(() =>
-  sessionStorage.getItem("visaflow_agency_company_id") || ""
-);
-const [activeAgencyCompanyName, setActiveAgencyCompanyName] = useState(() =>
-  sessionStorage.getItem("visaflow_agency_company_name") || ""
-);
+// Tenant identifiers are populated only from the authenticated workspace RPC.
+// The browser persists only the opaque access-row selector, never company authority.
+const [activeAgencyCompanyId, setActiveAgencyCompanyId] = useState("");
+const [activeAgencyCompanyName, setActiveAgencyCompanyName] = useState("");
 const DEFAULT_COMPANY_ID = "";
 const rawCurrentRole = String(currentUser?.role || "").trim();
 const isCurrentAgencyUser = rawCurrentRole.toLowerCase() === "agency";
@@ -5738,6 +5760,11 @@ const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 const [loginLoading, setLoginLoading] = useState(false);
 const [rememberMe, setRememberMe] = useState(true);
 const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+const [workspaceRecoveryEmail, setWorkspaceRecoveryEmail] = useState("");
+const [workspaceRecoveryLoading, setWorkspaceRecoveryLoading] = useState(false);
+const [workspaceRecoveryMessage, setWorkspaceRecoveryMessage] = useState(() =>
+  consumeWorkspaceRecoverySuccess(sessionStorage)
+);
 const [loginLanguage, setLoginLanguage] = useState("AR");
 const [loginLogoFailed, setLoginLogoFailed] = useState(false);
 const [ssoInfoOpen, setSsoInfoOpen] = useState(false);
@@ -6241,67 +6268,15 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
   setAgencyWorkspaceLoading(true);
 
   try {
-    const { data: accessRows, error: accessError } = await supabase
-      .from("agency_company_user_access")
-      .select("*")
-      .eq("status", "Active")
-      .eq("user_id", effectiveUser.id)
-      .eq("agency_id", effectiveUser.agency_id)
-      .range(0, 500);
-
-    if (accessError) {
-      console.warn("agency_company_user_access:", accessError.message);
-      setAgencyClientAccess([]);
-      return [];
-    }
-
-    const companyIds = Array.from(
-      new Set((accessRows || []).map((row) => row.company_id).filter(Boolean))
-    );
-
-    if (companyIds.length === 0) {
-      setAgencyClientAccess([]);
-      return [];
-    }
-
-    const { data: companyRows, error: companyError } = await supabase
-      .from("companies")
-      .select("id, name, status, subscription_status")
-      .in("id", companyIds)
-      .range(0, 500);
-
-    if (companyError) {
-      console.warn("companies for agency workspaces:", companyError.message);
-      setAgencyClientAccess([]);
-      return [];
-    }
-
-    const companiesById = new Map((companyRows || []).map((company) => [String(company.id), company]));
-
-    const workspaces = getUniqueAgencyWorkspaces(
-      (accessRows || [])
-        .map((row) => {
-          const company = companiesById.get(String(row.company_id));
-          if (!company) return null;
-
-          return {
-            ...row,
-            company_id: row.company_id,
-            company_name: company.name || `Client ${row.company_id}`,
-            company_status: company.status || "Active",
-            subscription_status: company.subscription_status || "Active",
-            agency_name: effectiveUser.agency_name || row.agency_name || "Agency Portal",
-          };
-        })
-        .filter(Boolean)
-        .filter((row) => String(row.company_status || "Active").toLowerCase() === "active")
-    );
+    const { data: accessRows, error: accessError } = await supabase.rpc("list_authenticated_agency_workspaces");
+    if (accessError) throw accessError;
+    const workspaces = getUniqueAgencyWorkspaces(accessRows || []);
 
     setAgencyClientAccess(workspaces);
 
     if (workspaces.length > 0 && autoSelect) {
-      const currentId = activeAgencyCompanyId || effectiveUser.active_company_id || "";
-      const selected = workspaces.find((item) => String(item.company_id) === String(currentId)) || workspaces[0];
+      const rememberedAccessId = sessionStorage.getItem("visaflow_agency_access_id") || "";
+      const selected = selectRememberedAgencyWorkspace(workspaces, rememberedAccessId);
       switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
     }
 
@@ -6331,12 +6306,11 @@ function switchAgencyWorkspace(workspace, options = {}) {
   setValidatedWorkspaceKey("");
   clearTenantSensitiveState();
 
-  sessionStorage.setItem("visaflow_agency_company_id", companyId);
-  sessionStorage.setItem("visaflow_agency_company_name", companyName);
+  sessionStorage.setItem("visaflow_agency_access_id", String(workspace.access_id || ""));
   setActiveAgencyCompanyId(companyId);
   setActiveAgencyCompanyName(companyName);
-  const storage = localStorage.getItem("visaflow_user") ? localStorage : sessionStorage;
-  storage.setItem("visaflow_user", JSON.stringify(updated));
+  const storage = localStorage.getItem("visaflow_workspace_display") ? localStorage : sessionStorage;
+  storage.setItem("visaflow_workspace_display", JSON.stringify(toWorkspaceDisplayCache(updated)));
   setCurrentUser(updated);
   setValidatedWorkspaceKey(getWorkspaceIdentityKey(updated));
   setWorkspaceAuthReady(true);
@@ -7393,6 +7367,9 @@ Cancel = إضافتها كوظيفة مستقلة`
     sessionStorage.removeItem("visaflow_user");
     sessionStorage.removeItem("visaflow_agency_company_id");
     sessionStorage.removeItem("visaflow_agency_company_name");
+    sessionStorage.removeItem("visaflow_agency_access_id");
+    localStorage.removeItem("visaflow_workspace_display");
+    sessionStorage.removeItem("visaflow_workspace_display");
   }
 
   function clearTenantSensitiveState() {
@@ -7504,7 +7481,7 @@ Cancel = إضافتها كوظيفة مستقلة`
 
     if (persist) {
       const storage = rememberMe ? localStorage : sessionStorage;
-      storage.setItem("visaflow_user", JSON.stringify(normalizedUser));
+      storage.setItem("visaflow_workspace_display", JSON.stringify(toWorkspaceDisplayCache(normalizedUser)));
     }
 
     setCurrentUser(normalizedUser);
@@ -7579,12 +7556,10 @@ Cancel = إضافتها كوظيفة مستقلة`
   const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
   const globalTables = ["countries", "professions", "profession_aliases"];
   const agencyNameFields = {
-    candidates: "agency",
     visa_authorizations: "agency",
     agency_agreements: "agency_name",
     agency_scores: "agency_name",
     agency_penalties: "agency_name",
-    interviews: "agency",
   };
   const agencyBlockedTables = [
     "requests",
@@ -7638,7 +7613,10 @@ Cancel = إضافتها كوظيفة مستقلة`
   }
 
   if (currentRole === "Agency") {
-    if (table === "agencies") {
+    if (["candidates", "interviews"].includes(table)) {
+      if (!currentUser?.agency_id) { setter([]); return; }
+      query = query.eq("agency_id", currentUser.agency_id);
+    } else if (table === "agencies") {
       if (currentUser?.agency_id) query = query.eq("id", currentUser.agency_id);
       else if (currentUser?.agency_name) query = query.eq("name", currentUser.agency_name);
       else { setter([]); return; }
@@ -7851,13 +7829,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     setUsers(Array.isArray(data) ? data : []);
   };
   const loadCompanies = async () => {
-    if (!currentCompanyId) return setCompanies([]);
-
-    const { data, error } = await supabase
-      .from("companies")
-      .select("*")
-      .eq("id", currentCompanyId)
-      .range(0, 10);
+    const { data, error } = await supabase.rpc("list_authorized_companies");
 
     if (error) {
       alert(`companies: ${error.message}`);
@@ -7874,11 +7846,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       return;
     }
 
-    const { data, error } = await supabase
-      .from("company_email_settings")
-      .select("id, company_id, mode, provider, smtp_host, smtp_port, smtp_secure, smtp_username, from_name, from_email, reply_to, agreements_email, notifications_email, support_email, is_active, is_verified, last_test_at, last_test_status, last_error, updated_at")
-      .eq("company_id", currentCompanyId)
-      .maybeSingle();
+    const { data, error } = await supabase.rpc("get_platform_email_settings");
 
     if (error) {
       console.warn("company_email_settings:", error.message);
@@ -7892,8 +7860,6 @@ Cancel = إضافتها كوظيفة مستقلة`
       ...emptyCompanyEmailSettings,
       ...(data || {}),
       smtp_password: "",
-      smtp_port: data?.smtp_port ? String(data.smtp_port) : "465",
-      smtp_secure: data?.smtp_secure === false ? "false" : "true",
       test_email: localStorage.getItem("visaflow_last_test_email") || currentUser?.email || "",
     });
   }
@@ -8130,12 +8096,7 @@ async function loadProfessionAliases() {
       return [];
     }
 
-    const { data, error } = await supabase
-      .from("ai_interview_sessions")
-      .select("*")
-      .eq("company_id", currentCompanyId)
-      .order("created_at", { ascending: false })
-      .range(0, 2000);
+    const { data, error } = await supabase.rpc("list_authorized_ai_interview_sessions");
 
     if (error) {
       console.warn("ai_interview_sessions:", error.message);
@@ -8230,12 +8191,7 @@ async function loadProfessionAliases() {
       return [];
     }
 
-    const { data, error } = await supabase
-      .from("ai_interview_invitation_jobs")
-      .select("*")
-      .eq("company_id", currentCompanyId)
-      .order("created_at", { ascending: false })
-      .range(0, 10000);
+    const { data, error } = await supabase.rpc("list_authorized_ai_interview_invitation_jobs");
 
     if (error) {
       console.warn("ai_interview_invitation_jobs:", error.message);
@@ -8404,6 +8360,17 @@ async function loadProfessionAliases() {
       }
     };
 
+    const fetchSafeUsers = async () => {
+      try {
+        const { data, error } = await supabase.rpc("list_manageable_app_users");
+        if (error) throw error;
+        return Array.isArray(data) ? data : [];
+      } catch (error) {
+        errors.push(`users: ${error.message || error}`);
+        return [];
+      }
+    };
+
     const getClientCompanyId = (client) => String(client?.operational_company_id || client?.company_id || "").trim();
     const getRowCompanyId = (row) => String(row?.company_id || "").trim();
     const isThisMonth = (value) => value && new Date(value) >= monthStart;
@@ -8436,7 +8403,7 @@ async function loadProfessionAliases() {
       emailRows,
       activityRows,
     ] = await Promise.all([
-      fetchRows("users", "users", "company_id, status, role, last_login, created_at"),
+      fetchSafeUsers(),
       fetchRows("requests", "requests", "company_id, created_at"),
       fetchRows("candidates", "candidates", "company_id, created_at, status"),
       fetchRows("visa_authorizations", "visa_authorizations", "company_id, created_at, status"),
@@ -9302,6 +9269,22 @@ async function loadNotifications() {
 useEffect(() => {
   let mounted = true;
 
+  if (workspaceRecoveryRequested) {
+    workspaceAuthReadyRef.current = false;
+    currentWorkspaceUserRef.current = null;
+    setWorkspaceAuthReady(false);
+    setValidatedWorkspaceKey("");
+    clearTenantSensitiveState();
+    clearStoredWorkspaceIdentity();
+    setAgencyClientAccess([]);
+    setActiveAgencyCompanyId("");
+    setActiveAgencyCompanyName("");
+    setCurrentUser(null);
+    return () => {
+      mounted = false;
+    };
+  }
+
   const reconcileAuthenticatedWorkspace = async (event, sessionFromEvent) => {
     const sequence = ++workspaceAuthSequenceRef.current;
     const activeWorkspaceUser = currentWorkspaceUserRef.current;
@@ -9359,15 +9342,18 @@ useEffect(() => {
     );
     if (
       !verifiedAuth.isVerified ||
-      String(verifiedAuth.authUser.id) !== String(sessionFromEvent.user.id)
+      String(verifiedAuth.authUser.id) !== String(sessionFromEvent.user.id) ||
+      !authUserMatchesAudience(verifiedAuth.authUser, AUTH_AUDIENCE.WORKSPACE)
     ) {
       legacyWorkspaceActiveRef.current = false;
       setWorkspaceAuthReady(true);
       return;
     }
 
-    const { data: linkedUser, error } = await supabase.rpc("get_authenticated_app_user");
+    const { data: workspaceContext, error } = await supabase.rpc("get_authenticated_workspace_context");
     if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
+
+    const linkedUser = workspaceContext?.actor || null;
 
     const linkedUserMatchesSession = Boolean(
       !error &&
@@ -9390,7 +9376,11 @@ useEffect(() => {
       return;
     }
 
-    activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+    activateWorkspaceUser({
+      ...linkedUser,
+      company_name: workspaceContext?.company?.name || "",
+      subscription_status: workspaceContext?.company?.subscription_status || "",
+    }, { persist: true, legacy: false });
     if (transition.shouldResetPage) {
       const nextRole = normalizeUserRole(linkedUser.role);
       setActivePage((ROLE_PAGES[nextRole] || ROLE_PAGES.Viewer)[0]);
@@ -9411,7 +9401,7 @@ useEffect(() => {
     mounted = false;
     authListener?.subscription?.unsubscribe();
   };
-}, []);
+}, [workspaceRecoveryRequested]);
 
 useEffect(() => {
   currentWorkspaceUserRef.current = currentUser;
@@ -9433,6 +9423,7 @@ useEffect(() => {
 ]);
 
 useEffect(() => {
+  if (workspaceRecoveryRequested) return;
   if (
     !currentUser ||
     !workspaceAuthReady ||
@@ -9445,7 +9436,14 @@ useEffect(() => {
   }
 
   loadAll();
-}, [currentUser?.id, currentUser?.auth_user_id, currentCompanyId, workspaceAuthReady, validatedWorkspaceKey]);
+}, [
+  workspaceRecoveryRequested,
+  currentUser?.id,
+  currentUser?.auth_user_id,
+  currentCompanyId,
+  workspaceAuthReady,
+  validatedWorkspaceKey,
+]);
 
 useEffect(() => {
   if (!currentUser || activePage !== "Client Usage Monitor" || !canManagePlatform) return;
@@ -12333,14 +12331,8 @@ async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} })
 async function saveCompanyEmailSettings({ silent = false } = {}) {
   if (!canManageUsers) return alert("You do not have permission to manage email settings.");
 
-  const useCompanyEmail = emailSettingsForm.mode === "company";
-  if (useCompanyEmail) {
-    if (!emailSettingsForm.smtp_host || !emailSettingsForm.smtp_username || !emailSettingsForm.from_email) {
-      return alert("SMTP host, SMTP username and From Email are required when company email is enabled.");
-    }
-    if (!emailSettingsForm.id && !emailSettingsForm.smtp_password) {
-      return alert("SMTP password is required for the first setup.");
-    }
+  if (emailSettingsForm.mode === "company" || emailSettingsForm.smtp_password) {
+    return alert("Company SMTP credentials are temporarily disabled. VisaFlow Platform SMTP remains active.");
   }
 
   setEmailSettingsLoading(true);
@@ -12348,13 +12340,7 @@ async function saveCompanyEmailSettings({ silent = false } = {}) {
 
   try {
     const payload = {
-      company_id: currentCompanyId,
-      mode: emailSettingsForm.mode || "platform",
-      provider: emailSettingsForm.provider || "SMTP",
-      smtp_host: emailSettingsForm.smtp_host || "",
-      smtp_port: Number(emailSettingsForm.smtp_port || 465),
-      smtp_secure: emailSettingsForm.smtp_secure === true || emailSettingsForm.smtp_secure === "true",
-      smtp_username: emailSettingsForm.smtp_username || "",
+      mode: "platform",
       from_name: emailSettingsForm.from_name || companies[0]?.name || "Company Recruitment",
       from_email: emailSettingsForm.from_email || "",
       reply_to: emailSettingsForm.reply_to || emailSettingsForm.support_email || "",
@@ -12362,44 +12348,21 @@ async function saveCompanyEmailSettings({ silent = false } = {}) {
       notifications_email: emailSettingsForm.notifications_email || emailSettingsForm.reply_to || "",
       support_email: emailSettingsForm.support_email || emailSettingsForm.reply_to || "",
       is_active: Boolean(emailSettingsForm.is_active),
-      updated_at: new Date().toISOString(),
     };
-
-    if (emailSettingsForm.smtp_password) {
-      payload.smtp_password = emailSettingsForm.smtp_password;
-      payload.is_verified = false;
-      payload.last_test_status = "Password Updated - Test Required";
-    }
-
-    const result = emailSettingsForm.id
-      ? await supabase
-          .from("company_email_settings")
-          .update(payload)
-          .eq("id", emailSettingsForm.id)
-          .eq("company_id", currentCompanyId)
-          .select()
-          .single()
-      : await supabase
-          .from("company_email_settings")
-          .insert([{ ...payload, created_at: new Date().toISOString() }])
-          .select()
-          .single();
-
-    if (result.error) throw result.error;
-
-    setCompanyEmailSettings(result.data || null);
+    const { data: result, error } = await supabase.functions.invoke("manage-company-email-settings", { body: payload });
+    if (error || !result?.ok) throw new Error(result?.message || error?.message || "Email settings save failed");
+    const safeSettings = result.settings || null;
+    setCompanyEmailSettings(safeSettings);
     setEmailSettingsForm((prev) => ({
       ...prev,
-      ...(result.data || {}),
+      ...(safeSettings || {}),
       smtp_password: "",
-      smtp_port: result.data?.smtp_port ? String(result.data.smtp_port) : prev.smtp_port,
-      smtp_secure: result.data?.smtp_secure === false ? "false" : "true",
       test_email: prev.test_email,
     }));
 
     if (!silent) setEmailSettingsMessage("Email settings saved successfully.");
     await loadCompanyEmailSettings();
-    return result.data;
+    return safeSettings;
   } catch (error) {
     if (!silent) setEmailSettingsMessage(`Email settings save failed: ${error.message}`);
     throw error;
@@ -12421,30 +12384,9 @@ async function testCompanyEmailSettings() {
       type: "COMPANY_EMAIL_TEST",
     });
 
-    await supabase
-      .from("company_email_settings")
-      .update({
-        is_verified: true,
-        last_test_at: new Date().toISOString(),
-        last_test_status: "Success",
-        last_error: "",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("company_id", currentCompanyId);
-
     await loadCompanyEmailSettings();
     setEmailSettingsMessage(`Test email sent successfully${response?.messageId ? ` (${response.messageId})` : ""}.`);
   } catch (error) {
-    await supabase
-      .from("company_email_settings")
-      .update({
-        is_verified: false,
-        last_test_at: new Date().toISOString(),
-        last_test_status: "Failed",
-        last_error: error.message || "Test failed",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("company_id", currentCompanyId);
     await loadCompanyEmailSettings();
     setEmailSettingsMessage(`Test email failed: ${error.message}`);
   } finally {
@@ -12469,11 +12411,10 @@ async function saveCompany() {
     notes: companyForm.notes || "",
   };
 
-  const { error } = await supabase
-    .from("companies")
-    .update(payload)
-    .eq("id", companyEditingId)
-    .eq("id", currentCompanyId);
+  const { error } = await supabase.rpc("update_authorized_company", {
+    p_company_id: companyEditingId,
+    p_patch: payload,
+  });
 
   if (error) return alert(error.message);
 
@@ -13449,6 +13390,9 @@ const shouldGenerateContract = ["Selected", "Interview Passed"].includes(autoSta
 const effectiveCandidateProfession = matchedCandidateLine?.profession || candidateForm.profession || "";
 const professionIntelligence = getCandidateProfessionIntelligence(effectiveCandidateProfession);
 const candidateScoreResult = buildCandidateTechnicalScores(candidateTechnicalForm, professionIntelligence);
+const selectedCandidateAgencyId = currentRole === "Agency"
+  ? (currentUser?.agency_id || null)
+  : (agencies.find((item) => normalize(item.name) === normalize(candidateForm.agency))?.id || null);
 
 const payload = {
   ...candidateForm,
@@ -13460,6 +13404,7 @@ const payload = {
   civil_id_no: saudiCandidateFlow ? String(candidateForm.civil_id_no || "").trim() : "",
   civil_id_expiry_date: saudiCandidateFlow ? (candidateForm.civil_id_expiry_date || null) : null,
   agency: currentRole === "Agency" ? (currentUser?.agency_name || candidateForm.agency || "") : candidateForm.agency,
+  agency_id: selectedCandidateAgencyId,
   notes: candidateForm.notes || "",
   status: autoStatus,
   email: candidateForm.email || "",
@@ -14105,6 +14050,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || "Agency Talent Pool",
           request_no: "",
           agency: agencyName,
+          agency_id: currentUser?.agency_id || null,
           passport_no: isSaudiNationality(rowNationality) ? "" : passportNo,
           civil_id_no: isSaudiNationality(rowNationality) ? String(civilIdNo || "").trim() : "",
           civil_id_expiry_date: isSaudiNationality(rowNationality) ? civilIdExpiryDate : null,
@@ -14554,6 +14500,12 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       const technicalScores = shouldCreateTechnicalProfile
         ? buildCandidateTechnicalScores(technicalFormFromExcel, professionIntelligence)
         : null;
+      const importedAgencyName = currentRole === "Agency"
+        ? (currentUser?.agency_name || "")
+        : getRowValue(row, ["Agency", "Office", "Agency Name"]);
+      const importedAgencyId = currentRole === "Agency"
+        ? (currentUser?.agency_id || null)
+        : (agencies.find((item) => normalize(item.name) === normalize(importedAgencyName))?.id || null);
 
       payloads.push(
         withCompany(withCreateActor({
@@ -14564,6 +14516,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           gender: matchedLine.gender || "",
           project: requestData.project_name || requestData.project || "",
           request_no: requestData.request_no || requestNo,
+          agency_id: importedAgencyId,
           agency: currentRole === "Agency" ? (currentUser?.agency_name || "") : getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
           passport_no: isSaudiNationality(matchedLine.nationality) ? "" : passportNo,
           civil_id_no: isSaudiNationality(matchedLine.nationality) ? String(civilIdNo || "").trim() : "",
@@ -15030,12 +14983,6 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return String(template?.company_id || currentCompanyId || "");
   }
 
-  function getAIInterviewInvitationUrl(session = {}) {
-    return session.invitation_url || (session.access_token
-      ? `${window.location.origin}${window.location.pathname}?ai_interview=${session.access_token}`
-      : "");
-  }
-
   function isValidEmailAddress(value = "") {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
   }
@@ -15090,7 +15037,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     setAIInterviewLoading(true);
     setAIInterviewMessage("Creating a new template version...");
     try {
-      const { data, error } = await supabase.rpc("create_ai_interview_template_version", {
+      const { data, error } = await supabase.rpc("secure_create_ai_interview_template_version", {
         p_template_id: template.id,
         p_version_notes: notes || null,
       });
@@ -15774,33 +15721,23 @@ ${errors.slice(0, 10).join("\n")}` : "")
   }
 
   async function copyAIInterviewReference(session = {}) {
-    const reference = getAIInterviewInvitationUrl(session) || session.id || "";
-    if (!reference) return alert("AI interview reference is not available.");
-
-    try {
-      await navigator.clipboard.writeText(reference);
-      alert("Candidate interview link copied.");
-    } catch {
-      window.prompt("Copy candidate interview link:", reference);
-    }
+    void session;
+    alert("Secure interview links are one-time and are delivered only through the Email Dispatcher. Resend the invitation to rotate the link.");
   }
 
   function openAIInterviewPortal(session = {}) {
-    const reference = getAIInterviewInvitationUrl(session);
-    if (!reference) return alert("Candidate interview link is not available.");
-    window.open(reference, "_blank", "noopener,noreferrer");
+    void session;
+    alert("For security, one-time candidate interview links cannot be opened from the Workspace.");
   }
 
   async function openAIInterviewRecording(answer = {}) {
     if (!answer.audio_storage_path) return alert("No recording is available for this answer.");
 
-    const { data, error } = await supabase.storage
-      .from(AI_INTERVIEW_AUDIO_BUCKET)
-      .createSignedUrl(answer.audio_storage_path, 60 * 60);
-
-    if (error) return alert(`Recording playback failed: ${error.message}`);
-    if (!data?.signedUrl) return alert("Recording link could not be created.");
-    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    const { data, error } = await supabase.functions.invoke("interview-review-media-sign-read", {
+      body: { answer_id: answer.id },
+    });
+    if (error || !data?.ok) return alert(data?.message || `Recording playback failed: ${error?.message || "Unavailable"}`);
+    window.open(data.signed_url, "_blank", "noopener,noreferrer");
   }
 
   function resetInterviewForm() {
@@ -15851,6 +15788,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
   const agencyScheduleNote = isAgencyScheduling
     ? `[Agency Schedule Pending Approval] ${currentUser?.agency_name || currentUser?.name || "Agency"} scheduled/proposed interview on ${new Date().toLocaleString()}`
     : "";
+  const selectedInterviewCandidate = candidates.find((item) => String(item.id) === String(interviewForm.candidate_id));
 
   const interviewPayload = {
     candidate_id: interviewForm.candidate_id,
@@ -15858,6 +15796,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     profession: interviewForm.profession || "",
     nationality: interviewForm.nationality || "",
     agency: interviewForm.agency || currentUser?.agency_name || "",
+    agency_id: isAgencyScheduling ? (currentUser?.agency_id || null) : (selectedInterviewCandidate?.agency_id || null),
     project: interviewForm.project || "",
     request_no: interviewForm.request_no || "",
     passport_no: interviewForm.passport_no || "",
@@ -17554,6 +17493,40 @@ async function handleChangePasswordSubmit() {
   }
 }
 
+
+async function handleWorkspacePasswordRecoveryRequest() {
+  const email = String(workspaceRecoveryEmail || loginForm.email || "").trim().toLowerCase();
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+    setWorkspaceRecoveryMessage(loginLanguage === "AR" ? "أدخل بريدًا إلكترونيًا صحيحًا." : "Enter a valid email address.");
+    return;
+  }
+
+  setWorkspaceRecoveryLoading(true);
+  setWorkspaceRecoveryMessage("");
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: getWorkspaceRecoveryRedirectUrl(),
+    });
+
+    if (error) {
+      const errorValue = `${error.code || ""} ${error.message || ""}`.toLowerCase();
+      if (errorValue.includes("rate limit") || errorValue.includes("rate_limit") || errorValue.includes("over_email_send_rate_limit")) {
+        throw error;
+      }
+      // Do not reveal whether a workspace account exists for this email.
+      console.warn("Workspace recovery request was not delivered", error?.message || error);
+    }
+
+    setWorkspaceRecoveryMessage(loginLanguage === "AR"
+      ? "تم استلام طلب الاستعادة. إذا كان البريد مرتبطًا بحساب شركة أو مكتب، فسيصلك رابط آمن لتعيين كلمة مرور جديدة."
+      : "Recovery request received. If the email belongs to a company or agency account, a secure reset link will be sent.");
+  } catch (error) {
+    setWorkspaceRecoveryMessage(getWorkspaceRecoveryErrorMessage(error, loginLanguage === "AR"));
+  } finally {
+    setWorkspaceRecoveryLoading(false);
+  }
+}
+
 async function handleLogin() {
   const email = loginForm.email.trim().toLowerCase();
   const password = loginForm.password.trim();
@@ -17579,8 +17552,14 @@ async function handleLogin() {
     });
 
     let userData = null;
+    let workspaceContext = null;
 
     if (!authError && authData?.user?.id) {
+      if (!authUserMatchesAudience(authData.user, AUTH_AUDIENCE.WORKSPACE)) {
+        await supabase.auth.signOut({ scope: "local" });
+        alert("This account belongs to a different VisaFlow sign-in area.");
+        return;
+      }
       const verifiedSession = authData.session || null;
       if (
         !verifiedSession?.access_token ||
@@ -17612,9 +17591,11 @@ async function handleLogin() {
         return;
       }
 
-      const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
-        "get_authenticated_app_user"
+      const { data: verifiedContext, error: linkedUserError } = await supabase.rpc(
+        "get_authenticated_workspace_context"
       );
+
+      const linkedUser = verifiedContext?.actor || null;
 
       reportSafeAuthDiagnostics(
         persistedAuth.session,
@@ -17632,31 +17613,18 @@ async function handleLogin() {
         return;
       }
 
-      userData = linkedUser;
+      workspaceContext = assertSafeWorkspaceContext(verifiedContext, verifiedSession.user.id);
+      userData = workspaceContext.actor;
     } else {
-      // A legacy browser session must not inherit a different Supabase Auth identity.
-      legacyWorkspaceActiveRef.current = true;
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        legacyWorkspaceActiveRef.current = false;
-        alert("Login failed. Please try again.");
-        return;
-      }
-
-      const { data: legacyResult, error: legacyError } = await supabase.rpc(
-        "legacy_app_login",
-        { p_email: email, p_password: password }
-      );
-
-      if (legacyError || !legacyResult?.ok || !legacyResult?.user) {
-        legacyWorkspaceActiveRef.current = false;
-        setWorkspaceAuthReady(true);
-        alert("Invalid email or password");
-        return;
-      }
-
-      userData = legacyResult.user;
+      await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      const { data: upgrade, error: upgradeError } = await supabase.functions.invoke("legacy-account-upgrade", {
+        body: { email, password },
+      });
+      setWorkspaceAuthReady(true);
+      alert(upgradeError
+        ? "Invalid email or password"
+        : (upgrade?.message || "If this account is eligible, check your email to finish secure setup."));
+      return;
     }
 
     const userStatus = String(userData.status || "").trim().toLowerCase();
@@ -17665,44 +17633,7 @@ async function handleLogin() {
       return;
     }
 
-    let companyData = null;
-
-    if (userData.company_id) {
-      const { data: company, error: companyError } = await supabase
-        .from("companies")
-        .select("id, name, status, subscription_status, subscription_end")
-        .eq("id", userData.company_id)
-        .maybeSingle();
-
-      if (companyError) {
-        console.warn("Company check failed:", companyError.message);
-      }
-
-      companyData = company;
-
-      const companyStatus = String(companyData?.status || "").trim().toLowerCase();
-      const subscriptionStatus = String(companyData?.subscription_status || "").trim().toLowerCase();
-
-      // Important:
-      // If companyData is null, the frontend likely cannot read the companies table
-      // because of RLS / policy settings. Do not block login in this case.
-      // The user's company_id will still isolate all operational data through currentCompanyId.
-      if (companyData) {
-        if (companyStatus !== "active" || !isLoginAllowedSubscriptionStatus(subscriptionStatus)) {
-          alert("Company subscription is not active. Please contact the system administrator.");
-          return;
-        }
-
-        if (companyData.subscription_end) {
-          const endDate = new Date(companyData.subscription_end);
-          endDate.setHours(23, 59, 59, 999);
-          if (endDate < new Date()) {
-            alert("Company subscription has expired. Please contact the system administrator.");
-            return;
-          }
-        }
-      }
-    }
+    const companyData = workspaceContext?.company || null;
 
     const loggedUser = {
       ...userData,
@@ -17713,18 +17644,13 @@ async function handleLogin() {
 
     if (loggedUser.role === "Agency") {
       const workspaces = await loadAgencyClientAccess(loggedUser, false);
-      const storedCompanyId = sessionStorage.getItem("visaflow_agency_company_id") || "";
-      const selectedWorkspace =
-        workspaces.find((item) => String(item.company_id) === String(storedCompanyId)) ||
-        workspaces.find((item) => String(item.company_id) === String(loggedUser.company_id || "")) ||
-        workspaces[0] ||
-        null;
+      const rememberedAccessId = sessionStorage.getItem("visaflow_agency_access_id") || "";
+      const selectedWorkspace = selectRememberedAgencyWorkspace(workspaces, rememberedAccessId);
 
       if (selectedWorkspace) {
         loggedUser.active_company_id = selectedWorkspace.company_id;
         loggedUser.active_company_name = selectedWorkspace.company_name || "Client Workspace";
-        sessionStorage.setItem("visaflow_agency_company_id", String(selectedWorkspace.company_id));
-        sessionStorage.setItem("visaflow_agency_company_name", loggedUser.active_company_name);
+        sessionStorage.setItem("visaflow_agency_access_id", String(selectedWorkspace.access_id));
         setActiveAgencyCompanyId(String(selectedWorkspace.company_id));
         setActiveAgencyCompanyName(loggedUser.active_company_name);
       } else if (!loggedUser.company_id) {
@@ -17735,7 +17661,7 @@ async function handleLogin() {
 
     activateWorkspaceUser(loggedUser, {
       persist: true,
-      legacy: !loggedUser.auth_user_id,
+      legacy: false,
     });
     setActivePage((ROLE_PAGES[loggedUser.role] || ROLE_PAGES.Viewer)[0]);
   } finally {
@@ -18865,6 +18791,40 @@ function calculateAgencyPerformanceRows() {
       const activeAgreement = agreementPolicy.agreement;
       const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
       const agencyInterviews = interviews.filter((interview) => normalize(interview.agency) === normalize(agencyName));
+
+      // Interview KPIs apply only to candidates whose request line actually requires an interview.
+      // A No Interview line must never receive a default score or be penalized for missing interviews.
+      const getCandidatePerformanceRequestLine = (candidate) => {
+        const relatedRequest = requests.find(
+          (request) => String(request.request_no || "") === String(candidate.request_no || "")
+        );
+        if (!relatedRequest) return null;
+        return getRequestLinesForRequest(relatedRequest).find((line) => candidateMatchesRequestLine(candidate, line)) || null;
+      };
+
+      const candidateRequiresInterview = (candidate) => {
+        const relatedRequest = requests.find(
+          (request) => String(request.request_no || "") === String(candidate.request_no || "")
+        );
+        const relatedLine = getCandidatePerformanceRequestLine(candidate);
+        const requirement = relatedLine?.interview_required || relatedRequest?.interview_required || "Required";
+        return normalize(requirement) !== "no interview";
+      };
+
+      const interviewMatchesCandidate = (interview, candidate) =>
+        String(interview.candidate_id || "") === String(candidate.id || "") ||
+        (interview.passport_no && candidate.passport_no && String(interview.passport_no) === String(candidate.passport_no)) ||
+        normalize(interview.candidate_name) === normalize(candidate.candidate_name);
+
+      const interviewQuality = calculateInterviewQuality({
+        candidates: agencyCandidates,
+        interviews: agencyInterviews,
+        requiresInterview: candidateRequiresInterview,
+        interviewMatchesCandidate,
+      });
+      const interviewRequiredCandidates = interviewQuality.applicableCandidates;
+      const noInterviewCandidates = interviewQuality.excludedCandidates;
+
       const agencyAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName));
       const activeAuthorizations = agencyAuthorizations.filter((authorization) => !["cancelled", "canceled", "closed", "completed"].includes(normalize(authorization.status || "Open")));
       const signedAgreement = Boolean(activeAgreement);
@@ -18888,6 +18848,9 @@ function calculateAgencyPerformanceRows() {
           candidates: 0,
           passedInterviews: 0,
           rejectedInterviews: 0,
+          interview_required_candidates: 0,
+          no_interview_candidates: 0,
+          quality_applicable: false,
           arrived: 0,
           joined: 0,
           failed: 0,
@@ -18911,10 +18874,12 @@ function calculateAgencyPerformanceRows() {
         };
       }
 
-      const totalInterviewed = agencyInterviews.length;
-      const passedInterviews = agencyInterviews.filter((interview) => interview.status === "Passed").length;
-      const rejectedInterviews = agencyInterviews.filter((interview) => ["Rejected", "Interview Failed"].includes(interview.status)).length;
-      const arrived = agencyCandidates.filter((candidate) => ["Arrived KSA", "Arrived", "Joined"].includes(candidate.status)).length;
+      const passedInterviews = interviewQuality.passedInterviews;
+      const rejectedInterviews = interviewQuality.rejectedInterviews;
+      const arrived = agencyCandidates.filter((candidate) =>
+        Boolean(candidate.arrival_date) ||
+        ["Arrived KSA", "Arrived"].includes(candidate.status)
+      ).length;
       const joined = agencyCandidates.filter((candidate) => candidate.status === "Joined").length;
       const failed = agencyCandidates.filter((candidate) => ["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "KSA Medical Failed", "Refused to Work", "Absconded"].includes(candidate.status)).length;
 
@@ -18922,8 +18887,12 @@ function calculateAgencyPerformanceRows() {
       const submitted = agencyCandidates.length;
       const submittedPercent = authorizedQty ? Math.min(Math.round((submitted / authorizedQty) * 100), 100) : submitted ? 100 : 0;
 
-      const qualityScore = totalInterviewed ? Math.round((passedInterviews / totalInterviewed) * 100) : submitted ? 70 : 0;
-      const mobilizationScore = passedInterviews ? Math.round((joined / passedInterviews) * 100) : arrived ? 70 : 0;
+      const qualityApplicable = interviewQuality.applicable;
+      const qualityScore = interviewQuality.score;
+
+      // The agency controls mobilization up to arrival in KSA. Joining is confirmed by the company,
+      // so the office must not be penalized while waiting for the company to confirm joining.
+      const mobilizationScore = calculateAgencyMobilizationScore(agencyCandidates);
       const rejectionScore = submitted ? Math.max(0, 100 - Math.round((failed / submitted) * 100)) : 0;
       const responseScore = submittedPercent;
 
@@ -18963,15 +18932,20 @@ function calculateAgencyPerformanceRows() {
       const validationPassed = validationRows.filter((validation) => validation.final_result === "Passed Validation").length;
       const validationFailed = validationRows.filter((validation) => ["Failed Validation", "Replacement Required"].includes(validation.final_result)).length;
 
-      const baseTotalScore = Math.round(
-        slaScore * 0.30 +
-        responseScore * 0.10 +
-        qualityScore * 0.20 +
-        rejectionScore * 0.10 +
-        mobilizationScore * 0.15 +
-        updateScore * 0.10 +
-        agreementScore * 0.05
-      );
+      const performanceComponents = [
+        { key: "sla", score: slaScore, weight: 0.30, applicable: true },
+        { key: "response", score: responseScore, weight: 0.10, applicable: true },
+        { key: "quality", score: qualityScore, weight: 0.20, applicable: qualityApplicable },
+        { key: "rejection", score: rejectionScore, weight: 0.10, applicable: true },
+        { key: "mobilization", score: mobilizationScore, weight: 0.15, applicable: true },
+        { key: "update", score: updateScore, weight: 0.10, applicable: true },
+        { key: "agreement", score: agreementScore, weight: 0.05, applicable: true },
+      ];
+
+      // When an indicator is not applicable, remove it from the denominator instead of awarding
+      // a default score. This keeps No Interview requests neutral and redistributes the remaining
+      // weight proportionally across the indicators that actually apply.
+      const baseTotalScore = calculateApplicableWeightedScore(performanceComponents) ?? 0;
 
       const totalScore = Math.max(0, Math.min(100, baseTotalScore + validationImpactScore));
 
@@ -19002,6 +18976,9 @@ function calculateAgencyPerformanceRows() {
         candidates: submitted,
         passedInterviews,
         rejectedInterviews,
+        interview_required_candidates: interviewRequiredCandidates.length,
+        no_interview_candidates: noInterviewCandidates.length,
+        quality_applicable: qualityApplicable,
         arrived,
         joined,
         failed,
@@ -19044,7 +19021,7 @@ async function saveAgencyPerformanceSnapshot() {
     company_id: currentCompanyId,
     agency_id: row.agency_id,
     sla_score: row.sla_score,
-    quality_score: row.quality_score,
+    quality_score: row.quality_applicable ? row.quality_score : null,
     response_score: row.response_score,
     mobilization_score: row.mobilization_score,
     update_score: row.update_score,
@@ -19069,7 +19046,7 @@ async function saveAgencyPerformanceSnapshot() {
       agency_name: row.agency_name,
       sla_score: row.sla_score,
       update_score: row.update_score,
-      quality_score: row.quality_score,
+      quality_score: row.quality_applicable ? row.quality_score : null,
       arrival_score: row.mobilization_score,
       agreement_sla_days: row.agreement_sla_days,
       update_frequency_days: row.update_frequency_days,
@@ -20663,7 +20640,6 @@ async function runAICommander(question = aiQuestion) {
   setAiAnswer("");
 
   const intent = getAICommanderIntent(finalQuestion);
-  const tenantContext = buildAICommanderTenantContext();
   const guardedQuestion = buildAICommanderGuardedQuestion(finalQuestion);
 
   const finishAnswer = (answerText) => {
@@ -20679,26 +20655,15 @@ async function runAICommander(question = aiQuestion) {
       return;
     }
 
-    const lockedReport = buildLockedVIEReport(finalQuestion);
-    const snapshot = buildAICommanderSnapshot();
     const localDecisionContext = buildLocalAICommanderAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage);
-    const conversationContext = buildAICommanderConversationContext();
 
     if (intent === "chat" || intent === "writing") {
       const aiText = await callVisaFlowAIEdge({
         action: "chat",
         question: guardedQuestion,
-        originalQuestion: finalQuestion,
         language: aiCommanderLanguage,
         mode: aiCommanderMode,
         intent,
-        userContext: tenantContext,
-        conversationContext,
-        snapshot: {
-          tenantContext,
-          ...(snapshot || {}),
-        },
-        localDecisionContext,
       });
 
       finishAnswer(aiText || buildAICommanderWelcomeAnswer(finalQuestion, aiCommanderMode, aiCommanderLanguage));
@@ -20712,14 +20677,6 @@ async function runAICommander(question = aiQuestion) {
       mode: aiCommanderMode,
       language: aiCommanderLanguage,
       intent,
-      userContext: tenantContext,
-      conversationContext,
-      lockedReport,
-      snapshot: {
-        tenantContext,
-        ...(snapshot || {}),
-      },
-      localDecisionContext,
     });
 
     finishAnswer(aiText || localDecisionContext);
@@ -20861,18 +20818,20 @@ async function acquireAIAgentActionLock({
   if (!currentCompanyId || !actionKey) return { ok: false, skipped: true, reason: "Missing AI Agent lock key" };
 
   try {
-    const { data, error } = await supabase.rpc("ai_agent_try_acquire_lock", {
-      p_company_id: currentCompanyId,
-      p_action_key: actionKey,
-      p_action_type: actionType || "AI_AGENT_ACTION",
-      p_related_table: relatedTable || null,
-      p_related_id: relatedId ? String(relatedId) : null,
-      p_agency_id: agencyId || null,
-      p_cooldown_minutes: getAIAgentCooldownMinutes(),
+    const { data, error } = await supabase.functions.invoke("visaflow-ai-agent-action", {
+      body: {
+        action: "acquire_lock",
+        action_key: actionKey,
+        action_type: actionType || "AI_AGENT_ACTION",
+        related_table: relatedTable || null,
+        related_id: relatedId ? String(relatedId) : null,
+        agency_id: agencyId || null,
+        cooldown_minutes: getAIAgentCooldownMinutes(),
+      },
     });
 
     if (error) throw error;
-    if (!data) {
+    if (!data?.ok || !data?.acquired) {
       await writeAIAgentAuditLog({
         actionType,
         actionKey,
@@ -23371,13 +23330,8 @@ async function resolveOperationalCompanyId(client) {
   if (client.operational_company_id) return client.operational_company_id;
   if (client.company_id) return client.company_id;
 
-  const { data } = await supabase
-    .from("companies")
-    .select("id, name")
-    .ilike("name", client.company_name || "")
-    .maybeSingle();
-
-  return data?.id || null;
+  const exact = companies.filter((item) => normalize(item.name) === normalize(client.company_name));
+  return exact.length === 1 ? exact[0].id : null;
 }
 
 async function openCompanyRequestsReport(client) {
@@ -23868,9 +23822,9 @@ async function savePlatformClient() {
     if (clientUpdateError) throw clientUpdateError;
 
     if (operationalCompanyId) {
-      const { error: companyUpdateError } = await supabase
-        .from("companies")
-        .update({
+      const { error: companyUpdateError } = await supabase.rpc("update_authorized_company", {
+        p_company_id: operationalCompanyId,
+        p_patch: {
           name: companyName,
           domain: companyPayload.domain,
           status: "Active",
@@ -23879,9 +23833,8 @@ async function savePlatformClient() {
           subscription_start: companyPayload.start_date,
           subscription_end: companyPayload.end_date,
           max_users: companyPayload.users_count || 5,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", operationalCompanyId);
+        },
+      });
 
       if (companyUpdateError) throw companyUpdateError;
     }
@@ -23933,14 +23886,13 @@ async function extendPlatformClient(client, months = 1) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
+    const { error: companyError } = await supabase.rpc("update_authorized_company", {
+      p_company_id: client.operational_company_id,
+      p_patch: {
         subscription_status: "Active",
         subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
+      },
+    });
 
     if (companyError) return alert(companyError.message);
   }
@@ -23979,14 +23931,13 @@ async function extendPlatformClient(client, days = 30) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
+    const { error: companyError } = await supabase.rpc("update_authorized_company", {
+      p_company_id: client.operational_company_id,
+      p_patch: {
         subscription_status: "Active",
         subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
+      },
+    });
 
     if (companyError) return alert(companyError.message);
   }
@@ -26338,7 +26289,7 @@ function getReportStudioVisualModel() {
       const candidateIds = Array.from(new Set([...existingIds, ...insertedIds]));
       if (!candidateIds.length) throw new Error("No candidate records were available for the campaign.");
 
-      const { data, error } = await supabase.rpc("add_candidates_to_ai_interview_campaign", {
+      const { data, error } = await supabase.rpc("secure_add_candidates_to_ai_interview_campaign", {
         p_campaign_id: campaign.id,
         p_candidate_ids: candidateIds,
       });
@@ -26373,7 +26324,7 @@ function getReportStudioVisualModel() {
     setAIInterviewCampaignMessage(`Adding ${selectedCampaignCandidateIds.length} candidate(s) to the campaign...`);
 
     try {
-      const { data, error } = await supabase.rpc("add_candidates_to_ai_interview_campaign", {
+      const { data, error } = await supabase.rpc("secure_add_candidates_to_ai_interview_campaign", {
         p_campaign_id: selectedAIInterviewCampaignId,
         p_candidate_ids: selectedCampaignCandidateIds.map(String),
       });
@@ -26401,7 +26352,7 @@ function getReportStudioVisualModel() {
 
     setAIInterviewCampaignBusy(true);
     try {
-      const { error } = await supabase.rpc("remove_candidates_from_ai_interview_campaign", {
+      const { error } = await supabase.rpc("secure_remove_candidates_from_ai_interview_campaign", {
         p_campaign_id: campaignCandidate.campaign_id,
         p_campaign_candidate_ids: [campaignCandidate.id],
       });
@@ -26418,7 +26369,7 @@ function getReportStudioVisualModel() {
     if (!selectedAIInterviewCampaignId) return alert("Select a campaign first.");
     setAIInterviewCampaignBusy(true);
     try {
-      const { data, error } = await supabase.rpc("revalidate_ai_interview_campaign_candidates", {
+      const { data, error } = await supabase.rpc("secure_revalidate_ai_interview_campaign_candidates", {
         p_campaign_id: selectedAIInterviewCampaignId,
       });
       if (error) throw error;
@@ -26478,7 +26429,7 @@ function getReportStudioVisualModel() {
       }
 
       const baseUrl = `${window.location.origin}${window.location.pathname}`.replace(/\/$/, "");
-      const { data, error } = await supabase.rpc("launch_ai_interview_campaign", {
+      const { data, error } = await supabase.rpc("secure_launch_ai_interview_campaign", {
         p_campaign_id: campaign.id,
         p_app_base_url: baseUrl,
       });
@@ -26665,7 +26616,6 @@ function getReportStudioVisualModel() {
         item.analysis_status,
         item.human_decision,
         item.status,
-        session?.access_token,
       ].join(" "));
 
       const matchesQuery = !aiResultsQuery || searchableText.includes(aiResultsQuery);
@@ -27710,12 +27660,21 @@ function exportCurrentPage() {
 }
 
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+const hasInterviewCapability = Boolean(sessionStorage.getItem("visaflow-interview-capability"));
 if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
+}
+const workspaceUpgradeId = getWorkspaceUpgradeId();
+if (workspaceUpgradeId) return <WorkspaceUpgradeScreen upgradeId={workspaceUpgradeId} />;
+if (workspaceRecoveryUrlState.requested) {
+  return <WorkspacePasswordRecoveryScreen language={loginLanguage} />;
 }
 
 if (talentPortalOpen) {
   return <TalentCandidatePortal onBack={closeTalentPortal} />;
+}
+if (hasInterviewCapability) {
+  return <AIInterviewCandidatePortal accessToken="" />;
 }
 
 const activeWorkspaceKey = getWorkspaceIdentityKey(currentUser);
@@ -28008,12 +27967,18 @@ if (!currentUser) {
               type="button"
               className="vf-forgot-link"
               onClick={() => {
+                setWorkspaceRecoveryEmail(loginForm.email || "");
+                setWorkspaceRecoveryMessage("");
                 setForgotPasswordOpen(true);
               }}
             >
               {loginLanguage === "AR" ? "نسيت كلمة المرور؟" : "Forgot Password?"}
             </button>
           </div>
+
+          {workspaceRecoveryMessage && !forgotPasswordOpen && (
+            <div className="vf-reset-message">{workspaceRecoveryMessage}</div>
+          )}
 
           <button
             type="button"
@@ -28101,19 +28066,44 @@ if (!currentUser) {
 
         {forgotPasswordOpen && (
           <div className="vf-reset-overlay">
-            <div className="vf-reset-modal">
+            <div className="vf-reset-modal" dir={loginLanguage === "AR" ? "rtl" : "ltr"}>
               <h3>{loginLanguage === "AR" ? "استعادة كلمة المرور" : "Password Recovery"}</h3>
               <p>
                 {loginLanguage === "AR"
-                  ? "استعادة كلمة المرور تتم مؤقتًا عن طريق إدارة المنصة."
-                  : "Password recovery is temporarily handled by the platform administrator."}
+                  ? "أدخل بريد حساب الشركة أو المكتب. سنرسل رابطًا آمنًا لتعيين كلمة مرور جديدة."
+                  : "Enter the company or agency account email. We will send a secure link to set a new password."}
               </p>
+
+              <input
+                type="email"
+                placeholder={loginLanguage === "AR" ? "البريد الإلكتروني" : "Email address"}
+                value={workspaceRecoveryEmail}
+                onChange={(event) => setWorkspaceRecoveryEmail(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && handleWorkspacePasswordRecoveryRequest()}
+                autoComplete="email"
+                dir="ltr"
+              />
+
+              {workspaceRecoveryMessage && <div className="vf-reset-message">{workspaceRecoveryMessage}</div>}
 
               <div className="vf-reset-actions">
                 <button
                   type="button"
+                  onClick={handleWorkspacePasswordRecoveryRequest}
+                  disabled={workspaceRecoveryLoading}
+                >
+                  {workspaceRecoveryLoading
+                    ? (loginLanguage === "AR" ? "جاري الإرسال..." : "Sending...")
+                    : (loginLanguage === "AR" ? "إرسال رابط الاستعادة" : "Send Recovery Link")}
+                </button>
+                <button
+                  type="button"
                   className="secondary"
-                  onClick={() => setForgotPasswordOpen(false)}
+                  onClick={() => {
+                    setForgotPasswordOpen(false);
+                    setWorkspaceRecoveryMessage("");
+                  }}
+                  disabled={workspaceRecoveryLoading}
                 >
                   {loginLanguage === "AR" ? "إغلاق" : "Close"}
                 </button>
@@ -33840,9 +33830,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>SLA Penalty Exposure</th>
             <th>SLA 30%</th>
             <th>Response 10%</th>
-            <th>Quality 20%</th>
+            <th>Quality 20% (when applicable)</th>
             <th>Rejection 10%</th>
-            <th>Mobilization 15%</th>
+            <th>Arrival 15%</th>
             <th>Update 10%</th>
             <th>Stale Updates</th>
             <th>Update KPI Deduction</th>
@@ -33868,7 +33858,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                 <td>{item.sla_score}%</td>
                 <td>{item.response_score}%</td>
-                <td>{item.quality_score}%</td>
+                <td>{item.quality_applicable ? formatOptionalPercentage(item.quality_score) : `N/A (${item.no_interview_candidates || 0} No Interview)`}</td>
                 <td>{item.rejection_score}%</td>
                 <td>{item.mobilization_score}%</td>
                 <td>{item.update_score}%</td>
@@ -33956,7 +33946,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   <td>{item.delayed_candidates || 0}</td>
                   <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                   <td>{item.sla_score || 0}%</td>
-                  <td>{item.quality_score || 0}%</td>
+                  <td>{formatOptionalPercentage(item.quality_score)}</td>
                   <td>{item.response_score || 0}%</td>
                   <td>{item.mobilization_score || 0}%</td>
                   <td>{item.update_score || 0}%</td>
@@ -34273,7 +34263,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   <td>{Number(item.penalty_exposure || 0).toLocaleString()} SAR</td>
                   <td>{item.sla_score || 0}%</td>
                   <td>{item.update_score || 0}%</td>
-                  <td>{item.quality_score || 0}%</td>
+                  <td>{formatOptionalPercentage(item.quality_score)}</td>
                   <td>{item.arrival_score || 0}%</td>
                   <td><b>{item.total_score || 0}%</b></td>
                   <td>{item.updated_at ? new Date(item.updated_at).toLocaleDateString("en-GB") : "-"}</td>
@@ -34355,11 +34345,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                       className={(company.subscription_status || "Active") === "Active" ? "danger" : "save-btn"}
                       onClick={async () => {
                         const nextStatus = (company.subscription_status || "Active") === "Active" ? "Suspended" : "Active";
-                        const { error } = await supabase
-                          .from("companies")
-                          .update({ subscription_status: nextStatus })
-                          .eq("id", company.id)
-                          .eq("id", currentCompanyId);
+                        const { error } = await supabase.rpc("update_authorized_company", {
+                          p_company_id: company.id,
+                          p_patch: { subscription_status: nextStatus },
+                        });
                         if (error) return alert(error.message);
                         await loadCompanies();
                       }}
@@ -34394,9 +34383,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <div className="form-grid">
         <Select
           placeholder="Email Sending Mode"
-          value={emailSettingsForm.mode || "platform"}
-          options={["platform", "company"]}
-          onChange={(v) => setEmailSettingsForm((p) => ({ ...p, mode: v }))}
+          value="platform"
+          options={["platform"]}
+          onChange={() => setEmailSettingsForm((p) => ({ ...p, mode: "platform" }))}
         />
         <Select
           placeholder="Provider"
@@ -34412,15 +34401,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         <Input placeholder="Notifications Email" value={emailSettingsForm.notifications_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, notifications_email: v }))} />
       </div>
 
-      <div className="section-title">SMTP Configuration</div>
-      <div className="form-grid">
-        <Input placeholder="SMTP Host" value={emailSettingsForm.smtp_host || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_host: v }))} />
-        <Input type="number" placeholder="SMTP Port" value={emailSettingsForm.smtp_port || "465"} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_port: v }))} />
-        <Select placeholder="Secure Connection" value={String(emailSettingsForm.smtp_secure ?? "true")} options={["true", "false"]} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_secure: v }))} />
-        <Input placeholder="SMTP Username" value={emailSettingsForm.smtp_username || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_username: v }))} />
-        <Input type="password" placeholder={emailSettingsForm.id ? "SMTP Password / App Password (leave blank to keep current)" : "SMTP Password / App Password"} value={emailSettingsForm.smtp_password || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, smtp_password: v }))} />
-        <Input placeholder="Test Recipient Email" value={emailSettingsForm.test_email || ""} onChange={(v) => setEmailSettingsForm((p) => ({ ...p, test_email: v }))} />
-      </div>
+      <div className="section-title">Platform SMTP</div>
+      <p className="muted-text">Company SMTP credentials are temporarily disabled until encrypted Vault storage is available. VisaFlow Platform SMTP remains active, and no SMTP password is sent to or returned from the browser.</p>
 
       <label className="check-row">
         <input

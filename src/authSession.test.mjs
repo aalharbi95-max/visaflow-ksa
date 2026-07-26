@@ -144,18 +144,31 @@ test("browser auth contract persists the workspace session and keeps cleanup sco
   assert.match(supabaseSource, /persistSession:\s*true/);
   assert.match(supabaseSource, /autoRefreshToken:\s*true/);
   assert.match(supabaseSource, /detectSessionInUrl:/);
+  assert.doesNotMatch(supabaseSource, /detectSessionInUrl:\s*\(/);
+  assert.match(supabaseSource, /detectSessionInUrl:\s*workspaceDetectsAuthCallback/);
+  assert.match(supabaseSource, /detectSessionInUrl:\s*talentDetectsAuthCallback/);
   assert.match(supabaseSource, /WORKSPACE_AUTH_STORAGE_KEY = 'visaflow-workspace-auth'/);
   assert.match(supabaseSource, /storage: typeof window === 'undefined' \? undefined : window\.localStorage/);
   assert.match(appSource, /workspaceSupabase as supabase/);
   assert.match(appSource, /const supabase = talentSupabase/);
-  assert.equal((supabaseSource.match(/createClient\(/g) || []).length, 2);
+  assert.equal((supabaseSource.match(/createClient\(/g) || []).length, 3);
+  assert.match(supabaseSource, /INTERVIEW_AUTH_STORAGE_KEY = 'visaflow-interview-auth'/);
+  assert.match(supabaseSource, /storage: typeof window === 'undefined' \? undefined : window\.sessionStorage/);
+  assert.match(supabaseSource, /VITE_SUPABASE_URL/);
+  assert.match(supabaseSource, /VITE_SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(supabaseSource, /VITE_SUPABASE_EXPECTED_PROJECT_REF/);
+  assert.match(supabaseSource, /activeProjectRef !== expectedProjectRef/);
   assert.match(loginSource, /const verifiedSession = authData\.session \|\| null/);
   assert.match(loginSource, /verifyWorkspaceAuthSession\(supabase\.auth\)/);
   const successfulAuthSource = loginSource.slice(
     loginSource.indexOf("if (!authError && authData?.user?.id)"),
-    loginSource.indexOf("// A legacy browser session")
+    loginSource.indexOf("} else {")
   );
-  assert.doesNotMatch(successfulAuthSource, /auth\.signOut\(/);
+  assert.doesNotMatch(successfulAuthSource, /auth\.signOut\(\s*\)/);
+  assert.match(successfulAuthSource, /authUserMatchesAudience/);
+  assert.doesNotMatch(loginSource, /legacy_app_login/);
+  assert.match(loginSource, /legacy-account-upgrade/);
+  assert.match(loginSource, /get_authenticated_workspace_context/);
   assert.doesNotMatch(appSource, /localStorage\.clear\(|sessionStorage\.clear\(/);
   assert.match(appSource, /\["INITIAL_SESSION", "SIGNED_IN", "SIGNED_OUT", "TOKEN_REFRESHED", "USER_UPDATED"\]/);
   assert.match(dispatcherSource, /verifyWorkspaceAuthSession\(supabase\.auth\)/);

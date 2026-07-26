@@ -41,7 +41,18 @@ const MAX_VARIABLES_TOTAL = 3_000;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT_AUTHENTICATED = 12;
 const RATE_LIMIT_INTERNAL = 60;
-const VISAFLOW_ORIGIN = "https://visaflowksa.com";
+function resolveVisaFlowOrigin() {
+  const configured = Deno.env.get("VISAFLOW_APP_URL") || "https://visaflowksa.com";
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== "https:") throw new Error("invalid_protocol");
+    return url.origin;
+  } catch {
+    return "https://visaflowksa.com";
+  }
+}
+
+const VISAFLOW_ORIGIN = resolveVisaFlowOrigin();
 const rateBuckets = new Map<string, number[]>();
 
 const PLATFORM_OWNER = "Platform Owner";
@@ -99,9 +110,9 @@ const messageContracts: Record<string, MessageContract> = {
     subject: "Penalty Decision", fields: [["penalty_no", "Penalty"], ["decision", "Decision"], ["amount", "Amount (SAR)"], ["note", "Notes"], ["action_url", "Portal"]], allowedInputVariables: [], allowedPath: "/",
   },
   AI_INTERVIEW_INVITATION: {
-    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: false,
+    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: true,
     requiredId: "interview_session_id", recipientSource: "ai_interview_sessions -> candidates.email", ownershipRule: "session and candidate belong to actor.company_id",
-    subject: "VisaFlow AI Interview Invitation", fields: [["candidate_name", "Candidate"], ["profession", "Profession"], ["request_no", "Request"], ["scheduled_at", "Scheduled"], ["expires_at", "Expires"], ["action_url", "Interview link"]], allowedInputVariables: [], allowedPath: "/?ai_interview=<record access_token>",
+    subject: "VisaFlow AI Interview Invitation", fields: [["candidate_name", "Candidate"], ["profession", "Profession"], ["request_no", "Request"], ["scheduled_at", "Scheduled"], ["expires_at", "Expires"], ["action_url", "Interview link"]], allowedInputVariables: [], allowedPath: "/#interview_invite=<one-time secret>",
   },
   AI_AGENT_MANAGER_APPROVAL: {
     roles: [...COMPANY_ADMINS, "Recruitment Manager"], browserEnabled: true, internalEnabled: true,
@@ -406,20 +417,29 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
   }
 
   if (type === "AI_INTERVIEW_INVITATION") {
-    if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
+    if (caller.kind === "authenticated" && !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
     const sessionId = safeId(body.interview_session_id, "interview_session_id");
-    const session = await exactlyOne(admin.from("ai_interview_sessions")
-      .select("id, company_id, candidate_id, candidate_name, candidate_email, profession, request_no, scheduled_at, expires_at, access_token, status")
-      .eq("id", sessionId).eq("company_id", caller.actor.company_id), "interview_session_not_found");
-    if (!session.candidate_id || !session.access_token) throw new RequestFailure(404, "interview_invitation_not_ready");
+    let sessionQuery = admin.from("ai_interview_sessions")
+      .select("id, company_id, candidate_id, candidate_name, candidate_email, profession, request_no, scheduled_at, expires_at, status")
+      .eq("id", sessionId);
+    if (caller.kind === "authenticated") sessionQuery = sessionQuery.eq("company_id", caller.actor.company_id);
+    const session = await exactlyOne(sessionQuery, "interview_session_not_found");
+    if (!session.candidate_id) throw new RequestFailure(404, "interview_invitation_not_ready");
     const candidate = await exactlyOne(admin.from("candidates").select("id, company_id, candidate_name, email, profession, request_no")
-      .eq("id", session.candidate_id).eq("company_id", caller.actor.company_id), "candidate_not_found");
+      .eq("id", session.candidate_id).eq("company_id", session.company_id), "candidate_not_found");
     const recipients = normalizeEmails([session.candidate_email, candidate.email]);
     if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
+    const { data: invitation, error: invitationError } = await admin.rpc("issue_secure_ai_interview_invitation", {
+      p_session_id: session.id,
+      p_app_base_url: VISAFLOW_ORIGIN,
+    });
+    if (invitationError || !String(invitation?.url || "").startsWith(`${VISAFLOW_ORIGIN}/#interview_invite=`)) {
+      throw new RequestFailure(503, "interview_invitation_not_ready");
+    }
     return { recipients: [recipients[0]], variables: {
       candidate_name: String(session.candidate_name || candidate.candidate_name || "Candidate"), profession: String(session.profession || candidate.profession || "-"),
       request_no: String(session.request_no || candidate.request_no || "-"), scheduled_at: String(session.scheduled_at || "-"), expires_at: String(session.expires_at || "-"),
-      action_url: approvedUrl({ ai_interview: String(session.access_token) }),
+      action_url: String(invitation.url),
     } };
   }
 
@@ -536,6 +556,15 @@ Deno.serve(async (req) => {
       transport.sendMail({ from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html },
         (error) => error ? reject(error) : resolve());
     });
+    if (messageType === "COMPANY_EMAIL_TEST" && caller.kind === "authenticated" && caller.actor.company_id) {
+      await admin.from("company_email_settings").update({
+        is_verified: true,
+        last_test_at: new Date().toISOString(),
+        last_test_status: "Success",
+        last_error: "",
+        updated_at: new Date().toISOString(),
+      }).eq("company_id", caller.actor.company_id);
+    }
     return jsonResponse({ ok: true, message_type: messageType });
   } catch (error) {
     if (error instanceof RequestFailure) return jsonResponse({ ok: false, error: error.publicCode }, error.status);

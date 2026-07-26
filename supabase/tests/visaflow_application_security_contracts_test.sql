@@ -1,0 +1,46 @@
+begin;
+
+create extension if not exists pgtap with schema extensions;
+set search_path = public, extensions;
+select plan(37);
+
+select ok(to_regclass('public.ai_interview_portal_invitations') is not null, 'portal invitation table exists');
+select ok(to_regclass('public.ai_interview_portal_capabilities') is not null, 'portal capability table exists');
+select ok(to_regclass('public.ai_interview_media_uploads') is not null, 'portal media upload table exists');
+select ok(exists(select 1 from information_schema.columns where table_schema='public' and table_name='candidates' and column_name='agency_id' and data_type='uuid'), 'candidates has agency_id');
+select ok(exists(select 1 from information_schema.columns where table_schema='public' and table_name='interviews' and column_name='agency_id' and data_type='uuid'), 'interviews has agency_id');
+select ok(to_regclass('public.candidates_company_agency_idx') is not null, 'candidate agency index exists');
+select ok(to_regclass('public.candidates_company_agency_status_idx') is not null, 'candidate agency status index exists');
+select ok(to_regclass('public.interviews_company_agency_candidate_idx') is not null, 'interview candidate agency index exists');
+select ok(to_regclass('public.interviews_company_agency_status_idx') is not null, 'interview agency status index exists');
+select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='ai_interview_one_active_invitation' and indexdef ilike '%consumed_at IS NULL%' and indexdef ilike '%revoked_at IS NULL%'), 'one active invitation partial unique index exists');
+select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='ai_interview_answers_session_question_order_uidx' and indexdef ilike 'CREATE UNIQUE INDEX%'), 'answer upsert has a matching unique index');
+select ok((select relrowsecurity from pg_class where oid='public.ai_interview_portal_invitations'::regclass), 'invitation RLS enabled');
+select ok((select relrowsecurity from pg_class where oid='public.ai_interview_portal_capabilities'::regclass), 'capability RLS enabled');
+select ok((select relrowsecurity from pg_class where oid='public.ai_interview_media_uploads'::regclass), 'media upload RLS enabled');
+select ok(not has_table_privilege('anon','public.ai_interview_sessions','SELECT'), 'anon cannot select interview sessions');
+select ok(not has_table_privilege('anon','public.ai_interview_answers','SELECT'), 'anon cannot select interview answers');
+select ok(not has_table_privilege('anon','public.ai_interview_portal_invitations','SELECT'), 'anon cannot select invitation hashes');
+select ok(not has_table_privilege('anon','public.ai_interview_portal_capabilities','SELECT'), 'anon cannot select capabilities');
+select ok(not has_table_privilege('anon','public.ai_interview_media_uploads','SELECT'), 'anon cannot select pending media');
+select ok(not has_function_privilege('public','public.legacy_app_login(text,text)','EXECUTE'), 'PUBLIC cannot execute legacy login');
+select ok(not has_function_privilege('anon','public.legacy_app_login(text,text)','EXECUTE'), 'anon cannot execute legacy login');
+select ok(not has_function_privilege('authenticated','public.legacy_app_login(text,text)','EXECUTE'), 'authenticated cannot execute legacy login');
+select ok(not has_function_privilege('public','public.ai_agent_try_acquire_lock(uuid,text,text,text,text,uuid,integer)','EXECUTE'), 'PUBLIC cannot acquire AI locks');
+select ok(not has_function_privilege('anon','public.ai_agent_try_acquire_lock(uuid,text,text,text,text,uuid,integer)','EXECUTE'), 'anon cannot acquire AI locks');
+select ok(not has_function_privilege('authenticated','public.ai_agent_try_acquire_lock(uuid,text,text,text,text,uuid,integer)','EXECUTE'), 'authenticated cannot directly acquire AI locks');
+select ok(has_function_privilege('service_role','public.ai_agent_try_acquire_lock(uuid,text,text,text,text,uuid,integer)','EXECUTE'), 'service role can acquire AI locks');
+select ok(not has_function_privilege('public','public.issue_secure_ai_interview_invitation(uuid,text)','EXECUTE'), 'PUBLIC cannot issue interview invitations');
+select ok(not has_function_privilege('authenticated','public.issue_secure_ai_interview_invitation(uuid,text)','EXECUTE'), 'authenticated cannot directly issue interview invitations');
+select ok(has_function_privilege('service_role','public.issue_secure_ai_interview_invitation(uuid,text)','EXECUTE'), 'service role can issue interview invitations');
+select ok(not has_function_privilege('anon','public.exchange_ai_interview_invitation(text)','EXECUTE'), 'anon role cannot exchange before anonymous Auth');
+select ok(has_function_privilege('authenticated','public.exchange_ai_interview_invitation(text)','EXECUTE'), 'authenticated interview session can exchange an invitation');
+select ok(not has_function_privilege('public','public.get_authenticated_workspace_context()','EXECUTE'), 'PUBLIC cannot load workspace context');
+select ok(not has_function_privilege('anon','public.get_authenticated_workspace_context()','EXECUTE'), 'anon cannot load workspace context');
+select ok(has_function_privilege('authenticated','public.get_authenticated_workspace_context()','EXECUTE'), 'authenticated can load self-scoped workspace context');
+select ok(not has_column_privilege('authenticated','public.company_email_settings','smtp_password','SELECT'), 'authenticated cannot select SMTP password');
+select ok(not exists(select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname in ('VisaFlow AI audio temporary insert','VisaFlow AI audio temporary read','VisaFlow AI audio temporary update')), 'broad AI audio policies are removed');
+select ok(not has_function_privilege('anon','public.save_platform_email_settings(jsonb)','EXECUTE'), 'anon cannot change email settings');
+
+select * from finish();
+rollback;
