@@ -1,11 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
+import { getViteSupabaseConfig } from './supabaseConfig.mjs'
 import {
   clearWorkspaceRecoveryLocalState,
   getWorkspaceRecoveryUrlState,
 } from './workspaceRecovery.mjs'
 
-const supabaseUrl = 'https://zeocbftriydodzfgixjv.supabase.co'
-const supabaseKey = 'sb_publishable_b5oQYxCWh6pwJsf8zDvDFA_HEcuoHCj'
+const {
+  url: supabaseUrl,
+  publishableKey: supabaseKey,
+} = getViteSupabaseConfig()
 export const WORKSPACE_AUTH_STORAGE_KEY = 'visaflow-workspace-auth'
 
 function isTalentAuthUrl(url) {
