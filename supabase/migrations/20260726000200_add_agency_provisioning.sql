@@ -382,6 +382,9 @@ begin
   if request_row.status not in ('Draft', 'Failed', 'Provisioning') then
     raise exception 'AGENCY_PROVISIONING_INVALID_STATE';
   end if;
+  if request_row.send_invitation is not true then
+    raise exception 'INVITATION_DISABLED';
+  end if;
 
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(
@@ -729,7 +732,8 @@ $function$;
 create or replace function public.agency_provisioning_mark_failed(
   p_actor_auth_user_id uuid,
   p_request_id uuid,
-  p_failure_code text
+  p_failure_code text,
+  p_metadata jsonb default '{}'::jsonb
 )
 returns jsonb
 language plpgsql
@@ -739,7 +743,37 @@ as $function$
 declare
   actor public.users%rowtype;
   request_row public.agency_provisioning_requests%rowtype;
+  sanitized_metadata jsonb;
 begin
+  if pg_catalog.jsonb_typeof(coalesce(p_metadata, '{}'::jsonb)) <> 'object' then
+    raise exception 'INVALID_FAILURE_METADATA';
+  end if;
+  if coalesce(p_metadata, '{}'::jsonb) <> '{}'::jsonb
+    and exists (
+      select 1
+      from pg_catalog.jsonb_object_keys(coalesce(p_metadata, '{}'::jsonb)) as key_name
+      where key_name not in (
+        'retryable',
+        'auth_user_created',
+        'auth_user_recorded',
+        'auth_user_id',
+        'failure_stage'
+      )
+    )
+  then
+    raise exception 'INVALID_FAILURE_METADATA';
+  end if;
+
+  sanitized_metadata := pg_catalog.jsonb_strip_nulls(
+    pg_catalog.jsonb_build_object(
+      'retryable', p_metadata->'retryable',
+      'auth_user_created', p_metadata->'auth_user_created',
+      'auth_user_recorded', p_metadata->'auth_user_recorded',
+      'auth_user_id', p_metadata->'auth_user_id',
+      'failure_stage', p_metadata->'failure_stage'
+    )
+  );
+
   select app_user.* into actor
   from public.users as app_user
   where app_user.auth_user_id = p_actor_auth_user_id
@@ -763,7 +797,7 @@ begin
   update public.agency_provisioning_requests
   set status = 'Failed',
       failure_code = left(coalesce(p_failure_code, 'INVITATION_FAILED'), 120),
-      failure_metadata = '{}'::jsonb,
+      failure_metadata = sanitized_metadata,
       failed_at = now(),
       updated_at = now()
   where id = request_row.id
@@ -781,7 +815,10 @@ begin
     request_row.id, 'failed-' || request_row.attempt_count,
     request_row.company_id, request_row.agency_id, actor.id,
     actor.auth_user_id, 'Provisioning Failed', 'Provisioning', 'Failed',
-    jsonb_build_object('failure_code', request_row.failure_code)
+    pg_catalog.jsonb_build_object(
+      'failure_code', request_row.failure_code,
+      'failure_metadata', sanitized_metadata
+    )
   )
   on conflict (request_id, event_key) do nothing;
 
@@ -1433,7 +1470,7 @@ revoke all on function public.agency_provisioning_complete_invitation(uuid, uuid
   from public, anon, authenticated;
 revoke all on function public.agency_provisioning_record_auth_user(uuid, uuid, uuid)
   from public, anon, authenticated;
-revoke all on function public.agency_provisioning_mark_failed(uuid, uuid, text)
+revoke all on function public.agency_provisioning_mark_failed(uuid, uuid, text, jsonb)
   from public, anon, authenticated;
 revoke all on function public.agency_provisioning_prepare_resend(uuid, uuid)
   from public, anon, authenticated;
@@ -1462,7 +1499,7 @@ grant execute on function public.agency_provisioning_complete_invitation(uuid, u
   to service_role;
 grant execute on function public.agency_provisioning_record_auth_user(uuid, uuid, uuid)
   to service_role;
-grant execute on function public.agency_provisioning_mark_failed(uuid, uuid, text)
+grant execute on function public.agency_provisioning_mark_failed(uuid, uuid, text, jsonb)
   to service_role;
 grant execute on function public.agency_provisioning_prepare_resend(uuid, uuid)
   to service_role;

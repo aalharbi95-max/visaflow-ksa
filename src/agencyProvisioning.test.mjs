@@ -8,10 +8,12 @@ import {
 import {
   ProvisioningError,
   runAgencyProvisioningAction,
+  sanitizeFailureMetadata,
   sanitizePermissions,
 } from "../supabase/functions/_shared/agencyProvisioningCore.mjs";
 import {
   buildCorsHeaders,
+  isAllowedInviteRedirectUrl,
   parseAllowedOrigins,
   resolveAllowedOrigin,
 } from "../supabase/functions/_shared/corsPolicy.mjs";
@@ -57,6 +59,7 @@ function request(overrides = {}) {
     agency_name: "Safe Agency",
     admin_email: "admin@agency.test",
     permissions,
+    send_invitation: true,
     status: "Draft",
     attempt_count: 0,
     ...overrides,
@@ -175,6 +178,33 @@ test("Admin can provision and invitation link is never returned", async () => {
   );
 });
 
+test("stored send_invitation=false prevents every Auth invitation mutation", async () => {
+  const mock = harness({
+    beginResult: { status: "Draft", send_invitation: false },
+  });
+  await assert.rejects(
+    runAgencyProvisioningAction({
+      body: {
+        action: "provision",
+        request_id: "request-1",
+        send_invitation: true,
+      },
+      actor: admin,
+      repository: mock.repository,
+      authAdmin: mock.authAdmin,
+      inviteRedirectUrl: "https://example.test/agency-invite",
+    }),
+    (error) =>
+      error instanceof ProvisioningError &&
+      error.code === "INVITATION_DISABLED"
+  );
+  assert.deepEqual(mock.calls.map(([name]) => name), ["begin"]);
+  assert.equal(
+    mock.calls.some(([name]) => name === "inviteUserByEmail"),
+    false
+  );
+});
+
 test("company_id supplied by another tenant is rejected", async () => {
   await assert.rejects(
     run({ ...draftBody, company_id: "company-b" }, admin),
@@ -203,6 +233,10 @@ test("invitation failure marks the request Failed and non-active", async () => {
   );
   assert.equal(mock.calls.at(-1)[0], "markFailed");
   assert.equal(mock.calls.at(-1)[1].code, "INVITATION_FAILED");
+  assert.deepEqual(mock.calls.at(-1)[1].metadata, {
+    retryable: true,
+    failure_stage: "invite_user",
+  });
 });
 
 test("Auth success followed by DB failure records the same Auth user for retry", async () => {
@@ -222,6 +256,12 @@ test("Auth success followed by DB failure records the same Auth user for retry",
     mock.calls.find(([name]) => name === "recordAuthUser")[1].authUserId,
     "auth-agency"
   );
+  assert.deepEqual(mock.calls.at(-1)[1].metadata, {
+    retryable: true,
+    auth_user_recorded: true,
+    auth_user_id: "auth-agency",
+    failure_stage: "complete_invitation",
+  });
 
   const retry = await run(
     { action: "provision", request_id: "request-1" },
@@ -247,6 +287,12 @@ test("failure while recording an invited Auth user is retryable and never sends 
   assert.equal(mock.calls.filter(([name]) => name === "inviteUserByEmail").length, 1);
   assert.equal(mock.calls.at(-1)[0], "markFailed");
   assert.equal(mock.calls.at(-1)[1].code, "DATABASE_FINALIZATION_FAILED");
+  assert.deepEqual(mock.calls.at(-1)[1].metadata, {
+    retryable: true,
+    auth_user_created: true,
+    auth_user_id: "auth-agency",
+    failure_stage: "record_auth_user",
+  });
 });
 
 test("idempotent completed request performs no duplicate writes or invite", async () => {
@@ -271,16 +317,49 @@ test("concurrent provisioning result is safe when the locked request is complete
   assert.equal(attempts.every(({ calls }) => calls.length === 1), true);
 });
 
-test("resend uses the same request and never returns Auth metadata", async () => {
-  const { result, calls } = await run(
-    { action: "resend_invitation", request_id: "request-1" },
-    admin
+test("resend is disabled without a mail provider and performs no Auth mutation", async () => {
+  const mock = harness();
+  await assert.rejects(
+    runAgencyProvisioningAction({
+      body: { action: "resend_invitation", request_id: "request-1" },
+      actor: admin,
+      repository: mock.repository,
+      authAdmin: mock.authAdmin,
+      inviteRedirectUrl: "https://example.test/agency-invite",
+    }),
+    (error) =>
+      error instanceof ProvisioningError &&
+      error.code === "RESEND_INVITATION_NOT_CONFIGURED"
   );
-  assert.equal(result.request.status, "Invitation Sent");
-  assert.equal("auth_user_id" in result.request, false);
+  assert.deepEqual(mock.calls, []);
+  assert.equal(
+    mock.calls.some(([name]) => name === "inviteUserByEmail"),
+    false
+  );
+});
+
+test("failure metadata rejects unknown fields and keeps only approved values", () => {
   assert.deepEqual(
-    calls.map(([name]) => name),
-    ["prepareResend", "inviteUserByEmail", "recordResend"]
+    sanitizeFailureMetadata({
+      retryable: true,
+      auth_user_created: true,
+      auth_user_recorded: false,
+      auth_user_id: "auth-agency",
+      failure_stage: "record_auth_user",
+    }),
+    {
+      retryable: true,
+      auth_user_created: true,
+      auth_user_recorded: false,
+      auth_user_id: "auth-agency",
+      failure_stage: "record_auth_user",
+    }
+  );
+  assert.throws(
+    () => sanitizeFailureMetadata({ retryable: true, stack: "secret stack" }),
+    (error) =>
+      error instanceof ProvisioningError &&
+      error.code === "INVALID_FAILURE_METADATA"
   );
 });
 
@@ -582,6 +661,10 @@ test("migrations enforce RLS, service-only writes, tenant keys and no destructiv
   assert.match(provisioning, /AGENCY_PROVISIONING_IN_PROGRESS/i);
   assert.match(
     provisioning,
+    /if request_row\.send_invitation is not true then\s+raise exception 'INVITATION_DISABLED'/i
+  );
+  assert.match(
+    provisioning,
     /where request\.company_id = actor\.company_id\s+and request\.idempotency_key = p_idempotency_key/i
   );
   assert.doesNotMatch(baseline + provisioning, /delete\s+from\s+public\.agencies/i);
@@ -600,6 +683,21 @@ test("migrations enforce RLS, service-only writes, tenant keys and no destructiv
   assert.match(provisioning, /SHARED_AGENCY_REQUIRES_MANUAL_REVIEW/i);
   assert.match(provisioning, /update public\.agency_company_user_access\s+set status = 'Suspended'/i);
   assert.doesNotMatch(provisioning, /delete\s+from\s+(?:auth\.users|public\.users)/i);
+  assert.match(
+    provisioning,
+    /agency_provisioning_mark_failed\(\s*p_actor_auth_user_id uuid,\s*p_request_id uuid,\s*p_failure_code text,\s*p_metadata jsonb default '\{\}'::jsonb/i
+  );
+  for (const key of [
+    "retryable",
+    "auth_user_created",
+    "auth_user_recorded",
+    "auth_user_id",
+    "failure_stage",
+  ]) {
+    assert.match(provisioning, new RegExp(`'${key}'`));
+  }
+  assert.match(provisioning, /raise exception 'INVALID_FAILURE_METADATA'/i);
+  assert.match(provisioning, /'failure_metadata', sanitized_metadata/i);
   assert.match(
     baseline,
     /in \('Platform Owner', 'Platform Accounts User', 'Platform Support User'\)/i
@@ -666,8 +764,13 @@ test("Edge source keeps privileged credentials server-side and validates JWT", a
   assert.equal(edge.includes(privilegedKeyName), true);
   assert.match(edge, /auth\.getUser\(token\)/);
   assert.match(core, /inviteUserByEmail/);
+  assert.match(edge, /p_metadata:\s*metadata/);
   assert.equal(client.includes(["SERVICE", "ROLE"].join("_")), false);
   assert.doesNotMatch(client, /inviteUserByEmail/);
+  assert.doesNotMatch(
+    core,
+    /action === "resend_invitation"[\s\S]{0,500}inviteUserByEmail/
+  );
 });
 
 test("CORS uses the configured production, staging, and localhost allowlist only", () => {
@@ -695,6 +798,27 @@ test("CORS uses the configured production, staging, and localhost allowlist only
       buildCorsHeaders("https://rejected.example", origins),
     false
   );
+  assert.equal(
+    isAllowedInviteRedirectUrl(
+      "https://staging.visaflow.example/agency-invite",
+      origins
+    ),
+    true
+  );
+  assert.equal(
+    isAllowedInviteRedirectUrl(
+      "http://staging.visaflow.example/agency-invite",
+      origins
+    ),
+    false
+  );
+  assert.equal(
+    isAllowedInviteRedirectUrl(
+      "https://rejected.example/agency-invite",
+      origins
+    ),
+    false
+  );
 });
 
 test("Edge rejects an unconfigured origin before handling preflight", async () => {
@@ -709,4 +833,16 @@ test("Edge rejects an unconfigured origin before handling preflight", async () =
   );
   assert.doesNotMatch(edge, /vercel\.app/i);
   assert.doesNotMatch(edge, /localhost:\\d/);
+  assert.match(edge, /INVITE_REDIRECT_IS_ALLOWED/);
+});
+
+test("resend UI is hidden and agency submission has a synchronous guard", async () => {
+  const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /runAgencyRequestAction\(item,\s*"resend_invitation"\)/);
+  assert.match(
+    app,
+    /if \(agencyProvisioningRequestRef\.current \|\| agencyProvisioningLoading\) return/
+  );
+  assert.match(app, /agencyProvisioningRequestRef\.current = true/);
+  assert.match(app, /agencyProvisioningRequestRef\.current = false/);
 });

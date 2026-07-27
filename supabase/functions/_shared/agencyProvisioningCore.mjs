@@ -5,6 +5,14 @@ export const AGENCY_PERMISSION_KEYS = Object.freeze([
   "can_view_interviews",
 ]);
 
+export const FAILURE_METADATA_KEYS = Object.freeze([
+  "retryable",
+  "auth_user_created",
+  "auth_user_recorded",
+  "auth_user_id",
+  "failure_stage",
+]);
+
 export class ProvisioningError extends Error {
   constructor(code, message, status = 400) {
     super(message);
@@ -45,6 +53,35 @@ export function sanitizePermissions(value = {}) {
   return Object.fromEntries(
     AGENCY_PERMISSION_KEYS.map((key) => [key, value[key] === true])
   );
+}
+
+export function sanitizeFailureMetadata(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProvisioningError(
+      "INVALID_FAILURE_METADATA",
+      "Failure metadata must be an object."
+    );
+  }
+  const unknown = Object.keys(value).filter(
+    (key) => !FAILURE_METADATA_KEYS.includes(key)
+  );
+  if (unknown.length) {
+    throw new ProvisioningError(
+      "INVALID_FAILURE_METADATA",
+      "One or more failure metadata fields are not allowed."
+    );
+  }
+  const sanitized = {};
+  for (const key of ["retryable", "auth_user_created", "auth_user_recorded"]) {
+    if (key in value) sanitized[key] = value[key] === true;
+  }
+  if (value.auth_user_id != null) {
+    sanitized.auth_user_id = String(value.auth_user_id).slice(0, 64);
+  }
+  if (value.failure_stage != null) {
+    sanitized.failure_stage = String(value.failure_stage).slice(0, 80);
+  }
+  return sanitized;
 }
 
 function requireActor(actor, allowedRoles, action) {
@@ -244,6 +281,13 @@ export async function runAgencyProvisioningAction({
     });
     const request = started?.request || started;
     if (["Invitation Sent", "Active"].includes(request.status)) return publicResult(request);
+    if (request.send_invitation === false) {
+      throw new ProvisioningError(
+        "INVITATION_DISABLED",
+        "Invitation sending is disabled for this provisioning request.",
+        409
+      );
+    }
 
     let authUserId = request.auth_user_id || null;
     if (!authUserId) {
@@ -259,7 +303,10 @@ export async function runAgencyProvisioningAction({
           requestId: request.id,
           actor,
           code: "INVITATION_FAILED",
-          metadata: { retryable: true },
+          metadata: sanitizeFailureMetadata({
+            retryable: true,
+            failure_stage: "invite_user",
+          }),
         });
         throw new ProvisioningError(
           "INVITATION_FAILED",
@@ -274,7 +321,12 @@ export async function runAgencyProvisioningAction({
           requestId: request.id,
           actor,
           code: "DATABASE_FINALIZATION_FAILED",
-          metadata: { retryable: true, auth_user_created: true },
+          metadata: sanitizeFailureMetadata({
+            retryable: true,
+            auth_user_created: true,
+            auth_user_id: authUserId,
+            failure_stage: "record_auth_user",
+          }),
         });
         throw new ProvisioningError(
           "DATABASE_FINALIZATION_FAILED",
@@ -293,7 +345,12 @@ export async function runAgencyProvisioningAction({
         requestId: request.id,
         actor,
         code: "DATABASE_FINALIZATION_FAILED",
-        metadata: { retryable: true, auth_user_recorded: true },
+        metadata: sanitizeFailureMetadata({
+          retryable: true,
+          auth_user_recorded: true,
+          auth_user_id: authUserId,
+          failure_stage: "complete_invitation",
+        }),
       });
       throw new ProvisioningError(
         "DATABASE_FINALIZATION_FAILED",
@@ -306,30 +363,12 @@ export async function runAgencyProvisioningAction({
   if (action === "resend_invitation") {
     requireActor(actor, PROVISION_ROLES, action);
     validateTenantHint(body, actor);
-    const prepared = await repository.prepareResend({
-      requestId: requireRequestId(body),
-      actor,
-    });
-    const request = prepared?.request || prepared;
-    try {
-      await authAdmin.inviteUserByEmail(
-        request.admin_email,
-        inviteOptions(request, inviteRedirectUrl)
-      );
-      return publicResult(await repository.recordResend({ requestId: request.id, actor }));
-    } catch {
-      await repository.markFailed({
-        requestId: request.id,
-        actor,
-        code: "INVITATION_RESEND_FAILED",
-        metadata: { retryable: true },
-      });
-      throw new ProvisioningError(
-        "INVITATION_RESEND_FAILED",
-        "The invitation could not be resent. Retry is available.",
-        502
-      );
-    }
+    requireRequestId(body);
+    throw new ProvisioningError(
+      "RESEND_INVITATION_NOT_CONFIGURED",
+      "Invitation resend is not configured.",
+      503
+    );
   }
 
   if (action === "activate") {

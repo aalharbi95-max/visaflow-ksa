@@ -7314,6 +7314,7 @@ async function saveSelectedAllocations() {
     createAgencyIdempotencyKey()
   );
   const [agencyProvisioningLoading, setAgencyProvisioningLoading] = useState(false);
+  const agencyProvisioningRequestRef = useRef(false);
   const [agencyProvisioningMessage, setAgencyProvisioningMessage] = useState("");
   const [agencyMaintenanceId, setAgencyMaintenanceId] = useState("");
   const [agencyMaintenanceForm, setAgencyMaintenanceForm] =
@@ -13005,6 +13006,7 @@ async function saveUser() {
 }
 
 async function submitAgencyProvisioning(mode) {
+  if (agencyProvisioningRequestRef.current || agencyProvisioningLoading) return;
   if (!canManageAgencies) {
     return setAgencyProvisioningMessage("You are not authorized to create an agency draft.");
   }
@@ -13018,6 +13020,7 @@ async function submitAgencyProvisioning(mode) {
     return setAgencyProvisioningMessage("Agency Name and Admin Email are required.");
   }
 
+  agencyProvisioningRequestRef.current = true;
   setAgencyProvisioningLoading(true);
   setAgencyProvisioningMessage("");
   try {
@@ -13043,6 +13046,7 @@ async function submitAgencyProvisioning(mode) {
   } catch (error) {
     setAgencyProvisioningMessage(getAgencyProvisioningErrorMessage(error));
   } finally {
+    agencyProvisioningRequestRef.current = false;
     setAgencyProvisioningLoading(false);
   }
 }
@@ -35332,9 +35336,6 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                             <button disabled={agencyProvisioningLoading} onClick={() => runAgencyRequestAction(item, "provision")}>
                               {item.status === "Draft" ? "Provision & Send Invitation" : "Retry"}
                             </button>
-                          )}
-                          {canProvisionAgencies && item.status === "Invitation Sent" && (
-                            <button disabled={agencyProvisioningLoading} onClick={() => runAgencyRequestAction(item, "resend_invitation")}>Resend Invitation</button>
                           )}
                           <button disabled={agencyProvisioningLoading} onClick={() => runAgencyRequestAction(item, "get_status")}>View Provisioning Status</button>
                         </td>

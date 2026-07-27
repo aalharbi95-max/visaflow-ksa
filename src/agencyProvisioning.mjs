@@ -32,7 +32,10 @@ const ERROR_MESSAGES = Object.freeze({
   FORBIDDEN: "You are not authorized to perform this action.",
   TENANT_MISMATCH: "The selected company does not match your authenticated workspace.",
   INVITATION_FAILED: "The invitation could not be sent. Retry is available.",
+  INVITATION_DISABLED: "Invitation sending is disabled for this request.",
   INVITATION_RESEND_FAILED: "The invitation could not be resent. Retry is available.",
+  RESEND_INVITATION_NOT_CONFIGURED:
+    "Invitation resend is temporarily unavailable.",
   DATABASE_FINALIZATION_FAILED:
     "Provisioning was not finalized. Retry will continue the existing request safely.",
   COMPANY_SETTINGS_INVALID_FIELDS:

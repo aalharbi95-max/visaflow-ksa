@@ -7,6 +7,9 @@ export const PROTECTED_TABLES = Object.freeze([
   "agencies",
   "company_agency_access",
   "agency_company_user_access",
+  "users",
+  "agency_provisioning_requests",
+  "agency_provisioning_events",
 ]);
 
 const SOURCE_EXTENSIONS = Object.freeze([

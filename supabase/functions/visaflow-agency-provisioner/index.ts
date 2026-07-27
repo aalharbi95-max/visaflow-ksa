@@ -5,6 +5,7 @@ import {
 } from "../_shared/agencyProvisioningCore.mjs";
 import {
   buildCorsHeaders,
+  isAllowedInviteRedirectUrl,
   parseAllowedOrigins,
   resolveAllowedOrigin,
 } from "../_shared/corsPolicy.mjs";
@@ -14,6 +15,10 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const INVITE_REDIRECT_URL = Deno.env.get("AGENCY_INVITE_REDIRECT_URL") || "";
 const ALLOWED_ORIGINS = parseAllowedOrigins(
   Deno.env.get("AGENCY_PROVISIONER_ALLOWED_ORIGINS") || ""
+);
+const INVITE_REDIRECT_IS_ALLOWED = isAllowedInviteRedirectUrl(
+  INVITE_REDIRECT_URL,
+  ALLOWED_ORIGINS
 );
 
 function corsHeaders(origin: string | null) {
@@ -63,11 +68,12 @@ function rpcRepository(admin: ReturnType<typeof createClient>) {
         p_request_id: requestId,
         p_auth_user_id: authUserId,
       }),
-    markFailed: ({ requestId, actor, code }: any) =>
+    markFailed: ({ requestId, actor, code, metadata = {} }: any) =>
       call("agency_provisioning_mark_failed", {
         p_actor_auth_user_id: actor.authUserId,
         p_request_id: requestId,
         p_failure_code: code,
+        p_metadata: metadata,
       }),
     prepareResend: ({ requestId, actor }: any) =>
       call("agency_provisioning_prepare_resend", {
@@ -132,7 +138,7 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") {
     return response(origin, 405, { ok: false, code: "METHOD_NOT_ALLOWED" });
   }
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !INVITE_REDIRECT_URL) {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !INVITE_REDIRECT_IS_ALLOWED) {
     return response(origin, 503, { ok: false, code: "FUNCTION_NOT_CONFIGURED" });
   }
   try {

@@ -24,6 +24,15 @@ export function resolveAllowedOrigin(origin, allowedOrigins) {
   return normalized && allowedOrigins.has(normalized) ? normalized : "";
 }
 
+export function isAllowedInviteRedirectUrl(value, allowedOrigins) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:" && allowedOrigins.has(url.origin);
+  } catch {
+    return false;
+  }
+}
+
 export function buildCorsHeaders(origin, allowedOrigins) {
   const allowedOrigin = resolveAllowedOrigin(origin, allowedOrigins);
   return {
