@@ -33,6 +33,21 @@ import {
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
 import {
+  DEFAULT_AGENCY_PERMISSIONS,
+  buildAgencyMaintenanceUpdate,
+  buildAgencyDraftPayload,
+  buildCompanySettingsUpdate,
+  canCreateAgencyDraft,
+  canProvisionAgency,
+  createAgencyIdempotencyKey,
+  getAgencyProvisioningErrorMessage,
+  getAgencyInvitationLoginUrl,
+  getAgencyInvitationRequestId,
+  invokeAgencyProvisioner,
+  isAgencyInvitationUrl,
+  shouldBlockAgencyWorkspace,
+} from "./agencyProvisioning.mjs";
+import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
   completeWorkspacePasswordRecovery,
@@ -460,9 +475,18 @@ const emptyAgency = {
   name: "",
   country: "",
   contact_person: "",
+  admin_email: "",
+  phone: "",
+  permissions: { ...DEFAULT_AGENCY_PERMISSIONS },
+  send_invitation: true,
+};
+
+const emptyAgencyMaintenance = {
+  name: "",
+  country: "",
+  contact_person: "",
   email: "",
   phone: "",
-  status: "Active",
 };
 
 const emptyCandidate = {
@@ -4912,6 +4936,120 @@ function clearWorkspaceRecoveryCallbackUrl() {
   }
 }
 
+function AgencyInvitationPasswordScreen() {
+  const [form, setForm] = useState({ password: "", confirmPassword: "" });
+  const [requestId, setRequestId] = useState("");
+  const [message, setMessage] = useState("Validating your secure agency invitation...");
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const validateInvitation = async (user) => {
+      const nextRequestId = getAgencyInvitationRequestId(user);
+      if (!nextRequestId) {
+        if (mounted) setMessage("This agency invitation is invalid or has expired.");
+        return;
+      }
+      try {
+        const status = await invokeAgencyProvisioner(supabase, {
+          action: "get_status",
+          request_id: nextRequestId,
+        });
+        if (status?.status !== "Invitation Sent") {
+          throw new Error("Invitation is not ready.");
+        }
+        if (!mounted) return;
+        setRequestId(nextRequestId);
+        setReady(true);
+        setMessage("");
+      } catch {
+        if (mounted) setMessage("This agency invitation is invalid or has expired.");
+      }
+    };
+
+    supabase.auth.getUser().then(({ data }) => validateInvitation(data?.user));
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session?.user) {
+        window.setTimeout(() => validateInvitation(session.user), 0);
+      }
+    });
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  async function setInvitationPassword() {
+    if (!requestId || !ready) return;
+    if (form.password.length < 12) {
+      return setMessage("Password must be at least 12 characters.");
+    }
+    if (form.password !== form.confirmPassword) {
+      return setMessage("Passwords do not match.");
+    }
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const status = await invokeAgencyProvisioner(supabase, {
+        action: "get_status",
+        request_id: requestId,
+      });
+      if (status?.status !== "Invitation Sent") {
+        throw new Error("Invitation is not ready.");
+      }
+      const { error } = await supabase.auth.updateUser({ password: form.password });
+      if (error) throw error;
+
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } catch (signOutError) {
+        console.warn("Agency invitation local sign-out failed:", signOutError?.message);
+      }
+      localStorage.removeItem("visaflow-workspace-auth");
+      localStorage.removeItem("visaflow_user");
+      sessionStorage.removeItem("visaflow_user");
+      sessionStorage.removeItem("visaflow_agency_company_id");
+      sessionStorage.removeItem("visaflow_agency_company_name");
+      window.location.replace(getAgencyInvitationLoginUrl(window.location));
+    } catch (error) {
+      console.warn("Agency invitation password setup failed:", error?.code || error?.message);
+      setMessage("The password could not be set. Request a new agency invitation.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="vf-login-shell" dir="ltr" lang="en">
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <div className="vf-login-card" style={{ maxWidth: 520 }}>
+          <h2>Set your agency password</h2>
+          <p>Create a password, then sign in manually to activate your Office Portal access.</p>
+          <Input
+            type="password"
+            placeholder="New Password"
+            value={form.password}
+            disabled={!ready || busy}
+            onChange={(value) => setForm((current) => ({ ...current, password: value }))}
+          />
+          <Input
+            type="password"
+            placeholder="Confirm Password"
+            value={form.confirmPassword}
+            disabled={!ready || busy}
+            onChange={(value) => setForm((current) => ({ ...current, confirmPassword: value }))}
+          />
+          {message && <p>{message}</p>}
+          <button className="save-btn" disabled={!ready || busy} onClick={setInvitationPassword}>
+            {busy ? "Saving..." : "Set Password"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
   const isArabic = language === "AR";
   const initialState = useMemo(
@@ -5501,6 +5639,10 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
 }
 
 function App() {
+  const agencyInvitationRequested = useMemo(
+    () => isAgencyInvitationUrl(window.location),
+    []
+  );
   const workspaceRecoveryState = useMemo(
     () => getWorkspaceRecoveryUrlState(window.location),
     []
@@ -5531,6 +5673,7 @@ function App() {
   const [visaAuthorizations, setVisaAuthorizations] = useState([]);
   const [visaAllocations, setVisaAllocations] = useState([]);
 const [agencies, setAgencies] = useState([]);
+const [agencyProvisioningRequests, setAgencyProvisioningRequests] = useState([]);
 const [agencyAgreements, setAgencyAgreements] = useState([]);
 const [agencyScores, setAgencyScores] = useState([]);
 const [agencyScoreHistory, setAgencyScoreHistory] = useState([]);
@@ -6187,6 +6330,7 @@ const [supportTicketForm, setSupportTicketForm] = useState(emptySupportTicket);
 function normalizeUserRole(role) {
   const value = String(role || "Viewer").trim();
   if (value === "Recruitment") return "Recruitment Officer";
+  if (value.toLowerCase() === "company admin") return "Admin";
 
   const matchedRole = ROLE_OPTIONS.find(
     (item) => item.toLowerCase() === value.toLowerCase()
@@ -6405,7 +6549,8 @@ const canManagePlatformSupport = [
 const canManageUsers =
   currentRole === "Admin" || canManagePlatformAccounts;
 const canManagePermissions = currentRole === "Admin";
-const canManageAgencies = ["Admin", "Recruitment Manager"].includes(currentRole);
+const canManageAgencies = canCreateAgencyDraft(currentRole);
+const canProvisionAgencies = canProvisionAgency(currentRole);
 const canNotifyAgencies = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canApprovePenalties = ["Admin", "Recruitment Manager", "CEO"].includes(currentRole);
@@ -7165,7 +7310,17 @@ async function saveSelectedAllocations() {
   const [visaLinesDraft, setVisaLinesDraft] = useState([]);
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
-  const [agencyEditingId, setAgencyEditingId] = useState(null);
+  const [agencyIdempotencyKey, setAgencyIdempotencyKey] = useState(() =>
+    createAgencyIdempotencyKey()
+  );
+  const [agencyProvisioningLoading, setAgencyProvisioningLoading] = useState(false);
+  const agencyProvisioningRequestRef = useRef(false);
+  const [agencyProvisioningMessage, setAgencyProvisioningMessage] = useState("");
+  const [agencyMaintenanceId, setAgencyMaintenanceId] = useState("");
+  const [agencyMaintenanceForm, setAgencyMaintenanceForm] =
+    useState(emptyAgencyMaintenance);
+  const [agencyMaintenanceLoading, setAgencyMaintenanceLoading] = useState(false);
+  const [agencyMaintenanceMessage, setAgencyMaintenanceMessage] = useState("");
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
@@ -7676,6 +7831,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     setVisaAuthorizations([]);
     setVisaAllocations([]);
     setAgencies([]);
+    setAgencyProvisioningRequests([]);
     setAgencyAgreements([]);
     setAgencyScores([]);
     setAgencyScoreHistory([]);
@@ -7798,6 +7954,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadVisaAuthorizations(),
       loadVisaAllocations(),
       loadAgencies(),
+      loadAgencyProvisioningRequests(),
       loadAgencyAgreements(),
       loadAgencyScores(),
       loadAgencyScoreHistory(),
@@ -8057,6 +8214,24 @@ Cancel = إضافتها كوظيفة مستقلة`
     );
 
     setAgencies(rows);
+  }
+  async function loadAgencyProvisioningRequests() {
+    if (!currentCompanyId || !canCreateAgencyDraft(currentRole)) {
+      setAgencyProvisioningRequests([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("agency_provisioning_requests")
+      .select("id,agency_id,agency_name,country,contact_person,admin_email,phone,permissions,send_invitation,status,attempt_count,failure_code,invitation_sent_at,activated_at,created_at,updated_at")
+      .eq("company_id", currentCompanyId)
+      .order("created_at", { ascending: false })
+      .range(0, 500);
+    if (error) {
+      console.warn("agency_provisioning_requests:", error.message);
+      setAgencyProvisioningRequests([]);
+      return;
+    }
+    setAgencyProvisioningRequests(data || []);
   }
   const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
@@ -9571,17 +9746,54 @@ async function loadNotifications() {
     if (error) return alert(error.message);
     await loadNotifications();
   }
+
+async function resolveAuthenticatedWorkspaceUser(
+  authUserId,
+  { activateInvitation = false } = {}
+) {
+  let result = await supabase.rpc("get_authenticated_app_user");
+  const isMatchingActiveUser = (candidate) =>
+    candidate?.auth_user_id &&
+    String(candidate.auth_user_id) === String(authUserId) &&
+    !shouldBlockAgencyWorkspace(candidate);
+
+  if (!result.error && isMatchingActiveUser(result.data)) return result;
+  if (!activateInvitation) return result;
+
+  try {
+    await invokeAgencyProvisioner(supabase, { action: "activate" });
+  } catch (activationError) {
+    console.warn("Agency invitation activation was not completed:", activationError?.code || "not_applicable");
+    return result;
+  }
+
+  result = await supabase.rpc("get_authenticated_app_user");
+  if (!result.error && shouldBlockAgencyWorkspace(result.data)) {
+    return {
+      data: null,
+      error: new Error("Agency workspace is not active."),
+    };
+  }
+  return result;
+}
+
 useEffect(() => {
   let mounted = true;
 
-  if (workspaceRecoveryRequested || workspaceRecoveryLoginGuard) {
+  if (
+    workspaceRecoveryRequested ||
+    workspaceRecoveryLoginGuard ||
+    agencyInvitationRequested
+  ) {
     workspaceAuthReadyRef.current = false;
     currentWorkspaceUserRef.current = null;
     setWorkspaceAuthReady(workspaceRecoveryLoginGuard);
     setValidatedWorkspaceKey("");
     clearTenantSensitiveState();
     clearStoredWorkspaceIdentity();
-    clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage });
+    if (!agencyInvitationRequested) {
+      clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage });
+    }
     setAgencyClientAccess([]);
     setActiveAgencyCompanyId("");
     setActiveAgencyCompanyName("");
@@ -9655,14 +9867,16 @@ useEffect(() => {
       return;
     }
 
-    const { data: linkedUser, error } = await supabase.rpc("get_authenticated_app_user");
+    const { data: linkedUser, error } =
+      await resolveAuthenticatedWorkspaceUser(verifiedAuth.authUser.id);
     if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
 
     const linkedUserMatchesSession = Boolean(
       !error &&
       linkedUser?.id &&
       linkedUser?.auth_user_id &&
-      String(linkedUser.auth_user_id) === String(verifiedAuth.authUser.id)
+      String(linkedUser.auth_user_id) === String(verifiedAuth.authUser.id) &&
+      !shouldBlockAgencyWorkspace(linkedUser)
     );
     reportSafeAuthDiagnostics(
       verifiedAuth.session,
@@ -9700,7 +9914,11 @@ useEffect(() => {
     mounted = false;
     authListener?.subscription?.unsubscribe();
   };
-}, [workspaceRecoveryRequested, workspaceRecoveryLoginGuard]);
+}, [
+  workspaceRecoveryRequested,
+  workspaceRecoveryLoginGuard,
+  agencyInvitationRequested,
+]);
 
 useEffect(() => {
   currentWorkspaceUserRef.current = currentUser;
@@ -12497,20 +12715,8 @@ async function saveVisa() {
 
   function resetAgencyForm() {
     setAgencyForm(emptyAgency);
-    setAgencyEditingId(null);
-  }
-
-  function editAgency(item) {
-    setAgencyEditingId(item.id);
-    setAgencyForm({
-      name: item.name || "",
-      country: item.country || "",
-      contact_person: item.contact_person || "",
-      email: item.email || "",
-      phone: item.phone || "",
-      status: item.status || "Active",
-    });
-    setActivePage("Agencies");
+    setAgencyProvisioningMessage("");
+    setAgencyIdempotencyKey(createAgencyIdempotencyKey());
   }
 
 function editCompany(company) {
@@ -12756,25 +12962,14 @@ async function saveCompany() {
   if (!companyEditingId) return alert("Please select a company to update.");
   if (!companyForm.name) return alert("Company name is required.");
 
-  const payload = {
-    name: companyForm.name,
-    domain: companyForm.domain || "",
-    status: companyForm.status || "Active",
-    subscription_plan: companyForm.subscription_plan || "Trial",
-    subscription_status: companyForm.subscription_status || "Active",
-    subscription_start: companyForm.subscription_start || null,
-    subscription_end: companyForm.subscription_end || null,
-    max_users: Number(companyForm.max_users || 5),
-    notes: companyForm.notes || "",
-  };
-
-  const { error } = await supabase
-    .from("companies")
-    .update(payload)
-    .eq("id", companyEditingId)
-    .eq("id", currentCompanyId);
-
-  if (error) return alert(error.message);
+  try {
+    await invokeAgencyProvisioner(supabase, {
+      action: "update_company_settings",
+      settings: buildCompanySettingsUpdate(companyForm),
+    });
+  } catch (error) {
+    return alert(getAgencyProvisioningErrorMessage(error));
+  }
 
   setCompanyEditingId(null);
   setCompanyForm({
@@ -12810,91 +13005,132 @@ async function saveUser() {
   alert("User management is temporarily restricted during the security migration.");
 }
 
-async function findExistingAgencyByName(name) {
-  const normalizedName = normalize(name);
-  if (!normalizedName) return null;
-
-  const { data, error } = await supabase
-    .from("agencies")
-    .select("*")
-    .range(0, 5000);
-
-  if (error) throw error;
-
-  return (data || []).find((agency) => normalize(agency.name) === normalizedName) || null;
-}
-
-async function saveAgency() {
-  if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
-  if (!agencyForm.name) return alert("Agency name is required.");
-  if (!currentCompanyId && !canManagePlatform) return alert("Company ID is missing.");
-
-  const cleanName = String(agencyForm.name || "").trim();
-  const payload = {
-    name: cleanName,
-    country: agencyForm.country || "",
-    contact_person: agencyForm.contact_person || "",
-    email: agencyForm.email || "",
-    phone: agencyForm.phone || "",
-    status: agencyForm.status || "Active",
-    company_id: null,
-    updated_at: new Date().toISOString(),
-  };
-
-  let agencyId = agencyEditingId || null;
-  let linkedExistingAgency = false;
-
-  try {
-    if (agencyEditingId) {
-      const { error } = await supabase
-        .from("agencies")
-        .update(payload)
-        .eq("id", agencyEditingId);
-
-      if (error) return alert(error.message);
-    } else {
-      const existingAgency = await findExistingAgencyByName(cleanName);
-
-      if (existingAgency) {
-        agencyId = existingAgency.id;
-        linkedExistingAgency = true;
-      } else {
-        const { data, error } = await supabase
-          .from("agencies")
-          .insert([payload])
-          .select("*")
-          .single();
-
-        if (error) return alert(error.message);
-        agencyId = data.id;
-      }
-    }
-
-    if (currentCompanyId && agencyId) {
-      const { error: accessError } = await supabase
-        .from("company_agency_access")
-        .upsert(
-          [{
-            company_id: currentCompanyId,
-            agency_id: agencyId,
-            status: "Active",
-            can_view_requests: true,
-            can_upload_candidates: true,
-            can_update_candidates: true,
-            can_view_interviews: true,
-          }],
-          { onConflict: "company_id,agency_id" }
-        );
-
-      if (accessError) return alert(accessError.message);
-    }
-  } catch (error) {
-    return alert(error.message || "Agency save failed.");
+async function submitAgencyProvisioning(mode) {
+  if (agencyProvisioningRequestRef.current || agencyProvisioningLoading) return;
+  if (!canManageAgencies) {
+    return setAgencyProvisioningMessage("You are not authorized to create an agency draft.");
+  }
+  if (mode === "provision" && !canProvisionAgencies) {
+    return setAgencyProvisioningMessage("Your role can save a Draft but cannot send an invitation.");
+  }
+  if (mode === "provision" && agencyForm.send_invitation !== true) {
+    return setAgencyProvisioningMessage("Enable Send Invitation before provisioning.");
+  }
+  if (!agencyForm.name?.trim() || !agencyForm.admin_email?.trim()) {
+    return setAgencyProvisioningMessage("Agency Name and Admin Email are required.");
   }
 
-  resetAgencyForm();
-  await loadAgencies();
-  alert(linkedExistingAgency ? "Existing agency has been linked to this company." : agencyEditingId ? "Agency updated successfully." : "Agency saved and linked to this company.");
+  agencyProvisioningRequestRef.current = true;
+  setAgencyProvisioningLoading(true);
+  setAgencyProvisioningMessage("");
+  try {
+    const draft = await invokeAgencyProvisioner(
+      supabase,
+      buildAgencyDraftPayload(agencyForm, agencyIdempotencyKey)
+    );
+    let result = draft;
+    if (mode === "provision") {
+      result = await invokeAgencyProvisioner(supabase, {
+        action: "provision",
+        request_id: draft.id,
+      });
+    }
+    setAgencyProvisioningMessage(
+      result.status === "Invitation Sent"
+        ? "Invitation sent. The agency remains inactive until the first successful sign-in."
+        : "Agency Draft saved. No Auth user or access was activated."
+    );
+    setAgencyForm(emptyAgency);
+    setAgencyIdempotencyKey(createAgencyIdempotencyKey());
+    await Promise.all([loadAgencyProvisioningRequests(), loadAgencies()]);
+  } catch (error) {
+    setAgencyProvisioningMessage(getAgencyProvisioningErrorMessage(error));
+  } finally {
+    agencyProvisioningRequestRef.current = false;
+    setAgencyProvisioningLoading(false);
+  }
+}
+
+async function runAgencyRequestAction(item, action) {
+  if (
+    agencyProvisioningLoading ||
+    (action !== "get_status" && !canProvisionAgencies)
+  ) return;
+  setAgencyProvisioningLoading(true);
+  setAgencyProvisioningMessage("");
+  try {
+    const result = await invokeAgencyProvisioner(supabase, {
+      action,
+      request_id: item.id,
+    });
+    setAgencyProvisioningMessage(
+      result.status === "Invitation Sent"
+        ? "Invitation sent. Access remains inactive until the agency signs in."
+        : `Provisioning status: ${result.status}.`
+    );
+    await Promise.all([loadAgencyProvisioningRequests(), loadAgencies()]);
+  } catch (error) {
+    setAgencyProvisioningMessage(getAgencyProvisioningErrorMessage(error));
+    await loadAgencyProvisioningRequests();
+  } finally {
+    setAgencyProvisioningLoading(false);
+  }
+}
+
+function beginAgencyMaintenance(item) {
+  setAgencyMaintenanceId(item?.id || "");
+  setAgencyMaintenanceForm({
+    name: item?.name || "",
+    country: item?.country || "",
+    contact_person: item?.contact_person || "",
+    email: item?.email || "",
+    phone: item?.phone || "",
+  });
+  setAgencyMaintenanceMessage("");
+}
+
+async function updateExistingAgency() {
+  if (!canProvisionAgencies || !agencyMaintenanceId) return;
+  setAgencyMaintenanceLoading(true);
+  setAgencyMaintenanceMessage("");
+  try {
+    await invokeAgencyProvisioner(supabase, {
+      action: "update_agency",
+      agency_id: agencyMaintenanceId,
+      agency: buildAgencyMaintenanceUpdate(agencyMaintenanceForm),
+    });
+    await loadAgencies();
+    setAgencyMaintenanceId("");
+    setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    setAgencyMaintenanceMessage("Agency details updated successfully.");
+  } catch (error) {
+    setAgencyMaintenanceMessage(getAgencyProvisioningErrorMessage(error));
+  } finally {
+    setAgencyMaintenanceLoading(false);
+  }
+}
+
+async function unlinkExistingAgency(item) {
+  if (!canProvisionAgencies || !item?.id || agencyMaintenanceLoading) return;
+  if (!window.confirm("Unlink this agency from the current company? Global agency and user records will be retained.")) return;
+  setAgencyMaintenanceLoading(true);
+  setAgencyMaintenanceMessage("");
+  try {
+    const result = await invokeAgencyProvisioner(supabase, {
+      action: "unlink_agency",
+      agency_id: item.id,
+    });
+    await Promise.all([loadAgencies(), loadAgencyProvisioningRequests()]);
+    setAgencyMaintenanceMessage(
+      result?.status === "Suspended"
+        ? "Agency access was suspended because related access or provisioning records exist."
+        : "Agency was unlinked from this company. No global records were deleted."
+    );
+  } catch (error) {
+    setAgencyMaintenanceMessage(getAgencyProvisioningErrorMessage(error));
+  } finally {
+    setAgencyMaintenanceLoading(false);
+  }
 }
   function editUser(user) {
   if (!canCurrentUserEditTargetUser(user)) {
@@ -12925,41 +13161,6 @@ async function saveAgency() {
 async function deleteUser(id) {
   alert("User management is temporarily restricted during the security migration.");
 }
-
-  async function deleteAgency(id) {
-    if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
-
-    if (canManagePlatform) {
-      if (!window.confirm("Delete this agency from the whole platform? This may affect all linked companies.")) return;
-      const { error } = await supabase.from("agencies").delete().eq("id", id);
-      if (error) return alert(error.message);
-      await loadAgencies();
-      return;
-    }
-
-    if (!currentCompanyId) return alert("Company ID is missing.");
-    if (!window.confirm("Remove this agency access from this company? The agency itself will remain available for other companies.")) return;
-
-    const { error: userAccessError } = await supabase
-      .from("agency_company_user_access")
-      .delete()
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", id);
-
-    if (userAccessError) return alert(userAccessError.message);
-
-    const { error: companyAccessError } = await supabase
-      .from("company_agency_access")
-      .delete()
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", id);
-
-    if (companyAccessError) return alert(companyAccessError.message);
-
-    await loadAgencies();
-    await loadUsers();
-    alert("Agency access has been removed from this company.");
-  }
 
 function getAgreementTemplateDefaults(templateType) {
   const type = templateType || "Standard Recruitment SLA";
@@ -17958,9 +18159,10 @@ async function handleLogin() {
         return;
       }
 
-      const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
-        "get_authenticated_app_user"
-      );
+      const { data: linkedUser, error: linkedUserError } =
+        await resolveAuthenticatedWorkspaceUser(verifiedSession.user.id, {
+          activateInvitation: true,
+        });
 
       reportSafeAuthDiagnostics(
         persistedAuth.session,
@@ -24194,7 +24396,7 @@ async function invokePlatformCompanyProvisioner(body) {
 }
 
 async function savePlatformClient() {
-  if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
+  if (!isPlatformOwner) return alert("Only a Platform Owner can change company provisioning or subscription settings.");
   if (platformClientSaving) return;
 
   const companyName = String(platformClientForm.company_name || "").trim();
@@ -24263,9 +24465,10 @@ async function savePlatformClient() {
     if (clientUpdateError) throw clientUpdateError;
 
     if (operationalCompanyId) {
-      const { error: companyUpdateError } = await supabase
-        .from("companies")
-        .update({
+      await invokeAgencyProvisioner(supabase, {
+        action: "update_company_settings",
+        company_id: operationalCompanyId,
+        settings: buildCompanySettingsUpdate({
           name: companyName,
           domain: companyPayload.domain,
           status: "Active",
@@ -24274,11 +24477,8 @@ async function savePlatformClient() {
           subscription_start: companyPayload.start_date,
           subscription_end: companyPayload.end_date,
           max_users: companyPayload.users_count || 5,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", operationalCompanyId);
-
-      if (companyUpdateError) throw companyUpdateError;
+        }, { platform: true }),
+      });
     }
 
     // Repair path for an existing company that was previously saved without
@@ -24307,42 +24507,6 @@ async function savePlatformClient() {
     setPlatformClientSaving(false);
   }
 }
-async function extendPlatformClient(client, months = 1) {
-  if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
-  if (!client?.id) return alert("Company is required.");
-
-  const baseDate = client.end_date ? new Date(client.end_date) : new Date();
-  if (baseDate < new Date()) baseDate.setTime(new Date().getTime());
-
-  baseDate.setMonth(baseDate.getMonth() + months);
-  const newEndDate = baseDate.toISOString().slice(0, 10);
-
-  const { error } = await supabase
-    .from("platform_clients")
-    .update({
-      end_date: newEndDate,
-      subscription_status: "Active",
-    })
-    .eq("id", client.id);
-
-  if (error) return alert(error.message);
-
-  if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
-        subscription_status: "Active",
-        subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
-
-    if (companyError) return alert(companyError.message);
-  }
-
-  await loadPlatformClients();
-  alert(`Subscription extended until ${newEndDate}`);
-}
 async function deletePlatformClient(id) {
   if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
   if (!window.confirm("Delete this platform client?")) return;
@@ -24353,7 +24517,7 @@ async function deletePlatformClient(id) {
 }
 
 async function extendPlatformClient(client, days = 30) {
-  if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
+  if (!isPlatformOwner) return alert("Only a Platform Owner can extend a company subscription.");
   if (!client?.id) return alert("Company is required.");
 
   const baseDate = client.end_date && new Date(client.end_date) > new Date()
@@ -24374,16 +24538,19 @@ async function extendPlatformClient(client, days = 30) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
-        subscription_status: "Active",
-        subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
-
-    if (companyError) return alert(companyError.message);
+    try {
+      await invokeAgencyProvisioner(supabase, {
+        action: "update_company_settings",
+        company_id: client.operational_company_id,
+        settings: buildCompanySettingsUpdate({
+          subscription_status: "Active",
+          subscription_end: newEndDate,
+        }, { platform: true }),
+      });
+    } catch (error) {
+      console.error("Operational company subscription update failed", error);
+      return alert(`Subscription mirror failed: ${error?.message || "Unknown server error"}`);
+    }
   }
 
   await loadPlatformClients();
@@ -28105,6 +28272,9 @@ function exportCurrentPage() {
 }
 
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+if (agencyInvitationRequested) {
+  return <AgencyInvitationPasswordScreen />;
+}
 if (workspaceRecoveryRequested) {
   return <WorkspacePasswordRecoveryScreen language={loginLanguage} />;
 }
@@ -28350,6 +28520,9 @@ if (!currentUser) {
           </div>
 
           <h2>{loginLanguage === "AR" ? "دخول الشركات" : "Company Login"}</h2>
+          {new URLSearchParams(window.location.search).get("agency_invite_complete") === "1" && (
+            <p>Password set successfully. Sign in manually to activate your agency access.</p>
+          )}
           <p className="vf-login-subtitle">
             {loginLanguage === "AR"
               ? "هذه البوابة مخصصة لموظفي الشركات والمكاتب. المتقدمون يستخدمون منصة المتقدمين الموضحة في الصفحة."
@@ -34733,17 +34906,12 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </div>
 
     {companyEditingId && (
-      <FormCard title="Edit Company & Subscription">
+      <FormCard title="Edit Company Settings">
         <div className="form-grid">
           <Input placeholder="Company Name" value={companyForm.name || ""} onChange={(v) => setCompanyForm((p) => ({ ...p, name: v }))} />
           <Input placeholder="Domain" value={companyForm.domain || ""} onChange={(v) => setCompanyForm((p) => ({ ...p, domain: v }))} />
-          <Select value={companyForm.status || "Active"} onChange={(v) => setCompanyForm((p) => ({ ...p, status: v }))} placeholder="Company Status" options={["Active", "Inactive", "Suspended"]} />
-          <Select value={companyForm.subscription_plan || "Trial"} onChange={(v) => setCompanyForm((p) => ({ ...p, subscription_plan: v }))} placeholder="Subscription Plan" options={["Trial", "Basic", "Professional", "Enterprise"]} />
-          <Select value={companyForm.subscription_status || "Active"} onChange={(v) => setCompanyForm((p) => ({ ...p, subscription_status: v }))} placeholder="Subscription Status" options={["Active", "Expired", "Suspended", "Cancelled"]} />
-          <Input type="date" placeholder="Subscription Start" value={companyForm.subscription_start || ""} onChange={(v) => setCompanyForm((p) => ({ ...p, subscription_start: v }))} />
-          <Input type="date" placeholder="Subscription End" value={companyForm.subscription_end || ""} onChange={(v) => setCompanyForm((p) => ({ ...p, subscription_end: v }))} />
-          <Input type="number" placeholder="Max Users" value={companyForm.max_users || 5} onChange={(v) => setCompanyForm((p) => ({ ...p, max_users: v }))} />
         </div>
+        <p className="muted-text">Subscription, ownership, status, and security-sensitive fields are managed only by an authorized Platform Owner.</p>
         <textarea rows="3" placeholder="Notes" value={companyForm.notes || ""} onChange={(e) => setCompanyForm((p) => ({ ...p, notes: e.target.value }))} />
         <div className="actions-line">
           <button className="save-btn" onClick={saveCompany}>Update Company</button>
@@ -34787,21 +34955,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   <td>{company.max_users || 5}</td>
                   <td className="table-actions">
                     <button onClick={() => editCompany(company)}>Edit</button>
-                    <button
-                      className={(company.subscription_status || "Active") === "Active" ? "danger" : "save-btn"}
-                      onClick={async () => {
-                        const nextStatus = (company.subscription_status || "Active") === "Active" ? "Suspended" : "Active";
-                        const { error } = await supabase
-                          .from("companies")
-                          .update({ subscription_status: nextStatus })
-                          .eq("id", company.id)
-                          .eq("id", currentCompanyId);
-                        if (error) return alert(error.message);
-                        await loadCompanies();
-                      }}
-                    >
-                      {(company.subscription_status || "Active") === "Active" ? "Suspend" : "Activate"}
-                    </button>
+                    <span className="muted-text">Subscription controls require Platform Owner approval.</span>
                   </td>
                 </tr>
               );
@@ -35103,19 +35257,144 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         {activePage === "Agencies" && (
           <>
             {canManageAgencies && (
-            <FormCard title={agencyEditingId ? "Edit Agency" : "Add Agency"}>
+            <FormCard title="Create Agency and Agency User">
               <div className="form-grid">
                 <Input placeholder="Agency Name" value={agencyForm.name} onChange={(v) => updateForm(setAgencyForm, "name", v)} />
                 <Input placeholder="Country" value={agencyForm.country} onChange={(v) => updateForm(setAgencyForm, "country", v)} />
                 <Input placeholder="Contact Person" value={agencyForm.contact_person} onChange={(v) => updateForm(setAgencyForm, "contact_person", v)} />
-                <Input placeholder="Email" value={agencyForm.email} onChange={(v) => updateForm(setAgencyForm, "email", v)} />
+                <Input placeholder="Admin Email" value={agencyForm.admin_email} onChange={(v) => updateForm(setAgencyForm, "admin_email", v)} />
                 <Input placeholder="Phone" value={agencyForm.phone} onChange={(v) => updateForm(setAgencyForm, "phone", v)} />
-                <Select value={agencyForm.status} onChange={(v) => updateForm(setAgencyForm, "status", v)} placeholder="Status" options={["Active", "Inactive", "Suspended"]} />
+                <Input placeholder="Company" value={getActiveAgencyWorkspaceName()} onChange={() => {}} disabled />
               </div>
-              <div className="actions-line"><button className="save-btn" onClick={saveAgency}>{agencyEditingId ? "Update Agency" : "Save Agency"}</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
+              <div className="actions-line" style={{ flexWrap: "wrap" }}>
+                {Object.keys(DEFAULT_AGENCY_PERMISSIONS).map((permission) => (
+                  <label key={permission} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={agencyForm.permissions?.[permission] === true}
+                      disabled={agencyProvisioningLoading}
+                      onChange={(event) =>
+                        setAgencyForm((previous) => ({
+                          ...previous,
+                          permissions: {
+                            ...previous.permissions,
+                            [permission]: event.target.checked,
+                          },
+                        }))
+                      }
+                    />
+                    {permission.replaceAll("_", " ")}
+                  </label>
+                ))}
+                <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={agencyForm.send_invitation === true}
+                    disabled={agencyProvisioningLoading}
+                    onChange={(event) =>
+                      updateForm(setAgencyForm, "send_invitation", event.target.checked)
+                    }
+                  />
+                  Send Invitation
+                </label>
+              </div>
+              {agencyProvisioningMessage && <p>{agencyProvisioningMessage}</p>}
+              <div className="actions-line">
+                <button
+                  className="light-btn"
+                  disabled={agencyProvisioningLoading}
+                  onClick={() => submitAgencyProvisioning("draft")}
+                >
+                  {agencyProvisioningLoading ? "Working..." : "Save Draft"}
+                </button>
+                {canProvisionAgencies && (
+                  <button
+                    className="save-btn"
+                    disabled={agencyProvisioningLoading}
+                    onClick={() => submitAgencyProvisioning("provision")}
+                  >
+                    {agencyProvisioningLoading ? "Working..." : "Provision & Send Invitation"}
+                  </button>
+                )}
+                <button className="light-btn" disabled={agencyProvisioningLoading} onClick={resetAgencyForm}>Clear</button>
+              </div>
             </FormCard>
             )}
-            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions">{canManageAgencies ? <><button onClick={() => editAgency(item)}>Edit</button><button className="danger" onClick={() => deleteAgency(item.id)}>Delete</button></> : "-"}</td></tr>)}</tbody></table></TableCard>
+            {canManageAgencies && (
+              <TableCard title="Agency Provisioning">
+                <table>
+                  <thead><tr><th>Agency</th><th>Admin Email</th><th>Status</th><th>Attempts</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    {agencyProvisioningRequests.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.agency_name}</td>
+                        <td>{item.admin_email}</td>
+                        <td><Badge value={item.status} /></td>
+                        <td>{item.attempt_count || 0}</td>
+                        <td className="table-actions">
+                          {canProvisionAgencies && ["Draft", "Failed"].includes(item.status) && (
+                            <button disabled={agencyProvisioningLoading} onClick={() => runAgencyRequestAction(item, "provision")}>
+                              {item.status === "Draft" ? "Provision & Send Invitation" : "Retry"}
+                            </button>
+                          )}
+                          <button disabled={agencyProvisioningLoading} onClick={() => runAgencyRequestAction(item, "get_status")}>View Provisioning Status</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {!agencyProvisioningRequests.length && <tr><td colSpan="5">No provisioning requests.</td></tr>}
+                  </tbody>
+                </table>
+              </TableCard>
+            )}
+            {agencyMaintenanceId && canProvisionAgencies && (
+              <FormCard title="Edit Agency">
+                <div className="form-grid">
+                  <Input placeholder="Agency Name" value={agencyMaintenanceForm.name} onChange={(value) => setAgencyMaintenanceForm((previous) => ({ ...previous, name: value }))} />
+                  <Input placeholder="Country" value={agencyMaintenanceForm.country} onChange={(value) => setAgencyMaintenanceForm((previous) => ({ ...previous, country: value }))} />
+                  <Input placeholder="Contact Person" value={agencyMaintenanceForm.contact_person} onChange={(value) => setAgencyMaintenanceForm((previous) => ({ ...previous, contact_person: value }))} />
+                  <Input type="email" placeholder="Admin Email" value={agencyMaintenanceForm.email} onChange={(value) => setAgencyMaintenanceForm((previous) => ({ ...previous, email: value }))} />
+                  <Input placeholder="Phone" value={agencyMaintenanceForm.phone} onChange={(value) => setAgencyMaintenanceForm((previous) => ({ ...previous, phone: value }))} />
+                </div>
+                {agencyMaintenanceMessage && <p>{agencyMaintenanceMessage}</p>}
+                <div className="actions-line">
+                  <button className="save-btn" disabled={agencyMaintenanceLoading} onClick={updateExistingAgency}>
+                    {agencyMaintenanceLoading ? "Saving..." : "Save Agency"}
+                  </button>
+                  <button
+                    className="light-btn"
+                    disabled={agencyMaintenanceLoading}
+                    onClick={() => {
+                      setAgencyMaintenanceId("");
+                      setAgencyMaintenanceForm(emptyAgencyMaintenance);
+                      setAgencyMaintenanceMessage("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </FormCard>
+            )}
+            {agencyMaintenanceMessage && !agencyMaintenanceId && <p>{agencyMaintenanceMessage}</p>}
+            <TableCard title="Active and Legacy Agencies">
+              <table>
+                <thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                  {agencies.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td>
+                      <td className="table-actions">
+                        {canProvisionAgencies ? (
+                          <>
+                            <button disabled={agencyMaintenanceLoading} onClick={() => beginAgencyMaintenance(item)}>Edit</button>
+                            <button className="danger" disabled={agencyMaintenanceLoading} onClick={() => unlinkExistingAgency(item)}>Unlink</button>
+                          </>
+                        ) : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableCard>
           </>
         )}
 
