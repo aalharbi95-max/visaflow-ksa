@@ -1,11 +1,9 @@
 # VisaFlow Staging schema bootstrap
 
-This directory describes a reviewed, schema-only bootstrap from the current
-Production database into the empty VisaFlow Staging project.
-
-No command in this document has been executed against either remote project.
-The dated snapshot remains uncommitted while it is sanitized, reviewed, and
-awaiting approval.
+This directory records the reviewed, schema-only bootstrap used to initialize
+the VisaFlow Staging project. The original Production schema snapshot is
+preserved unchanged as source evidence; the Staging-compatible v2 snapshot is
+the only final apply artifact.
 
 ## Fixed project identity
 
@@ -74,9 +72,9 @@ The first two scans require human review rather than blind deletion because
 object definitions may legitimately reference an Auth table, standard role, or
 column name containing one of these words.
 
-## Captured snapshot review record
+## Captured source snapshot review record
 
-The current local snapshot was captured on 2026-07-27 and remains uncommitted:
+The source snapshot was captured on 2026-07-27 and is preserved unchanged:
 
 - File: `production-schema-snapshot-20260727.sql`
 - Scope: PostgreSQL schema-only dump of the `public` schema
@@ -118,6 +116,70 @@ It does not by itself satisfy a planned `--schema public,extensions` artifact.
 Before any later apply is considered, the Staging preflight must verify the
 required managed Auth objects, roles, and
 `extensions.gen_random_bytes(integer)` separately.
+
+## Final Staging-compatible snapshot and outcome
+
+The final artifact is
+`production-schema-snapshot-20260727-staging-v2.sql`:
+
+- Size: 414,508 bytes
+- SHA-256:
+  `3a0c2275c8d99c9e6b32624e6a99df19775153ead044dc7357072dbf732ae33d`
+- It differs from the unchanged source snapshot only through the reviewed
+  Staging compatibility exclusions described below.
+- The intermediate `production-schema-snapshot-20260727-staging.sql` was not
+  retained because it failed its transactional apply and was fully rolled back.
+
+The standalone `CREATE SCHEMA public;` statement was removed because Supabase
+projects provision the `public` schema before application bootstrap. Retaining
+that statement caused the first transactional apply to stop because the schema
+already existed.
+
+Twelve `ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public`
+statements were excluded from v2: four each for sequences, functions, and
+tables. The Staging connection role is not permitted to change another role's
+default privileges, and the required `supabase_admin` defaults already exist in
+the managed Staging project. The corresponding default-privilege statements for
+the `postgres` role remain in the final snapshot.
+
+The v2 snapshot applied successfully in a single transaction to VisaFlow
+Staging. Post-apply verification reported:
+
+| Result | Count |
+| --- | ---: |
+| Public tables | 75 |
+| Public functions | 69 |
+| RLS policies | 110 |
+| Non-internal triggers | 63 |
+
+No Production application rows, user records, credentials, secrets, or other
+business data were imported. The snapshot contains schema definitions only.
+
+Migration history was initialized separately without replaying migration SQL.
+Local and remote history contain exactly these five matching versions:
+
+- `20260718000100`
+- `20260719000100`
+- `20260719000200`
+- `20260719000300`
+- `20260719000400`
+
+The migration history workflow is retained in
+`../../../scripts/staging-migration-history-repair.ps1`. It uses an explicit
+Staging database URL, validates the Staging project ref, rejects the Production
+ref, and does not use an implicit Supabase link.
+
+The following four `SECURITY DEFINER` functions still require a separately
+reviewed security-hardening migration to configure an explicit safe
+`search_path`:
+
+- `guard_agency_company_user_access`
+- `guard_company_agency_access`
+- `guard_platform_user_roles`
+- `guard_users_security`
+
+Do not alter these functions as part of the bootstrap artifact. Apply their
+hardening only through a separately reviewed and approved migration.
 
 ## Approved bootstrap order
 
