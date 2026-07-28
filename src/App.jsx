@@ -33,6 +33,13 @@ import {
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
 import {
+  buildAuthorizationTimeline,
+  getAuthorizationActions,
+  getAuthorizationAgencyStatus,
+  invokeAuthorizationWorkflow,
+  isAuthorizationCompanyActor,
+} from "./authorizationWorkflow.mjs";
+import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
   completeWorkspacePasswordRecovery,
@@ -186,6 +193,7 @@ const ROLE_OPTIONS = [
   "CEO",
   "Operations Manager",
   "Project Manager",
+  "Recruitment Director",
   "Recruitment Manager",
   "Recruitment Officer",
   "Visa Team",
@@ -271,6 +279,16 @@ const ACTION_PERMISSIONS = {
     "viewPerformance",
   ],
 
+  "Recruitment Director": [
+    "view",
+    "create",
+    "edit",
+    "approve",
+    "export",
+    "approveAgencies",
+    "viewPerformance",
+  ],
+
   "Recruitment Officer": ["view", "create", "edit"],
 
   "Visa Team": ["view", "createVisa", "editVisa", "deleteVisa", "export"],
@@ -287,6 +305,7 @@ const ROLE_DESCRIPTIONS = {
   "Operations Manager": "Operations leader. Follows manpower requests, mobilization, employees, demobilization and operational reports. Views recruitment and agency performance.",
   "Project Manager": "Project-level manager. Follows project manpower requests, mobilization, employees and reports for operational follow-up.",
   "Recruitment Manager": "Recruitment leader. Manages recruitment requests, approvals, candidates, interviews, recruiter performance, agency performance and agency approvals.",
+  "Recruitment Director": "Recruitment executive. Oversees recruitment workflow, agency decisions, notifications and launch readiness.",
   "Recruitment Officer": "Recruiter. Handles daily recruitment operations: requests, candidates, interviews and candidate follow-up.",
   "Visa Team": "Visa coordinator. Manages visa inventory, allocation, authorizations and cancellation register.",
   Agency: "External office user. Uses Office Portal for candidate updates, mobilization tracking and interview scheduling only. Interview results remain controlled by the company.",
@@ -5529,6 +5548,10 @@ function App() {
   const [visaRecords, setVisaRecords] = useState([]);
   const [visaBatchLines, setVisaBatchLines] = useState([]);
   const [visaAuthorizations, setVisaAuthorizations] = useState([]);
+  const [selectedAuthorization, setSelectedAuthorization] = useState(null);
+  const [authorizationTimelineEvents, setAuthorizationTimelineEvents] = useState([]);
+  const [authorizationWorkflowBusy, setAuthorizationWorkflowBusy] = useState("");
+  const [authorizationWorkflowFeedback, setAuthorizationWorkflowFeedback] = useState(null);
   const [visaAllocations, setVisaAllocations] = useState([]);
 const [agencies, setAgencies] = useState([]);
 const [agencyAgreements, setAgencyAgreements] = useState([]);
@@ -6332,6 +6355,19 @@ const ROLE_PAGES = {
     "Reports",
   ],
 
+  "Recruitment Director": [
+    "Executive Dashboard",
+    "Dashboard",
+    "Requests",
+    "RequestDetails",
+    "Candidates",
+    "Interviews",
+    "Authorization",
+    "Agency Performance",
+    "Notifications",
+    "Reports",
+  ],
+
   // Recruiter / Recruitment Officer: daily recruitment operation only.
   "Recruitment Officer": [
     "Dashboard",
@@ -6417,6 +6453,7 @@ const canApproveRequest = ["Admin", "Recruitment Manager"].includes(currentRole)
 const canDeleteRequest = currentRole === "Admin";
 
 const canManageVisas = ["Admin", "Visa Team"].includes(currentRole);
+const canManageAuthorizationWorkflow = isAuthorizationCompanyActor(currentRole);
 const canManageCandidates = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageOfficePortal = ["Admin", "Agency"].includes(currentRole);
 const canViewCandidateIntelligence = Boolean(currentUser) && currentRole !== "Agency" && !isCurrentPlatformUser;
@@ -6637,6 +6674,7 @@ function getActiveAgencyWorkspaceName() {
 
 const [authForm,setAuthForm] = useState({
 
+  agency_id:"",
   agency:"",
   authorization_no:"",
   allocated_qty:0
@@ -6653,9 +6691,13 @@ const [allocationSearch, setAllocationSearch] = useState("");
 async function saveAuthorization(){
   if (!canManageVisas) return alert("You do not have permission to manage authorizations.");
   if (!selectedVisa) {
-  alert("Please select visa allocation");
-  return;
-}
+    setAuthorizationWorkflowFeedback({ type: "error", message: "Please select a visa allocation." });
+    return;
+  }
+  if (!authForm.agency_id || !authForm.authorization_no || Number(authForm.allocated_qty || 0) <= 0) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: "Agency, authorization number and a positive quantity are required." });
+    return;
+  }
 const allocationQty = Number(
   visaAllocations.find((a) => String(a.id) === String(selectedVisa?.id))
     ?.allocated_qty || 0
@@ -6684,9 +6726,10 @@ const alreadyAuthorized = visaAuthorizations
 const requestedAuthQty = Number(authForm.allocated_qty || 0);
 
 if (alreadyAuthorized + requestedAuthQty > allocationQty) {
-  alert(
-    `Cannot authorize more than allocated quantity. Allocated: ${allocationQty}, Already authorized: ${alreadyAuthorized}, Remaining: ${allocationQty - alreadyAuthorized}`
-  );
+  setAuthorizationWorkflowFeedback({
+    type: "error",
+    message: `Cannot authorize more than allocated quantity. Allocated: ${allocationQty}, already authorized: ${alreadyAuthorized}, remaining: ${allocationQty - alreadyAuthorized}.`,
+  });
   return;
 }
 const payload={
@@ -6702,36 +6745,113 @@ profession: selectedVisa?.profession || "",
 nationality: selectedVisa?.nationality || "",
 gender: selectedVisa?.gender || "",
 authorization_no: authForm.authorization_no,
-agency: authForm.agency,
+agency_id: authForm.agency_id,
 office_country: authForm.office_country,
 allocated_qty: Number(authForm.allocated_qty || 0),
-received_candidates: 0,
-interview_passed: 0,
-mobilized: 0,
-status: "Open"
 };
-const {error}=await supabase
-.from("visa_authorizations")
-.insert([withCompany(withCreateActor(payload))]);
-
-if(error){
-alert(error.message);
-return;
+  setAuthorizationWorkflowBusy("create");
+  setAuthorizationWorkflowFeedback(null);
+  try {
+    const result = await invokeAuthorizationWorkflow(supabase, "create", null, payload);
+    setVisaAuthorizations((rows) => [result.authorization, ...rows]);
+    setSelectedAuthorization(result.authorization);
+    setAuthorizationTimelineEvents(result.events || []);
+    setShowAuthForm(false);
+    setAuthForm({ agency_id: "", agency: "", authorization_no: "", allocated_qty: 0 });
+    setAuthorizationWorkflowFeedback({ type: "success", message: "Authorization created successfully. It is ready to send to the agency." });
+    await loadVisaAuthorizations();
+  } catch (error) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: error?.message || "Authorization could not be created." });
+  } finally {
+    setAuthorizationWorkflowBusy("");
+  }
 }
 
-loadVisaAuthorizations();
-
-setShowAuthForm(false);
-
-setAuthForm({
-agency:"",
-authorization_no:"",
-allocated_qty:0
-});
-
+async function loadAuthorizationTimeline(authorizationId) {
+  if (!authorizationId) {
+    setAuthorizationTimelineEvents([]);
+    return [];
+  }
+  const { data, error } = await supabase
+    .from("authorization_events")
+    .select("id, event_type, actor_name, actor_email, actor_role, reason, metadata, created_at")
+    .eq("authorization_id", authorizationId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+  if (error) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: `Timeline could not be loaded: ${error.message}` });
+    return [];
+  }
+  setAuthorizationTimelineEvents(data || []);
+  return data || [];
 }
+
+async function runAuthorizationWorkflowAction(action, item, input = {}) {
+  if (!item?.id || authorizationWorkflowBusy) return null;
+  const busyKey = `${action}:${item.id}`;
+  setAuthorizationWorkflowBusy(busyKey);
+  setAuthorizationWorkflowFeedback(null);
+  try {
+    const result = await invokeAuthorizationWorkflow(supabase, action, item.id, input);
+    setVisaAuthorizations((rows) => rows.map((row) => row.id === item.id ? result.authorization : row));
+    setSelectedAuthorization(result.authorization);
+    setAuthorizationTimelineEvents(result.events || []);
+    setAuthorizationWorkflowFeedback({
+      type: "success",
+      message: action === "send"
+        ? (item.sent_at ? "Authorization resent to the agency." : "Authorization sent to the agency.")
+        : action === "view"
+          ? "Authorization marked as viewed."
+          : `Authorization ${action} completed successfully.`,
+    });
+    await Promise.all([loadVisaAuthorizations(), loadNotifications()]);
+    return result.authorization;
+  } catch (error) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: error?.message || `Authorization ${action} failed.` });
+    return null;
+  } finally {
+    setAuthorizationWorkflowBusy("");
+  }
+}
+
+async function openAuthorizationWorkflow(item, { markViewed = false } = {}) {
+  setSelectedAuthorization(item);
+  if (markViewed && currentRole === "Agency" && getAuthorizationAgencyStatus(item) === "New") {
+    await runAuthorizationWorkflowAction("view", item);
+    return;
+  }
+  await loadAuthorizationTimeline(item.id);
+}
+
+async function sendAuthorizationToAgency(item) {
+  const isResend = Boolean(item.sent_at);
+  if (isResend && !window.confirm("This authorization was already sent. Resend it to the agency?")) return;
+  await runAuthorizationWorkflowAction("send", item, {
+    confirm_resend: isResend,
+    expected_sent_at: item.sent_at || null,
+  });
+}
+
+async function handleAgencyAuthorizationAction(action, item) {
+  let reason = "";
+  if (action === "reject") {
+    reason = window.prompt("Enter the rejection reason:") || "";
+    if (!reason.trim()) {
+      setAuthorizationWorkflowFeedback({ type: "error", message: "A rejection reason is required." });
+      return;
+    }
+  } else if (action === "accept") {
+    reason = window.prompt("Optional acceptance note:") || "";
+  } else if (action === "acknowledge") {
+    reason = window.prompt("Optional acknowledgement note:") || "";
+  }
+  await runAuthorizationWorkflowAction(action, item, { reason });
+}
+
 async function cancelAuthorization(id) {
   if (!canManageVisas) return alert("You do not have permission to cancel authorizations.");
+  const item = visaAuthorizations.find((authorization) => String(authorization.id) === String(id));
+  if (!item) return;
   const cancellationNo = window.prompt("Enter cancellation authorization number:");
 
   if (!cancellationNo) {
@@ -6746,22 +6866,10 @@ async function cancelAuthorization(id) {
     return;
   }
 
-  const { error } = await supabase
-    .from("visa_authorizations")
-    .update(withUpdateActor({
-      status: "Cancelled",
-      cancellation_no: cancellationNo,
-      cancelled_at: cancellationDate,
-    }))
-    .eq("id", id);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await loadVisaAuthorizations();
-  alert("Authorization cancelled");
+  await runAuthorizationWorkflowAction("cancel", item, {
+    cancellation_no: cancellationNo,
+    cancelled_at: cancellationDate,
+  });
 }
 function openAuthorization(item){
   // Authorization must be linked to a specific visa allocation line, not only visa batch.
@@ -7674,6 +7782,10 @@ Cancel = إضافتها كوظيفة مستقلة`
     setVisaRecords([]);
     setVisaBatchLines([]);
     setVisaAuthorizations([]);
+    setSelectedAuthorization(null);
+    setAuthorizationTimelineEvents([]);
+    setAuthorizationWorkflowBusy("");
+    setAuthorizationWorkflowFeedback(null);
     setVisaAllocations([]);
     setAgencies([]);
     setAgencyAgreements([]);
@@ -7918,6 +8030,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       // Agency users should see penalties sent to their agency even if the agency display name changed.
       // Fetch all non-internal penalties for the active company, then filter safely in the browser by agency_id / agency_name / email.
       query = query.neq("status", "Pending Review");
+    } else if (table === "visa_authorizations") {
+      if (!currentUser?.agency_id) { setter([]); return; }
+      query = query.eq("agency_id", currentUser.agency_id);
     } else if (agencyNameFields[table]) {
       if (!currentUser?.agency_name) { setter([]); return; }
       query = query.eq(agencyNameFields[table], currentUser.agency_name);
@@ -9164,7 +9279,7 @@ async function loadNotifications() {
 
   let query = supabase
     .from("notification_events")
-    .select("id, company_id, user_id, agency_id, agency_name, request_no, type, title, message, priority, status, delivery_status, related_table, related_id, response_status, response_at, rejection_reason, sla_started_at, sla_days, sla_due_at, read_at, created_at, data")
+    .select("id, company_id, user_id, agency_id, agency_name, recipient_role, request_no, type, title, message, priority, status, delivery_status, related_table, related_id, response_status, response_at, rejection_reason, sla_started_at, sla_days, sla_due_at, read_at, created_at, data")
     .eq("company_id", currentCompanyId)
     .order("created_at", { ascending: false })
     .limit(1000);
@@ -9194,10 +9309,21 @@ async function loadNotifications() {
     rows = rows.filter((item) => {
       const payload = item.data || {};
       return (
-        String(item.agency_id || "") === String(currentUser?.agency_id || "") ||
-        normalize(item.agency_name || payload.agency || payload.agency_name) === normalize(currentUser?.agency_name)
+        (!item.recipient_role || item.recipient_role === "Agency") &&
+        (
+          String(item.agency_id || "") === String(currentUser?.agency_id || "") ||
+          normalize(item.agency_name || payload.agency || payload.agency_name) === normalize(currentUser?.agency_name)
+        )
       );
     });
+  } else if (["Recruitment Manager", "Recruitment Director"].includes(currentRole)) {
+    rows = rows.filter((item) => (
+      !item.recipient_role ||
+      (
+        item.recipient_role === currentRole &&
+        (!item.user_id || String(item.user_id) === String(currentUser?.auth_user_id || ""))
+      )
+    ));
   }
 
   setNotifications(rows);
@@ -9516,7 +9642,7 @@ async function loadNotifications() {
     return notifications.filter((item) => {
       const type = item.type || item.status || "Notification";
       const matchesType = notificationFilter === "All" || type === notificationFilter;
-      const searchable = [type, getNotificationTitle(item), getNotificationMessage(item), item.priority, item.status]
+      const searchable = [type, getNotificationTitle(item), getNotificationMessage(item), item.recipient_role, item.priority, item.status]
         .join(" ")
         .toLowerCase();
       return matchesType && (!keyword || searchable.includes(keyword));
@@ -28953,6 +29079,7 @@ if (!currentUser) {
                     <tr>
                       <th>Status</th>
                       <th>Priority</th>
+                      <th>Recipient</th>
                       <th>Type</th>
                       <th>Title</th>
                       <th>Message</th>
@@ -28964,8 +29091,8 @@ if (!currentUser) {
                   <tbody>
                     {filteredNotificationRows.length === 0 ? (
                       <tr>
-                        <td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
-                          No notifications found.
+                        <td colSpan="9" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
+                          {loading ? "Loading notifications..." : "No notifications found."}
                         </td>
                       </tr>
                     ) : (
@@ -28977,6 +29104,7 @@ if (!currentUser) {
                             </span>
                           </td>
                           <td>{item.priority || item.data?.priority || "Medium"}</td>
+                          <td>{item.recipient_role || item.data?.recipient_role || "Company"}</td>
                           <td>{item.type || item.status || "Notification"}</td>
                           <td>{getNotificationTitle(item)}</td>
                           <td style={{ maxWidth: "520px", whiteSpace: "normal" }}>{getNotificationMessage(item)}</td>
@@ -31135,6 +31263,20 @@ selectedVisa
 {canManageVisas && <button onClick={() => setShowAuthForm(true)}>
 + Add Authorization
 </button>}
+{authorizationWorkflowFeedback && (
+  <div
+    role="status"
+    style={{
+      padding: "10px 14px",
+      borderRadius: "10px",
+      background: authorizationWorkflowFeedback.type === "success" ? "#ecfdf5" : "#fef2f2",
+      color: authorizationWorkflowFeedback.type === "success" ? "#047857" : "#b91c1c",
+      fontWeight: 800,
+    }}
+  >
+    {authorizationWorkflowFeedback.message}
+  </div>
+)}
 {showAuthForm && (
 
 <FormCard title="Add Authorization">
@@ -31190,18 +31332,26 @@ selectedVisa
 
   
 
-<input
-placeholder="Office / Agency"
-onChange={(e)=>
-setAuthForm({
-...authForm,
-agency:e.target.value
-})
-}
-/>
+<select
+  value={authForm.agency_id}
+  onChange={(e) => {
+    const agency = agencies.find((item) => String(item.id) === String(e.target.value));
+    setAuthForm((current) => ({
+      ...current,
+      agency_id: e.target.value,
+      agency: agency?.name || "",
+    }));
+  }}
+>
+  <option value="">Select Agency / Office</option>
+  {agencies.map((agency) => (
+    <option key={agency.id} value={agency.id}>{agency.name}</option>
+  ))}
+</select>
 
 <input
 placeholder="Authorization No"
+value={authForm.authorization_no}
 onChange={(e)=>
 setAuthForm({
 ...authForm,
@@ -31213,6 +31363,7 @@ authorization_no:e.target.value
 <input
 type="number"
 placeholder="Allocated Qty"
+value={authForm.allocated_qty}
 onChange={(e)=>
 setAuthForm({
 ...authForm,
@@ -31224,8 +31375,9 @@ allocated_qty:e.target.value
 <button
 className="save-btn"
 onClick={saveAuthorization}
+disabled={authorizationWorkflowBusy === "create"}
 >
-Save Authorization
+{authorizationWorkflowBusy === "create" ? "Saving..." : "Save Authorization"}
 </button>
 
 </div>
@@ -31265,6 +31417,8 @@ Save Authorization
 <th>Interview Passed</th>
 <th>Mobilized</th>
 <th>Status</th>
+<th>Agency Status</th>
+<th>Sent</th>
 <th>Cancellation No</th>
 <th>Cancelled Date</th>
 <th>Actions</th>
@@ -31274,8 +31428,8 @@ Save Authorization
 
 {filteredAuthorizationTableRows.length === 0 ? (
   <tr>
-    <td colSpan="14" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
-      No authorizations match the current search and filters.
+    <td colSpan="17" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+      {loading ? "Loading authorizations..." : "No authorizations match the current search and filters."}
     </td>
   </tr>
 ) : pagedAuthorizationTableRows.map((item) => (
@@ -31291,23 +31445,50 @@ Save Authorization
     <td>{item.interview_passed || 0}</td>
     <td>{item.mobilized || 0}</td>
     <td><Badge value={item.status || "Open"} /></td>
+    <td><Badge value={getAuthorizationAgencyStatus(item)} /></td>
+    <td>
+      {item.sent_at ? (
+        <div>
+          <div>{new Date(item.sent_at).toLocaleString()}</div>
+          <small>{item.sent_by ? `By ${item.updated_by_name || item.sent_by}` : "-"}</small>
+        </div>
+      ) : "Not sent"}
+    </td>
     <td>{item.cancellation_no || "-"}</td>
     <td>{item.cancelled_at || "-"}</td>
     <td>
-      {canManageVisas && item.status !== "Cancelled" ? (
-        <button
-          className="btn btn-sm"
-          onClick={() => {
-            if (window.confirm("Cancel this authorization?")) {
-              cancelAuthorization(item.id);
-            }
-          }}
-        >
-          Cancel
-        </button>
-      ) : (
-        "-"
-      )}
+      <div className="row-actions">
+        <button className="light-btn" onClick={() => openAuthorizationWorkflow(item)}>Timeline</button>
+        {canManageAuthorizationWorkflow && getAuthorizationActions(item, currentRole).canSend && (
+          <button
+            className="save-btn"
+            onClick={() => sendAuthorizationToAgency(item)}
+            disabled={Boolean(authorizationWorkflowBusy)}
+          >
+            {authorizationWorkflowBusy === `send:${item.id}` ? "Sending..." : "Send to Agency"}
+          </button>
+        )}
+        {canManageAuthorizationWorkflow && getAuthorizationActions(item, currentRole).canResend && (
+          <button
+            className="new-btn"
+            onClick={() => sendAuthorizationToAgency(item)}
+            disabled={Boolean(authorizationWorkflowBusy)}
+          >
+            {authorizationWorkflowBusy === `send:${item.id}` ? "Resending..." : "Resend to Agency"}
+          </button>
+        )}
+        {canManageVisas && item.status !== "Cancelled" && (
+          <button
+            className="danger-btn"
+            onClick={() => {
+              if (window.confirm("Cancel this authorization?")) cancelAuthorization(item.id);
+            }}
+            disabled={Boolean(authorizationWorkflowBusy)}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
     </td>
   </tr>
 ))}
@@ -31319,6 +31500,52 @@ Save Authorization
   totalPages={authorizationTableTotalPages}
   onPageChange={setAuthorizationTablePage}
 />
+
+{selectedAuthorization && (
+  <div style={{ marginTop: "18px", padding: "18px", border: "1px solid #dbeafe", borderRadius: "14px", background: "#f8fafc" }}>
+    <div className="actions-line" style={{ justifyContent: "space-between" }}>
+      <div>
+        <h3 style={{ margin: 0 }}>Authorization Timeline</h3>
+        <p style={{ margin: "4px 0 0", color: "#64748b" }}>
+          {selectedAuthorization.authorization_no || selectedAuthorization.visa_no || selectedAuthorization.id}
+        </p>
+      </div>
+      <button className="light-btn" onClick={() => setSelectedAuthorization(null)}>Close</button>
+    </div>
+    <div style={{ display: "grid", gap: "10px", marginTop: "16px" }}>
+      {buildAuthorizationTimeline(authorizationTimelineEvents).map((event, index) => (
+        <div key={`${event.stage}-${index}`} style={{ display: "grid", gridTemplateColumns: "34px minmax(140px, 1fr) 2fr", gap: "10px", alignItems: "start" }}>
+          <span
+            aria-hidden="true"
+            style={{
+              width: "28px",
+              height: "28px",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "50%",
+              background: event.complete ? "#059669" : "#e2e8f0",
+              color: event.complete ? "#fff" : "#64748b",
+              fontWeight: 900,
+            }}
+          >
+            {event.complete ? "✓" : index + 1}
+          </span>
+          <strong>{event.stage}</strong>
+          <div style={{ color: "#475569" }}>
+            {event.complete ? (
+              <>
+                <div>{event.at ? new Date(event.at).toLocaleString() : "-"}</div>
+                <div>{event.by || "-"}</div>
+                {event.reason && <div style={{ color: "#b91c1c" }}>Reason: {event.reason}</div>}
+              </>
+            ) : "Pending"}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
 </TableCard>
 )}
@@ -33368,6 +33595,122 @@ Save Authorization
         className="passed"
       />
     </div>
+
+    {currentRole === "Agency" && (
+      <TableCard title="Assigned Authorizations">
+        {authorizationWorkflowFeedback && (
+          <div
+            role="status"
+            style={{
+              marginBottom: "14px",
+              padding: "10px 14px",
+              borderRadius: "10px",
+              background: authorizationWorkflowFeedback.type === "success" ? "#ecfdf5" : "#fef2f2",
+              color: authorizationWorkflowFeedback.type === "success" ? "#047857" : "#b91c1c",
+              fontWeight: 800,
+            }}
+          >
+            {authorizationWorkflowFeedback.message}
+          </div>
+        )}
+        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "520px" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Authorization</th>
+                <th>Request</th>
+                <th>Profession</th>
+                <th>Nationality</th>
+                <th>Quantity</th>
+                <th>Status</th>
+                <th>Updated</th>
+                <th>Reason</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="9" style={{ textAlign: "center", padding: "24px" }}>Loading assigned authorizations...</td></tr>
+              ) : visaAuthorizations.length === 0 ? (
+                <tr><td colSpan="9" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>No authorizations have been assigned to this agency.</td></tr>
+              ) : visaAuthorizations.map((item) => {
+                const actions = getAuthorizationActions(item, currentRole);
+                return (
+                  <tr key={item.id}>
+                    <td>{item.authorization_no || item.visa_no || "-"}</td>
+                    <td>{item.request_no || "-"}</td>
+                    <td>{item.profession || "-"}</td>
+                    <td>{item.nationality || "-"}</td>
+                    <td>{item.allocated_qty || 0}</td>
+                    <td><Badge value={getAuthorizationAgencyStatus(item)} /></td>
+                    <td>{item.updated_at ? new Date(item.updated_at).toLocaleString() : "-"}</td>
+                    <td>{item.response_reason || "-"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="light-btn"
+                          onClick={() => openAuthorizationWorkflow(item, { markViewed: true })}
+                          disabled={Boolean(authorizationWorkflowBusy)}
+                        >
+                          {authorizationWorkflowBusy === `view:${item.id}` ? "Opening..." : "View"}
+                        </button>
+                        {actions.canAcknowledge && (
+                          <button
+                            className="new-btn"
+                            onClick={() => handleAgencyAuthorizationAction("acknowledge", item)}
+                            disabled={Boolean(authorizationWorkflowBusy)}
+                          >
+                            {authorizationWorkflowBusy === `acknowledge:${item.id}` ? "Saving..." : "Acknowledge"}
+                          </button>
+                        )}
+                        {actions.canAccept && (
+                          <button
+                            className="save-btn"
+                            onClick={() => handleAgencyAuthorizationAction("accept", item)}
+                            disabled={Boolean(authorizationWorkflowBusy)}
+                          >
+                            {authorizationWorkflowBusy === `accept:${item.id}` ? "Accepting..." : "Accept"}
+                          </button>
+                        )}
+                        {actions.canReject && (
+                          <button
+                            className="danger-btn"
+                            onClick={() => handleAgencyAuthorizationAction("reject", item)}
+                            disabled={Boolean(authorizationWorkflowBusy)}
+                          >
+                            {authorizationWorkflowBusy === `reject:${item.id}` ? "Rejecting..." : "Reject"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {selectedAuthorization && (
+          <div style={{ marginTop: "16px", padding: "16px", borderRadius: "12px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+            <div className="actions-line" style={{ justifyContent: "space-between" }}>
+              <strong>Timeline — {selectedAuthorization.authorization_no || selectedAuthorization.visa_no || "-"}</strong>
+              <button className="light-btn" onClick={() => setSelectedAuthorization(null)}>Close</button>
+            </div>
+            <div style={{ display: "grid", gap: "8px", marginTop: "12px" }}>
+              {buildAuthorizationTimeline(authorizationTimelineEvents).map((event, index) => (
+                <div key={`${event.stage}-${index}`} style={{ display: "grid", gridTemplateColumns: "28px 1fr 2fr", gap: "8px" }}>
+                  <span style={{ color: event.complete ? "#059669" : "#94a3b8", fontWeight: 900 }}>{event.complete ? "✓" : "○"}</span>
+                  <strong>{event.stage}</strong>
+                  <span>
+                    {event.complete ? `${event.at ? new Date(event.at).toLocaleString() : "-"} · ${event.by || "-"}` : "Pending"}
+                    {event.reason ? ` · Reason: ${event.reason}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </TableCard>
+    )}
 
 
     {currentRole === "Agency" && (
