@@ -16,9 +16,8 @@ export const AUTHORIZATION_TIMELINE_STAGES = Object.freeze([
 
 const COMPANY_ACTION_ROLES = new Set([
   'Admin',
+  'Company Admin',
   'Visa Team',
-  'Recruitment Manager',
-  'Recruitment Director',
 ])
 
 export function isAuthorizationCompanyActor(role) {
@@ -53,20 +52,28 @@ export function getAuthorizationActions(authorization = {}, role = '') {
 
 export function buildAuthorizationTimeline(events = []) {
   const sorted = [...events].sort(
-    (left, right) => new Date(left.created_at || 0) - new Date(right.created_at || 0)
+    (left, right) => {
+      const timeDifference = new Date(left.created_at || 0) - new Date(right.created_at || 0)
+      return timeDifference || Number(left.id || 0) - Number(right.id || 0)
+    }
   )
 
+  if (sorted.length) {
+    return sorted.map((event) => ({
+      stage: event.event_type,
+      complete: true,
+      at: event.created_at || null,
+      by: event.actor_name || event.actor_email || null,
+      reason: event.reason || null,
+    }))
+  }
   return AUTHORIZATION_TIMELINE_STAGES.map((stage) => {
-    const matching = stage === 'Accepted / Rejected'
-      ? sorted.find((event) => ['Accepted', 'Rejected'].includes(event.event_type))
-      : sorted.find((event) => event.event_type === stage)
-
     return {
-      stage: matching?.event_type || stage,
-      complete: Boolean(matching),
-      at: matching?.created_at || null,
-      by: matching?.actor_name || matching?.actor_email || null,
-      reason: matching?.reason || null,
+      stage,
+      complete: false,
+      at: null,
+      by: null,
+      reason: null,
     }
   })
 }
@@ -75,7 +82,8 @@ export async function invokeAuthorizationWorkflow(
   supabase,
   action,
   authorizationId = null,
-  input = {}
+  input = {},
+  idempotencyKey = globalThis.crypto?.randomUUID?.()
 ) {
   if (!supabase?.functions?.invoke) {
     throw new Error('Authorization workflow service is unavailable.')
@@ -83,12 +91,16 @@ export async function invokeAuthorizationWorkflow(
 
   const body = {
     action,
+    idempotency_key: idempotencyKey,
     ...(authorizationId ? { authorization_id: authorizationId } : {}),
     input,
   }
 
   if ('company_id' in input) {
     throw new Error('company_id is server-controlled and cannot be supplied by the client.')
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(String(idempotencyKey || ''))) {
+    throw new Error('A valid idempotency key is required.')
   }
 
   const { data, error } = await supabase.functions.invoke('authorization-workflow', { body })

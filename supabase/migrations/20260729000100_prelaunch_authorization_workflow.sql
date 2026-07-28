@@ -1,6 +1,73 @@
 -- Sprint 1: protected authorization delivery and agency decision workflow.
 -- This migration is intentionally environment-agnostic and does not contain data or secrets.
 
+set local lock_timeout = '5s';
+set local statement_timeout = '120s';
+
+-- Preflight runs before DDL. Ambiguous/unmatched legacy agency names are
+-- reported and skipped; ambiguous application identities fail closed.
+do $preflight$
+declare
+  duplicate_actor_count bigint;
+  linkable_count bigint;
+  ambiguous_count bigint;
+  unmatched_count bigint;
+  inactive_agency_count bigint;
+  notification_count bigint;
+  notification_dedupe_ready boolean;
+begin
+  select count(*) into duplicate_actor_count
+  from (
+    select auth_user_id from public.users
+    where auth_user_id is not null
+    group by auth_user_id having count(*) > 1
+  ) duplicates;
+  if duplicate_actor_count > 0 then
+    raise exception 'prelaunch preflight failed: % duplicate auth identities', duplicate_actor_count;
+  end if;
+
+  select exists (
+    select 1
+    from pg_catalog.pg_index index_metadata
+    where index_metadata.indrelid = 'public.notification_events'::regclass
+      and index_metadata.indisunique
+      and pg_catalog.pg_get_indexdef(index_metadata.indexrelid)
+        ilike '%(company_id, dedupe_key)%'
+  ) into notification_dedupe_ready;
+  if not notification_dedupe_ready then
+    raise exception 'prelaunch preflight failed: notification dedupe unique index is required';
+  end if;
+
+  with matches as (
+    select authorization.id,
+      count(distinct access.agency_id) filter (
+        where access.status = 'Active' and agency.status = 'Active'
+      ) active_matches,
+      count(distinct access.agency_id) filter (
+        where agency.status is distinct from 'Active'
+      ) inactive_matches
+    from public.visa_authorizations authorization
+    left join public.company_agency_access access
+      on access.company_id = authorization.company_id
+    left join public.agencies agency
+      on agency.id = access.agency_id
+     and lower(trim(agency.name)) = lower(trim(authorization.agency))
+    where authorization.agency_id is null
+    group by authorization.id
+  )
+  select count(*) filter (where active_matches = 1),
+    count(*) filter (where active_matches > 1),
+    count(*) filter (where active_matches = 0),
+    count(*) filter (where inactive_matches > 0)
+  into linkable_count, ambiguous_count, unmatched_count, inactive_agency_count
+  from matches;
+
+  select count(*) into notification_count from public.notification_events;
+  raise notice 'prelaunch preflight: linkable=%, ambiguous=%, unmatched=%, inactive_agency=%, notification_events=%',
+    linkable_count, ambiguous_count, unmatched_count, inactive_agency_count, notification_count;
+end;
+$preflight$;
+
 alter table public.visa_authorizations
   add column if not exists agency_id uuid references public.agencies(id),
   add column if not exists agency_status text not null default 'New',
@@ -50,9 +117,13 @@ create table if not exists public.authorization_events (
   actor_email text,
   actor_role text not null,
   reason text,
+  idempotency_key text not null,
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
+
+create unique index if not exists uq_authorization_events_idempotency
+  on public.authorization_events(authorization_id, idempotency_key);
 
 create index if not exists idx_authorization_events_timeline
   on public.authorization_events(authorization_id, created_at, id);
@@ -73,6 +144,7 @@ with unambiguous_agency_matches as (
    and coalesce(access.status, 'Active') = 'Active'
   join public.agencies agency
     on agency.id = access.agency_id
+   and agency.status = 'Active'
    and lower(trim(agency.name)) = lower(trim(authorization.agency))
   where authorization.agency_id is null
   group by authorization.id
@@ -91,6 +163,7 @@ insert into public.authorization_events (
   actor_name,
   actor_email,
   actor_role,
+  idempotency_key,
   created_at,
   metadata
 )
@@ -102,6 +175,7 @@ select
   coalesce(nullif(authorization.created_by_name, ''), 'Legacy Import'),
   nullif(authorization.created_by_email, ''),
   coalesce(nullif(authorization.created_by_role, ''), 'System'),
+  'legacy-created:' || authorization.id::text,
   coalesce(authorization.created_at, now()),
   jsonb_build_object('backfilled', true)
 from public.visa_authorizations authorization
@@ -116,12 +190,13 @@ where authorization.company_id is not null
 alter table public.notification_events
   add column if not exists recipient_role text;
 
-create index if not exists idx_notification_events_authorization_recipient
-  on public.notification_events(company_id, agency_id, recipient_role, related_id)
-  where related_table = 'visa_authorizations';
+-- A notification_events covering index is intentionally deferred. This table
+-- can be large, and CREATE INDEX CONCURRENTLY must be run as a separately
+-- approved non-transactional operation after staging EXPLAIN/size review.
 
 alter table public.visa_authorizations enable row level security;
 alter table public.authorization_events enable row level security;
+alter table public.notification_events enable row level security;
 
 drop policy if exists visa_authorizations_select_tenant_policy
   on public.visa_authorizations;
@@ -131,21 +206,24 @@ create policy visa_authorizations_select_prelaunch_workflow
   for select
   to authenticated
   using (
-    public.is_current_platform_user()
-    or (
-      public.current_app_user_role() <> 'Agency'
-      and company_id = public.current_app_user_company_id()
+    (
+      public.current_log_actor()->>'role' in ('Platform Owner', 'Platform Accounts User')
+      and public.current_log_actor()->>'company_id' is null
     )
     or (
-      public.current_app_user_role() = 'Agency'
-      and agency_id = public.current_app_user_agency_id()
+      public.current_log_actor()->>'role' not in ('Agency', 'Platform Owner', 'Platform Accounts User', 'Platform Support User')
+      and company_id::text = public.current_log_actor()->>'company_id'
+    )
+    or (
+      public.current_log_actor()->>'role' = 'Agency'
+      and agency_id::text = public.current_log_actor()->>'agency_id'
       and exists (
         select 1
         from public.agency_company_user_access access
-        where access.user_id = public.current_app_user_id()
+        where access.user_id::text = public.current_log_actor()->>'id'
           and access.company_id = visa_authorizations.company_id
           and access.agency_id = visa_authorizations.agency_id
-          and coalesce(access.status, 'Active') = 'Active'
+          and access.status = 'Active'
       )
     )
   );
@@ -155,21 +233,66 @@ create policy authorization_events_select_prelaunch_workflow
   for select
   to authenticated
   using (
-    public.is_current_platform_user()
-    or (
-      public.current_app_user_role() <> 'Agency'
-      and company_id = public.current_app_user_company_id()
+    (
+      public.current_log_actor()->>'role' in ('Platform Owner', 'Platform Accounts User')
+      and public.current_log_actor()->>'company_id' is null
     )
     or (
-      public.current_app_user_role() = 'Agency'
-      and agency_id = public.current_app_user_agency_id()
+      public.current_log_actor()->>'role' not in ('Agency', 'Platform Owner', 'Platform Accounts User', 'Platform Support User')
+      and company_id::text = public.current_log_actor()->>'company_id'
+    )
+    or (
+      public.current_log_actor()->>'role' = 'Agency'
+      and agency_id::text = public.current_log_actor()->>'agency_id'
       and exists (
         select 1
         from public.agency_company_user_access access
-        where access.user_id = public.current_app_user_id()
+        where access.user_id::text = public.current_log_actor()->>'id'
           and access.company_id = authorization_events.company_id
           and access.agency_id = authorization_events.agency_id
-          and coalesce(access.status, 'Active') = 'Active'
+          and access.status = 'Active'
+      )
+    )
+  );
+
+drop policy if exists secure_notification_select on public.notification_events;
+drop policy if exists secure_notification_insert on public.notification_events;
+drop policy if exists secure_notification_update on public.notification_events;
+drop policy if exists secure_notification_delete on public.notification_events;
+drop policy if exists notification_events_recipient_select on public.notification_events;
+
+create policy notification_events_recipient_select
+  on public.notification_events
+  for select to authenticated
+  using (
+    (
+      company_id::text = public.current_log_actor()->>'company_id'
+      and public.current_log_actor()->>'role' not in ('Agency', 'Platform Owner', 'Platform Accounts User', 'Platform Support User')
+      and (
+        (user_id is not null and user_id = auth.uid())
+        or (user_id is null and recipient_role = public.current_log_actor()->>'role')
+        or (user_id is null and recipient_role is null)
+      )
+    )
+    or (
+      public.current_log_actor()->>'role' = 'Agency'
+      and agency_id::text = public.current_log_actor()->>'agency_id'
+      and (user_id is null or user_id = auth.uid())
+      and (recipient_role is null or recipient_role = 'Agency')
+      and exists (
+        select 1 from public.agency_company_user_access access
+        where access.user_id::text = public.current_log_actor()->>'id'
+          and access.company_id = notification_events.company_id
+          and access.agency_id = notification_events.agency_id
+          and access.status = 'Active'
+      )
+    )
+    or (
+      public.current_log_actor()->>'role' in ('Platform Owner', 'Platform Accounts User')
+      and public.current_log_actor()->>'company_id' is null
+      and (
+        (user_id is not null and user_id = auth.uid())
+        or (user_id is null and recipient_role = public.current_log_actor()->>'role')
       )
     )
   );
@@ -178,12 +301,14 @@ create policy authorization_events_select_prelaunch_workflow
 -- role, tenant, agency membership, and state-transition checks.
 revoke insert, update, delete on table public.visa_authorizations from anon, authenticated;
 revoke all on table public.authorization_events from anon, authenticated;
+revoke insert, update, delete on table public.notification_events from anon, authenticated;
 grant select on table public.visa_authorizations to authenticated;
 grant select on table public.authorization_events to authenticated;
+grant select on table public.notification_events to authenticated;
 grant usage, select on sequence public.authorization_events_id_seq to service_role;
 
 comment on table public.authorization_events is
   'Immutable server-written Authorization timeline. Browser clients have SELECT only.';
 
 comment on column public.visa_authorizations.company_id is
-  'Server-controlled tenant identifier. The Authorization Edge Function derives it from the authenticated actor.';
+  'Server-controlled tenant identifier. Protected RPCs derive it from the authenticated actor.';

@@ -1296,14 +1296,12 @@ async function triggerExternalNotification(type, data = {}) {
   }
 
   const payload = {
-    company_id: data.company_id || null,
-    user_id: data.user_id || null,
+    workspace_company_id: data.company_id || currentCompanyId || null,
     agency_id: data.agency_id || null,
     type,
     title: data.title || type,
     message: data.message || data.provider_message || data.candidate_name || type,
     priority: data.priority || "Medium",
-    status: "Unread",
     related_table: data.related_table || "",
     related_id: data.related_id || "",
     request_no: data.request_no || data.requestNo || "",
@@ -1315,13 +1313,13 @@ async function triggerExternalNotification(type, data = {}) {
     sla_days: data.sla_days || null,
     sla_due_at: data.sla_due_at || null,
     data,
-    created_at: new Date().toISOString(),
   };
 
-  const { data: insertedRows, error: insertError } = await supabase
-    .from("notification_events")
-    .insert([payload])
-    .select("id, company_id, agency_id, agency_name, request_no, type, title, response_status, sla_started_at, sla_days, sla_due_at, created_at");
+  const { data: insertedRow, error: insertError } = await supabase.rpc("notification_event_mutate", {
+    p_operation: "create",
+    p_notification_id: null,
+    p_payload: payload,
+  });
 
   if (insertError) {
     console.error("notification_events insert failed", insertError.message);
@@ -1330,7 +1328,7 @@ async function triggerExternalNotification(type, data = {}) {
 
   const webhookUrl = import.meta.env?.VITE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) {
-    return { ok: true, notification: insertedRows?.[0] || null, webhook: "not_configured", payload };
+    return { ok: true, notification: insertedRow || null, webhook: "not_configured", payload };
   }
 
   try {
@@ -1339,10 +1337,10 @@ async function triggerExternalNotification(type, data = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    return { ok: true, notification: insertedRows?.[0] || null, webhook: "sent", payload };
+    return { ok: true, notification: insertedRow || null, webhook: "sent", payload };
   } catch (error) {
     console.warn("External notification webhook failed", error?.message || error);
-    return { ok: true, notification: insertedRows?.[0] || null, webhook: "failed", payload };
+    return { ok: true, notification: insertedRow || null, webhook: "failed", payload };
   }
 }
 
@@ -6452,7 +6450,7 @@ const canEditRequest = ["Admin", "Operations Manager", "Project Manager", "Recru
 const canApproveRequest = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canDeleteRequest = currentRole === "Admin";
 
-const canManageVisas = ["Admin", "Visa Team"].includes(currentRole);
+const canManageVisas = ["Admin", "Company Admin", "Visa Team"].includes(currentRole);
 const canManageAuthorizationWorkflow = isAuthorizationCompanyActor(currentRole);
 const canManageCandidates = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageOfficePortal = ["Admin", "Agency"].includes(currentRole);
@@ -6826,9 +6824,8 @@ async function openAuthorizationWorkflow(item, { markViewed = false } = {}) {
 async function sendAuthorizationToAgency(item) {
   const isResend = Boolean(item.sent_at);
   if (isResend && !window.confirm("This authorization was already sent. Resend it to the agency?")) return;
-  await runAuthorizationWorkflowAction("send", item, {
+  await runAuthorizationWorkflowAction(isResend ? "resend" : "send", item, {
     confirm_resend: isResend,
-    expected_sent_at: item.sent_at || null,
   });
 }
 
@@ -9657,11 +9654,11 @@ async function loadNotifications() {
 
   async function markNotificationRead(id) {
     if (!id || !secureLogFeaturesAvailable) return;
-    const { error } = await supabase
-      .from("notification_events")
-      .update({ status: "Read", read_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("company_id", currentCompanyId);
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "mark_read",
+      p_notification_id: id,
+      p_payload: {},
+    });
 
     if (error) return alert(error.message);
     await loadNotifications();
@@ -9669,17 +9666,11 @@ async function loadNotifications() {
 
   async function markAllNotificationsRead() {
     if (!secureLogFeaturesAvailable) return;
-    let query = supabase
-      .from("notification_events")
-      .update({ status: "Read", read_at: new Date().toISOString() })
-      .eq("company_id", currentCompanyId)
-      .neq("status", "Read");
-
-    if (currentRole === "Agency" && currentUser?.agency_id) {
-      query = query.eq("agency_id", currentUser.agency_id);
-    }
-
-    const { error } = await query;
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "mark_all_read",
+      p_notification_id: null,
+      p_payload: {},
+    });
     if (error) return alert(error.message);
     await loadNotifications();
   }
@@ -9688,11 +9679,11 @@ async function loadNotifications() {
     if (!id || !secureLogFeaturesAvailable) return;
     if (!window.confirm("Delete this notification?")) return;
 
-    const { error } = await supabase
-      .from("notification_events")
-      .delete()
-      .eq("id", id)
-      .eq("company_id", currentCompanyId);
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "delete",
+      p_notification_id: id,
+      p_payload: {},
+    });
 
     if (error) return alert(error.message);
     await loadNotifications();
@@ -11859,11 +11850,10 @@ function isDuplicateRequestNoError(error) {
       sla_due_at: slaDueAt,
     };
 
-    const { error } = await supabase
-      .from("notification_events")
-      .update({
-        status: "Read",
-        read_at: now,
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "agency_response",
+      p_notification_id: item.id,
+      p_payload: {
         agency_name: agencyName,
         request_no: existingData.request_no || item.request_no || "",
         response_status: decision,
@@ -11873,9 +11863,8 @@ function isDuplicateRequestNoError(error) {
         sla_days: nextData.sla_days,
         sla_due_at: nextData.sla_due_at,
         data: nextData,
-      })
-      .eq("id", item.id)
-      .eq("company_id", currentCompanyId);
+      },
+    });
 
     if (error) return alert(`Agency response failed: ${error.message}`);
 
@@ -13682,10 +13671,8 @@ async function deleteAgreement(id) {
         if (error) throw error;
       }
 
-      if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
-        user_id: null,
+      if (secureLogFeaturesAvailable) await triggerExternalNotification("OFFICE_BULK_CANDIDATE_UPDATE", {
         agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
-        type: "OFFICE_BULK_CANDIDATE_UPDATE",
         title: "Office Bulk Candidate Update",
         message: `${selectedCandidates.length} candidates updated in Office Portal`,
         priority: "Medium",
@@ -13697,7 +13684,7 @@ async function deleteAgreement(id) {
           status: officeBulkForm.status || "",
           medical_status: officeBulkForm.medical_status || "",
         },
-      })]);
+      });
 
       const touchedRequestNos = [...new Set(selectedCandidates.map((item) => item.request_no).filter(Boolean))];
       for (const requestNo of touchedRequestNos) {
@@ -14006,10 +13993,10 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
       }
     }
 
-    if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
-      user_id: null,
+    if (secureLogFeaturesAvailable) await triggerExternalNotification(
+      candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
+      {
       agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
-      type: candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
       title: candidateEditingId ? "Candidate Updated" : "New Candidate Added",
       message: `${candidateForm.candidate_name || "Candidate"} / ${candidateForm.request_no || "No Request"} / ${autoStatus}`,
       priority: "Medium",
@@ -14022,7 +14009,8 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
         agency: currentRole === "Agency" ? currentUser?.agency_name : candidateForm.agency,
         status: autoStatus,
       },
-    })]);
+      }
+    );
 
 const { count: completedCandidateCount } = await supabase
   .from("candidates")
@@ -14595,10 +14583,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       }
     }
 
-    if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
-      user_id: null,
+    if (secureLogFeaturesAvailable) await triggerExternalNotification("AGENCY_TALENT_POOL_UPLOAD", {
       agency_id: currentUser?.agency_id || null,
-      type: "AGENCY_TALENT_POOL_UPLOAD",
       title: "Agency Talent Pool Upload",
       message: `${payloads.length} candidate(s) uploaded by ${agencyName} without request assignment.`,
       priority: "Medium",
@@ -14611,7 +14597,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         uploaded_count: payloads.length,
         intelligence_profiles: technicalProfilePayloads.length,
       },
-    })]);
+    });
 
     await loadCandidates();
     await loadCandidateTechnicalProfiles();
@@ -19315,8 +19301,13 @@ async function generateSlaEscalationNotifications() {
     };
   });
 
-  const { error } = await supabase.from("notification_events").insert(payload);
-  if (error) return alert(error.message);
+  try {
+    for (const event of payload) {
+      await triggerExternalNotification(event.type, event);
+    }
+  } catch (error) {
+    return alert(error.message);
+  }
 
   alert(`Update compliance alerts generated: ${payload.length}`);
 }
