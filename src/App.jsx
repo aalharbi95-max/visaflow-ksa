@@ -32,6 +32,8 @@ import {
   calculateInterviewQuality,
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
+import RequestLineCustomFields from "./RequestLineCustomFields";
+import Select from "./Select";
 import {
   buildAuthorizationTimeline,
   getAuthorizationActions,
@@ -30707,21 +30709,13 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                 </p>
 
                 <div className="form-grid">
-                  <Select
-                    value={requestLineForm.profession}
-                    onChange={(v) => updateForm(setRequestLineForm, "profession", v)}
-                    placeholder="Profession"
-                    searchable
-                    options={professions.map((p) =>
+                  <RequestLineCustomFields
+                    value={requestLineForm}
+                    onFieldChange={(field, value) => updateForm(setRequestLineForm, field, value)}
+                    professionOptions={professions.map((p) =>
                       p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar
                     )}
-                  />
-                  <Select
-                    value={requestLineForm.nationality}
-                    onChange={(v) => updateForm(setRequestLineForm, "nationality", v)}
-                    placeholder="Nationality"
-                    searchable
-                    options={countries.map((c) =>
+                    nationalityOptions={countries.map((c) =>
                       c.nationality ? `${c.nationality} (${c.name})` : c.name
                     )}
                   />
@@ -37987,81 +37981,6 @@ function SmartTablePagination({ page = 1, totalPages = 1, onPageChange }) {
   );
 }
 
-
-function Select({ value, onChange, placeholder, options = [], searchable = false, disabled = false }) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const getOptionValue = (option) => typeof option === "object" ? String(option.value ?? "") : String(option ?? "");
-  const getOptionLabel = (option) => typeof option === "object" ? String(option.label ?? option.value ?? "") : String(option ?? "");
-  const selectedOption = options.find((option) => getOptionValue(option) === String(value || ""));
-  const selectedLabel = selectedOption ? getOptionLabel(selectedOption) : value || "";
-
-  if (!searchable) {
-    return (
-      <select value={value || ""} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={getOptionValue(option)} value={getOptionValue(option)}>{getOptionLabel(option)}</option>
-        ))}
-      </select>
-    );
-  }
-
-  const filtered = options.filter((option) =>
-    getOptionLabel(option).toLowerCase().includes(query.toLowerCase())
-  );
-
-  return (
-    <div style={{ position: "relative" }}>
-      <input
-  value={open ? query : selectedLabel}
-  placeholder={placeholder}
-  disabled={disabled}
-  onFocus={() => {
-    if (disabled) return;
-    setOpen(true);
-    setQuery("");
-  }}
-  onBlur={() => {
-    setTimeout(() => {
-      setOpen(false);
-      setQuery("");
-    }, 150);
-  }}
-  onKeyDown={(e) => {
-    if (e.key === "Escape") {
-      setOpen(false);
-      setQuery("");
-      e.target.blur();
-    }
-  }}
-  onChange={(e) => {
-    if (disabled) return;
-    setQuery(e.target.value);
-    setOpen(true);
-  }}
-/>
-
-      {open && !disabled && (
-        <div style={{ position: "absolute", background: "#fff", border: "1px solid #ddd", maxHeight: "250px", overflowY: "auto", width: "100%", zIndex: 9999 }}>
-          {filtered.slice(0, 80).map((option) => (
-            <div
-              key={getOptionValue(option)}
-              style={{ padding: "8px", cursor: "pointer" }}
-              onMouseDown={() => {
-                onChange(getOptionValue(option));
-                setOpen(false);
-                setQuery("");
-              }}
-            >
-              {getOptionLabel(option)}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function Badge({ value }) {
   const text = value || "-";
