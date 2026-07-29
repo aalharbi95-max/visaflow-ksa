@@ -105,7 +105,7 @@ set search_path = ''
 as $function$
 declare
   actor public.users%rowtype;
-  authorization public.visa_authorizations%rowtype;
+  authorization_record public.visa_authorizations%rowtype;
   allocation public.visa_allocations%rowtype;
   agency public.agencies%rowtype;
   normalized_action text := lower(trim(coalesce(p_action, '')));
@@ -117,6 +117,7 @@ declare
   already_authorized bigint;
   is_resend boolean;
   timeline jsonb;
+  operation_idempotency_key text;
 begin
   if auth.uid() is null then raise exception using errcode = '42501', message = 'authentication_required'; end if;
   if p_idempotency_key is null or p_idempotency_key !~ '^[0-9a-fA-F-]{36}$' then
@@ -125,6 +126,7 @@ begin
   if p_input ? 'company_id' or p_input ? 'actor_user_id' or p_input ? 'recipient_role' then
     raise exception using errcode = '22023', message = 'server_controlled_field';
   end if;
+  operation_idempotency_key := normalized_action || ':' || p_idempotency_key;
 
   begin
     select app_user.* into strict actor
@@ -151,12 +153,12 @@ begin
     if actor.role not in ('Admin', 'Company Admin', 'Visa Team') or actor.company_id is null then
       raise exception using errcode = '42501', message = 'company_role_denied';
     end if;
-    select * into authorization from public.visa_authorizations
-    where company_id = actor.company_id and creation_idempotency_key = p_idempotency_key;
+    select * into authorization_record from public.visa_authorizations
+    where company_id = actor.company_id and creation_idempotency_key = operation_idempotency_key;
     if found then
       select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at, e.id), '[]'::jsonb)
-      into timeline from public.authorization_events e where e.authorization_id = authorization.id;
-      return jsonb_build_object('authorization', to_jsonb(authorization), 'events', timeline, 'idempotent', true);
+      into timeline from public.authorization_events e where e.authorization_id = authorization_record.id;
+      return jsonb_build_object('authorization', to_jsonb(authorization_record), 'events', timeline, 'idempotent', true);
     end if;
 
     requested_qty := (p_input->>'allocated_qty')::integer;
@@ -166,12 +168,12 @@ begin
       for update;
     -- A concurrent duplicate may have committed while this request waited for
     -- the allocation lock. Recheck so both callers receive the same result.
-    select * into authorization from public.visa_authorizations
-    where company_id = actor.company_id and creation_idempotency_key = p_idempotency_key;
+    select * into authorization_record from public.visa_authorizations
+    where company_id = actor.company_id and creation_idempotency_key = operation_idempotency_key;
     if found then
       select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at, e.id), '[]'::jsonb)
-      into timeline from public.authorization_events e where e.authorization_id = authorization.id;
-      return jsonb_build_object('authorization', to_jsonb(authorization), 'events', timeline, 'idempotent', true);
+      into timeline from public.authorization_events e where e.authorization_id = authorization_record.id;
+      return jsonb_build_object('authorization', to_jsonb(authorization_record), 'events', timeline, 'idempotent', true);
     end if;
     select coalesce(sum(allocated_qty), 0) into already_authorized
       from public.visa_authorizations
@@ -190,64 +192,99 @@ begin
       raise exception using errcode = '22023', message = 'authorization_no_required';
     end if;
 
-    insert into public.visa_authorizations (
-      company_id, visa_id, visa_no, request_no, visa_allocation_id, visa_batch_line_id,
-      profession, nationality, gender, authorization_no, agency_id, agency,
-      office_country, allocated_qty, received_candidates, interview_passed, mobilized,
-      status, agency_status, created_at, updated_at, updated_by,
-      created_by_name, created_by_email, created_by_role,
-      updated_by_name, updated_by_email, updated_by_role, creation_idempotency_key
-    ) values (
-      actor.company_id, nullif(p_input->>'visa_id', '')::uuid, allocation.visa_no,
-      allocation.request_no, allocation.id, allocation.visa_batch_line_id,
-      nullif(trim(p_input->>'profession'), ''), nullif(trim(p_input->>'nationality'), ''),
-      nullif(trim(p_input->>'gender'), ''), trim(p_input->>'authorization_no'),
-      agency.id, agency.name, nullif(trim(p_input->>'office_country'), ''), requested_qty,
-      0, 0, 0, 'New', 'New', now_at, now_at, actor.auth_user_id,
-      coalesce(nullif(actor.name, ''), actor.email), actor.email, actor.role,
-      coalesce(nullif(actor.name, ''), actor.email), actor.email, actor.role, p_idempotency_key
-    ) returning * into authorization;
+    if nullif(p_input->>'visa_id', '') is null then
+      -- Omit visa_id so the existing NOT NULL column default is applied.
+      insert into public.visa_authorizations (
+        company_id, visa_no, request_no, visa_allocation_id, visa_batch_line_id,
+        profession, nationality, gender, authorization_no, agency_id, agency,
+        office_country, allocated_qty, received_candidates, interview_passed, mobilized,
+        status, agency_status, created_at, updated_at, updated_by,
+        created_by_name, created_by_email, created_by_role,
+        updated_by_name, updated_by_email, updated_by_role, creation_idempotency_key
+      ) values (
+        actor.company_id, allocation.visa_no, allocation.request_no, allocation.id,
+        allocation.visa_batch_line_id, nullif(trim(p_input->>'profession'), ''),
+        nullif(trim(p_input->>'nationality'), ''), nullif(trim(p_input->>'gender'), ''),
+        trim(p_input->>'authorization_no'), agency.id, agency.name,
+        nullif(trim(p_input->>'office_country'), ''), requested_qty,
+        0, 0, 0, 'New', 'New', now_at, now_at, actor.auth_user_id,
+        coalesce(nullif(actor.name, ''), actor.email), actor.email, actor.role,
+        coalesce(nullif(actor.name, ''), actor.email), actor.email, actor.role,
+        operation_idempotency_key
+      ) returning * into authorization_record;
+    else
+      insert into public.visa_authorizations (
+        company_id, visa_id, visa_no, request_no, visa_allocation_id, visa_batch_line_id,
+        profession, nationality, gender, authorization_no, agency_id, agency,
+        office_country, allocated_qty, received_candidates, interview_passed, mobilized,
+        status, agency_status, created_at, updated_at, updated_by,
+        created_by_name, created_by_email, created_by_role,
+        updated_by_name, updated_by_email, updated_by_role, creation_idempotency_key
+      ) values (
+        actor.company_id, (p_input->>'visa_id')::uuid, allocation.visa_no,
+        allocation.request_no, allocation.id, allocation.visa_batch_line_id,
+        nullif(trim(p_input->>'profession'), ''), nullif(trim(p_input->>'nationality'), ''),
+        nullif(trim(p_input->>'gender'), ''), trim(p_input->>'authorization_no'),
+        agency.id, agency.name, nullif(trim(p_input->>'office_country'), ''), requested_qty,
+        0, 0, 0, 'New', 'New', now_at, now_at, actor.auth_user_id,
+        coalesce(nullif(actor.name, ''), actor.email), actor.email, actor.role,
+        coalesce(nullif(actor.name, ''), actor.email), actor.email, actor.role,
+        operation_idempotency_key
+      ) returning * into authorization_record;
+    end if;
     event_name := 'Created';
   else
     if p_authorization_id is null then raise exception using errcode = '22023', message = 'authorization_id_required'; end if;
-    select * into strict authorization from public.visa_authorizations
-      where id = p_authorization_id for update;
-
-    if exists (
-      select 1 from public.authorization_events
-      where authorization_id = authorization.id and idempotency_key = p_idempotency_key
-    ) then
-      select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at, e.id), '[]'::jsonb)
-      into timeline from public.authorization_events e where e.authorization_id = authorization.id;
-      return jsonb_build_object('authorization', to_jsonb(authorization), 'events', timeline, 'idempotent', true);
-    end if;
 
     if normalized_action in ('send', 'resend', 'cancel') then
-      if actor.role not in ('Admin', 'Company Admin', 'Visa Team')
-        or actor.company_id is distinct from authorization.company_id then
+      if actor.role not in ('Admin', 'Company Admin', 'Visa Team') or actor.company_id is null then
         raise exception using errcode = '42501', message = 'company_authorization_access_denied';
       end if;
-    else
-      if normalized_action not in ('view', 'acknowledge', 'accept', 'reject')
-        or actor.role <> 'Agency' or actor.agency_id is distinct from authorization.agency_id
-        or not exists (
+      select authorization_row.* into strict authorization_record
+      from public.visa_authorizations authorization_row
+      where authorization_row.id = p_authorization_id
+        and authorization_row.company_id = actor.company_id
+      for update;
+    elsif normalized_action in ('view', 'acknowledge', 'accept', 'reject') then
+      if actor.role <> 'Agency' or actor.agency_id is null then
+        raise exception using errcode = '42501', message = 'agency_authorization_access_denied';
+      end if;
+      select authorization_row.* into strict authorization_record
+      from public.visa_authorizations authorization_row
+      where authorization_row.id = p_authorization_id
+        and authorization_row.agency_id = actor.agency_id
+        and exists (
           select 1 from public.agency_company_user_access access
-          where access.user_id = actor.id and access.company_id = authorization.company_id
+          where access.user_id = actor.id and access.company_id = authorization_row.company_id
             and access.agency_id = actor.agency_id and access.status = 'Active'
-        ) then raise exception using errcode = '42501', message = 'agency_authorization_access_denied'; end if;
-      if authorization.sent_at is null then raise exception using errcode = '23514', message = 'authorization_not_sent'; end if;
+        )
+      for update;
+      if authorization_record.sent_at is null then raise exception using errcode = '23514', message = 'authorization_not_sent'; end if;
+    else
+      raise exception using errcode = '22023', message = 'unsupported_authorization_action';
+    end if;
+
+    -- Tenant and actor checks above must complete before any prior result is read.
+    if exists (
+      select 1 from public.authorization_events
+      where authorization_id = authorization_record.id
+        and idempotency_key = operation_idempotency_key
+    ) then
+      select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at, e.id), '[]'::jsonb)
+      into timeline from public.authorization_events e where e.authorization_id = authorization_record.id;
+      return jsonb_build_object('authorization', to_jsonb(authorization_record), 'events', timeline, 'idempotent', true);
     end if;
 
     if normalized_action in ('send', 'resend') then
-      if authorization.status = 'Cancelled' or authorization.agency_id is null then
+      if authorization_record.status = 'Cancelled' or authorization_record.agency_id is null then
         raise exception using errcode = '23514', message = 'authorization_cannot_be_sent';
       end if;
       if not exists (
         select 1 from public.company_agency_access access join public.agencies a on a.id = access.agency_id
-        where access.company_id = actor.company_id and access.agency_id = authorization.agency_id
+        where access.company_id = actor.company_id and access.agency_id = authorization_record.agency_id
           and access.status = 'Active' and a.status = 'Active'
       ) then raise exception using errcode = '42501', message = 'agency_not_active_for_company'; end if;
-      is_resend := authorization.sent_at is not null;
+      is_resend := authorization_record.sent_at is not null;
       if is_resend and normalized_action <> 'resend' then
         raise exception using errcode = '23505', message = 'already_sent_use_resend';
       end if;
@@ -260,10 +297,10 @@ begin
         updated_at = now_at, updated_by = actor.auth_user_id,
         updated_by_name = coalesce(nullif(actor.name, ''), actor.email),
         updated_by_email = actor.email, updated_by_role = actor.role
-      where id = authorization.id returning * into authorization;
+      where id = authorization_record.id returning * into authorization_record;
       event_name := case when is_resend then 'Resent' else 'Sent' end;
     elsif normalized_action = 'cancel' then
-      if authorization.status = 'Cancelled' then raise exception using errcode = '23505', message = 'already_cancelled'; end if;
+      if authorization_record.status = 'Cancelled' then raise exception using errcode = '23505', message = 'already_cancelled'; end if;
       if nullif(trim(p_input->>'cancellation_no'), '') is null
         or coalesce(p_input->>'cancelled_at', '') !~ '^\d{4}-\d{2}-\d{2}$' then
         raise exception using errcode = '22023', message = 'valid_cancellation_details_required';
@@ -274,26 +311,26 @@ begin
         updated_at = now_at, updated_by = actor.auth_user_id,
         updated_by_name = coalesce(nullif(actor.name, ''), actor.email),
         updated_by_email = actor.email, updated_by_role = actor.role
-      where id = authorization.id returning * into authorization;
+      where id = authorization_record.id returning * into authorization_record;
       event_name := 'Cancelled';
     else
       if normalized_action = 'view'
-        and authorization.agency_status in ('Viewed', 'Acknowledged', 'Accepted', 'Rejected') then
+        and authorization_record.agency_status in ('Viewed', 'Acknowledged', 'Accepted', 'Rejected') then
         select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at, e.id), '[]'::jsonb)
-        into timeline from public.authorization_events e where e.authorization_id = authorization.id;
-        return jsonb_build_object('authorization', to_jsonb(authorization), 'events', timeline, 'idempotent', true);
+        into timeline from public.authorization_events e where e.authorization_id = authorization_record.id;
+        return jsonb_build_object('authorization', to_jsonb(authorization_record), 'events', timeline, 'idempotent', true);
       end if;
       if normalized_action = 'view' then
-        if authorization.agency_status <> 'New' then raise exception using errcode = '23514', message = 'invalid_view_transition'; end if;
+        if authorization_record.agency_status <> 'New' then raise exception using errcode = '23514', message = 'invalid_view_transition'; end if;
         next_status := 'Viewed'; event_name := 'Viewed';
       elsif normalized_action = 'acknowledge' then
-        if authorization.agency_status not in ('New', 'Viewed') then raise exception using errcode = '23514', message = 'invalid_acknowledge_transition'; end if;
+        if authorization_record.agency_status not in ('New', 'Viewed') then raise exception using errcode = '23514', message = 'invalid_acknowledge_transition'; end if;
         next_status := 'Acknowledged'; event_name := 'Acknowledged';
       elsif normalized_action = 'accept' then
-        if authorization.agency_status <> 'Acknowledged' then raise exception using errcode = '23514', message = 'invalid_accept_transition'; end if;
+        if authorization_record.agency_status <> 'Acknowledged' then raise exception using errcode = '23514', message = 'invalid_accept_transition'; end if;
         next_status := 'Accepted'; event_name := 'Accepted';
       elsif normalized_action = 'reject' then
-        if authorization.agency_status <> 'Acknowledged' then raise exception using errcode = '23514', message = 'invalid_reject_transition'; end if;
+        if authorization_record.agency_status <> 'Acknowledged' then raise exception using errcode = '23514', message = 'invalid_reject_transition'; end if;
         if reason_text is null or length(reason_text) > 1000 then raise exception using errcode = '22023', message = 'valid_rejection_reason_required'; end if;
         next_status := 'Rejected'; event_name := 'Rejected';
       end if;
@@ -308,19 +345,19 @@ begin
         updated_at = now_at, updated_by = actor.auth_user_id,
         updated_by_name = coalesce(nullif(actor.name, ''), actor.email),
         updated_by_email = actor.email, updated_by_role = actor.role
-      where id = authorization.id returning * into authorization;
+      where id = authorization_record.id returning * into authorization_record;
     end if;
   end if;
 
-  if normalized_action = 'acknowledge' and authorization.viewed_at = now_at then
+  if normalized_action = 'acknowledge' and authorization_record.viewed_at = now_at then
     insert into public.authorization_events (
       authorization_id, company_id, agency_id, event_type, actor_user_id,
       actor_auth_user_id, actor_name, actor_email, actor_role, reason,
       idempotency_key, metadata, created_at
     ) values (
-      authorization.id, authorization.company_id, authorization.agency_id, 'Viewed',
+      authorization_record.id, authorization_record.company_id, authorization_record.agency_id, 'Viewed',
       actor.id, actor.auth_user_id, coalesce(nullif(actor.name, ''), actor.email),
-      actor.email, actor.role, null, p_idempotency_key || ':implicit-view',
+      actor.email, actor.role, null, operation_idempotency_key || ':implicit-view',
       jsonb_build_object('implicit', true), now_at
     );
   end if;
@@ -330,23 +367,23 @@ begin
     actor_auth_user_id, actor_name, actor_email, actor_role, reason,
     idempotency_key, metadata
   ) values (
-    authorization.id, authorization.company_id, authorization.agency_id, event_name,
+    authorization_record.id, authorization_record.company_id, authorization_record.agency_id, event_name,
     actor.id, actor.auth_user_id, coalesce(nullif(actor.name, ''), actor.email),
-    actor.email, actor.role, reason_text, p_idempotency_key,
-    jsonb_build_object('action', normalized_action, 'send_count', authorization.send_count)
+    actor.email, actor.role, reason_text, operation_idempotency_key,
+    jsonb_build_object('action', normalized_action, 'send_count', authorization_record.send_count)
   );
 
   if event_name in ('Sent', 'Resent') then
-    perform public.authorization_workflow_notify(authorization, 'AUTHORIZATION_SENT', null, p_idempotency_key);
+    perform public.authorization_workflow_notify(authorization_record, 'AUTHORIZATION_SENT', null, operation_idempotency_key);
   elsif event_name = 'Accepted' then
-    perform public.authorization_workflow_notify(authorization, 'AUTHORIZATION_ACCEPTED', reason_text, p_idempotency_key);
+    perform public.authorization_workflow_notify(authorization_record, 'AUTHORIZATION_ACCEPTED', reason_text, operation_idempotency_key);
   elsif event_name = 'Rejected' then
-    perform public.authorization_workflow_notify(authorization, 'AUTHORIZATION_REJECTED', reason_text, p_idempotency_key);
+    perform public.authorization_workflow_notify(authorization_record, 'AUTHORIZATION_REJECTED', reason_text, operation_idempotency_key);
   end if;
 
   select coalesce(jsonb_agg(to_jsonb(e) order by e.created_at, e.id), '[]'::jsonb)
-  into timeline from public.authorization_events e where e.authorization_id = authorization.id;
-  return jsonb_build_object('authorization', to_jsonb(authorization), 'events', timeline, 'idempotent', false);
+  into timeline from public.authorization_events e where e.authorization_id = authorization_record.id;
+  return jsonb_build_object('authorization', to_jsonb(authorization_record), 'events', timeline, 'idempotent', false);
 exception
   when no_data_found then
     raise exception using errcode = 'P0002', message = 'protected_resource_not_found';
@@ -384,6 +421,9 @@ declare
   ];
   requested_agency uuid;
   target_company uuid;
+  notification_idempotency_key text;
+  fallback_notification_identity text;
+  updated_count bigint;
 begin
   if actor is null then raise exception using errcode = '42501', message = 'active_application_user_required'; end if;
   if p_payload ? 'company_id' or p_payload ? 'user_id' or p_payload ? 'recipient_role'
@@ -405,16 +445,62 @@ begin
         where access.user_id::text = actor->>'id' and access.company_id = target_company
           and access.agency_id = requested_agency and access.status = 'Active'
       ) then raise exception using errcode = '42501', message = 'agency_company_access_denied'; end if;
-    elsif requested_agency is not null and not exists (
+    elsif actor->>'role' in ('Platform Owner', 'Platform Accounts User') then
+      target_company := nullif(p_payload->>'workspace_company_id', '')::uuid;
+      if target_company is null or not exists (
+        select 1 from public.companies company
+        where company.id = target_company and company.status = 'Active'
+      ) then raise exception using errcode = '42501', message = 'active_workspace_company_required'; end if;
+    elsif actor->>'role' = 'Platform Support User' then
+      raise exception using errcode = '42501', message = 'notification_create_denied';
+    end if;
+
+    if actor->>'role' <> 'Agency' and requested_agency is not null and not exists (
       select 1 from public.company_agency_access access join public.agencies a on a.id = access.agency_id
-      where access.company_id = (actor->>'company_id')::uuid
+      where access.company_id = target_company
         and access.agency_id = requested_agency and access.status = 'Active' and a.status = 'Active'
     ) then raise exception using errcode = '42501', message = 'agency_not_active_for_company'; end if;
+
+    if length(coalesce(p_payload->>'dedupe_key', '')) > 400 then
+      raise exception using errcode = '22023', message = 'notification_dedupe_key_too_long';
+    end if;
+
+    -- Compatibility fallback for non-upgraded trusted callers only. It uses
+    -- stable record identity and never timestamps, message text, or full JSON.
+    -- Callers without a stable record/request identity must provide dedupe_key.
+    if nullif(trim(p_payload->>'dedupe_key'), '') is null then
+      if nullif(trim(p_payload->>'related_table'), '') is null
+        or coalesce(
+          nullif(trim(p_payload->>'related_id'), ''),
+          nullif(trim(p_payload->>'request_no'), '')
+        ) is null then
+        raise exception using errcode = '22023', message = 'notification_dedupe_key_required';
+      end if;
+      fallback_notification_identity := 'fallback:'
+        || (p_payload->>'type') || ':'
+        || left(trim(p_payload->>'related_table'), 120) || ':'
+        || left(coalesce(
+          nullif(trim(p_payload->>'related_id'), ''),
+          nullif(trim(p_payload->>'request_no'), '')
+        ), 500) || ':'
+        || left(coalesce(nullif(trim(p_payload->>'response_status'), ''), 'default'), 120);
+      if length(fallback_notification_identity) > 800 then
+        raise exception using errcode = '22023', message = 'notification_fallback_identity_too_long';
+      end if;
+    end if;
+
+    notification_idempotency_key := 'notification:create:'
+      || (p_payload->>'type') || ':'
+      || coalesce(requested_agency::text, 'company') || ':'
+      || coalesce(
+        nullif(trim(p_payload->>'dedupe_key'), ''),
+        fallback_notification_identity
+      );
 
     insert into public.notification_events (
       company_id, agency_id, agency_name, type, title, message, priority, status,
       related_table, related_id, request_no, response_status, response_at,
-      rejection_reason, sla_started_at, sla_days, sla_due_at, data
+      rejection_reason, sla_started_at, sla_days, sla_due_at, dedupe_key, data
     ) values (
       target_company, requested_agency, left(coalesce(p_payload->>'agency_name', ''), 300),
       p_payload->>'type', left(coalesce(p_payload->>'title', p_payload->>'type'), 300),
@@ -425,8 +511,17 @@ begin
       left(coalesce(p_payload->>'response_status', ''), 120), nullif(p_payload->>'response_at', '')::timestamptz,
       left(coalesce(p_payload->>'rejection_reason', ''), 1000), nullif(p_payload->>'sla_started_at', '')::timestamptz,
       nullif(p_payload->>'sla_days', '')::integer, nullif(p_payload->>'sla_due_at', '')::timestamptz,
-      coalesce(p_payload->'data', '{}'::jsonb)
-    ) returning * into result_row;
+      notification_idempotency_key, coalesce(p_payload->'data', '{}'::jsonb)
+    )
+    on conflict (company_id, dedupe_key) where dedupe_key is not null do nothing
+    returning * into result_row;
+
+    if result_row.id is null then
+      select notification.* into strict result_row
+      from public.notification_events notification
+      where notification.company_id is not distinct from target_company
+        and notification.dedupe_key = notification_idempotency_key;
+    end if;
   elsif p_operation = 'agency_response' then
     if actor->>'role' <> 'Agency' or p_notification_id is null
       or p_payload->>'response_status' not in ('Accepted', 'Rejected')
@@ -443,6 +538,8 @@ begin
       data = coalesce(p_payload->'data', '{}'::jsonb)
     where id = p_notification_id
       and agency_id::text = actor->>'agency_id'
+      and (user_id is null or user_id = auth.uid())
+      and (recipient_role is null or recipient_role = 'Agency')
       and exists (
         select 1 from public.agency_company_user_access access
         where access.user_id::text = actor->>'id'
@@ -456,34 +553,104 @@ begin
     if p_operation = 'mark_read' then
       update public.notification_events set status = 'Read', read_at = now()
       where id = p_notification_id and (
-        (company_id::text = actor->>'company_id' and (
+        (
+          actor->>'role' not in ('Agency', 'Platform Owner', 'Platform Accounts User', 'Platform Support User')
+          and company_id::text = actor->>'company_id' and (
+            (user_id is not null and user_id = auth.uid())
+            or (user_id is null and recipient_role = actor->>'role')
+            or (user_id is null and recipient_role is null)
+          )
+        )
+        or (
+          actor->>'role' = 'Agency'
+          and agency_id::text = actor->>'agency_id'
+          and (user_id is null or user_id = auth.uid())
+          and (recipient_role is null or recipient_role = 'Agency')
+          and exists (
+            select 1 from public.agency_company_user_access access
+            where access.user_id::text = actor->>'id'
+              and access.company_id = notification_events.company_id
+              and access.agency_id = notification_events.agency_id
+              and access.status = 'Active'
+          )
+        )
+        or (
+          actor->>'role' in ('Platform Owner', 'Platform Accounts User')
+          and actor->>'company_id' is null
+          and (
           (user_id is not null and user_id = auth.uid())
           or (user_id is null and recipient_role = actor->>'role')
-          or (user_id is null and recipient_role is null)
-        ))
-        or (actor->>'role' = 'Agency' and agency_id::text = actor->>'agency_id')
+          )
+        )
       ) returning * into result_row;
     else
       delete from public.notification_events where id = p_notification_id and (
-        (company_id::text = actor->>'company_id' and (
+        (
+          actor->>'role' not in ('Agency', 'Platform Owner', 'Platform Accounts User', 'Platform Support User')
+          and company_id::text = actor->>'company_id' and (
+            (user_id is not null and user_id = auth.uid())
+            or (user_id is null and recipient_role = actor->>'role')
+            or (user_id is null and recipient_role is null)
+          )
+        )
+        or (
+          actor->>'role' = 'Agency'
+          and agency_id::text = actor->>'agency_id'
+          and (user_id is null or user_id = auth.uid())
+          and (recipient_role is null or recipient_role = 'Agency')
+          and exists (
+            select 1 from public.agency_company_user_access access
+            where access.user_id::text = actor->>'id'
+              and access.company_id = notification_events.company_id
+              and access.agency_id = notification_events.agency_id
+              and access.status = 'Active'
+          )
+        )
+        or (
+          actor->>'role' in ('Platform Owner', 'Platform Accounts User')
+          and actor->>'company_id' is null
+          and (
           (user_id is not null and user_id = auth.uid())
           or (user_id is null and recipient_role = actor->>'role')
-          or (user_id is null and recipient_role is null)
-        ))
-        or (actor->>'role' = 'Agency' and agency_id::text = actor->>'agency_id')
+          )
+        )
       ) returning * into result_row;
     end if;
   elsif p_operation = 'mark_all_read' then
     update public.notification_events set status = 'Read', read_at = now()
     where status <> 'Read' and (
-      (company_id::text = actor->>'company_id' and (
-        (user_id is not null and user_id = auth.uid())
-        or (user_id is null and recipient_role = actor->>'role')
-        or (user_id is null and recipient_role is null)
-      ))
-      or (actor->>'role' = 'Agency' and agency_id::text = actor->>'agency_id')
+      (
+        actor->>'role' not in ('Agency', 'Platform Owner', 'Platform Accounts User', 'Platform Support User')
+        and company_id::text = actor->>'company_id' and (
+          (user_id is not null and user_id = auth.uid())
+          or (user_id is null and recipient_role = actor->>'role')
+          or (user_id is null and recipient_role is null)
+        )
+      )
+      or (
+        actor->>'role' = 'Agency'
+        and agency_id::text = actor->>'agency_id'
+        and (user_id is null or user_id = auth.uid())
+        and (recipient_role is null or recipient_role = 'Agency')
+        and exists (
+          select 1 from public.agency_company_user_access access
+          where access.user_id::text = actor->>'id'
+            and access.company_id = notification_events.company_id
+            and access.agency_id = notification_events.agency_id
+            and access.status = 'Active'
+        )
+      )
+      or (
+        actor->>'role' in ('Platform Owner', 'Platform Accounts User')
+        and actor->>'company_id' is null
+        and (
+          (user_id is not null and user_id = auth.uid())
+          or (user_id is null and recipient_role = actor->>'role')
+        )
+      )
     );
-    return jsonb_build_object('updated', found);
+    get diagnostics updated_count = row_count;
+    return jsonb_build_object('updated', updated_count);
   else
     raise exception using errcode = '22023', message = 'unsupported_notification_operation';
   end if;

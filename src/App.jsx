@@ -39,6 +39,7 @@ import {
   invokeAuthorizationWorkflow,
   isAuthorizationCompanyActor,
 } from "./authorizationWorkflow.mjs";
+import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
 import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
@@ -1295,9 +1296,12 @@ async function triggerExternalNotification(type, data = {}) {
     return { ok: false, skipped: true, reason: "auth_required" };
   }
 
+  const workspaceCompanyId = data.company_id || currentCompanyId || null;
+  const dedupeKey = await buildNotificationDedupeKey(type, data, workspaceCompanyId);
   const payload = {
-    workspace_company_id: data.company_id || currentCompanyId || null,
+    workspace_company_id: workspaceCompanyId,
     agency_id: data.agency_id || null,
+    dedupe_key: dedupeKey,
     type,
     title: data.title || type,
     message: data.message || data.provider_message || data.candidate_name || type,
@@ -13325,7 +13329,7 @@ async function saveAgreement(statusOverride = "") {
       message: `${payload.agreement_no} sent to ${payload.agency_name} for electronic acceptance.`,
       priority: "Medium",
       related_table: "agency_agreements",
-      related_id: String(agreementEditingId || ""),
+      related_id: String(result.data?.id || agreementEditingId || ""),
       agency_name: payload.agency_name,
     });
 
@@ -14590,7 +14594,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       priority: "Medium",
       status: "Unread",
       related_table: "candidates",
-      related_id: "",
+      related_id: (insertedCandidates || []).map((candidate) => candidate.id).sort().join(","),
       data: {
         agency: agencyName,
         upload_mode: "Agency Talent Pool",
@@ -21738,6 +21742,7 @@ async function createAIAgentManagerBriefNotification() {
 
   await triggerExternalNotification("AI_AGENT_DAILY_BRIEF", {
     company_id: currentCompanyId,
+    dedupe_key: `ai-daily-brief:${new Date().toISOString().slice(0, 10)}`,
     user_id: currentUser?.id || null,
     title,
     message,
