@@ -6445,7 +6445,11 @@ const canManagePlatformSupport = [
 const canManageUsers =
   currentRole === "Admin" || canManagePlatformAccounts;
 const canManagePermissions = currentRole === "Admin";
-const canManageAgencies = ["Admin", "Recruitment Manager"].includes(currentRole);
+const canManageAgencies = [
+  "Admin",
+  "Company Admin",
+  "Recruitment Manager",
+].includes(currentRole);
 const canNotifyAgencies = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canApprovePenalties = ["Admin", "Recruitment Manager", "CEO"].includes(currentRole);
@@ -7276,7 +7280,6 @@ async function saveSelectedAllocations() {
   const [visaLinesDraft, setVisaLinesDraft] = useState([]);
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
-  const [agencyEditingId, setAgencyEditingId] = useState(null);
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
@@ -12618,20 +12621,6 @@ async function saveVisa() {
 
   function resetAgencyForm() {
     setAgencyForm(emptyAgency);
-    setAgencyEditingId(null);
-  }
-
-  function editAgency(item) {
-    setAgencyEditingId(item.id);
-    setAgencyForm({
-      name: item.name || "",
-      country: item.country || "",
-      contact_person: item.contact_person || "",
-      email: item.email || "",
-      phone: item.phone || "",
-      status: item.status || "Active",
-    });
-    setActivePage("Agencies");
   }
 
 function editCompany(company) {
@@ -12931,20 +12920,6 @@ async function saveUser() {
   alert("User management is temporarily restricted during the security migration.");
 }
 
-async function findExistingAgencyByName(name) {
-  const normalizedName = normalize(name);
-  if (!normalizedName) return null;
-
-  const { data, error } = await supabase
-    .from("agencies")
-    .select("*")
-    .range(0, 5000);
-
-  if (error) throw error;
-
-  return (data || []).find((agency) => normalize(agency.name) === normalizedName) || null;
-}
-
 async function saveAgency() {
   if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
   if (!agencyForm.name) return alert("Agency name is required.");
@@ -12958,64 +12933,40 @@ async function saveAgency() {
     email: agencyForm.email || "",
     phone: agencyForm.phone || "",
     status: agencyForm.status || "Active",
-    company_id: null,
-    updated_at: new Date().toISOString(),
   };
 
-  let agencyId = agencyEditingId || null;
-  let linkedExistingAgency = false;
-
   try {
-    if (agencyEditingId) {
-      const { error } = await supabase
-        .from("agencies")
-        .update(payload)
-        .eq("id", agencyEditingId);
+    const { data, error } = await supabase.rpc("company_agency_create", {
+      p_payload: payload,
+    });
 
-      if (error) return alert(error.message);
-    } else {
-      const existingAgency = await findExistingAgencyByName(cleanName);
+    if (error) throw error;
 
-      if (existingAgency) {
-        agencyId = existingAgency.id;
-        linkedExistingAgency = true;
-      } else {
-        const { data, error } = await supabase
-          .from("agencies")
-          .insert([payload])
-          .select("*")
-          .single();
-
-        if (error) return alert(error.message);
-        agencyId = data.id;
-      }
-    }
-
-    if (currentCompanyId && agencyId) {
-      const { error: accessError } = await supabase
-        .from("company_agency_access")
-        .upsert(
-          [{
-            company_id: currentCompanyId,
-            agency_id: agencyId,
-            status: "Active",
-            can_view_requests: true,
-            can_upload_candidates: true,
-            can_update_candidates: true,
-            can_view_interviews: true,
-          }],
-          { onConflict: "company_id,agency_id" }
-        );
-
-      if (accessError) return alert(accessError.message);
-    }
+    resetAgencyForm();
+    await loadAgencies();
+    alert(data?.idempotent
+      ? "This agency is already linked to your company."
+      : "Agency saved and linked to your company.");
   } catch (error) {
-    return alert(error.message || "Agency save failed.");
+    const message = String(error?.message || "");
+    if (message.includes("COMPANY_AGENCY_CREATE_UNAUTHORIZED")) {
+      return alert("You are not authorized to create agencies.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_ALREADY_EXISTS")) {
+      return alert("An agency with the same email or identity already exists.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_USER_INACTIVE")) {
+      return alert("Your user account is inactive.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_COMPANY_INACTIVE")) {
+      return alert("Your company is missing or inactive.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_INVALID_INPUT") ||
+        message.includes("COMPANY_AGENCY_CREATE_INVALID_FIELDS")) {
+      return alert("Agency details are invalid.");
+    }
+    return alert("Agency creation failed unexpectedly. Please try again.");
   }
-
-  resetAgencyForm();
-  await loadAgencies();
-  alert(linkedExistingAgency ? "Existing agency has been linked to this company." : agencyEditingId ? "Agency updated successfully." : "Agency saved and linked to this company.");
 }
   function editUser(user) {
   if (!canCurrentUserEditTargetUser(user)) {
@@ -13046,41 +12997,6 @@ async function saveAgency() {
 async function deleteUser(id) {
   alert("User management is temporarily restricted during the security migration.");
 }
-
-  async function deleteAgency(id) {
-    if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
-
-    if (canManagePlatform) {
-      if (!window.confirm("Delete this agency from the whole platform? This may affect all linked companies.")) return;
-      const { error } = await supabase.from("agencies").delete().eq("id", id);
-      if (error) return alert(error.message);
-      await loadAgencies();
-      return;
-    }
-
-    if (!currentCompanyId) return alert("Company ID is missing.");
-    if (!window.confirm("Remove this agency access from this company? The agency itself will remain available for other companies.")) return;
-
-    const { error: userAccessError } = await supabase
-      .from("agency_company_user_access")
-      .delete()
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", id);
-
-    if (userAccessError) return alert(userAccessError.message);
-
-    const { error: companyAccessError } = await supabase
-      .from("company_agency_access")
-      .delete()
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", id);
-
-    if (companyAccessError) return alert(companyAccessError.message);
-
-    await loadAgencies();
-    await loadUsers();
-    alert("Agency access has been removed from this company.");
-  }
 
 function getAgreementTemplateDefaults(templateType) {
   const type = templateType || "Standard Recruitment SLA";
@@ -35436,7 +35352,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         {activePage === "Agencies" && (
           <>
             {canManageAgencies && (
-            <FormCard title={agencyEditingId ? "Edit Agency" : "Add Agency"}>
+            <FormCard title="Add Agency">
               <div className="form-grid">
                 <Input placeholder="Agency Name" value={agencyForm.name} onChange={(v) => updateForm(setAgencyForm, "name", v)} />
                 <Input placeholder="Country" value={agencyForm.country} onChange={(v) => updateForm(setAgencyForm, "country", v)} />
@@ -35445,10 +35361,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <Input placeholder="Phone" value={agencyForm.phone} onChange={(v) => updateForm(setAgencyForm, "phone", v)} />
                 <Select value={agencyForm.status} onChange={(v) => updateForm(setAgencyForm, "status", v)} placeholder="Status" options={["Active", "Inactive", "Suspended"]} />
               </div>
-              <div className="actions-line"><button className="save-btn" onClick={saveAgency}>{agencyEditingId ? "Update Agency" : "Save Agency"}</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
+              <div className="actions-line"><button className="save-btn" onClick={saveAgency}>Save Agency</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
             </FormCard>
             )}
-            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions">{canManageAgencies ? <><button onClick={() => editAgency(item)}>Edit</button><button className="danger" onClick={() => deleteAgency(item.id)}>Delete</button></> : "-"}</td></tr>)}</tbody></table></TableCard>
+            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions"><span title="Agency editing and deletion require a separate secured administration workflow.">Secured workflow required</span></td></tr>)}</tbody></table></TableCard>
           </>
         )}
 
