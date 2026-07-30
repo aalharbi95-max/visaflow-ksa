@@ -43,6 +43,18 @@ import {
 } from "./authorizationWorkflow.mjs";
 import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
 import {
+  buildAgencyInvitationPayload,
+  canSendAgencyInvitation,
+  createAgencyInvitationAcceptanceError,
+  getAgencyInvitationAcceptanceMessage,
+  getAgencyInvitationCallbackError,
+  getCleanAgencyInvitationUrl,
+  getAgencyInvitationErrorMessage,
+  getAgencyInvitationStatus,
+  isAgencyInvitationUrl,
+  invokeAgencyInvitation,
+} from "./agencyInvitation.mjs";
+import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
   completeWorkspacePasswordRecovery,
@@ -4935,6 +4947,197 @@ function clearWorkspaceRecoveryCallbackUrl() {
   }
 }
 
+function AgencyInvitationPasswordScreen({ onAccepted }) {
+  const [session, setSession] = useState(null);
+  const [form, setForm] = useState({ password: "", confirmation: "" });
+  const [message, setMessage] = useState("Validating your secure agency invitation...");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    let validationSequence = 0;
+    const callbackError = getAgencyInvitationCallbackError(window.location);
+    if (callbackError) {
+      setMessage(getAgencyInvitationAcceptanceMessage(callbackError));
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const acceptSession = async (nextSession) => {
+      const sequence = ++validationSequence;
+      const user = nextSession?.user;
+      if (
+        !user?.id ||
+        user.user_metadata?.account_type !== "agency" ||
+        !user.user_metadata?.provisioning_request_id
+      ) {
+        if (mounted && sequence === validationSequence) {
+          setSession(null);
+          setMessage(
+            getAgencyInvitationAcceptanceMessage(
+              "AGENCY_INVITATION_LINK_INVALID"
+            )
+          );
+        }
+        return;
+      }
+
+      const { data: invitation, error } = await supabase
+        .from("agency_provisioning_requests")
+        .select("id, agency_id, auth_user_id, status")
+        .eq("id", user.user_metadata.provisioning_request_id)
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+
+      if (!mounted || sequence !== validationSequence) return;
+      if (error || !invitation?.id || !invitation.agency_id) {
+        setSession(null);
+        setMessage(
+          getAgencyInvitationAcceptanceMessage(
+            "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+          )
+        );
+        return;
+      }
+      if (invitation.status === "Active") {
+        setSession(null);
+        setMessage(
+          getAgencyInvitationAcceptanceMessage(
+            "AGENCY_INVITATION_LINK_USED"
+          )
+        );
+        return;
+      }
+      if (invitation.status !== "Invitation Sent") {
+        setSession(null);
+        setMessage(
+          getAgencyInvitationAcceptanceMessage(
+            "AGENCY_INVITATION_LINK_INVALID"
+          )
+        );
+        return;
+      }
+
+      setSession(nextSession);
+      setMessage("");
+    };
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        if (mounted) {
+          setMessage(
+            getAgencyInvitationAcceptanceMessage(
+              "AGENCY_INVITATION_LINK_INVALID"
+            )
+          );
+        }
+        return;
+      }
+      void acceptSession(data?.session);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (event, nextSession) => {
+        if (event === "SIGNED_IN" && nextSession?.user) {
+          window.setTimeout(() => void acceptSession(nextSession), 0);
+        }
+      }
+    );
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  async function acceptAgencyInvitation() {
+    if (!session?.user?.id || busy) return;
+    if (form.password.length < 12) {
+      setMessage("Password must be at least 12 characters.");
+      return;
+    }
+    if (form.password !== form.confirmation) {
+      setMessage("Passwords do not match.");
+      return;
+    }
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: form.password,
+      });
+      if (error) throw error;
+
+      const request = await invokeAgencyInvitation(supabase, {
+        action: "activate",
+      });
+      if (request?.status !== "Active") {
+        throw createAgencyInvitationAcceptanceError(
+          "AGENCY_INVITATION_ACTIVATION_FAILED"
+        );
+      }
+
+      const { data: refreshed, error: sessionError } =
+        await supabase.auth.getSession();
+      if (
+        sessionError ||
+        !refreshed?.session?.user?.id ||
+        refreshed.session.user.id !== session.user.id ||
+        refreshed.session.user.user_metadata?.account_type !== "agency"
+      ) {
+        throw createAgencyInvitationAcceptanceError(
+          "AGENCY_INVITATION_LINK_INVALID"
+        );
+      }
+
+      await onAccepted({
+        request,
+        session: refreshed.session,
+      });
+    } catch (error) {
+      setMessage(getAgencyInvitationAcceptanceMessage(error));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="vf-login-shell" dir="ltr" lang="en">
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <div className="vf-login-card" style={{ maxWidth: 520 }}>
+          <h2>Accept agency invitation</h2>
+          <p>Set a password to activate your Office Portal access.</p>
+          <Input
+            type="password"
+            placeholder="New Password"
+            value={form.password}
+            disabled={!session || busy}
+            onChange={(value) =>
+              setForm((current) => ({ ...current, password: value }))
+            }
+          />
+          <Input
+            type="password"
+            placeholder="Confirm Password"
+            value={form.confirmation}
+            disabled={!session || busy}
+            onChange={(value) =>
+              setForm((current) => ({ ...current, confirmation: value }))
+            }
+          />
+          {message && <p>{message}</p>}
+          <button
+            className="save-btn"
+            disabled={!session || busy}
+            onClick={acceptAgencyInvitation}
+          >
+            {busy ? "Activating..." : "Set Password & Accept"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
   const isArabic = language === "AR";
   const initialState = useMemo(
@@ -5529,6 +5732,9 @@ function App() {
     []
   );
   const workspaceRecoveryRequested = workspaceRecoveryState.requested;
+  const [agencyInvitationRequested, setAgencyInvitationRequested] = useState(
+    () => isAgencyInvitationUrl(window.location)
+  );
   const workspaceRecoveryLoginState = useMemo(
     () =>
       getWorkspaceRecoveryLoginGuard({
@@ -7280,6 +7486,8 @@ async function saveSelectedAllocations() {
   const [visaLinesDraft, setVisaLinesDraft] = useState([]);
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
+  const [agencyInvitationStates, setAgencyInvitationStates] = useState({});
+  const [agencyInvitationSendingId, setAgencyInvitationSendingId] = useState("");
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
@@ -7794,6 +8002,8 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAuthorizationWorkflowFeedback(null);
     setVisaAllocations([]);
     setAgencies([]);
+    setAgencyInvitationStates({});
+    setAgencyInvitationSendingId("");
     setAgencyAgreements([]);
     setAgencyScores([]);
     setAgencyScoreHistory([]);
@@ -8077,6 +8287,36 @@ Cancel = إضافتها كوظيفة مستقلة`
   const loadVisaBatchLines = () => loadTable("visa_batch_lines", setVisaBatchLines);
   const loadVisaAuthorizations = () => loadTable("visa_authorizations", setVisaAuthorizations);
   const loadVisaAllocations = () => loadTable("visa_allocations", setVisaAllocations);
+  async function loadAgencyInvitationStates(agencyRows) {
+    const agencyIds = (agencyRows || [])
+      .map((agency) => agency?.id)
+      .filter(Boolean);
+    if (!canManageAgencies || !agencyIds.length) {
+      setAgencyInvitationStates({});
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("agency_provisioning_requests")
+      .select("id, agency_id, status, invitation_sent_at, failed_at, activated_at, updated_at")
+      .in("agency_id", agencyIds)
+      .order("created_at", { ascending: false })
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("agency invitation status:", error.message);
+      setAgencyInvitationStates({});
+      return;
+    }
+
+    const nextStates = {};
+    (data || []).forEach((request) => {
+      const key = String(request.agency_id || "");
+      if (key && !nextStates[key]) nextStates[key] = request;
+    });
+    setAgencyInvitationStates(nextStates);
+  }
+
   async function loadAgencies() {
     if (canManagePlatform) {
       const { data, error } = await supabase
@@ -8178,6 +8418,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     );
 
     setAgencies(rows);
+    await loadAgencyInvitationStates(rows);
   }
   const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
@@ -9700,6 +9941,22 @@ async function loadNotifications() {
 useEffect(() => {
   let mounted = true;
 
+  if (agencyInvitationRequested) {
+    workspaceAuthReadyRef.current = false;
+    currentWorkspaceUserRef.current = null;
+    setWorkspaceAuthReady(false);
+    setValidatedWorkspaceKey("");
+    clearTenantSensitiveState();
+    clearStoredWorkspaceIdentity();
+    setAgencyClientAccess([]);
+    setActiveAgencyCompanyId("");
+    setActiveAgencyCompanyName("");
+    setCurrentUser(null);
+    return () => {
+      mounted = false;
+    };
+  }
+
   if (workspaceRecoveryRequested || workspaceRecoveryLoginGuard) {
     workspaceAuthReadyRef.current = false;
     currentWorkspaceUserRef.current = null;
@@ -9826,7 +10083,11 @@ useEffect(() => {
     mounted = false;
     authListener?.subscription?.unsubscribe();
   };
-}, [workspaceRecoveryRequested, workspaceRecoveryLoginGuard]);
+}, [
+  agencyInvitationRequested,
+  workspaceRecoveryRequested,
+  workspaceRecoveryLoginGuard,
+]);
 
 useEffect(() => {
   currentWorkspaceUserRef.current = currentUser;
@@ -12966,6 +13227,53 @@ async function saveAgency() {
       return alert("Agency details are invalid.");
     }
     return alert("Agency creation failed unexpectedly. Please try again.");
+  }
+}
+
+async function inviteAgency(item) {
+  if (!canManageAgencies) {
+    alert("غير مخول.");
+    return;
+  }
+
+  const key = String(item?.id || "");
+  const currentRequest = agencyInvitationStates[key] || null;
+  const currentStatus = getAgencyInvitationStatus(currentRequest);
+  if (!canSendAgencyInvitation(currentStatus)) {
+    alert("المكتب مدعو مسبقًا.");
+    return;
+  }
+  if (!String(item?.email || "").trim()) {
+    alert("يجب حفظ بريد صحيح للوكالة قبل إرسال الدعوة.");
+    return;
+  }
+
+  setAgencyInvitationSendingId(key);
+  setAgencyInvitationStates((current) => ({
+    ...current,
+    [key]: {
+      ...(current[key] || {}),
+      agency_id: item.id,
+      status: "Provisioning",
+      updated_at: new Date().toISOString(),
+    },
+  }));
+
+  try {
+    const request = await invokeAgencyInvitation(
+      supabase,
+      buildAgencyInvitationPayload(item)
+    );
+    setAgencyInvitationStates((current) => ({
+      ...current,
+      [key]: request,
+    }));
+    alert("تم إرسال الدعوة إلى المكتب.");
+  } catch (error) {
+    alert(getAgencyInvitationErrorMessage(error));
+  } finally {
+    setAgencyInvitationSendingId("");
+    await loadAgencyInvitationStates(agencies);
   }
 }
   function editUser(user) {
@@ -17990,6 +18298,18 @@ async function handleLogin() {
           "تعذر حفظ جلسة تسجيل الدخول الآمنة. حاول تسجيل الدخول مرة أخرى."
         );
         return;
+      }
+
+      if (
+        authData.user.user_metadata?.account_type === "agency" &&
+        authData.user.user_metadata?.provisioning_request_id
+      ) {
+        try {
+          await invokeAgencyInvitation(supabase, { action: "activate" });
+        } catch {
+          alert("تعذر تفعيل دعوة المكتب. تواصل مع مسؤول النظام.");
+          return;
+        }
       }
 
       const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
@@ -28144,7 +28464,79 @@ function exportCurrentPage() {
   return alert("Export is available for lists and reports pages");
 }
 
+async function completeAcceptedAgencyInvitation({ request, session }) {
+  const authUser = session?.user;
+  if (
+    request?.status !== "Active" ||
+    !request?.agency_id ||
+    !authUser?.id ||
+    authUser.user_metadata?.account_type !== "agency" ||
+    authUser.user_metadata?.provisioning_request_id !== request.id
+  ) {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_LINK_INVALID"
+    );
+  }
+
+  const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
+    "get_authenticated_app_user"
+  );
+  if (
+    linkedUserError ||
+    !linkedUser?.id ||
+    linkedUser.auth_user_id !== authUser.id ||
+    normalizeUserRole(linkedUser.role) !== "Agency" ||
+    linkedUser.status !== "Active" ||
+    linkedUser.is_active === false ||
+    !linkedUser.agency_id ||
+    linkedUser.agency_id !== request.agency_id
+  ) {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  const workspaces = await loadAgencyClientAccess(linkedUser, false);
+  const selectedWorkspace =
+    workspaces.find(
+      (workspace) =>
+        workspace.status === "Active" &&
+        workspace.agency_id === linkedUser.agency_id
+    ) || null;
+  if (!selectedWorkspace) {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  const cleanUrl = getCleanAgencyInvitationUrl(window.location);
+  window.history.replaceState(
+    {},
+    "",
+    `${cleanUrl.pathname}${cleanUrl.search}`
+  );
+  setWorkspaceRecoveryLoginGuard(false);
+  activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+  setAgencyClientAccess(workspaces);
+  switchAgencyWorkspace(selectedWorkspace, {
+    silent: true,
+    user: linkedUser,
+  });
+  setSearch("");
+  setFilterStatus("All");
+  setActivePage("Office Portal");
+  setAgencyInvitationRequested(false);
+}
+
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+if (agencyInvitationRequested) {
+  return (
+    <AgencyInvitationPasswordScreen
+      onAccepted={completeAcceptedAgencyInvitation}
+    />
+  );
+}
+
 if (workspaceRecoveryRequested) {
   return <WorkspacePasswordRecoveryScreen language={loginLanguage} />;
 }
@@ -35364,7 +35756,55 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <div className="actions-line"><button className="save-btn" onClick={saveAgency}>Save Agency</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
             </FormCard>
             )}
-            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions"><span title="Agency editing and deletion require a separate secured administration workflow.">Secured workflow required</span></td></tr>)}</tbody></table></TableCard>
+            <TableCard title="Agencies List">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Country</th>
+                    <th>Contact</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agencies.map((item) => {
+                    const invitationStatus = getAgencyInvitationStatus(
+                      agencyInvitationStates[String(item.id)] || null
+                    );
+                    const isSending =
+                      agencyInvitationSendingId === String(item.id);
+                    const canSend = canSendAgencyInvitation(invitationStatus);
+                    return (
+                      <tr key={item.id}>
+                        <td>{item.name}</td>
+                        <td>{item.country}</td>
+                        <td>{item.contact_person}</td>
+                        <td>{item.email}</td>
+                        <td>{item.phone}</td>
+                        <td><Badge value={item.status} /></td>
+                        <td className="table-actions">
+                          <span>{isSending ? "Invitation Sending" : invitationStatus}</span>
+                          <button
+                            disabled={!canSend || isSending}
+                            onClick={() => inviteAgency(item)}
+                            title={
+                              canSend
+                                ? "Send a secure agency invitation"
+                                : "Invitation cannot be resent in this state"
+                            }
+                          >
+                            {isSending ? "Invitation Sending" : "Invite Agency"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </TableCard>
           </>
         )}
 

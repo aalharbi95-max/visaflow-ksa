@@ -1,9 +1,23 @@
 import { readFile } from 'node:fs/promises'
 
-const protectedTables = ['visa_authorizations', 'authorization_events', 'notification_events']
+const protectedTables = [
+  'visa_authorizations',
+  'authorization_events',
+  'notification_events',
+  'users',
+  'agencies',
+  'company_agency_access',
+  'agency_company_user_access',
+  'agency_provisioning_requests',
+  'agency_provisioning_events',
+]
 // Vite's live entry imports App.jsx and the focused workflow module. Historical
 // backup folders under src are intentionally not part of the application graph.
-const productionFiles = ['src/App.jsx', 'src/authorizationWorkflow.mjs']
+const productionFiles = [
+  'src/App.jsx',
+  'src/authorizationWorkflow.mjs',
+  'src/agencyInvitation.mjs',
+]
 const findings = []
 
 for (const file of productionFiles) {
