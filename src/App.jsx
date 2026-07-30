@@ -55,6 +55,12 @@ import {
   invokeAgencyInvitation,
 } from "./agencyInvitation.mjs";
 import {
+  buildAgencyMaintenanceUpdate,
+  buildCompanySettingsUpdate,
+  getAgencyAdministrationErrorMessage,
+  invokeAgencyAdministration,
+} from "./agencyAdministration.mjs";
+import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
   completeWorkspacePasswordRecovery,
@@ -497,6 +503,14 @@ const emptyAgency = {
   email: "",
   phone: "",
   status: "Active",
+};
+
+const emptyAgencyMaintenance = {
+  name: "",
+  country: "",
+  contact_person: "",
+  email: "",
+  phone: "",
 };
 
 const emptyCandidate = {
@@ -6650,12 +6664,15 @@ const canManagePlatformSupport = [
 
 const canManageUsers =
   currentRole === "Admin" || canManagePlatformAccounts;
+const canAdministerCompanySettings =
+  ["Admin", "Company Admin"].includes(currentRole) || isPlatformOwner;
 const canManagePermissions = currentRole === "Admin";
 const canManageAgencies = [
   "Admin",
   "Company Admin",
   "Recruitment Manager",
 ].includes(currentRole);
+const canAdministerAgencies = ["Admin", "Company Admin"].includes(currentRole);
 const canNotifyAgencies = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canApprovePenalties = ["Admin", "Recruitment Manager", "CEO"].includes(currentRole);
@@ -7488,6 +7505,12 @@ async function saveSelectedAllocations() {
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
   const [agencyInvitationStates, setAgencyInvitationStates] = useState({});
   const [agencyInvitationSendingId, setAgencyInvitationSendingId] = useState("");
+  const [agencyMaintenanceId, setAgencyMaintenanceId] = useState("");
+  const [agencyMaintenanceForm, setAgencyMaintenanceForm] = useState(
+    emptyAgencyMaintenance
+  );
+  const [agencyMaintenanceLoading, setAgencyMaintenanceLoading] = useState(false);
+  const [agencyMaintenanceMessage, setAgencyMaintenanceMessage] = useState("");
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
@@ -8004,6 +8027,10 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAgencies([]);
     setAgencyInvitationStates({});
     setAgencyInvitationSendingId("");
+    setAgencyMaintenanceId("");
+    setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    setAgencyMaintenanceLoading(false);
+    setAgencyMaintenanceMessage("");
     setAgencyAgreements([]);
     setAgencyScores([]);
     setAgencyScoreHistory([]);
@@ -13123,29 +13150,23 @@ async function testCompanyEmailSettings() {
 }
 
 async function saveCompany() {
-  if (!canManageUsers) return alert("You do not have permission to manage company settings.");
+  if (!canAdministerCompanySettings) {
+    return alert("You do not have permission to manage company settings.");
+  }
   if (!companyEditingId) return alert("Please select a company to update.");
   if (!companyForm.name) return alert("Company name is required.");
 
-  const payload = {
-    name: companyForm.name,
-    domain: companyForm.domain || "",
-    status: companyForm.status || "Active",
-    subscription_plan: companyForm.subscription_plan || "Trial",
-    subscription_status: companyForm.subscription_status || "Active",
-    subscription_start: companyForm.subscription_start || null,
-    subscription_end: companyForm.subscription_end || null,
-    max_users: Number(companyForm.max_users || 5),
-    notes: companyForm.notes || "",
-  };
-
-  const { error } = await supabase
-    .from("companies")
-    .update(payload)
-    .eq("id", companyEditingId)
-    .eq("id", currentCompanyId);
-
-  if (error) return alert(error.message);
+  try {
+    await invokeAgencyAdministration(supabase, {
+      action: "update_company_settings",
+      company_id: companyEditingId,
+      settings: buildCompanySettingsUpdate(companyForm, {
+        platform: isPlatformOwner,
+      }),
+    });
+  } catch (error) {
+    return alert(getAgencyAdministrationErrorMessage(error));
+  }
 
   setCompanyEditingId(null);
   setCompanyForm({
@@ -13274,6 +13295,91 @@ async function inviteAgency(item) {
   } finally {
     setAgencyInvitationSendingId("");
     await loadAgencyInvitationStates(agencies);
+  }
+}
+
+function beginAgencyMaintenance(item) {
+  if (!canAdministerAgencies || !item?.id) return;
+  setAgencyMaintenanceId(item.id);
+  setAgencyMaintenanceForm({
+    name: item.name || "",
+    country: item.country || "",
+    contact_person: item.contact_person || "",
+    email: item.email || "",
+    phone: item.phone || "",
+  });
+  setAgencyMaintenanceMessage("");
+}
+
+function cancelAgencyMaintenance() {
+  setAgencyMaintenanceId("");
+  setAgencyMaintenanceForm(emptyAgencyMaintenance);
+  setAgencyMaintenanceMessage("");
+}
+
+async function saveAgencyMaintenance() {
+  if (
+    !canAdministerAgencies ||
+    !agencyMaintenanceId ||
+    agencyMaintenanceLoading
+  ) return;
+  if (!String(agencyMaintenanceForm.name || "").trim()) {
+    return setAgencyMaintenanceMessage("Agency name is required.");
+  }
+
+  setAgencyMaintenanceLoading(true);
+  setAgencyMaintenanceMessage("");
+  try {
+    await invokeAgencyAdministration(supabase, {
+      action: "update_agency",
+      agency_id: agencyMaintenanceId,
+      agency: buildAgencyMaintenanceUpdate(agencyMaintenanceForm),
+    });
+    await loadAgencies();
+    setAgencyMaintenanceId("");
+    setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    setAgencyMaintenanceMessage("Agency details updated successfully.");
+  } catch (error) {
+    setAgencyMaintenanceMessage(
+      getAgencyAdministrationErrorMessage(error)
+    );
+  } finally {
+    setAgencyMaintenanceLoading(false);
+  }
+}
+
+async function unlinkExistingAgency(item) {
+  if (!canAdministerAgencies || !item?.id || agencyMaintenanceLoading) return;
+  const confirmed = window.confirm(
+    "Unlink this agency from your company?\n\n" +
+    "Company access will be disabled. The global agency, Supabase Auth user, " +
+    "and public user record will not be deleted."
+  );
+  if (!confirmed) return;
+
+  setAgencyMaintenanceLoading(true);
+  setAgencyMaintenanceMessage("");
+  try {
+    const result = await invokeAgencyAdministration(supabase, {
+      action: "unlink_agency",
+      agency_id: item.id,
+    });
+    await loadAgencies();
+    if (agencyMaintenanceId === item.id) {
+      setAgencyMaintenanceId("");
+      setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    }
+    setAgencyMaintenanceMessage(
+      result?.status === "Suspended"
+        ? "Agency access was suspended. The agency and user records were retained."
+        : "Agency was unlinked. The agency and user records were retained."
+    );
+  } catch (error) {
+    setAgencyMaintenanceMessage(
+      getAgencyAdministrationErrorMessage(error)
+    );
+  } finally {
+    setAgencyMaintenanceLoading(false);
   }
 }
   function editUser(user) {
@@ -24623,9 +24729,10 @@ async function savePlatformClient() {
     if (clientUpdateError) throw clientUpdateError;
 
     if (operationalCompanyId) {
-      const { error: companyUpdateError } = await supabase
-        .from("companies")
-        .update({
+      await invokeAgencyAdministration(supabase, {
+        action: "update_company_settings",
+        company_id: operationalCompanyId,
+        settings: buildCompanySettingsUpdate({
           name: companyName,
           domain: companyPayload.domain,
           status: "Active",
@@ -24634,11 +24741,8 @@ async function savePlatformClient() {
           subscription_start: companyPayload.start_date,
           subscription_end: companyPayload.end_date,
           max_users: companyPayload.users_count || 5,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", operationalCompanyId);
-
-      if (companyUpdateError) throw companyUpdateError;
+        }, { platform: true }),
+      });
     }
 
     // Repair path for an existing company that was previously saved without
@@ -24688,16 +24792,18 @@ async function extendPlatformClient(client, months = 1) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
-        subscription_status: "Active",
-        subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
-
-    if (companyError) return alert(companyError.message);
+    try {
+      await invokeAgencyAdministration(supabase, {
+        action: "update_company_settings",
+        company_id: client.operational_company_id,
+        settings: buildCompanySettingsUpdate({
+          subscription_status: "Active",
+          subscription_end: newEndDate,
+        }, { platform: true }),
+      });
+    } catch (companyError) {
+      return alert(getAgencyAdministrationErrorMessage(companyError));
+    }
   }
 
   await loadPlatformClients();
@@ -24734,16 +24840,18 @@ async function extendPlatformClient(client, days = 30) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
-        subscription_status: "Active",
-        subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
-
-    if (companyError) return alert(companyError.message);
+    try {
+      await invokeAgencyAdministration(supabase, {
+        action: "update_company_settings",
+        company_id: client.operational_company_id,
+        settings: buildCompanySettingsUpdate({
+          subscription_status: "Active",
+          subscription_end: newEndDate,
+        }, { platform: true }),
+      });
+    } catch (companyError) {
+      return alert(getAgencyAdministrationErrorMessage(companyError));
+    }
   }
 
   await loadPlatformClients();
@@ -35431,13 +35539,26 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     <button
                       className={(company.subscription_status || "Active") === "Active" ? "danger" : "save-btn"}
                       onClick={async () => {
+                        if (!isPlatformOwner) {
+                          return alert(
+                            "Only Platform Owner can change subscription status."
+                          );
+                        }
                         const nextStatus = (company.subscription_status || "Active") === "Active" ? "Suspended" : "Active";
-                        const { error } = await supabase
-                          .from("companies")
-                          .update({ subscription_status: nextStatus })
-                          .eq("id", company.id)
-                          .eq("id", currentCompanyId);
-                        if (error) return alert(error.message);
+                        try {
+                          await invokeAgencyAdministration(supabase, {
+                            action: "update_company_settings",
+                            company_id: company.id,
+                            settings: buildCompanySettingsUpdate(
+                              { subscription_status: nextStatus },
+                              { platform: true }
+                            ),
+                          });
+                        } catch (error) {
+                          return alert(
+                            getAgencyAdministrationErrorMessage(error)
+                          );
+                        }
                         await loadCompanies();
                       }}
                     >
@@ -35756,6 +35877,84 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <div className="actions-line"><button className="save-btn" onClick={saveAgency}>Save Agency</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
             </FormCard>
             )}
+            {agencyMaintenanceId && canAdministerAgencies && (
+              <FormCard title="Edit Agency">
+                <div className="form-grid">
+                  <Input
+                    placeholder="Agency Name"
+                    value={agencyMaintenanceForm.name}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        name: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Country"
+                    value={agencyMaintenanceForm.country}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        country: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Contact Person"
+                    value={agencyMaintenanceForm.contact_person}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        contact_person: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Email"
+                    value={agencyMaintenanceForm.email}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        email: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Phone"
+                    value={agencyMaintenanceForm.phone}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        phone: value,
+                      }))
+                    }
+                  />
+                </div>
+                {agencyMaintenanceMessage && (
+                  <p>{agencyMaintenanceMessage}</p>
+                )}
+                <div className="actions-line">
+                  <button
+                    className="save-btn"
+                    disabled={agencyMaintenanceLoading}
+                    onClick={saveAgencyMaintenance}
+                  >
+                    {agencyMaintenanceLoading ? "Saving..." : "Update Agency"}
+                  </button>
+                  <button
+                    className="light-btn"
+                    disabled={agencyMaintenanceLoading}
+                    onClick={cancelAgencyMaintenance}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </FormCard>
+            )}
+            {!agencyMaintenanceId && agencyMaintenanceMessage && (
+              <p>{agencyMaintenanceMessage}</p>
+            )}
             <TableCard title="Agencies List">
               <table>
                 <thead>
@@ -35798,6 +35997,23 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                           >
                             {isSending ? "Invitation Sending" : "Invite Agency"}
                           </button>
+                          {canAdministerAgencies && (
+                            <>
+                              <button
+                                disabled={agencyMaintenanceLoading}
+                                onClick={() => beginAgencyMaintenance(item)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                className="danger-btn"
+                                disabled={agencyMaintenanceLoading}
+                                onClick={() => unlinkExistingAgency(item)}
+                              >
+                                Unlink
+                              </button>
+                            </>
+                          )}
                         </td>
                       </tr>
                     );

@@ -3,6 +3,11 @@ import {
   AgencyInvitationError,
   runAgencyInvitationAction,
 } from "../_shared/agencyInvitationCore.mjs";
+import {
+  AGENCY_ADMINISTRATION_ACTIONS,
+  AgencyAdministrationError,
+  runAgencyAdministrationAction,
+} from "../_shared/agencyAdministrationCore.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -58,13 +63,21 @@ function respond(origin: string | null, status: number, body: unknown) {
 
 function databaseStatus(error: any) {
   const message = String(error?.message || "");
-  if (message.includes("UNAUTHORIZED")) return 403;
+  if (
+    message.includes("UNAUTHORIZED") ||
+    message.includes("TENANT_MISMATCH")
+  ) return 403;
   if (
     message.includes("ALREADY") ||
     message.includes("IN_PROGRESS") ||
-    message.includes("INVALID_STATE")
+    message.includes("INVALID_STATE") ||
+    message.includes("MANUAL_REVIEW")
   ) return 409;
-  if (message.includes("NOT_FOUND") || message.includes("NOT_AVAILABLE")) {
+  if (
+    message.includes("NOT_FOUND") ||
+    message.includes("NOT_AVAILABLE") ||
+    message.includes("NOT_LINKED")
+  ) {
     return 404;
   }
   return 400;
@@ -203,26 +216,55 @@ Deno.serve(async (request) => {
           p_failure_code: code,
         }),
       activate: () => rpc(userClient, "agency_invitation_activate"),
+      updateCompanySettings: ({
+        actor,
+        targetCompanyId,
+        settings,
+      }: any) =>
+        rpc(admin, "workspace_admin_update_company_settings", {
+          p_actor_auth_user_id: actor.authUserId,
+          p_target_company_id: targetCompanyId,
+          p_updates: settings,
+        }),
+      updateAgency: ({ actor, agencyId, updates }: any) =>
+        rpc(admin, "workspace_admin_update_agency", {
+          p_actor_auth_user_id: actor.authUserId,
+          p_agency_id: agencyId,
+          p_updates: updates,
+        }),
+      unlinkAgency: ({ actor, agencyId }: any) =>
+        rpc(admin, "workspace_admin_unlink_agency", {
+          p_actor_auth_user_id: actor.authUserId,
+          p_agency_id: agencyId,
+        }),
     };
 
-    const result = await runAgencyInvitationAction({
-      body,
-      actor,
-      repository,
-      authAdmin: admin.auth.admin,
-      inviteRedirectUrl: INVITE_REDIRECT_URL,
-    });
+    const result = AGENCY_ADMINISTRATION_ACTIONS.includes(body?.action)
+      ? await runAgencyAdministrationAction({
+          body,
+          actor,
+          repository,
+        })
+      : await runAgencyInvitationAction({
+          body,
+          actor,
+          repository,
+          authAdmin: admin.auth.admin,
+          inviteRedirectUrl: INVITE_REDIRECT_URL,
+        });
     return respond(origin, 200, result);
   } catch (error) {
     const caught = error as any;
     const code =
-      error instanceof AgencyInvitationError
+      error instanceof AgencyInvitationError ||
+      error instanceof AgencyAdministrationError
         ? error.code
         : String(caught?.message || "AGENCY_INVITATION_FAILED")
             .match(/[A-Z][A-Z0-9_]{4,}/)?.[0] ||
           "AGENCY_INVITATION_FAILED";
     const status =
-      error instanceof AgencyInvitationError
+      error instanceof AgencyInvitationError ||
+      error instanceof AgencyAdministrationError
         ? error.status
         : databaseStatus(caught);
     console.error("Agency invitation failed", { code, status });
@@ -230,7 +272,8 @@ Deno.serve(async (request) => {
       ok: false,
       code,
       message:
-        error instanceof AgencyInvitationError
+        error instanceof AgencyInvitationError ||
+        error instanceof AgencyAdministrationError
           ? error.message
           : "The agency invitation could not be completed.",
     });
