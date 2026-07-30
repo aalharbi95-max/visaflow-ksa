@@ -43,7 +43,10 @@ import {
 } from "./authorizationWorkflow.mjs";
 import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
 import {
+  AGENCY_PERMISSION_KEYS,
+  DEFAULT_AGENCY_PERMISSIONS,
   buildAgencyInvitationPayload,
+  canInviteAgencyUser,
   canSendAgencyInvitation,
   createAgencyInvitationAcceptanceError,
   getAgencyInvitationAcceptanceMessage,
@@ -6672,6 +6675,10 @@ const canManageAgencies = [
   "Company Admin",
   "Recruitment Manager",
 ].includes(currentRole);
+const canInviteAgencyUsers = canInviteAgencyUser(
+  currentRole,
+  currentUser?.status === "Active" && currentUser?.is_active !== false
+);
 const canAdministerAgencies = ["Admin", "Company Admin"].includes(currentRole);
 const canNotifyAgencies = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
@@ -7504,6 +7511,8 @@ async function saveSelectedAllocations() {
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
   const [agencyInvitationStates, setAgencyInvitationStates] = useState({});
+  const [agencyInvitationPermissions, setAgencyInvitationPermissions] =
+    useState({});
   const [agencyInvitationSendingId, setAgencyInvitationSendingId] = useState("");
   const [agencyMaintenanceId, setAgencyMaintenanceId] = useState("");
   const [agencyMaintenanceForm, setAgencyMaintenanceForm] = useState(
@@ -13252,7 +13261,7 @@ async function saveAgency() {
 }
 
 async function inviteAgency(item) {
-  if (!canManageAgencies) {
+  if (!canInviteAgencyUsers) {
     alert("غير مخول.");
     return;
   }
@@ -13283,7 +13292,10 @@ async function inviteAgency(item) {
   try {
     const request = await invokeAgencyInvitation(
       supabase,
-      buildAgencyInvitationPayload(item)
+      buildAgencyInvitationPayload(
+        item,
+        agencyInvitationPermissions[key] || DEFAULT_AGENCY_PERMISSIONS
+      )
     );
     setAgencyInvitationStates((current) => ({
       ...current,
@@ -35965,6 +35977,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     <th>Email</th>
                     <th>Phone</th>
                     <th>Status</th>
+                    <th>Portal Permissions</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -35984,19 +35997,50 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                         <td>{item.email}</td>
                         <td>{item.phone}</td>
                         <td><Badge value={item.status} /></td>
+                        <td>
+                          <div style={{ display: "grid", gap: "4px", minWidth: 190 }}>
+                            {AGENCY_PERMISSION_KEYS.map((permissionKey) => {
+                              const selected =
+                                agencyInvitationPermissions[String(item.id)] ||
+                                DEFAULT_AGENCY_PERMISSIONS;
+                              return (
+                                <label key={permissionKey} className="check-row">
+                                  <input
+                                    type="checkbox"
+                                    disabled={!canInviteAgencyUsers || !canSend}
+                                    checked={selected[permissionKey] === true}
+                                    onChange={(event) =>
+                                      setAgencyInvitationPermissions((current) => ({
+                                        ...current,
+                                        [String(item.id)]: {
+                                          ...(current[String(item.id)] ||
+                                            DEFAULT_AGENCY_PERMISSIONS),
+                                          [permissionKey]: event.target.checked,
+                                        },
+                                      }))
+                                    }
+                                  />
+                                  {permissionKey.replaceAll("_", " ")}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </td>
                         <td className="table-actions">
                           <span>{isSending ? "Invitation Sending" : invitationStatus}</span>
-                          <button
-                            disabled={!canSend || isSending}
-                            onClick={() => inviteAgency(item)}
-                            title={
-                              canSend
-                                ? "Send a secure agency invitation"
-                                : "Invitation cannot be resent in this state"
-                            }
-                          >
-                            {isSending ? "Invitation Sending" : "Invite Agency"}
-                          </button>
+                          {canInviteAgencyUsers && (
+                            <button
+                              disabled={!canSend || isSending}
+                              onClick={() => inviteAgency(item)}
+                              title={
+                                canSend
+                                  ? "Send a secure agency invitation"
+                                  : "Invitation cannot be resent in this state"
+                              }
+                            >
+                              {isSending ? "Invitation Sending" : "Invite Agency"}
+                            </button>
+                          )}
                           {canAdministerAgencies && (
                             <>
                               <button

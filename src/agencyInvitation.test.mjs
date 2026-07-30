@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  DEFAULT_AGENCY_PERMISSIONS,
   buildAgencyInvitationPayload,
+  canInviteAgencyUser,
   canSendAgencyInvitation,
   getAgencyInvitationAcceptanceMessage,
   getAgencyInvitationCallbackError,
@@ -70,7 +72,35 @@ test("browser payload contains only the action and untrusted agency hint", () =>
     {
       action: "invite_existing",
       agency_id: "agency-a",
+      permissions: DEFAULT_AGENCY_PERMISSIONS,
     }
+  );
+});
+
+test("only active Admin and Company Admin users can create agency login access", () => {
+  assert.equal(canInviteAgencyUser("Admin", true), true);
+  assert.equal(canInviteAgencyUser("Company Admin", true), true);
+  assert.equal(canInviteAgencyUser("Recruitment Manager", true), false);
+  assert.equal(canInviteAgencyUser("Agency", true), false);
+  assert.equal(canInviteAgencyUser("Admin", false), false);
+});
+
+test("agency invitation permissions reject unknown or non-boolean values", () => {
+  assert.throws(
+    () =>
+      buildAgencyInvitationPayload(
+        { id: "agency-a" },
+        { ...DEFAULT_AGENCY_PERMISSIONS, can_delete_requests: true }
+      ),
+    (error) => error.code === "AGENCY_INVITATION_INVALID_PERMISSIONS"
+  );
+  assert.throws(
+    () =>
+      buildAgencyInvitationPayload(
+        { id: "agency-a" },
+        { ...DEFAULT_AGENCY_PERMISSIONS, can_view_requests: "yes" }
+      ),
+    (error) => error.code === "AGENCY_INVITATION_INVALID_PERMISSIONS"
   );
 });
 

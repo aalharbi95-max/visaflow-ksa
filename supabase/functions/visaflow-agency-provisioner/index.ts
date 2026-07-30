@@ -8,47 +8,33 @@ import {
   AgencyAdministrationError,
   runAgencyAdministrationAction,
 } from "../_shared/agencyAdministrationCore.mjs";
+import {
+  AGENCY_PROVISIONER_MAX_BODY_BYTES,
+  buildAgencyProvisionerCorsHeaders,
+  isAllowedInviteRedirect,
+  parseAllowedOrigins,
+  resolveAllowedOrigin,
+  validateAgencyProvisionerRequest,
+} from "../_shared/agencyProvisionerHttp.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const INVITE_REDIRECT_URL = Deno.env.get("AGENCY_INVITE_REDIRECT_URL") || "";
-const ALLOWED_ORIGINS = new Set(
-  String(Deno.env.get("AGENCY_PROVISIONER_ALLOWED_ORIGINS") || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
+const ALLOWED_ORIGINS = parseAllowedOrigins(
+  Deno.env.get("AGENCY_PROVISIONER_ALLOWED_ORIGINS") || ""
 );
-const MAX_BODY_BYTES = 16 * 1024;
 
 function allowedOrigin(origin: string | null) {
-  if (!origin) return "";
-  try {
-    const normalized = new URL(origin).origin;
-    return ALLOWED_ORIGINS.has(normalized) ? normalized : "";
-  } catch {
-    return "";
-  }
+  return resolveAllowedOrigin(origin, ALLOWED_ORIGINS);
 }
 
 function redirectConfigured() {
-  try {
-    const redirect = new URL(INVITE_REDIRECT_URL);
-    return redirect.protocol === "https:" && ALLOWED_ORIGINS.has(redirect.origin);
-  } catch {
-    return false;
-  }
+  return isAllowedInviteRedirect(INVITE_REDIRECT_URL, ALLOWED_ORIGINS);
 }
 
 function corsHeaders(origin: string | null) {
-  const resolved = allowedOrigin(origin);
-  return {
-    ...(resolved ? { "Access-Control-Allow-Origin": resolved } : {}),
-    "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Vary": "Origin",
-  };
+  return buildAgencyProvisionerCorsHeaders(origin, ALLOWED_ORIGINS);
 }
 
 function respond(origin: string | null, status: number, body: unknown) {
@@ -85,21 +71,24 @@ function databaseStatus(error: any) {
 
 Deno.serve(async (request) => {
   const origin = request.headers.get("origin");
-  if (origin && !allowedOrigin(origin)) {
-    return respond(origin, 403, {
+  const preflight = validateAgencyProvisionerRequest({
+    method: request.method,
+    origin,
+    contentLength: Number(request.headers.get("content-length") || 0),
+    allowedOrigins: ALLOWED_ORIGINS,
+  });
+  if (!preflight.ok) {
+    return respond(origin, preflight.status, {
       ok: false,
-      code: "ORIGIN_NOT_ALLOWED",
+      code: preflight.code,
     });
   }
   if (request.method === "OPTIONS") return respond(origin, 204, null);
-  if (request.method !== "POST") {
-    return respond(origin, 405, {
-      ok: false,
-      code: "METHOD_NOT_ALLOWED",
-    });
-  }
-  const contentLength = Number(request.headers.get("content-length") || 0);
-  if (contentLength > MAX_BODY_BYTES) {
+  const rawBody = await request.text();
+  if (
+    new TextEncoder().encode(rawBody).byteLength >
+    AGENCY_PROVISIONER_MAX_BODY_BYTES
+  ) {
     return respond(origin, 413, {
       ok: false,
       code: "REQUEST_TOO_LARGE",
@@ -154,7 +143,7 @@ Deno.serve(async (request) => {
       );
     }
 
-    const body = await request.json();
+    const body = JSON.parse(rawBody);
     const { data: appUser, error: appUserError } = await admin
       .from("users")
       .select("id,auth_user_id,company_id,role,status,is_active")
@@ -181,16 +170,23 @@ Deno.serve(async (request) => {
       return data;
     };
     const repository = {
-      begin: ({ agencyId }: { agencyId: string }) =>
-        rpc(userClient, "agency_invitation_begin", {
+      begin: ({
+        agencyId,
+        permissions,
+      }: {
+        agencyId: string;
+        permissions: Record<string, boolean>;
+      }) =>
+        rpc(userClient, "agency_invitation_begin_v2", {
           p_agency_id: agencyId,
+          p_permissions: permissions,
         }),
       recordAuthUser: ({
         actorAuthUserId,
         requestId,
         authUserId,
       }: Record<string, string>) =>
-        rpc(admin, "agency_invitation_record_auth_user", {
+        rpc(admin, "agency_invitation_record_auth_user_v2", {
           p_actor_auth_user_id: actorAuthUserId,
           p_request_id: requestId,
           p_auth_user_id: authUserId,
@@ -200,7 +196,7 @@ Deno.serve(async (request) => {
         requestId,
         authUserId,
       }: Record<string, string>) =>
-        rpc(admin, "agency_invitation_complete", {
+        rpc(admin, "agency_invitation_complete_v2", {
           p_actor_auth_user_id: actorAuthUserId,
           p_request_id: requestId,
           p_auth_user_id: authUserId,
@@ -209,13 +205,58 @@ Deno.serve(async (request) => {
         actorAuthUserId,
         requestId,
         code,
-      }: Record<string, string>) =>
-        rpc(admin, "agency_invitation_mark_failed", {
+        stage,
+        lastSuccessfulOperation,
+        authUserId,
+        metadata,
+      }: any) =>
+        rpc(admin, "agency_invitation_mark_failed_v2", {
           p_actor_auth_user_id: actorAuthUserId,
           p_request_id: requestId,
           p_failure_code: code,
+          p_failure_stage: stage,
+          p_last_successful_operation: lastSuccessfulOperation,
+          p_auth_user_id: authUserId || null,
+          p_failure_metadata: metadata || {},
         }),
-      activate: () => rpc(userClient, "agency_invitation_activate"),
+      activate: () => rpc(userClient, "agency_invitation_activate_v2"),
+      markActivationFailed: ({ code }: { code: string }) =>
+        rpc(userClient, "agency_invitation_mark_activation_failed", {
+          p_failure_code: code,
+        }),
+      findRecoverableAuthUser: async ({
+        email,
+        requestId,
+        agencyId,
+      }: Record<string, string>) => {
+        const normalizedEmail = String(email || "").trim().toLowerCase();
+        const matches = [];
+        for (let page = 1; page <= 10; page += 1) {
+          const { data, error } = await admin.auth.admin.listUsers({
+            page,
+            perPage: 1000,
+          });
+          if (error) throw error;
+          const users = data?.users || [];
+          matches.push(
+            ...users.filter((user) =>
+              String(user.email || "").trim().toLowerCase() === normalizedEmail &&
+              user.user_metadata?.account_type === "agency" &&
+              user.user_metadata?.provisioning_request_id === requestId &&
+              user.user_metadata?.agency_id === agencyId
+            )
+          );
+          if (users.length < 1000) break;
+        }
+        if (matches.length > 1) {
+          throw new AgencyInvitationError(
+            "AGENCY_INVITATION_MANUAL_REVIEW",
+            "Multiple Auth identities matched the invitation.",
+            409
+          );
+        }
+        return matches[0]?.id || null;
+      },
       updateCompanySettings: ({
         actor,
         targetCompanyId,

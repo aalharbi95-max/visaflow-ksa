@@ -13,6 +13,7 @@ const RM_A = "20000000-0000-4000-8000-000000000001";
 const ADMIN_A = "20000000-0000-4000-8000-000000000002";
 const OFFICER_A = "20000000-0000-4000-8000-000000000003";
 const ADMIN_B = "20000000-0000-4000-8000-000000000004";
+const ADMIN_ROLE_A = "20000000-0000-4000-8000-000000000005";
 const AGENCIES = Array.from(
   { length: 8 },
   (_, index) =>
@@ -268,18 +269,20 @@ function actor(authUserId, role, companyId = COMPANY_A) {
 
 function repositoryFor(authUserId) {
   return {
-    begin: ({ agencyId }) =>
+    begin: ({ agencyId, permissions }) =>
       asAuthenticated(authUserId, async () => {
         const result = await db.query(
-          "select public.agency_invitation_begin($1::uuid) as result",
-          [agencyId]
+          `select public.agency_invitation_begin_v2(
+             $1::uuid, $2::jsonb
+           ) as result`,
+          [agencyId, JSON.stringify(permissions)]
         );
         return result.rows[0].result;
       }),
     recordAuthUser: ({ actorAuthUserId, requestId, authUserId }) =>
       asService(async () => {
         const result = await db.query(
-          `select public.agency_invitation_record_auth_user(
+          `select public.agency_invitation_record_auth_user_v2(
              $1::uuid, $2::uuid, $3::uuid
            ) as result`,
           [actorAuthUserId, requestId, authUserId]
@@ -289,27 +292,44 @@ function repositoryFor(authUserId) {
     complete: ({ actorAuthUserId, requestId, authUserId }) =>
       asService(async () => {
         const result = await db.query(
-          `select public.agency_invitation_complete(
+          `select public.agency_invitation_complete_v2(
              $1::uuid, $2::uuid, $3::uuid
            ) as result`,
           [actorAuthUserId, requestId, authUserId]
         );
         return result.rows[0].result;
       }),
-    markFailed: ({ actorAuthUserId, requestId, code }) =>
+    markFailed: ({
+      actorAuthUserId,
+      requestId,
+      code,
+      stage,
+      lastSuccessfulOperation,
+      authUserId = null,
+      metadata = {},
+    }) =>
       asService(async () => {
         const result = await db.query(
-          `select public.agency_invitation_mark_failed(
-             $1::uuid, $2::uuid, $3::text
+          `select public.agency_invitation_mark_failed_v2(
+             $1::uuid, $2::uuid, $3::text, $4::text, $5::text,
+             $6::uuid, $7::jsonb
            ) as result`,
-          [actorAuthUserId, requestId, code]
+          [
+            actorAuthUserId,
+            requestId,
+            code,
+            stage,
+            lastSuccessfulOperation,
+            authUserId,
+            JSON.stringify(metadata),
+          ]
         );
         return result.rows[0].result;
       }),
     activate: () =>
       asAuthenticated(authUserId, async () => {
         const result = await db.query(
-          "select public.agency_invitation_activate() as result"
+          "select public.agency_invitation_activate_v2() as result"
         );
         return result.rows[0].result;
       }),
@@ -355,10 +375,20 @@ async function invite({
   agencyId,
   companyId = COMPANY_A,
   fail = false,
+  permissions = {
+    can_view_requests: true,
+    can_upload_candidates: true,
+    can_update_candidates: true,
+    can_view_interviews: true,
+  },
 }) {
   const auth = authAdmin({ fail });
   const result = await runAgencyInvitationAction({
-    body: { action: "invite_existing", agency_id: agencyId },
+    body: {
+      action: "invite_existing",
+      agency_id: agencyId,
+      permissions,
+    },
     actor: actor(authUserId, role, companyId),
     repository: repositoryFor(authUserId),
     authAdmin: auth.api,
@@ -377,6 +407,13 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
       ),
       "utf8"
     );
+    const hardeningMigration = await readFile(
+      new URL(
+        "../supabase/migrations/20260730000300_harden_agency_invitation_recovery.sql",
+        import.meta.url
+      ),
+      "utf8"
+    );
     await db.exec(fixtureSql);
 
     await db.exec(`
@@ -388,7 +425,8 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
         ('${RM_A}', 'rm-a@example.test'),
         ('${ADMIN_A}', 'admin-a@example.test'),
         ('${OFFICER_A}', 'officer-a@example.test'),
-        ('${ADMIN_B}', 'admin-b@example.test');
+        ('${ADMIN_B}', 'admin-b@example.test'),
+        ('${ADMIN_ROLE_A}', 'admin-role-a@example.test');
 
       insert into public.users (
         auth_user_id, company_id, name, email, role, status, is_active
@@ -396,7 +434,8 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
         ('${RM_A}', '${COMPANY_A}', 'RM A', 'rm-a@example.test', 'Recruitment Manager', 'Active', true),
         ('${ADMIN_A}', '${COMPANY_A}', 'Admin A', 'admin-a@example.test', 'Company Admin', 'Active', true),
         ('${OFFICER_A}', '${COMPANY_A}', 'Officer A', 'officer-a@example.test', 'Recruitment Officer', 'Active', true),
-        ('${ADMIN_B}', '${COMPANY_B}', 'Admin B', 'admin-b@example.test', 'Company Admin', 'Active', true);
+        ('${ADMIN_B}', '${COMPANY_B}', 'Admin B', 'admin-b@example.test', 'Company Admin', 'Active', true),
+        ('${ADMIN_ROLE_A}', '${COMPANY_A}', 'Admin Role A', 'admin-role-a@example.test', 'Admin', 'Active', true);
     `);
 
     for (let index = 0; index < AGENCIES.length; index += 1) {
@@ -429,20 +468,47 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
     `);
 
     await db.exec(migration);
+    await db.exec(hardeningMigration);
   });
 
   after(async () => {
     await db?.close();
   });
 
-  test("Recruitment Manager sends an invitation", async () => {
+  test("Recruitment Manager is rejected by core and PostgreSQL", async () => {
+    await assert.rejects(
+      invite({
+        authUserId: RM_A,
+        role: "Recruitment Manager",
+        agencyId: AGENCIES[0],
+      }),
+      (error) => error.code === "AGENCY_INVITATION_UNAUTHORIZED"
+    );
+    await assert.rejects(
+      asAuthenticated(RM_A, () =>
+        db.query(
+          `select public.agency_invitation_begin_v2(
+             $1::uuid, $2::jsonb
+           )`,
+          [AGENCIES[0], JSON.stringify({
+            can_view_requests: true,
+            can_upload_candidates: true,
+            can_update_candidates: true,
+            can_view_interviews: true,
+          })]
+        )
+      ),
+      /AGENCY_INVITATION_UNAUTHORIZED/
+    );
+  });
+
+  test("Admin sends an invitation", async () => {
     const { result } = await invite({
-      authUserId: RM_A,
-      role: "Recruitment Manager",
+      authUserId: ADMIN_ROLE_A,
+      role: "Admin",
       agencyId: AGENCIES[0],
     });
     assert.equal(result.request.status, "Invitation Sent");
-    assert.equal(result.request.agency_id, AGENCIES[0]);
   });
 
   test("Company Admin sends an invitation", async () => {
@@ -468,8 +534,15 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
     await assert.rejects(
       asAuthenticated(OFFICER_A, () =>
         db.query(
-          "select public.agency_invitation_begin($1::uuid)",
-          [AGENCIES[2]]
+          `select public.agency_invitation_begin_v2(
+             $1::uuid, $2::jsonb
+           )`,
+          [AGENCIES[2], JSON.stringify({
+            can_view_requests: true,
+            can_upload_candidates: true,
+            can_update_candidates: true,
+            can_view_interviews: true,
+          })]
         )
       ),
       /AGENCY_INVITATION_UNAUTHORIZED/
@@ -479,8 +552,8 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
   test("an agency linked to another company is rejected", async () => {
     await assert.rejects(
       invite({
-        authUserId: RM_A,
-        role: "Recruitment Manager",
+        authUserId: ADMIN_ROLE_A,
+        role: "Admin",
         agencyId: AGENCY_B,
       }),
       /AGENCY_INVITATION_AGENCY_NOT_AVAILABLE/
@@ -496,14 +569,14 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
 
   test("a sent invitation cannot be duplicated", async () => {
     const first = await invite({
-      authUserId: RM_A,
-      role: "Recruitment Manager",
+      authUserId: ADMIN_ROLE_A,
+      role: "Admin",
       agencyId: AGENCIES[3],
     });
     await assert.rejects(
       invite({
-        authUserId: RM_A,
-        role: "Recruitment Manager",
+        authUserId: ADMIN_ROLE_A,
+        role: "Admin",
         agencyId: AGENCIES[3],
       }),
       (error) =>
@@ -518,6 +591,13 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
       [AGENCIES[3]]
     );
     assert.equal(count.rows[0].count, 1);
+    const eventCount = await db.query(
+      `select count(*)::integer as count
+       from public.agency_provisioning_events
+       where request_id = $1::uuid`,
+      [first.result.request.id]
+    );
+    assert.equal(eventCount.rows[0].count, 2);
   });
 
   test("the public user and access use the trusted agency and company", async () => {
@@ -551,10 +631,44 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
     });
   });
 
+  test("selected permission keys are saved without changing company-agency defaults", async () => {
+    const selected = {
+      can_view_requests: true,
+      can_upload_candidates: true,
+      can_update_candidates: false,
+      can_view_interviews: false,
+    };
+    const { result } = await invite({
+      authUserId: ADMIN_A,
+      role: "Company Admin",
+      agencyId: AGENCIES[2],
+      permissions: selected,
+    });
+    const access = await db.query(
+      `select user_access.can_view_requests,
+              user_access.can_upload_candidates,
+              user_access.can_update_candidates,
+              user_access.can_view_interviews,
+              company_access.can_update_candidates as company_can_update,
+              company_access.can_view_interviews as company_can_interview
+       from public.agency_company_user_access as user_access
+       join public.company_agency_access as company_access
+         on company_access.company_id = user_access.company_id
+        and company_access.agency_id = user_access.agency_id
+       where user_access.user_id = $1::bigint`,
+      [result.request.public_user_id]
+    );
+    assert.deepEqual(access.rows[0], {
+      ...selected,
+      company_can_update: true,
+      company_can_interview: true,
+    });
+  });
+
   test("an agency user receives no access to another company", async () => {
     const { result, auth } = await invite({
-      authUserId: RM_A,
-      role: "Recruitment Manager",
+      authUserId: ADMIN_ROLE_A,
+      role: "Admin",
       agencyId: AGENCIES[5],
     });
     const activated = await runAgencyInvitationAction({
@@ -583,8 +697,8 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
   test("email delivery failure records Failed without partial linking", async () => {
     await assert.rejects(
       invite({
-        authUserId: RM_A,
-        role: "Recruitment Manager",
+        authUserId: ADMIN_ROLE_A,
+        role: "Admin",
         agencyId: AGENCIES[6],
         fail: true,
       }),
@@ -609,8 +723,8 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
     assert.equal(links.rows[0].count, 0);
 
     const retry = await invite({
-      authUserId: RM_A,
-      role: "Recruitment Manager",
+      authUserId: ADMIN_ROLE_A,
+      role: "Admin",
       agencyId: AGENCIES[6],
     });
     assert.equal(retry.result.request.status, "Invitation Sent");
@@ -621,6 +735,13 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
       [AGENCIES[6]]
     );
     assert.equal(requestCount.rows[0].count, 1);
+    const attempts = await db.query(
+      `select attempt_count
+       from public.agency_provisioning_requests
+       where agency_id = $1::uuid`,
+      [AGENCIES[6]]
+    );
+    assert.equal(attempts.rows[0].attempt_count, 2);
   });
 
   test("accepting the invitation changes the state to Accepted", async () => {

@@ -1,6 +1,18 @@
 export const AGENCY_INVITATION_FUNCTION = "visaflow-agency-provisioner";
 export const AGENCY_INVITATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 export const AGENCY_INVITATION_SENDING_TIMEOUT_MS = 5 * 60 * 1000;
+export const AGENCY_PERMISSION_KEYS = Object.freeze([
+  "can_view_requests",
+  "can_upload_candidates",
+  "can_update_candidates",
+  "can_view_interviews",
+]);
+export const DEFAULT_AGENCY_PERMISSIONS = Object.freeze({
+  can_view_requests: true,
+  can_upload_candidates: true,
+  can_update_candidates: true,
+  can_view_interviews: true,
+});
 
 const ERROR_MESSAGES = Object.freeze({
   AGENCY_INVITATION_ALREADY_SENT: "المكتب مدعو مسبقًا.",
@@ -139,10 +151,36 @@ export function canSendAgencyInvitation(status) {
   return ["Not Invited", "Failed", "Expired"].includes(status);
 }
 
-export function buildAgencyInvitationPayload(agency) {
+export function canInviteAgencyUser(role, isActive = true) {
+  return (
+    isActive === true &&
+    ["Admin", "Company Admin"].includes(String(role || ""))
+  );
+}
+
+export function normalizeAgencyPermissionSelection(value) {
+  const source = value || DEFAULT_AGENCY_PERMISSIONS;
+  const unknown = Object.keys(source).filter(
+    (key) => !AGENCY_PERMISSION_KEYS.includes(key)
+  );
+  if (
+    unknown.length ||
+    AGENCY_PERMISSION_KEYS.some((key) => typeof source[key] !== "boolean")
+  ) {
+    const error = new Error("Agency permissions contain unsupported values.");
+    error.code = "AGENCY_INVITATION_INVALID_PERMISSIONS";
+    throw error;
+  }
+  return Object.fromEntries(
+    AGENCY_PERMISSION_KEYS.map((key) => [key, source[key]])
+  );
+}
+
+export function buildAgencyInvitationPayload(agency, permissions) {
   return {
     action: "invite_existing",
     agency_id: String(agency?.id || "").trim(),
+    permissions: normalizeAgencyPermissionSelection(permissions),
   };
 }
 
