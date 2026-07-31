@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   getCompanyAdminPages,
+  getWorkspaceRoleLabel,
   normalizeWorkspaceRole,
 } from "./workspacePermissions.mjs";
 
 test("Company Admin uses the full tenant Admin policy", () => {
   assert.equal(normalizeWorkspaceRole("Company Admin", ["Admin", "Viewer"]), "Admin");
+  assert.equal(getWorkspaceRoleLabel("Company Admin"), "Company Admin");
 });
 
 test("Company Admin pages include operations and exclude platform administration", () => {

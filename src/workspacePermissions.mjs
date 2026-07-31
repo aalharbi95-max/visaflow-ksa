@@ -10,6 +10,10 @@ export function normalizeWorkspaceRole(role, roleOptions = []) {
   return matchedRole || value || "Viewer";
 }
 
+export function getWorkspaceRoleLabel(role) {
+  return String(role || "Viewer").trim() || "Viewer";
+}
+
 export function getCompanyAdminPages(pages = [], platformPages = []) {
   return [...pages.filter((page) => !platformPages.includes(page)), "RequestDetails"];
 }

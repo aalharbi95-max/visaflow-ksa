@@ -22,6 +22,7 @@ import {
 } from "./workspaceContext.mjs";
 import {
   getCompanyAdminPages,
+  getWorkspaceRoleLabel,
   normalizeWorkspaceRole,
 } from "./workspacePermissions.mjs";
 import {
@@ -8128,6 +8129,7 @@ Cancel = إضافتها كوظيفة مستقلة`
   function activateWorkspaceUser(user, { persist = true, legacy = false } = {}) {
     const normalizedUser = {
       ...user,
+      role_label: getWorkspaceRoleLabel(user?.role),
       role: normalizeUserRole(user?.role),
     };
     clearTenantSensitiveState();
@@ -29217,7 +29219,7 @@ if (!currentUser) {
         </div>
         <div className="user-box">
           <strong>{currentUser.name}</strong>
-          <span>{currentUser.role}</span>
+          <span>{currentUser.role_label || currentUser.role}</span>
           {currentRole === "Agency" && (
             <span style={{ marginTop: "6px", color: "#bfdbfe", fontSize: "12px" }}>
               Client: {getActiveAgencyWorkspaceName()}
