@@ -222,7 +222,8 @@ test("App uses the Edge Function and contains no invitation table writes", async
   assert.match(app, /AgencyInvitationPasswordScreen/);
   assert.match(app, /auth\.updateUser\(\{\s*password:/);
   assert.match(app, /setActivePage\("Office Portal"\)/);
-  assert.match(app, /get_authenticated_app_user/);
+  assert.match(app, /loadAuthenticatedWorkspaceContext/);
+  assert.doesNotMatch(app, /get_authenticated_app_user/);
   assert.match(app, /agency_company_user_access/);
   assert.doesNotMatch(
     app,

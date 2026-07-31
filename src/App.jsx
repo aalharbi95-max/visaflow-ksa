@@ -17,6 +17,10 @@ import {
   verifyWorkspaceAuthSession,
 } from "./authSession.mjs";
 import {
+  getWorkspaceLoginErrorMessage,
+  loadAuthenticatedWorkspaceContext,
+} from "./workspaceContext.mjs";
+import {
   buildPublicViewUrl,
   getPublicViewFromLocation,
   PUBLIC_VIEW,
@@ -10074,15 +10078,20 @@ useEffect(() => {
       return;
     }
 
-    const { data: linkedUser, error } = await supabase.rpc("get_authenticated_app_user");
+    let workspaceContext = null;
+    let linkedUser = null;
+    try {
+      workspaceContext = await loadAuthenticatedWorkspaceContext(
+        supabase,
+        verifiedAuth.authUser.id
+      );
+      linkedUser = workspaceContext.actor;
+    } catch {
+      // Reconciliation is intentionally silent; manual sign-in shows the safe cause.
+    }
     if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
 
-    const linkedUserMatchesSession = Boolean(
-      !error &&
-      linkedUser?.id &&
-      linkedUser?.auth_user_id &&
-      String(linkedUser.auth_user_id) === String(verifiedAuth.authUser.id)
-    );
+    const linkedUserMatchesSession = Boolean(linkedUser?.id);
     reportSafeAuthDiagnostics(
       verifiedAuth.session,
       linkedUser,
@@ -10098,7 +10107,11 @@ useEffect(() => {
       return;
     }
 
-    activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+    activateWorkspaceUser({
+      ...linkedUser,
+      company_name: workspaceContext?.company?.name || "",
+      subscription_status: workspaceContext?.company?.subscription_status || "",
+    }, { persist: true, legacy: false });
     if (transition.shouldResetPage) {
       const nextRole = normalizeUserRole(linkedUser.role);
       setActivePage((ROLE_PAGES[nextRole] || ROLE_PAGES.Viewer)[0]);
@@ -18384,10 +18397,16 @@ async function handleLogin() {
       password,
     });
 
-    let userData = null;
+    if (authError || !authData?.user?.id) {
+      await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      setWorkspaceAuthReady(true);
+      alert(getWorkspaceLoginErrorMessage("auth", authError));
+      return;
+    }
 
-    if (!authError && authData?.user?.id) {
-      const verifiedSession = authData.session || null;
+    let userData = null;
+    let workspaceContext = null;
+    const verifiedSession = authData.session || null;
       if (
         !verifiedSession?.access_token ||
         !verifiedSession?.user?.id ||
@@ -18430,9 +18449,23 @@ async function handleLogin() {
         }
       }
 
-      const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
-        "get_authenticated_app_user"
-      );
+      try {
+        workspaceContext = await loadAuthenticatedWorkspaceContext(
+          supabase,
+          verifiedSession.user.id
+        );
+      } catch (error) {
+        reportSafeAuthDiagnostics(
+          persistedAuth.session,
+          null,
+          "password_sign_in_workspace_failed",
+          persistedAuth.authUser
+        );
+        alert(getWorkspaceLoginErrorMessage("workspace", error));
+        return;
+      }
+
+      const linkedUser = workspaceContext.actor;
 
       reportSafeAuthDiagnostics(
         persistedAuth.session,
@@ -18441,86 +18474,15 @@ async function handleLogin() {
         persistedAuth.authUser
       );
 
-      if (
-        linkedUserError ||
-        !linkedUser?.auth_user_id ||
-        String(linkedUser.auth_user_id) !== String(verifiedSession.user.id)
-      ) {
-        alert("Invalid email or password");
-        return;
-      }
-
       userData = linkedUser;
-    } else {
-      // A legacy browser session must not inherit a different Supabase Auth identity.
-      legacyWorkspaceActiveRef.current = true;
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        legacyWorkspaceActiveRef.current = false;
-        alert("Login failed. Please try again.");
-        return;
-      }
-
-      const { data: legacyResult, error: legacyError } = await supabase.rpc(
-        "legacy_app_login",
-        { p_email: email, p_password: password }
-      );
-
-      if (legacyError || !legacyResult?.ok || !legacyResult?.user) {
-        legacyWorkspaceActiveRef.current = false;
-        setWorkspaceAuthReady(true);
-        alert("Invalid email or password");
-        return;
-      }
-
-      userData = legacyResult.user;
-    }
 
     const userStatus = String(userData.status || "").trim().toLowerCase();
     if (userStatus !== "active" || userData.is_active === false) {
-      alert("This user is not active");
+      alert("Your account is inactive.");
       return;
     }
 
-    let companyData = null;
-
-    if (userData.company_id) {
-      const { data: company, error: companyError } = await supabase
-        .from("companies")
-        .select("id, name, status, subscription_status, subscription_end")
-        .eq("id", userData.company_id)
-        .maybeSingle();
-
-      if (companyError) {
-        console.warn("Company check failed:", companyError.message);
-      }
-
-      companyData = company;
-
-      const companyStatus = String(companyData?.status || "").trim().toLowerCase();
-      const subscriptionStatus = String(companyData?.subscription_status || "").trim().toLowerCase();
-
-      // Important:
-      // If companyData is null, the frontend likely cannot read the companies table
-      // because of RLS / policy settings. Do not block login in this case.
-      // The user's company_id will still isolate all operational data through currentCompanyId.
-      if (companyData) {
-        if (companyStatus !== "active" || !isLoginAllowedSubscriptionStatus(subscriptionStatus)) {
-          alert("Company subscription is not active. Please contact the system administrator.");
-          return;
-        }
-
-        if (companyData.subscription_end) {
-          const endDate = new Date(companyData.subscription_end);
-          endDate.setHours(23, 59, 59, 999);
-          if (endDate < new Date()) {
-            alert("Company subscription has expired. Please contact the system administrator.");
-            return;
-          }
-        }
-      }
-    }
+    const companyData = workspaceContext.company;
 
     const loggedUser = {
       ...userData,
@@ -18555,7 +18517,7 @@ async function handleLogin() {
     setWorkspaceRecoveryLoginGuard(false);
     activateWorkspaceUser(loggedUser, {
       persist: true,
-      legacy: !loggedUser.auth_user_id,
+      legacy: false,
     });
     setActivePage((ROLE_PAGES[loggedUser.role] || ROLE_PAGES.Viewer)[0]);
   } finally {
@@ -28598,11 +28560,19 @@ async function completeAcceptedAgencyInvitation({ request, session }) {
     );
   }
 
-  const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
-    "get_authenticated_app_user"
-  );
+  let workspaceContext;
+  try {
+    workspaceContext = await loadAuthenticatedWorkspaceContext(
+      supabase,
+      authUser.id
+    );
+  } catch {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+    );
+  }
+  const linkedUser = workspaceContext.actor;
   if (
-    linkedUserError ||
     !linkedUser?.id ||
     linkedUser.auth_user_id !== authUser.id ||
     normalizeUserRole(linkedUser.role) !== "Agency" ||
