@@ -21,6 +21,10 @@ import {
   loadAuthenticatedWorkspaceContext,
 } from "./workspaceContext.mjs";
 import {
+  getCompanyAdminPages,
+  normalizeWorkspaceRole,
+} from "./workspacePermissions.mjs";
+import {
   buildPublicViewUrl,
   getPublicViewFromLocation,
   PUBLIC_VIEW,
@@ -6439,14 +6443,7 @@ const [subscriptionInvoiceForm, setSubscriptionInvoiceForm] = useState(emptySubs
 const [supportTicketForm, setSupportTicketForm] = useState(emptySupportTicket);
 
 function normalizeUserRole(role) {
-  const value = String(role || "Viewer").trim();
-  if (value === "Recruitment") return "Recruitment Officer";
-
-  const matchedRole = ROLE_OPTIONS.find(
-    (item) => item.toLowerCase() === value.toLowerCase()
-  );
-
-  return matchedRole || value || "Viewer";
+  return normalizeWorkspaceRole(role, ROLE_OPTIONS);
 }
 
 const currentRole = normalizeUserRole(currentUser?.role);
@@ -6497,7 +6494,7 @@ const ROLE_PAGES = {
 "Platform Support User": PLATFORM_SUPPORT_PAGES,
 
   // Company Admin: full tenant administration and all company operations, excluding SaaS platform screens.
-  Admin: [...PAGES.filter((page) => !PLATFORM_PAGES.includes(page)), "RequestDetails"],
+  Admin: getCompanyAdminPages(PAGES, PLATFORM_PAGES),
 
   // CEO: executive visibility and read-only reporting.
   CEO: [
