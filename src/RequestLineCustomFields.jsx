@@ -19,9 +19,8 @@ export default function RequestLineCustomFields({
       <Select
         value={value.nationality}
         onChange={(nextValue) => onFieldChange("nationality", nextValue)}
-        placeholder="Nationality"
+        placeholder="Nationality / الجنسية"
         searchable
-        allowCustomValue
         options={nationalityOptions}
       />
     </>

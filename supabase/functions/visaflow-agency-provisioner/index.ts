@@ -21,6 +21,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const INVITE_REDIRECT_URL = Deno.env.get("AGENCY_INVITE_REDIRECT_URL") || "";
+const EMAIL_DISPATCHER_INTERNAL_SECRET = Deno.env.get("VISAFLOW_EMAIL_DISPATCHER_SECRET") || "";
 const ALLOWED_ORIGINS = parseAllowedOrigins(
   Deno.env.get("AGENCY_PROVISIONER_ALLOWED_ORIGINS") || ""
 );
@@ -173,23 +174,30 @@ Deno.serve(async (request) => {
       begin: ({
         agencyId,
         permissions,
+        action,
       }: {
         agencyId: string;
         permissions: Record<string, boolean>;
+        action: string;
       }) =>
-        rpc(userClient, "agency_invitation_begin_v2", {
+        rpc(userClient, "agency_invitation_begin_v3", {
           p_agency_id: agencyId,
           p_permissions: permissions,
+          p_action: action,
         }),
+      revoke: ({ agencyId }: { agencyId: string }) =>
+        rpc(userClient, "agency_invitation_revoke_v1", { p_agency_id: agencyId }),
       recordAuthUser: ({
         actorAuthUserId,
         requestId,
         authUserId,
-      }: Record<string, string>) =>
-        rpc(admin, "agency_invitation_record_auth_user_v2", {
+        existingIdentity,
+      }: Record<string, any>) =>
+        rpc(admin, "agency_invitation_record_auth_user_v3", {
           p_actor_auth_user_id: actorAuthUserId,
           p_request_id: requestId,
           p_auth_user_id: authUserId,
+          p_existing_identity: existingIdentity === true,
         }),
       complete: ({
         actorAuthUserId,
@@ -255,7 +263,59 @@ Deno.serve(async (request) => {
             409
           );
         }
-        return matches[0]?.id || null;
+        return matches[0]
+          ? { authUserId: matches[0].id, existingIdentity: matches[0].user_metadata?.existing_identity === true }
+          : null;
+      },
+      findExistingAuthUser: async ({ email, agencyId, requestId }: Record<string, string>) => {
+        const normalizedEmail = String(email || "").trim().toLowerCase();
+        const escapedEmailPattern = normalizedEmail.replace(/[\\%_]/g, "\\$&");
+        const matches = [];
+        for (let page = 1; page <= 10; page += 1) {
+          const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+          if (error) throw error;
+          const users = data?.users || [];
+          matches.push(...users.filter((user) => String(user.email || "").trim().toLowerCase() === normalizedEmail));
+          if (users.length < 1000) break;
+        }
+        if (matches.length !== 1) {
+          if (matches.length > 1) throw new AgencyInvitationError("AGENCY_INVITATION_MANUAL_REVIEW", "Multiple Auth identities matched the email.", 409);
+          return null;
+        }
+        const authUserId = String(matches[0].id);
+        const [{ data: byAuth, error: byAuthError }, { data: byEmail, error: byEmailError }] = await Promise.all([
+          admin.from("users").select("id, auth_user_id, email, role, agency_id").eq("auth_user_id", authUserId).limit(2),
+          admin.from("users").select("id, auth_user_id, email, role, agency_id").ilike("email", escapedEmailPattern).limit(2),
+        ]);
+        if (byAuthError) throw byAuthError;
+        if (byEmailError) throw byEmailError;
+        const publicRows = [...(byAuth || []), ...(byEmail || [])].filter((row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index);
+        if (publicRows.some((row) => row.role !== "Agency" || String(row.agency_id || "") !== agencyId || (row.auth_user_id && String(row.auth_user_id) !== authUserId))) {
+          throw new AgencyInvitationError("AGENCY_INVITATION_EMAIL_ALREADY_ASSIGNED", "The existing account is assigned to another role or agency.", 409);
+        }
+        const declaredAccountType = String(matches[0].user_metadata?.account_type || matches[0].app_metadata?.account_type || "").toLowerCase();
+        if (declaredAccountType && declaredAccountType !== "agency") {
+          throw new AgencyInvitationError("AGENCY_INVITATION_EMAIL_ALREADY_ASSIGNED", "The existing account is assigned to another account type.", 409);
+        }
+        const { error: metadataError } = await admin.auth.admin.updateUserById(authUserId, {
+          user_metadata: { ...(matches[0].user_metadata || {}), account_type: "agency",
+            provisioning_request_id: requestId,
+            agency_id: agencyId,
+            existing_identity: true },
+        });
+        if (metadataError) throw metadataError;
+        return authUserId;
+      },
+      deliverInvitation: async ({ requestId, actionLink }: { requestId: string; actionLink: string }) => {
+        if (!EMAIL_DISPATCHER_INTERNAL_SECRET) throw new Error("Email dispatcher is not configured.");
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/visaflow-email-dispatcher`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-visaflow-email-secret": EMAIL_DISPATCHER_INTERNAL_SECRET },
+          body: JSON.stringify({ message_type: "AGENCY_USER_INVITATION", request_id: requestId, variables: { action_url: actionLink } }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result?.ok !== true) throw new Error(String(result?.error || "email_dispatch_failed"));
+        return result;
       },
       updateCompanySettings: ({
         actor,

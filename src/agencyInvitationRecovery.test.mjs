@@ -28,11 +28,13 @@ function recoveryHarness({
       agency_id: "agency-a",
       admin_email: "agency@example.test",
       auth_user_id: null,
+      auth_identity_preexisting: false,
       status: "Provisioning",
       attempt_count: 0,
     },
     authUsers: [],
     authCalls: 0,
+    deliveryCalls: 0,
     recordCalls: 0,
     completeCalls: 0,
     invitationRows: 0,
@@ -56,12 +58,19 @@ function recoveryHarness({
         )?.id || null
       );
     },
-    async recordAuthUser({ authUserId }) {
+    async findExistingAuthUser() { return null; },
+    async deliverInvitation({ requestId, actionLink }) {
+      state.deliveryCalls += 1;
+      assert.equal(requestId, state.request.id);
+      assert.match(actionLink, /^https:\/\/supabase\.example\.test\/auth\/v1\/verify/);
+    },
+    async recordAuthUser({ authUserId, existingIdentity }) {
       state.recordCalls += 1;
       if (state.recordCalls <= recordFailures) {
         throw new Error("record failed");
       }
       state.request.auth_user_id = authUserId;
+      state.request.auth_identity_preexisting = existingIdentity === true;
     },
     async complete({ authUserId }) {
       state.completeCalls += 1;
@@ -83,19 +92,17 @@ function recoveryHarness({
   };
 
   const authAdmin = {
-    async inviteUserByEmail(email, options) {
+    async generateLink({ type, email, options }) {
       state.authCalls += 1;
       if (authFailure) {
         return { data: null, error: new Error("mail provider failed") };
       }
-      const user = {
-        id: "auth-agency-a",
-        email,
-        requestId: options.data.provisioning_request_id,
-        agencyId: options.data.agency_id,
-      };
-      state.authUsers.push(user);
-      return { data: { user }, error: null };
+      let user = state.authUsers.find((item) => item.email === email);
+      if (!user) {
+        user = { id: "auth-agency-a", email, requestId: options.data.provisioning_request_id, agencyId: options.data.agency_id };
+        state.authUsers.push(user);
+      }
+      return { data: { user, properties: { action_link: `https://supabase.example.test/auth/v1/verify?type=${type}` } }, error: null };
     },
   };
 
@@ -147,7 +154,7 @@ test("retry after Auth creation reuses the same identity without a second Auth u
   const result = await harness.run();
   assert.equal(result.request.status, "Invitation Sent");
   assert.equal(result.request.auth_user_id, "auth-agency-a");
-  assert.equal(harness.state.authCalls, 1);
+  assert.equal(harness.state.authCalls, 2);
   assert.equal(harness.state.authUsers.length, 1);
   assert.equal(harness.state.invitationRows, 1);
 });
@@ -166,7 +173,7 @@ test("finalization retry resumes after the recorded Auth identity", async () => 
 
   const result = await harness.run();
   assert.equal(result.request.status, "Invitation Sent");
-  assert.equal(harness.state.authCalls, 1);
+  assert.equal(harness.state.authCalls, 2);
   assert.equal(harness.state.invitationRows, 1);
 });
 
@@ -245,4 +252,43 @@ test("activation failure records a resumable activation stage", async () => {
     stage: "ACTIVATION",
     lastSuccessfulOperation: "INVITATION_SENT",
   });
+});
+
+test("an existing compatible Auth identity receives a recovery invitation link", async () => {
+  let generatedType = "";
+  let recordedAsPreexisting = false;
+  const result = await runAgencyInvitationAction({
+    body: { action: "resend_invitation", agency_id: "agency-a", permissions: DEFAULT_AGENCY_PERMISSIONS },
+    actor: activeActor(),
+    repository: {
+      begin: async () => ({ id: "request-a", agency_id: "agency-a", admin_email: "agency@example.test", auth_user_id: null, outcome: "resend" }),
+      findRecoverableAuthUser: async () => null,
+      findExistingAuthUser: async () => "existing-auth",
+      deliverInvitation: async ({ actionLink }) => assert.match(actionLink, /type=recovery/),
+      recordAuthUser: async ({ authUserId, existingIdentity }) => {
+        assert.equal(authUserId, "existing-auth");
+        recordedAsPreexisting = existingIdentity;
+      },
+      complete: async () => ({ status: "Invitation Sent", auth_user_id: "existing-auth" }),
+      markFailed: async () => assert.fail("must not fail"),
+    },
+    authAdmin: { generateLink: async ({ type }) => {
+      generatedType = type;
+      return { data: { user: { id: "existing-auth" }, properties: { action_link: `https://supabase.example.test/auth/v1/verify?type=${type}` } } };
+    } },
+    inviteRedirectUrl: "https://staging.example.test/agency-invite",
+  });
+  assert.equal(generatedType, "recovery");
+  assert.equal(recordedAsPreexisting, true);
+  assert.equal(result.request.auth_user_id, "existing-auth");
+});
+
+test("revocation is tenant-authorized and delegated to the protected repository", async () => {
+  let agencyId = "";
+  const result = await runAgencyInvitationAction({
+    body: { action: "revoke_invitation", agency_id: "agency-a" }, actor: activeActor(),
+    repository: { revoke: async (input) => { agencyId = input.agencyId; return { status: "Revoked" }; } }, authAdmin: {},
+  });
+  assert.equal(agencyId, "agency-a");
+  assert.equal(result.request.status, "Revoked");
 });

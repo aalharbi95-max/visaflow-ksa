@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import RequestLineCustomFields from "./RequestLineCustomFields";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const toBase64 = (value) => btoa(unescape(encodeURIComponent(value)));
 
 function setInputValue(input, value) {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -26,7 +27,10 @@ function RequestLineHarness() {
         value={line}
         onFieldChange={(field, value) => setLine((previous) => ({ ...previous, [field]: value }))}
         professionOptions={["Engineer", "Accountant"]}
-        nationalityOptions={["Saudi", "Indian"]}
+        nationalityOptions={[
+          { value: "Saudi", label: "سعودي — Saudi" },
+          { value: "Indian", label: "هندي — Indian" },
+        ]}
       />
       <input aria-label="Gender" value={line.gender} onChange={(event) => setLine((previous) => ({ ...previous, gender: event.target.value }))} />
       <input aria-label="Quantity" value={line.quantity} onChange={(event) => setLine((previous) => ({ ...previous, quantity: event.target.value }))} />
@@ -48,7 +52,7 @@ function RequestLineHarness() {
             request_type: "Project Recruitment",
             request_lines: draftLines.map((item) => ({ ...item, quantity: Number(item.quantity) })),
           };
-          document.documentElement.dataset.savedPayload = btoa(JSON.stringify(payload));
+          document.documentElement.dataset.savedPayload = toBase64(JSON.stringify(payload));
         }}
       >
         Save Request
@@ -58,13 +62,13 @@ function RequestLineHarness() {
 }
 
 function recordResult(result) {
-  document.documentElement.dataset.testResult = btoa(JSON.stringify(result));
+  document.documentElement.dataset.testResult = toBase64(JSON.stringify(result));
 }
 
 async function runScenario() {
   try {
     const profession = document.querySelector('input[placeholder="Profession"]');
-    const nationality = document.querySelector('input[placeholder="Nationality"]');
+    const nationality = document.querySelector('input[placeholder="Nationality / الجنسية"]');
     const gender = document.querySelector('input[aria-label="Gender"]');
     const quantity = document.querySelector('input[aria-label="Quantity"]');
 
@@ -74,7 +78,9 @@ async function runScenario() {
     await delay(180);
     const professionAfterBlur = profession.value;
 
-    setInputValue(nationality, "Custom Nationality");
+    setInputValue(nationality, "هندي");
+    const indianOption = document.querySelector('[data-select-option="Indian"]');
+    indianOption.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     profession.focus();
     await delay(180);
     const nationalityAfterBlur = nationality.value;
@@ -84,7 +90,7 @@ async function runScenario() {
     const engineerOption = document.querySelector('[data-select-option="Engineer"]');
     engineerOption.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await delay(0);
-    const optionSelectionWorked = profession.value === "Engineer";
+    const optionSelectionWorked = profession.value === "Engineer" && nationality.value.includes("Indian");
 
     document.querySelector("#add-line").click();
     await delay(0);
@@ -100,7 +106,7 @@ async function runScenario() {
       payload,
     });
   } catch (error) {
-    document.documentElement.dataset.testError = btoa(String(error?.stack || error));
+    document.documentElement.dataset.testError = toBase64(String(error?.stack || error));
   }
 }
 

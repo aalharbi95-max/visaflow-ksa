@@ -99,12 +99,12 @@ test("request Profession and Nationality persist through focus changes and reach
     const result = JSON.parse(Buffer.from(resultMatch[1], "base64").toString("utf8"));
 
     assert.equal(result.professionAfterBlur, "Custom Profession");
-    assert.equal(result.nationalityAfterBlur, "Custom Nationality");
+    assert.match(result.nationalityAfterBlur, /Indian/);
     assert.equal(result.otherFieldsPreserved, true);
     assert.equal(result.optionSelectionWorked, true);
     assert.deepEqual(result.payload.request_lines, [{
       profession: "Engineer",
-      nationality: "Custom Nationality",
+      nationality: "Indian",
       gender: "Female",
       quantity: 3,
     }]);

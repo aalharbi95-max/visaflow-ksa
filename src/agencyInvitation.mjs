@@ -1,6 +1,7 @@
 export const AGENCY_INVITATION_FUNCTION = "visaflow-agency-provisioner";
 export const AGENCY_INVITATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 export const AGENCY_INVITATION_SENDING_TIMEOUT_MS = 5 * 60 * 1000;
+export const AGENCY_INVITATION_RESEND_COOLDOWN_MS = 60 * 1000;
 export const AGENCY_PERMISSION_KEYS = Object.freeze([
   "can_view_requests",
   "can_upload_candidates",
@@ -29,6 +30,12 @@ const ERROR_MESSAGES = Object.freeze({
     "يجب حفظ بريد صحيح للوكالة قبل إرسال الدعوة.",
   AGENCY_INVITATION_SEND_FAILED: "تعذر إرسال الدعوة.",
   AGENCY_INVITATION_FINALIZATION_FAILED: "تعذر إرسال الدعوة.",
+});
+
+const LIFECYCLE_ERROR_MESSAGES = Object.freeze({
+  AGENCY_INVITATION_EMAIL_DELIVERY_FAILED: "The invitation could not be handed off to the email provider. You can retry after the cooldown.",
+  AGENCY_INVITATION_RESEND_COOLDOWN: "Please wait one minute before resending the invitation.",
+  AGENCY_INVITATION_NOT_FOUND: "No invitation was found for this agency.",
 });
 
 const ACCEPTANCE_MESSAGES = Object.freeze({
@@ -131,7 +138,7 @@ export function getAgencyInvitationStatus(request, now = Date.now()) {
     ) {
       return "Failed";
     }
-    return "Invitation Sending";
+    return "Pending";
   }
   if (status === "Draft") return "Not Invited";
   if (status === "Invitation Sent") {
@@ -142,13 +149,25 @@ export function getAgencyInvitationStatus(request, now = Date.now()) {
     ) {
       return "Expired";
     }
-    return "Invitation Sent";
+    return "Sent";
   }
+  if (status === "Revoked") return "Revoked";
   return "Not Invited";
 }
 
 export function canSendAgencyInvitation(status) {
-  return ["Not Invited", "Failed", "Expired"].includes(status);
+  return status === "Not Invited";
+}
+
+export function canResendAgencyInvitation(request, now = Date.now()) {
+  const status = getAgencyInvitationStatus(request, now);
+  if (!["Failed", "Expired", "Revoked"].includes(status)) return false;
+  const lastAttempt = Date.parse(request?.updated_at || request?.invitation_sent_at || "");
+  return !Number.isFinite(lastAttempt) || now - lastAttempt >= AGENCY_INVITATION_RESEND_COOLDOWN_MS;
+}
+
+export function canRevokeAgencyInvitation(status) {
+  return ["Pending", "Sent", "Expired", "Failed"].includes(status);
 }
 
 export function canInviteAgencyUser(role, isActive = true) {
@@ -176,12 +195,16 @@ export function normalizeAgencyPermissionSelection(value) {
   );
 }
 
-export function buildAgencyInvitationPayload(agency, permissions) {
+export function buildAgencyInvitationPayload(agency, permissions, action = "invite_existing") {
   return {
-    action: "invite_existing",
+    action,
     agency_id: String(agency?.id || "").trim(),
     permissions: normalizeAgencyPermissionSelection(permissions),
   };
+}
+
+export function buildAgencyInvitationRevokePayload(agency) {
+  return { action: "revoke_invitation", agency_id: String(agency?.id || "").trim() };
 }
 
 export function isAgencyInvitationUrl(locationLike) {
@@ -204,6 +227,7 @@ export function getAgencyInvitationErrorMessage(error) {
     error?.context?.code ||
     error?.context?.error?.code ||
     error?.details?.code;
+  if (LIFECYCLE_ERROR_MESSAGES[code]) return LIFECYCLE_ERROR_MESSAGES[code];
   return ERROR_MESSAGES[code] || "تعذر إرسال الدعوة.";
 }
 

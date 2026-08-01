@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   DEFAULT_AGENCY_PERMISSIONS,
   buildAgencyInvitationPayload,
+  buildAgencyInvitationRevokePayload,
   canInviteAgencyUser,
+  canResendAgencyInvitation,
+  canRevokeAgencyInvitation,
   canSendAgencyInvitation,
   getAgencyInvitationAcceptanceMessage,
   getAgencyInvitationCallbackError,
@@ -22,7 +25,7 @@ test("agency invitation statuses cover the required UI states", () => {
       status: "Provisioning",
       updated_at: "2026-07-30T11:59:00Z",
     }, now),
-    "Invitation Sending"
+    "Pending"
   );
   assert.equal(
     getAgencyInvitationStatus({
@@ -36,7 +39,7 @@ test("agency invitation statuses cover the required UI states", () => {
       status: "Invitation Sent",
       invitation_sent_at: "2026-07-30T11:00:00Z",
     }, now),
-    "Invitation Sent"
+    "Sent"
   );
   assert.equal(
     getAgencyInvitationStatus({
@@ -47,19 +50,20 @@ test("agency invitation statuses cover the required UI states", () => {
   );
   assert.equal(getAgencyInvitationStatus({ status: "Active" }, now), "Accepted");
   assert.equal(getAgencyInvitationStatus({ status: "Failed" }, now), "Failed");
+  assert.equal(getAgencyInvitationStatus({ status: "Revoked" }, now), "Revoked");
 });
 
-test("resend is allowed only for not invited, failed, or expired states", () => {
-  for (const status of ["Not Invited", "Failed", "Expired"]) {
-    assert.equal(canSendAgencyInvitation(status), true);
-  }
-  for (const status of [
-    "Invitation Sending",
-    "Invitation Sent",
-    "Accepted",
-  ]) {
+test("send, resend, revoke, and cooldown rules are distinct", () => {
+  assert.equal(canSendAgencyInvitation("Not Invited"), true);
+  for (const status of ["Pending", "Sent", "Failed", "Expired", "Revoked", "Accepted"]) {
     assert.equal(canSendAgencyInvitation(status), false);
   }
+  const now = Date.parse("2026-07-30T12:00:00Z");
+  assert.equal(canResendAgencyInvitation({ status: "Failed", updated_at: "2026-07-30T11:58:00Z" }, now), true);
+  assert.equal(canResendAgencyInvitation({ status: "Failed", updated_at: "2026-07-30T11:59:30Z" }, now), false);
+  assert.equal(canResendAgencyInvitation({ status: "Revoked", updated_at: "2026-07-30T11:00:00Z" }, now), true);
+  assert.equal(canRevokeAgencyInvitation("Sent"), true);
+  assert.equal(canRevokeAgencyInvitation("Accepted"), false);
 });
 
 test("browser payload contains only the action and untrusted agency hint", () => {
@@ -75,6 +79,13 @@ test("browser payload contains only the action and untrusted agency hint", () =>
       permissions: DEFAULT_AGENCY_PERMISSIONS,
     }
   );
+});
+
+test("revoke payload contains no user, company, role, or email authority", () => {
+  assert.deepEqual(buildAgencyInvitationRevokePayload({ id: "agency-a", company_id: "ignored" }), {
+    action: "revoke_invitation",
+    agency_id: "agency-a",
+  });
 });
 
 test("only active Admin and Company Admin users can create agency login access", () => {
@@ -216,11 +227,14 @@ test("App uses the Edge Function and contains no invitation table writes", async
     new URL("./agencyInvitation.mjs", import.meta.url),
     "utf8"
   );
-  assert.match(app, /Invite Agency/);
+  assert.match(app, /Send Invitation/);
   assert.match(app, /invokeAgencyInvitation/);
   assert.match(app, /action:\s*"activate"/);
   assert.match(app, /AgencyInvitationPasswordScreen/);
   assert.match(app, /auth\.updateUser\(\{\s*password:/);
+  assert.match(app, /if \(!existingIdentity\) \{[\s\S]{0,300}auth\.updateUser\(\{\s*password:/);
+  assert.match(app, /auth_identity_preexisting/);
+  assert.match(app, /Your password will not be changed/);
   assert.match(app, /setActivePage\("Office Portal"\)/);
   assert.match(app, /loadAuthenticatedWorkspaceContext/);
   assert.doesNotMatch(app, /get_authenticated_app_user/);

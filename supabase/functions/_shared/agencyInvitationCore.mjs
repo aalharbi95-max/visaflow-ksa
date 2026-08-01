@@ -83,13 +83,14 @@ export function normalizeAgencyPermissions(value) {
   );
 }
 
-function inviteOptions(request, inviteRedirectUrl) {
+function inviteOptions(request, inviteRedirectUrl, existingIdentity) {
   return {
     redirectTo: inviteRedirectUrl,
     data: {
       account_type: "agency",
       provisioning_request_id: request.id,
       agency_id: request.agency_id,
+      existing_identity: existingIdentity === true,
     },
   };
 }
@@ -115,12 +116,18 @@ export async function runAgencyInvitationAction({
 }) {
   const action = String(body?.action || "").trim();
 
-  if (action === "invite_existing") {
+  if (action === "revoke_invitation") {
+    requireInvitationActor(actor);
+    return { ok: true, request: await repository.revoke({ agencyId: requireAgencyId(body) }) };
+  }
+
+  if (action === "invite_existing" || action === "resend_invitation") {
     requireInvitationActor(actor);
     const permissions = normalizeAgencyPermissions(body?.permissions);
     const started = await repository.begin({
       agencyId: requireAgencyId(body),
       permissions,
+      action,
     });
     const outcome = String(started?.outcome || "send");
 
@@ -147,55 +154,41 @@ export async function runAgencyInvitationAction({
     }
 
     let authUserId = started.auth_user_id || null;
+    let authUserExists = Boolean(authUserId);
+    let existingIdentity = started.auth_identity_preexisting === true;
     if (!authUserId && repository.findRecoverableAuthUser) {
-      authUserId = await repository.findRecoverableAuthUser({
+      const recovered = await repository.findRecoverableAuthUser({
         email: started.admin_email,
         requestId: started.id,
         agencyId: started.agency_id,
       });
+      authUserId = recovered?.authUserId || recovered || null;
+      authUserExists = Boolean(authUserId);
+      existingIdentity = recovered?.existingIdentity === true;
     }
 
-    if (!authUserId) {
-      try {
-        const invited = await authAdmin.inviteUserByEmail(
-          started.admin_email,
-          inviteOptions(started, inviteRedirectUrl)
-        );
-        if (invited?.error) throw invited.error;
-        authUserId = invited?.data?.user?.id || null;
-        if (!authUserId) {
-          throw new Error("Auth invitation did not return a user.");
-        }
-      } catch (error) {
-        const code = authErrorCode(error);
-        if (
-          code === "AGENCY_INVITATION_EMAIL_ALREADY_ASSIGNED" &&
-          repository.findRecoverableAuthUser
-        ) {
-          authUserId = await repository.findRecoverableAuthUser({
-            email: started.admin_email,
-            requestId: started.id,
-            agencyId: started.agency_id,
-          });
-        }
-        if (!authUserId) {
-          await repository.markFailed({
-            actorAuthUserId: actor.authUserId,
-            requestId: started.id,
-            code,
-            stage: "AUTH_CREATE",
-            lastSuccessfulOperation: "REQUEST_STARTED",
-            metadata: { retryable: true },
-          });
-          throw new AgencyInvitationError(
-            code,
-            code === "AGENCY_INVITATION_EMAIL_ALREADY_ASSIGNED"
-              ? "The email is already assigned to another account."
-              : "The invitation could not be sent.",
-            code === "AGENCY_INVITATION_EMAIL_ALREADY_ASSIGNED" ? 409 : 502
-          );
-        }
-      }
+    if (!authUserId && repository.findExistingAuthUser) {
+      authUserId = await repository.findExistingAuthUser({ email: started.admin_email, agencyId: started.agency_id, requestId: started.id });
+      authUserExists = Boolean(authUserId);
+      existingIdentity = Boolean(authUserId);
+    }
+
+    let actionLink = "";
+    try {
+      const generated = await authAdmin.generateLink({
+        type: authUserExists ? "recovery" : "invite",
+        email: started.admin_email,
+        options: inviteOptions(started, inviteRedirectUrl, existingIdentity),
+      });
+      if (generated?.error) throw generated.error;
+      authUserId = authUserId || generated?.data?.user?.id || null;
+      actionLink = generated?.data?.properties?.action_link || "";
+      if (!authUserId || !actionLink) throw new Error("Auth invitation link was not generated.");
+    } catch (error) {
+      const code = authErrorCode(error);
+      await repository.markFailed({ actorAuthUserId: actor.authUserId, requestId: started.id,
+        code, stage: "AUTH_CREATE", lastSuccessfulOperation: "REQUEST_STARTED", metadata: { retryable: true } });
+      throw new AgencyInvitationError(code, "The secure invitation link could not be generated.", 502);
     }
 
     try {
@@ -203,6 +196,7 @@ export async function runAgencyInvitationAction({
         actorAuthUserId: actor.authUserId,
         requestId: started.id,
         authUserId,
+        existingIdentity,
       });
     } catch (error) {
       await repository.markFailed({
@@ -219,6 +213,15 @@ export async function runAgencyInvitationAction({
         "The invited identity could not be recorded.",
         503
       );
+    }
+
+    try {
+      await repository.deliverInvitation({ requestId: started.id, actionLink });
+    } catch (error) {
+      await repository.markFailed({ actorAuthUserId: actor.authUserId, requestId: started.id, authUserId,
+        code: "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED", stage: "INVITATION_FINALIZATION",
+        lastSuccessfulOperation: "AUTH_USER_RECORDED", metadata: { retryable: true } });
+      throw new AgencyInvitationError("AGENCY_INVITATION_EMAIL_DELIVERY_FAILED", "The invitation reached the email provider handoff but delivery failed.", 502);
     }
 
     try {

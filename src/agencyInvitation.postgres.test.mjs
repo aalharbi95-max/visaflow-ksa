@@ -333,6 +333,11 @@ function repositoryFor(authUserId) {
         );
         return result.rows[0].result;
       }),
+    findExistingAuthUser: async () => null,
+    deliverInvitation: async ({ actionLink }) => {
+      assert.match(actionLink, /\/auth\/v1\/verify/);
+      return { ok: true, provider_message_id: "test-provider-message" };
+    },
   };
 }
 
@@ -341,7 +346,7 @@ function authAdmin({ fail = false } = {}) {
   return {
     state,
     api: {
-      async inviteUserByEmail(email, options) {
+      async generateLink({ type, email, options }) {
         state.calls += 1;
         if (fail) {
           return {
@@ -361,7 +366,7 @@ function authAdmin({ fail = false } = {}) {
           [authUserId, email, JSON.stringify(options.data)]
         );
         return {
-          data: { user: { id: authUserId, email } },
+          data: { user: { id: authUserId, email }, properties: { action_link: `https://supabase.example.test/auth/v1/verify?type=${type}` } },
           error: null,
         };
       },
