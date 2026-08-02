@@ -295,6 +295,50 @@ async function recordAgreementDelivery(admin: any, messageType: string, agreemen
   if (error) throw error;
 }
 
+async function prepareAgreementAttempt(admin: any, caller: Caller, messageType: string, body: Json) {
+  if (messageType !== "AGENCY_AGREEMENT_SENT" || caller.kind !== "authenticated"
+    || !caller.actor.company_id || !messageContracts[messageType].roles.includes(caller.actor.role)) return null;
+  const agreementId = safeId(body.agreement_id, "agreement_id");
+  const agreement = await exactlyOne(admin.from("agency_agreements")
+    .select("id,company_id,agency_id,agency_name,agreement_no")
+    .eq("id", agreementId).eq("company_id", caller.actor.company_id), "agreement_not_found");
+  const agency = agreement.agency_id
+    ? await activeAgency(admin, String(agreement.agency_id))
+    : await agencyByUniqueName(admin, String(agreement.agency_name || ""));
+  const recipients = agencyRecipients(agency);
+  const idempotencyKey = buildEmailIdempotencyKey(messageType, agreementId, recipients);
+  const { data: prior, error: lookupError } = await admin.from("email_logs")
+    .select("id,status,retry_count,failed_at").eq("company_id", caller.actor.company_id)
+    .eq("idempotency_key", idempotencyKey).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (prior?.status === "Sent" || prior?.status === "Queued") return {
+    id: String(prior.id), owned: false, companyId: caller.actor.company_id, agreementId,
+  };
+  if (prior?.id) {
+    if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
+    const { data: claimed, error: claimError } = await admin.from("email_logs").update({
+      status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
+      error_code: null, error_message: null, failed_at: null,
+    }).eq("id", prior.id).eq("status", "Failed").select("id").maybeSingle();
+    if (claimError) throw claimError;
+    return { id: String(claimed?.id || prior.id), owned: Boolean(claimed?.id), companyId: caller.actor.company_id, agreementId };
+  }
+  const recipient = recipients[0];
+  const { data: inserted, error: insertError } = await admin.from("email_logs").insert({
+    company_id: caller.actor.company_id, agency_id: agency.id, user_id: caller.actor.id,
+    event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
+    recipient, to_email: recipient, to_emails: recipient,
+    subject: messageContracts[messageType].subject, related_id: agreementId,
+    idempotency_key: idempotencyKey, retry_count: 0,
+  }).select("id").single();
+  if (insertError) throw insertError;
+  await recordAgreementDelivery(admin, messageType, agreementId, caller.actor.company_id, {
+    email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
+    email_last_attempt_at: new Date().toISOString(),
+  });
+  return { id: String(inserted.id), owned: true, companyId: caller.actor.company_id, agreementId };
+}
+
 async function companyMailbox(admin: any, companyId: string, kind: "notifications" | "agreements" | "support" = "notifications") {
   const { data: settings, error } = await admin.from("company_email_settings")
     .select("notifications_email, agreements_email, support_email, is_active")
@@ -375,7 +419,7 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
     if (recipients.length !== 1) throw new RequestFailure(404, "agency_recipient_not_found");
     return { recipients, variables: { agency_name: String(invitation.agency_name), action_url: actionUrl.toString() },
       companyId: String(invitation.company_id), agencyId: String(invitation.agency_id),
-      deliveryKey: `${invitation.id}:${invitation.attempt_count || 0}` };
+      deliveryKey: String(invitation.id) };
   }
 
   if (type === "NEW_REQUEST_AGENCY_ALERT_EMAIL") {
@@ -563,6 +607,12 @@ Deno.serve(async (req) => {
     deliveryMessageType = messageType;
     const contract = messageContracts[messageType];
     if (!contract) return jsonResponse({ ok: false, error: "message_type_not_allowed" }, 400);
+    const preparedAgreement = await prepareAgreementAttempt(admin, caller, messageType, body);
+    if (preparedAgreement?.owned) emailLogId = preparedAgreement.id;
+    if (preparedAgreement) {
+      deliveryRelatedId = preparedAgreement.agreementId;
+      deliveryCompanyId = preparedAgreement.companyId;
+    }
     const inputVariables = cleanInputVariables(body.variables, contract.allowedInputVariables);
     const resolved = await resolveMessage(admin, caller, messageType, contract, body, inputVariables);
     const recipients = normalizeEmails(resolved.recipients).slice(0, MAX_RECIPIENTS);
@@ -572,9 +622,7 @@ Deno.serve(async (req) => {
     const smtpHost = Deno.env.get("SMTP_HOSTNAME") || "mail.privateemail.com";
     const smtpPort = Number(Deno.env.get("SMTP_PORT") || "465");
     const smtpSecure = parseBoolean(Deno.env.get("SMTP_SECURE"), smtpPort === 465);
-    const smtpUser = requireSecret("SMTP_USERNAME");
-    const smtpPass = requireSecret("SMTP_PASSWORD");
-    const smtpFrom = Deno.env.get("SMTP_FROM") || `VisaFlow KSA <${smtpUser}>`;
+    const smtpFrom = Deno.env.get("SMTP_FROM") || "VisaFlow KSA";
     const approvedReplyTo = Deno.env.get("SMTP_REPLY_TO") || "support@visaflowksa.com";
     const relatedIdentifier = contract.requiredId ? String(body[contract.requiredId] || "") : caller.key;
     const identifier = resolved.deliveryKey || relatedIdentifier;
@@ -590,8 +638,9 @@ Deno.serve(async (req) => {
     if (priorError) throw priorError;
     const prior = priorLogs?.[0];
     if (prior?.status === "Sent") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, provider_message_id: prior.provider_message_id || prior.message_id || null });
-    if (prior?.status === "Queued") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
-    if (prior?.id) {
+    if (prior?.status === "Queued" && caller.kind === "internal" && messageType === "AGENCY_USER_INVITATION") emailLogId = String(prior.id);
+    if (prior?.status === "Queued" && emailLogId !== String(prior.id)) return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
+    if (prior?.id && prior.status !== "Queued") {
       if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
       emailLogId = String(prior.id);
       const { data: retryClaim, error: retryError } = await admin.from("email_logs").update({ status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
@@ -612,6 +661,8 @@ Deno.serve(async (req) => {
       email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
       email_last_attempt_at: new Date().toISOString(),
     });
+    const smtpUser = requireSecret("SMTP_USERNAME");
+    const smtpPass = requireSecret("SMTP_PASSWORD");
     const transport = nodemailer.createTransport({ host: smtpHost, port: smtpPort, secure: smtpSecure, auth: { user: smtpUser, pass: smtpPass } });
     const providerResult = await deliverWithTransport(transport, { from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html });
     const { error: sentLogError } = await admin.from("email_logs").update({ status: "Sent", provider_message_id: providerResult.providerMessageId,

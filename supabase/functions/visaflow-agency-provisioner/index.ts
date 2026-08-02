@@ -16,6 +16,7 @@ import {
   resolveAllowedOrigin,
   validateAgencyProvisionerRequest,
 } from "../_shared/agencyProvisionerHttp.mjs";
+import { buildEmailIdempotencyKey } from "../_shared/emailDeliveryCore.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -306,15 +307,71 @@ Deno.serve(async (request) => {
         if (metadataError) throw metadataError;
         return authUserId;
       },
-      deliverInvitation: async ({ requestId, actionLink }: { requestId: string; actionLink: string }) => {
-        if (!EMAIL_DISPATCHER_INTERNAL_SECRET) throw new Error("Email dispatcher is not configured.");
+      deliverInvitation: async ({ requestId, actionLink, companyId, agencyId, recipient }: Record<string, any>) => {
+        const normalizedRecipient = String(recipient || "").trim().toLowerCase();
+        const idempotencyKey = buildEmailIdempotencyKey(
+          "AGENCY_USER_INVITATION",
+          requestId,
+          [normalizedRecipient],
+        );
+        const queued = {
+          company_id: companyId,
+          agency_id: agencyId,
+          event_type: "AGENCY_USER_INVITATION",
+          type: "AGENCY_USER_INVITATION",
+          status: "Queued",
+          provider: "SMTP",
+          recipient: normalizedRecipient,
+          to_email: normalizedRecipient,
+          to_emails: normalizedRecipient,
+          subject: "VisaFlow Agency Account Invitation",
+          related_id: requestId,
+          idempotency_key: idempotencyKey,
+        };
+        const { data: existing, error: lookupError } = await admin.from("email_logs")
+          .select("id,status,retry_count,failed_at").eq("company_id", companyId)
+          .eq("idempotency_key", idempotencyKey).maybeSingle();
+        if (lookupError) throw lookupError;
+        let emailLogId = existing?.id ? String(existing.id) : "";
+        if (!emailLogId) {
+          const { data: inserted, error: insertError } = await admin.from("email_logs")
+            .insert({ ...queued, retry_count: 0 }).select("id").single();
+          if (insertError) throw insertError;
+          emailLogId = String(inserted.id);
+        } else if (existing.status === "Failed") {
+          const { error: retryError } = await admin.from("email_logs").update({
+            ...queued,
+            retry_count: Number(existing.retry_count || 0) + 1,
+            error_code: null,
+            error_message: null,
+            failed_at: null,
+          }).eq("id", emailLogId);
+          if (retryError) throw retryError;
+        }
+        const failAttempt = async (code: string) => {
+          await admin.from("email_logs").update({
+            status: "Failed",
+            error_code: code,
+            error_message: "Email delivery authorization failed.",
+            failed_at: new Date().toISOString(),
+          }).eq("id", emailLogId);
+        };
+        if (!EMAIL_DISPATCHER_INTERNAL_SECRET) {
+          await failAttempt("DISPATCHER_SECRET_MISSING");
+          throw new Error("Email dispatcher is not configured.");
+        }
         const response = await fetch(`${SUPABASE_URL}/functions/v1/visaflow-email-dispatcher`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-visaflow-email-secret": EMAIL_DISPATCHER_INTERNAL_SECRET },
           body: JSON.stringify({ message_type: "AGENCY_USER_INVITATION", request_id: requestId, variables: { action_url: actionLink } }),
         });
         const result = await response.json().catch(() => ({}));
-        if (!response.ok || result?.ok !== true) throw new Error(String(result?.error || "email_dispatch_failed"));
+        if (!response.ok || result?.ok !== true) {
+          await failAttempt(response.status === 401 || response.status === 403
+            ? "DISPATCHER_AUTH_FAILED"
+            : "EMAIL_DISPATCH_FAILED");
+          throw new Error("email_dispatch_failed");
+        }
         return result;
       },
       updateCompanySettings: ({

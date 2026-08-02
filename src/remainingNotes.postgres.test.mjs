@@ -69,7 +69,8 @@ create table public.email_logs (
   created_at timestamptz default now(), type text default 'EMAIL', to_email text, cc_email text, bcc_email text
 );
 alter table public.email_logs enable row level security;
-grant select, insert on public.email_logs to authenticated;
+grant select, insert, update, delete, truncate on public.email_logs to authenticated;
+grant truncate on public.email_logs to anon;
 create function public.current_log_actor() returns jsonb language sql stable security definer set search_path='' as $$
   select jsonb_build_object('id',u.id,'company_id',u.company_id,'role',u.role)
   from public.users u where u.auth_user_id=auth.uid() and u.status='Active' and u.is_active is true
@@ -131,6 +132,8 @@ before(async () => {
   await db.exec(migration);
   const deliveryMigration = await readFile(new URL("../supabase/migrations/20260802000100_email_delivery_observability.sql", import.meta.url), "utf8");
   await db.exec(deliveryMigration);
+  const dispatcherSecurityMigration = await readFile(new URL("../supabase/migrations/20260802000200_email_dispatcher_early_failure_security.sql", import.meta.url), "utf8");
+  await db.exec(dispatcherSecurityMigration);
 });
 
 after(async () => { await db?.close(); });
@@ -196,6 +199,20 @@ test("email logs are server-owned and non-admin recipients are masked by the RPC
   assert.equal(otherTenant.rows.length, 0);
   await authenticate(AGENCY_AUTH);
   await assert.rejects(() => db.query("select * from public.email_log_list_v1()"), /EMAIL_LOG_UNAUTHORIZED/);
+});
+
+test("browser roles cannot mutate or truncate email logs", async () => {
+  await db.exec("reset role");
+  const privileges = await db.query(`select
+    has_table_privilege('anon','public.email_logs','truncate') anon_truncate,
+    has_table_privilege('authenticated','public.email_logs','insert') auth_insert,
+    has_table_privilege('authenticated','public.email_logs','update') auth_update,
+    has_table_privilege('authenticated','public.email_logs','delete') auth_delete,
+    has_table_privilege('authenticated','public.email_logs','truncate') auth_truncate`);
+  assert.deepEqual(privileges.rows[0], {
+    anon_truncate: false, auth_insert: false, auth_update: false,
+    auth_delete: false, auth_truncate: false,
+  });
 });
 
 test("resend enforces tenant role, cooldown and idempotent state transition", async () => {

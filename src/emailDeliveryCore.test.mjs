@@ -35,10 +35,12 @@ test("dispatcher retry claim respects failed delivery cooldown", () => {
 });
 
 test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id", async () => {
-  const [dispatcher, app, migration] = await Promise.all([
+  const [dispatcher, provisioner, app, migration, securityMigration] = await Promise.all([
     readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/visaflow-agency-provisioner/index.ts", import.meta.url), "utf8"),
     readFile(new URL("./App.jsx", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/20260801000200_remaining_notes_agency_security.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/20260802000200_email_dispatcher_early_failure_security.sql", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(app, /Resolved securely by Email Dispatcher/);
   assert.match(dispatcher, /agency_id, agency_name/);
@@ -53,7 +55,15 @@ test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id",
   assert.match(dispatcher, /status: "Failed"/);
   assert.match(dispatcher, /prior\?\.status === "Queued"[\s\S]*in_progress: true/);
   assert.match(dispatcher, /\.eq\("status", "Failed"\)\.select\("id"\)\.maybeSingle\(\)/);
+  assert.match(dispatcher, /prepareAgreementAttempt/);
+  assert.match(dispatcher, /emailLogId = preparedAgreement\.id/);
+  assert.match(provisioner, /DISPATCHER_SECRET_MISSING/);
+  assert.match(provisioner, /DISPATCHER_AUTH_FAILED/);
+  assert.match(provisioner, /status: "Failed"/);
+  assert.match(provisioner, /buildEmailIdempotencyKey/);
+  assert.doesNotMatch(provisioner, /error_message:\s*String\(result/);
   assert.match(migration, /revoke insert, update, delete on table public\.email_logs from anon, authenticated/);
+  assert.match(securityMigration, /revoke insert, update, delete, truncate, references, trigger/);
   assert.match(migration, /create or replace function public\.email_log_list_v1/);
   for (const field of ["recipient", "error_code", "retry_count", "sent_at", "failed_at", "idempotency_key"]) assert.match(migration, new RegExp(field));
 });

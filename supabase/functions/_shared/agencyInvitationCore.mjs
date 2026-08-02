@@ -216,7 +216,14 @@ export async function runAgencyInvitationAction({
     }
 
     try {
-      await repository.deliverInvitation({ requestId: started.id, actionLink });
+      await repository.deliverInvitation({
+        requestId: started.id,
+        actionLink,
+        companyId: started.company_id,
+        agencyId: started.agency_id,
+        recipient: started.admin_email,
+        attemptCount: started.attempt_count || 0,
+      });
     } catch (error) {
       await repository.markFailed({ actorAuthUserId: actor.authUserId, requestId: started.id, authUserId,
         code: "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED", stage: "INVITATION_FINALIZATION",
