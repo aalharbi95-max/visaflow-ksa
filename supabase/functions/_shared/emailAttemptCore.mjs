@@ -14,6 +14,7 @@ export async function ensureQueuedEmailAttempt({ lookup, insert, requeue, queued
       error_code: null,
       error_message: null,
       failed_at: null,
+      dispatch_claimed_at: null,
     });
     if (!updated?.id) throw new Error("EMAIL_LOG_REQUEUE_FAILED");
     return { id: String(updated.id), retryCount };

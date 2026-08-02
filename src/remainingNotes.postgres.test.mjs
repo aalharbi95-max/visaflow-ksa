@@ -134,6 +134,8 @@ before(async () => {
   await db.exec(deliveryMigration);
   const dispatcherSecurityMigration = await readFile(new URL("../supabase/migrations/20260802000200_email_dispatcher_early_failure_security.sql", import.meta.url), "utf8");
   await db.exec(dispatcherSecurityMigration);
+  const dispatchClaimsMigration = await readFile(new URL("../supabase/migrations/20260802000300_email_dispatch_claims.sql", import.meta.url), "utf8");
+  await db.exec(dispatchClaimsMigration);
 });
 
 after(async () => { await db?.close(); });
@@ -144,6 +146,7 @@ test("remaining-notes migration adds deterministic agreement and email audit col
   const columns = await db.query("select column_name from information_schema.columns where table_name='email_logs'");
   const names = new Set(columns.rows.map((row) => row.column_name));
   for (const name of ["agency_id","user_id","recipient","provider_message_id","error_code","retry_count","sent_at","failed_at","idempotency_key"]) assert.ok(names.has(name));
+  assert.ok(names.has("dispatch_claimed_at"));
   const requestColumns = await db.query("select column_name from information_schema.columns where table_name='agency_provisioning_requests'");
   assert.ok(requestColumns.rows.some((row) => row.column_name === "auth_identity_preexisting"));
   const agreementColumns = await db.query("select column_name from information_schema.columns where table_name='agency_agreements'");

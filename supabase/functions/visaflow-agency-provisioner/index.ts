@@ -374,7 +374,16 @@ Deno.serve(async (request) => {
         const response = await fetch(`${SUPABASE_URL}/functions/v1/visaflow-email-dispatcher`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-visaflow-email-secret": EMAIL_DISPATCHER_INTERNAL_SECRET },
-          body: JSON.stringify({ message_type: "AGENCY_USER_INVITATION", request_id: requestId, variables: { action_url: actionLink } }),
+          body: JSON.stringify({
+            message_type: "AGENCY_USER_INVITATION",
+            request_id: requestId,
+            email_log_id: emailLogId,
+            idempotency_key: idempotencyKey,
+            company_id: companyId,
+            agency_id: agencyId,
+            recipient: normalizedRecipient,
+            variables: { action_url: actionLink },
+          }),
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || result?.ok !== true) {

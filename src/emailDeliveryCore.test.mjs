@@ -4,6 +4,7 @@ import test from "node:test";
 import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../supabase/functions/_shared/emailDeliveryCore.mjs";
 import { ensureQueuedEmailAttempt, markEmailAttemptFailed } from "../supabase/functions/_shared/emailAttemptCore.mjs";
 import { cleanContractInputVariables, validateSupabaseInvitationUrl } from "../supabase/functions/_shared/emailVariableValidation.mjs";
+import { acquireEmailDispatch, isValidInternalHandoff } from "../supabase/functions/_shared/emailDispatchState.mjs";
 
 test("transport test double receives the final provider payload", async () => {
   let received;
@@ -120,6 +121,82 @@ test("retry reuses the idempotent email log and increments retry_count", async (
   assert.equal(inserted, false);
   assert.equal(attempt.id, "log-a");
   assert.equal(attempt.retryCount, 2);
+});
+
+const handoff = { emailLogId: "log-a", idempotencyKey: "key-a", companyId: "company-a", agencyId: "agency-a", recipient: "agency@example.test" };
+const dispatchExpected = { ...handoff };
+const never = async () => { throw new Error("unexpected operation"); };
+
+test("existing Queued with a valid internal handoff claims once and reaches mocked SMTP", async () => {
+  let claimed = false;
+  let inserts = 0;
+  const result = await acquireEmailDispatch({
+    prior: { id: "log-a", status: "Queued" }, callerKind: "internal", handoff, expected: dispatchExpected,
+    canRetry: () => false,
+    claimQueued: async () => claimed ? null : (claimed = true, { id: "log-a" }),
+    claimFailed: never, insertQueued: async () => { inserts += 1; }, reloadAfterConflict: never,
+  });
+  assert.deepEqual(result, { action: "send", id: "log-a" });
+  assert.equal(inserts, 0);
+  let smtpReached = false;
+  if (result.action === "send") await deliverWithTransport({ sendMail(_mail, callback) { smtpReached = true; callback(null, { messageId: "mock" }); } }, {});
+  assert.equal(smtpReached, true);
+  const duplicate = await acquireEmailDispatch({
+    prior: { id: "log-a", status: "Queued" }, callerKind: "internal", handoff, expected: dispatchExpected,
+    canRetry: () => false, claimQueued: async () => null, claimFailed: never, insertQueued: never, reloadAfterConflict: never,
+  });
+  assert.equal(duplicate.action, "in_progress");
+});
+
+test("Queued duplicate or mismatched handoff never sends or inserts", async () => {
+  for (const candidate of [null, { ...handoff, companyId: "company-b" }, { ...handoff, recipient: "other@example.test" }]) {
+    const result = await acquireEmailDispatch({
+      prior: { id: "log-a", status: "Queued" }, callerKind: candidate ? "internal" : "authenticated",
+      handoff: candidate, expected: dispatchExpected, canRetry: () => false,
+      claimQueued: never, claimFailed: never, insertQueued: never, reloadAfterConflict: never,
+    });
+    assert.equal(result.action, "in_progress");
+  }
+  assert.equal(isValidInternalHandoff({ callerKind: "internal", handoff, expected: dispatchExpected }), true);
+});
+
+test("Sent is idempotent and Failed uses one atomic retry claim", async () => {
+  const sent = await acquireEmailDispatch({ prior: { id: "log-a", status: "Sent" }, callerKind: "authenticated", handoff: null,
+    expected: dispatchExpected, canRetry: () => false, claimQueued: never, claimFailed: never, insertQueued: never, reloadAfterConflict: never });
+  assert.equal(sent.action, "sent");
+  let claims = 0;
+  const failed = await acquireEmailDispatch({ prior: { id: "log-a", status: "Failed", retry_count: 2 }, callerKind: "authenticated", handoff: null,
+    expected: dispatchExpected, canRetry: () => true, claimQueued: never,
+    claimFailed: async () => (++claims === 1 ? { id: "log-a" } : null), insertQueued: never, reloadAfterConflict: never });
+  assert.equal(failed.action, "send");
+  const raced = await acquireEmailDispatch({ prior: { id: "log-a", status: "Failed", retry_count: 2 }, callerKind: "authenticated", handoff: null,
+    expected: dispatchExpected, canRetry: () => true, claimQueued: never,
+    claimFailed: async () => (++claims === 1 ? { id: "log-a" } : null), insertQueued: never, reloadAfterConflict: never });
+  assert.equal(raced.action, "in_progress");
+  assert.equal(claims, 2);
+});
+
+test("no prior inserts once and a 23505 race reloads as in_progress", async () => {
+  let inserts = 0;
+  const created = await acquireEmailDispatch({ prior: null, callerKind: "authenticated", handoff: null, expected: dispatchExpected,
+    canRetry: () => false, claimQueued: never, claimFailed: never,
+    insertQueued: async () => (++inserts, { id: "log-new" }), reloadAfterConflict: never });
+  assert.deepEqual(created, { action: "send", id: "log-new" });
+  assert.equal(inserts, 1);
+  const race = await acquireEmailDispatch({ prior: null, callerKind: "authenticated", handoff: null, expected: dispatchExpected,
+    canRetry: () => false, claimQueued: never, claimFailed: never,
+    insertQueued: async () => { const error = new Error("duplicate"); error.code = "23505"; throw error; },
+    reloadAfterConflict: async () => ({ id: "log-winner", status: "Queued" }) });
+  assert.deepEqual(race, { action: "in_progress", id: "log-winner", raced: true });
+});
+
+test("SMTP secrets are read only after a dispatch claim succeeds", async () => {
+  let secretsRead = 0;
+  const result = await acquireEmailDispatch({ prior: { id: "log-a", status: "Queued" }, callerKind: "authenticated", handoff: null,
+    expected: dispatchExpected, canRetry: () => false, claimQueued: never, claimFailed: never, insertQueued: never, reloadAfterConflict: never });
+  if (result.action === "send") secretsRead += 1;
+  assert.equal(result.action, "in_progress");
+  assert.equal(secretsRead, 0);
 });
 
 test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id", async () => {

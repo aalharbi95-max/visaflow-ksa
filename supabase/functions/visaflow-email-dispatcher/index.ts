@@ -2,6 +2,7 @@ import nodemailer from "npm:nodemailer@6.9.10";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../_shared/emailDeliveryCore.mjs";
 import { cleanContractInputVariables } from "../_shared/emailVariableValidation.mjs";
+import { acquireEmailDispatch } from "../_shared/emailDispatchState.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -140,6 +141,7 @@ const messageContracts: Record<string, MessageContract> = {
 const allowedTopLevelFields = new Set([
   "message_type", "variables", "request_id", "agency_id", "notification_event_id", "candidate_id",
   "interview_session_id", "agreement_id", "penalty_id", "offer_id", "target_user_id", "company_id",
+  "email_log_id", "idempotency_key", "recipient",
 ]);
 const forbiddenEnvelopeFields = new Set(["to", "cc", "bcc", "from", "replyTo", "reply_to", "subject", "text", "html", "actionUrl", "action_url"]);
 
@@ -303,7 +305,7 @@ async function prepareAgreementAttempt(admin: any, caller: Caller, messageType: 
     if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
     const { data: claimed, error: claimError } = await admin.from("email_logs").update({
       status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
-      error_code: null, error_message: null, failed_at: null,
+      error_code: null, error_message: null, failed_at: null, dispatch_claimed_at: new Date().toISOString(),
     }).eq("id", prior.id).eq("status", "Failed").select("id").maybeSingle();
     if (claimError) throw claimError;
     return { id: String(claimed?.id || prior.id), owned: Boolean(claimed?.id), companyId: caller.actor.company_id, agreementId };
@@ -314,7 +316,7 @@ async function prepareAgreementAttempt(admin: any, caller: Caller, messageType: 
     event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
     recipient, to_email: recipient, to_emails: recipient,
     subject: messageContracts[messageType].subject, related_id: agreementId,
-    idempotency_key: idempotencyKey, retry_count: 0,
+    idempotency_key: idempotencyKey, retry_count: 0, dispatch_claimed_at: new Date().toISOString(),
   }).select("id").single();
   if (insertError) throw insertError;
   await recordAgreementDelivery(admin, messageType, agreementId, caller.actor.company_id, {
@@ -587,6 +589,8 @@ Deno.serve(async (req) => {
       if (forbiddenEnvelopeFields.has(key)) return jsonResponse({ ok: false, error: "smtp_envelope_not_allowed" }, 400);
       if (!allowedTopLevelFields.has(key)) return jsonResponse({ ok: false, error: "unsupported_request_field" }, 400);
     }
+    const hasHandoffFields = ["email_log_id", "idempotency_key", "recipient"].some((key) => body[key] !== undefined);
+    if (hasHandoffFields && caller.kind !== "internal") throw new RequestFailure(403, "forbidden");
 
     const messageType = String(body.message_type || "").trim();
     deliveryMessageType = messageType;
@@ -631,26 +635,58 @@ Deno.serve(async (req) => {
     const { data: priorLogs, error: priorError } = await priorQuery.limit(1);
     if (priorError) throw priorError;
     const prior = priorLogs?.[0];
-    if (prior?.status === "Sent") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, provider_message_id: prior.provider_message_id || prior.message_id || null });
-    if (prior?.status === "Queued" && caller.kind === "internal" && messageType === "AGENCY_USER_INVITATION") emailLogId = String(prior.id);
-    if (prior?.status === "Queued" && emailLogId !== String(prior.id)) return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
-    if (prior?.id && prior.status !== "Queued") {
-      if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
-      emailLogId = String(prior.id);
-      const { data: retryClaim, error: retryError } = await admin.from("email_logs").update({ status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
-        error_code: null, error_message: null, failed_at: null }).eq("id", prior.id).eq("status", "Failed").select("id").maybeSingle();
-      if (retryError) throw retryError;
-      if (!retryClaim?.id) return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
-    } else {
-      const { data: inserted, error: insertError } = await admin.from("email_logs").insert({
+    const handoff = hasHandoffFields ? {
+      emailLogId: String(body.email_log_id || ""), idempotencyKey: String(body.idempotency_key || ""),
+      companyId: String(body.company_id || ""), agencyId: String(body.agency_id || ""),
+      recipient: String(body.recipient || "").trim().toLowerCase(),
+    } : null;
+    const expectedHandoff = {
+      emailLogId: prior?.id ? String(prior.id) : "", idempotencyKey, companyId: companyId || "",
+      agencyId: resolved.agencyId || "", recipient: recipients[0],
+    };
+    const insertQueued = async () => {
+      const { data, error } = await admin.from("email_logs").insert({
         company_id: companyId, agency_id: resolved.agencyId || null, user_id: resolved.userId || (caller.kind === "authenticated" ? caller.actor.id : null),
         event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
         from_email: smtpFrom, recipient: recipients[0], to_email: recipients[0], to_emails: recipients.join(","),
         subject: rendered.subject, related_id: relatedIdentifier || null, idempotency_key: idempotencyKey, retry_count: 0,
+        dispatch_claimed_at: new Date().toISOString(),
       }).select("id").single();
-      if (insertError) throw insertError;
-      emailLogId = String(inserted.id);
-    }
+      if (error) throw error;
+      return data;
+    };
+    const dispatch = await acquireEmailDispatch({
+      prior, callerKind: caller.kind, handoff, expected: expectedHandoff,
+      preclaimedId: preparedAgreement?.owned ? preparedAgreement.id : null,
+      canRetry: (row: Json) => canRetryEmailDelivery(row.status, row.failed_at),
+      claimQueued: async (row: Json) => {
+        const { data, error } = await admin.from("email_logs").update({ dispatch_claimed_at: new Date().toISOString() })
+          .eq("id", row.id).eq("company_id", companyId).eq("idempotency_key", idempotencyKey)
+          .eq("status", "Queued").is("dispatch_claimed_at", null).select("id").maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+      claimFailed: async (row: Json) => {
+        const { data, error } = await admin.from("email_logs").update({
+          status: "Queued", retry_count: Number(row.retry_count || 0) + 1,
+          error_code: null, error_message: null, failed_at: null, dispatch_claimed_at: new Date().toISOString(),
+        }).eq("id", row.id).eq("status", "Failed").select("id").maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+      insertQueued,
+      reloadAfterConflict: async () => {
+        const { data, error } = await admin.from("email_logs").select("id,status,retry_count,failed_at")
+          .eq("company_id", companyId).eq("idempotency_key", idempotencyKey).maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+    });
+    if (dispatch.action === "sent") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, provider_message_id: prior?.provider_message_id || prior?.message_id || null });
+    if (dispatch.action === "cooldown") throw new RequestFailure(429, "email_retry_cooldown");
+    if (dispatch.action === "invalid_handoff") throw new RequestFailure(409, "EMAIL_DELIVERY_ALREADY_IN_PROGRESS");
+    if (dispatch.action === "in_progress") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
+    emailLogId = dispatch.id;
     await recordAgreementDelivery(admin, messageType, relatedIdentifier, companyId, {
       email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
       email_last_attempt_at: new Date().toISOString(),
