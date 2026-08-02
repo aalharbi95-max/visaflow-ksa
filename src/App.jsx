@@ -42,7 +42,7 @@ import {
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
 import RequestLineCustomFields from "./RequestLineCustomFields";
-import { buildProfessionOptions, isApprovedRequestLine, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
+import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
 import {
@@ -8705,16 +8705,18 @@ async function loadRequestMasterData() {
   const requestGeneration = workspaceDataGenerationRef.current;
   const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
   let countriesResult;
-  let professionsPart1;
-  let professionsPart2;
+  let professionsResult;
+  const isCurrentWorkspace = () => (
+    requestGeneration === workspaceDataGenerationRef.current
+    && requestWorkspaceKey === validatedWorkspaceKey
+  );
   try {
-    [countriesResult, professionsPart1, professionsPart2] = await Promise.all([
+    [countriesResult, professionsResult] = await Promise.all([
       supabase.from("countries").select("*").range(0, 5000),
-      supabase.from("professions").select("*").range(0, 999),
-      supabase.from("professions").select("*").range(1000, 3000),
+      loadAllProfessionPages(supabase, { isCurrentWorkspace }),
     ]);
   } catch (error) {
-    if (requestGeneration === workspaceDataGenerationRef.current && requestWorkspaceKey === validatedWorkspaceKey) {
+    if (isCurrentWorkspace()) {
       setCountries([]);
       setProfessions([]);
       setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error?.message || error}`);
@@ -8722,12 +8724,9 @@ async function loadRequestMasterData() {
     return [];
   }
 
-  if (
-    requestGeneration !== workspaceDataGenerationRef.current
-    || requestWorkspaceKey !== validatedWorkspaceKey
-  ) return [];
+  if (!isCurrentWorkspace() || professionsResult.cancelled) return [];
 
-  const error = countriesResult.error || professionsPart1.error || professionsPart2.error;
+  const error = countriesResult.error || professionsResult.error;
   if (error) {
     setCountries([]);
     setProfessions([]);
@@ -8736,7 +8735,7 @@ async function loadRequestMasterData() {
   }
 
   const nextCountries = countriesResult.data || [];
-  const nextProfessions = [...(professionsPart1.data || []), ...(professionsPart2.data || [])];
+  const nextProfessions = professionsResult.data || [];
   setCountries(nextCountries);
   setProfessions(nextProfessions);
   if (!buildProfessionOptions(nextProfessions).length || !buildNationalityOptions(nextCountries).length) {

@@ -2,6 +2,41 @@ function normalize(value) {
   return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("en");
 }
 
+export const PROFESSION_PAGE_SIZE = 1000;
+
+export async function loadAllProfessionPages(
+  supabase,
+  { pageSize = PROFESSION_PAGE_SIZE, isCurrentWorkspace = () => true } = {},
+) {
+  const professions = [];
+  const seenIds = new Set();
+
+  for (let from = 0; ; from += pageSize) {
+    if (!isCurrentWorkspace()) return { data: [], error: null, cancelled: true };
+
+    const result = await supabase
+      .from("professions")
+      .select("*")
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (!isCurrentWorkspace()) return { data: [], error: null, cancelled: true };
+    if (result.error) return { data: [], error: result.error, cancelled: false };
+
+    const page = result.data || [];
+    for (const profession of page) {
+      const id = profession?.id;
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      professions.push(profession);
+    }
+
+    if (page.length < pageSize) {
+      return { data: professions, error: null, cancelled: false };
+    }
+  }
+}
+
 export function getProfessionOption(profession = {}) {
   const arabic = String(profession.name_ar || "").trim();
   const english = String(profession.name_en || "").trim();
