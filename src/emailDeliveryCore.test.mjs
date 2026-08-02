@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../supabase/functions/_shared/emailDeliveryCore.mjs";
 import { ensureQueuedEmailAttempt, markEmailAttemptFailed } from "../supabase/functions/_shared/emailAttemptCore.mjs";
+import { cleanContractInputVariables, validateSupabaseInvitationUrl } from "../supabase/functions/_shared/emailVariableValidation.mjs";
 
 test("transport test double receives the final provider payload", async () => {
   let received;
@@ -16,9 +17,53 @@ test("transport test double receives the final provider payload", async () => {
 
 test("provider errors are safe to store and never retain secrets", () => {
   const safe = sanitizeProviderError({ code: "EAUTH", message: "password=hunter2 token=abc connection rejected" });
-  assert.equal(safe.code, "EAUTH");
+  assert.equal(safe.code, "SMTP_AUTH_FAILED");
   assert.doesNotMatch(safe.message, /hunter2|abc/);
-  assert.equal(safe.message, "Email delivery failed at the provider.");
+  assert.equal(safe.message, "SMTP authentication failed.");
+});
+
+test("invitation contract accepts only the staging Supabase Auth verification URL", () => {
+  const supabaseUrl = "https://staging-ref.supabase.co";
+  const valid = validateSupabaseInvitationUrl(
+    "https://staging-ref.supabase.co/auth/v1/verify?token=secret-token&type=invite",
+    supabaseUrl,
+  );
+  assert.equal(valid.ok, true);
+  for (const value of [
+    "https://attacker.example/auth/v1/verify?token=x",
+    "http://staging-ref.supabase.co/auth/v1/verify?token=x",
+    "javascript:alert(1)",
+    "data:text/html,unsafe",
+    "file:///auth/v1/verify",
+    "https://user:password@staging-ref.supabase.co/auth/v1/verify",
+    "https://staging-ref.supabase.co/not-auth/verify",
+  ]) assert.deepEqual(validateSupabaseInvitationUrl(value, supabaseUrl), { ok: false, error: "INVALID_ACTION_URL" });
+});
+
+test("all non-invitation template variables continue to reject URLs", () => {
+  const result = cleanContractInputVariables({
+    messageType: "OTHER_MESSAGE",
+    value: { action_url: "https://staging-ref.supabase.co/auth/v1/verify?token=x" },
+    allowedKeys: ["action_url"],
+    supabaseUrl: "https://staging-ref.supabase.co",
+  });
+  assert.deepEqual(result, { ok: false, error: "EXTERNAL_URL_NOT_ALLOWED" });
+});
+
+test("validated invitation reaches the mocked transport without exposing its token", async () => {
+  const validation = cleanContractInputVariables({
+    messageType: "AGENCY_USER_INVITATION",
+    value: { action_url: "https://staging-ref.supabase.co/auth/v1/verify?token=private-token&type=invite" },
+    allowedKeys: ["action_url"],
+    supabaseUrl: "https://staging-ref.supabase.co",
+  });
+  assert.equal(validation.ok, true);
+  let transportReached = false;
+  const transport = { sendMail(_message, callback) { transportReached = true; callback(null, { messageId: "mock-provider-id" }); } };
+  await deliverWithTransport(transport, { subject: "Invitation" });
+  assert.equal(transportReached, true);
+  const safe = sanitizeProviderError({ code: "EAUTH", message: validation.variables.action_url });
+  assert.doesNotMatch(JSON.stringify(safe), /private-token|auth\/v1\/verify/);
 });
 
 test("email idempotency ignores recipient order", () => {
@@ -63,6 +108,20 @@ test("email log insert errors are propagated and cannot be replaced by a success
   }), /email_logs insert rejected/);
 });
 
+test("retry reuses the idempotent email log and increments retry_count", async () => {
+  const existing = { id: "log-a", status: "Failed", retry_count: 1 };
+  let inserted = false;
+  const attempt = await ensureQueuedEmailAttempt({
+    queued: { company_id: "company-a", idempotency_key: "stable-key" },
+    lookup: async () => existing,
+    insert: async () => { inserted = true; return null; },
+    requeue: async (id, values) => ({ id, ...values }),
+  });
+  assert.equal(inserted, false);
+  assert.equal(attempt.id, "log-a");
+  assert.equal(attempt.retryCount, 2);
+});
+
 test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id", async () => {
   const [dispatcher, provisioner, app, migration, securityMigration] = await Promise.all([
     readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8"),
@@ -91,6 +150,8 @@ test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id",
   assert.match(provisioner, /markEmailAttemptFailed/);
   assert.match(provisioner, /buildEmailIdempotencyKey/);
   assert.doesNotMatch(provisioner, /error_message:\s*String\(result/);
+  assert.match(provisioner, /SAFE_DISPATCHER_ERROR_CODES/);
+  assert.doesNotMatch(dispatcher, /console\.(?:log|error)\([^\n]*action_url/);
   assert.match(migration, /revoke insert, update, delete on table public\.email_logs from anon, authenticated/);
   assert.match(securityMigration, /revoke insert, update, delete, truncate, references, trigger/);
   assert.match(migration, /create or replace function public\.email_log_list_v1/);

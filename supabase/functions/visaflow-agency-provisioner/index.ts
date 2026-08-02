@@ -27,6 +27,11 @@ const EMAIL_DISPATCHER_INTERNAL_SECRET = Deno.env.get("VISAFLOW_EMAIL_DISPATCHER
 const ALLOWED_ORIGINS = parseAllowedOrigins(
   Deno.env.get("AGENCY_PROVISIONER_ALLOWED_ORIGINS") || ""
 );
+const SAFE_DISPATCHER_ERROR_CODES = new Set([
+  "INVALID_ACTION_URL", "SMTP_AUTH_FAILED", "SMTP_TLS_FAILED", "SMTP_CONNECTION_FAILED",
+  "SMTP_SENDER_REJECTED", "SMTP_RELAY_DENIED", "SMTP_TIMEOUT", "SMTP_CONFIG_MISSING",
+  "EMAIL_DISPATCH_FAILED",
+]);
 
 function allowedOrigin(origin: string | null) {
   return resolveAllowedOrigin(origin, ALLOWED_ORIGINS);
@@ -373,9 +378,11 @@ Deno.serve(async (request) => {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || result?.ok !== true) {
-          await failAttempt(response.status === 401 || response.status === 403
+          const dispatcherCode = String(result?.error || "").toUpperCase();
+          const safeCode = response.status === 401 || response.status === 403
             ? "DISPATCHER_AUTH_FAILED"
-            : "EMAIL_DISPATCH_FAILED");
+            : SAFE_DISPATCHER_ERROR_CODES.has(dispatcherCode) ? dispatcherCode : "EMAIL_DISPATCH_FAILED";
+          await failAttempt(safeCode);
           throw new Error("email_dispatch_failed");
         }
         return result;

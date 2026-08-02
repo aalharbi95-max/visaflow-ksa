@@ -1,6 +1,7 @@
 import nodemailer from "npm:nodemailer@6.9.10";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../_shared/emailDeliveryCore.mjs";
+import { cleanContractInputVariables } from "../_shared/emailVariableValidation.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -194,22 +195,6 @@ function approvedUrl(query?: Record<string, string>) {
   for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
   if (url.protocol !== "https:" || url.origin !== VISAFLOW_ORIGIN) throw new RequestFailure(400, "invalid_action_url");
   return url.toString();
-}
-
-function cleanInputVariables(value: unknown, allowedKeys: string[]) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, string>;
-  const result: Record<string, string> = {};
-  let total = 0;
-  for (const [key, raw] of Object.entries(value as Json)) {
-    if (!allowedKeys.includes(key)) throw new RequestFailure(400, "unsupported_template_variable");
-    const text = Array.isArray(raw) ? raw.slice(0, 20).join(", ") : String(raw ?? "");
-    if (/(?:https?:\/\/|javascript\s*:|data\s*:)/i.test(text)) throw new RequestFailure(400, "external_url_not_allowed");
-    const cleaned = text.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, MAX_VARIABLE_LENGTH);
-    total += cleaned.length;
-    if (total > MAX_VARIABLES_TOTAL) throw new RequestFailure(400, "invalid_variables");
-    result[key] = cleaned;
-  }
-  return result;
 }
 
 function renderTemplate(contract: MessageContract, variables: Record<string, string>) {
@@ -613,7 +598,16 @@ Deno.serve(async (req) => {
       deliveryRelatedId = preparedAgreement.agreementId;
       deliveryCompanyId = preparedAgreement.companyId;
     }
-    const inputVariables = cleanInputVariables(body.variables, contract.allowedInputVariables);
+    const validation = cleanContractInputVariables({
+      messageType,
+      value: body.variables,
+      allowedKeys: contract.allowedInputVariables,
+      supabaseUrl,
+      maxVariableLength: MAX_VARIABLE_LENGTH,
+      maxTotal: MAX_VARIABLES_TOTAL,
+    });
+    if (!validation.ok) throw new RequestFailure(400, validation.error);
+    const inputVariables = validation.variables;
     const resolved = await resolveMessage(admin, caller, messageType, contract, body, inputVariables);
     const recipients = normalizeEmails(resolved.recipients).slice(0, MAX_RECIPIENTS);
     if (!recipients.length || recipients.length > MAX_RECIPIENTS) throw new RequestFailure(404, "recipient_not_found");
@@ -675,17 +669,17 @@ Deno.serve(async (req) => {
     });
     return jsonResponse({ ok: true, message_type: messageType, provider_message_id: providerResult.providerMessageId });
   } catch (error) {
+    let safeError = sanitizeProviderError(error);
     if (adminForLog && emailLogId) {
-      const safe = sanitizeProviderError(error);
-      await adminForLog.from("email_logs").update({ status: "Failed", error_code: safe.code,
-        error_message: safe.message, failed_at: new Date().toISOString() }).eq("id", emailLogId);
+      await adminForLog.from("email_logs").update({ status: "Failed", error_code: safeError.code,
+        error_message: safeError.message, failed_at: new Date().toISOString() }).eq("id", emailLogId);
       await recordAgreementDelivery(adminForLog, deliveryMessageType, deliveryRelatedId, deliveryCompanyId, {
-        email_delivery_status: "Failed", email_error_code: safe.code,
-        email_error_message: safe.message, email_failed_at: new Date().toISOString(),
+        email_delivery_status: "Failed", email_error_code: safeError.code,
+        email_error_message: safeError.message, email_failed_at: new Date().toISOString(),
       }).catch(() => undefined);
     }
     if (error instanceof RequestFailure) return jsonResponse({ ok: false, error: error.publicCode }, error.status);
     console.error("Email dispatcher internal failure", error instanceof Error ? error.name : "UnknownError");
-    return jsonResponse({ ok: false, error: "email_dispatch_failed" }, 500);
+    return jsonResponse({ ok: false, error: safeError.code }, 500);
   }
 });
