@@ -48,6 +48,10 @@ import {
   resolveAgencyUploadWorkspace,
   secureAgencyCandidatePayload,
 } from "./candidateExcelUpload.mjs";
+import {
+  buildCandidateCountSnapshot,
+  getOperationalCandidates,
+} from "./candidateOperationalMetrics.mjs";
 import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
@@ -6234,6 +6238,14 @@ const currentCompanyId = isCurrentPlatformUser
     ? (activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "")
     : (currentUser?.company_id || "");
 
+// Operational UI, dashboards, alerts and exports share this defensive source.
+// The database query also filters deleted_at, but this keeps stale/in-flight state
+// from ever reintroducing a soft-deleted row into a count after a workspace reload.
+const operationalCandidates = useMemo(
+  () => getOperationalCandidates(candidates, currentCompanyId),
+  [candidates, currentCompanyId]
+);
+
 function getWorkspaceIdentityKey(user = null) {
   if (!user?.id) return "";
   const effectiveCompanyId = normalizeUserRole(user.role) === "Agency"
@@ -8846,7 +8858,9 @@ async function loadProfessionAliases() {
     setCandidateTechnicalProfiles(data || []);
   }
 
-  const loadCandidates = () => loadTable("candidates", setCandidates);
+  const loadCandidates = () => loadTable("candidates", (rows) => {
+    setCandidates(getOperationalCandidates(rows, currentCompanyId));
+  });
   async function loadCandidateDeletionData() {
     if (!currentCompanyId) {
       setDeletedCandidates([]);
@@ -11036,10 +11050,10 @@ function getSaudiHiringRowCandidates(row) {
 
 const stats = useMemo(() => {
     const totalQty = visaRecords.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    const totalCandidates = candidates.length;
+    const totalCandidates = operationalCandidates.length;
 
 const totalRemaining = requests.reduce((sum, item) => {
-  const used = candidates.filter(
+  const used = operationalCandidates.filter(
     (c) => c.request_no === item.request_no
   ).length;
 
@@ -11054,7 +11068,7 @@ const visaProcessCount = requests.filter(
   (x) => x.status === "Visa Process"
 ).length;
 
-const totalMobilizationCost = candidates.reduce((sum, candidate) => sum + getCandidateTotalCost(candidate), 0);
+const totalMobilizationCost = operationalCandidates.reduce((sum, candidate) => sum + getCandidateTotalCost(candidate), 0);
 
 const totalRequestBudget = requests.reduce((sum, request) => {
   const qty = Number(request.quantity || 0);
@@ -11074,7 +11088,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
 
   approvedRequests: requests.filter((item) => item.approval_status === "Approved by Recruitment").length,
   pendingApprovals: requests.filter((item) => item.approval_status === "Pending Recruitment Approval").length,
-  joinedCandidates: candidates.filter((item) => item.status === "Joined").length,
+  joinedCandidates: operationalCandidates.filter((item) => item.status === "Joined").length,
   arrivedMobilizations: mobilizations.filter((item) => item.mobilization_status === "Arrived KSA").length,
   joinedMobilizations: mobilizations.filter((item) => item.mobilization_status === "Joined").length,
   pendingMedicalMobilizations: mobilizations.filter((item) => item.medical_status === "Pending").length,
@@ -11090,7 +11104,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
   openRequests: requests.filter((item) => item.status === "Open").length,
   urgentRequests: requests.filter((item) => item.priority === "Urgent").length,
 };
-  }, [visaRecords, agencies, requests, candidates, interviews, mobilizations]);
+  }, [visaRecords, agencies, requests, operationalCandidates, interviews, mobilizations]);
   const reports = useMemo(() => {
   const today = new Date();
 
@@ -11118,7 +11132,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
     visaAuthorizations.some((a) => a.visa_no === visa.visa_no);
 
   const authHasCandidates = (auth) =>
-    candidates.some(
+    operationalCandidates.some(
       (c) =>
         c.visa_no === auth.visa_no ||
         c.authorization_no === auth.authorization_no
@@ -11145,7 +11159,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
       (a) => !authHasCandidates(a)
     ),
 
-    candidatesWithoutInterviews: candidates.filter(
+    candidatesWithoutInterviews: operationalCandidates.filter(
       (c) => !candidateHasInterview(c)
     ),
 
@@ -11181,7 +11195,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
         relatedVisas.some((v) => v.visa_no === a.visa_no)
       );
 
-      const relatedCandidates = candidates.filter(
+      const relatedCandidates = operationalCandidates.filter(
         (c) =>
           c.request_no === r.request_no ||
           relatedVisas.some((v) => v.visa_no === c.visa_no)
@@ -11227,7 +11241,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
       };
     }),
   };
-}, [requests, requestLines, visaRecords, visaAuthorizations, candidates, interviews, mobilizations]);
+}, [requests, requestLines, visaRecords, visaAuthorizations, operationalCandidates, interviews, mobilizations]);
 
 const activityRequestOptions = useMemo(() => {
   const requestNos = [
@@ -11311,13 +11325,13 @@ const mobilizationRequestRows = useMemo(() => {
     const interviewRequiredQty = sumLineQty(interviewRequiredLines);
     const noInterviewQty = sumLineQty(noInterviewLines);
 
-    const requestCandidates = candidates.filter(
+    const requestCandidates = operationalCandidates.filter(
       (candidate) =>
         String(candidate.request_no || "") === String(requestNo || "") &&
         !["Rejected", "Interview Failed", "Medical Failed", "Cancelled"].includes(candidate.status)
     );
 
-    const allRequestCandidates = candidates.filter(
+    const allRequestCandidates = operationalCandidates.filter(
       (candidate) => String(candidate.request_no || "") === String(requestNo || "")
     );
 
@@ -11540,7 +11554,7 @@ const mobilizationRequestRows = useMemo(() => {
       approval_status: request.approval_status || "-",
     };
   });
-}, [requests, requestLines, candidates, interviews, mobilizations, visaAllocations, visaAuthorizations]);
+}, [requests, requestLines, operationalCandidates, interviews, mobilizations, visaAllocations, visaAuthorizations]);
 
 const selectedMobilizationRow =
   mobilizationRequestRows.find((row) => row.request_no === selectedMobilizationRequestNo) ||
@@ -11743,23 +11757,18 @@ const onboardingValidationStats = useMemo(() => ({
 }), [onboardingValidations]);
 
 const executiveDashboard = useMemo(() => {
-  const excludedCandidateStatuses = [
-    "Rejected",
-    "Interview Failed",
-    "Cancelled",
-    "Medical Failed",
-    "Medical Fail",
-  ];
-
-  const isActiveCandidate = (candidate) =>
-    !excludedCandidateStatuses.includes(candidate.status);
-
-  const activeCandidates = candidates.filter(isActiveCandidate);
-
   const totalRequired = requests.reduce(
     (sum, request) => sum + getRequestTotalQty(request),
     0
   );
+  const candidateSnapshot = buildCandidateCountSnapshot({
+    candidates: operationalCandidates,
+    companyId: currentCompanyId,
+    required: totalRequired,
+    interviews,
+  });
+  const activeCandidates = candidateSnapshot.activeCandidates;
+  const recruitmentProgress = candidateSnapshot.recruitmentProgress;
 
   const saudiRequests = requests.filter(isSaudiRequest);
   const foreignRequests = requests.filter((request) => !isSaudiRequest(request));
@@ -11783,10 +11792,6 @@ const executiveDashboard = useMemo(() => {
   }).length;
 
   const totalJoined = activeCandidates.filter((candidate) => candidate.status === "Joined").length;
-  const recruitmentProgress = totalRequired
-    ? Math.round((activeCandidates.length / totalRequired) * 100)
-    : 0;
-
   const allocatedVisas = visaAllocations.reduce(
     (sum, allocation) => sum + Number(allocation.allocated_qty || 0),
     0
@@ -11963,7 +11968,7 @@ const executiveDashboard = useMemo(() => {
     arrivalsNext30Days,
     recruitmentFunnel,
   };
-}, [requests, requestLines, visaRecords, visaAllocations, visaAuthorizations, candidates, interviews, reports]);
+}, [requests, requestLines, visaRecords, visaAllocations, visaAuthorizations, operationalCandidates, currentCompanyId, interviews, reports]);
 
  async function generateRequestNo() {
   const year = new Date().getFullYear();
@@ -13953,7 +13958,7 @@ async function deleteAgreement(id) {
   }
 
   function getOfficeVisibleCandidates() {
-    return candidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
+    return operationalCandidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
   }
 
   function isCurrentAgencyPenaltyRecord(item = {}) {
@@ -14211,6 +14216,7 @@ async function deleteAgreement(id) {
           .select("*", { count: "exact", head: true })
           .eq("request_no", requestNo)
           .eq("company_id", currentCompanyId)
+          .is("deleted_at", null)
           .in("status", completedStatuses);
 
         const requiredQty = Number(requestRow?.quantity || 0);
@@ -14532,7 +14538,8 @@ const { count: completedCandidateCount } = await supabase
   .select("*", { count: "exact", head: true })
   .eq("request_no", candidateForm.request_no)
   .eq("status", saudiCandidateFlow ? "Joined" : "Arrived KSA")
-  .eq("company_id", currentCompanyId);
+  .eq("company_id", currentCompanyId)
+  .is("deleted_at", null);
 
 const requestRemaining =
   Number(requestData?.quantity || 0) - Number(completedCandidateCount || 0);
@@ -24400,7 +24407,7 @@ async function openCompanyRequestsReport(client) {
 
     const [requestsResult, candidatesResult, mobilizationsResult] = await Promise.all([
       supabase.from("requests").select("*").eq("company_id", operationalCompanyId).range(0, 5000),
-      supabase.from("candidates").select("*").eq("company_id", operationalCompanyId).range(0, 5000),
+      supabase.from("candidates").select("*").eq("company_id", operationalCompanyId).is("deleted_at", null).range(0, 5000),
       supabase.from("mobilizations").select("*").eq("company_id", operationalCompanyId).range(0, 5000),
     ]);
 
