@@ -26,7 +26,10 @@ function RequestLineHarness() {
       <RequestLineCustomFields
         value={line}
         onFieldChange={(field, value) => setLine((previous) => ({ ...previous, [field]: value }))}
-        professionOptions={["Engineer", "Accountant"]}
+        professionOptions={[
+          { value: "مهندس - Engineer", label: "مهندس - Engineer" },
+          { value: "محاسب - Accountant", label: "محاسب - Accountant" },
+        ]}
         nationalityOptions={[
           { value: "Saudi", label: "سعودي — Saudi" },
           { value: "Indian", label: "هندي — Indian" },
@@ -73,7 +76,7 @@ async function runScenario() {
     const quantity = document.querySelector('input[aria-label="Quantity"]');
 
     profession.focus();
-    setInputValue(profession, "Custom Profession");
+    setInputValue(profession, "Unapproved Profession");
     nationality.focus();
     await delay(180);
     const professionAfterBlur = profession.value;
@@ -87,10 +90,10 @@ async function runScenario() {
     const otherFieldsPreserved = gender.value === "Female" && quantity.value === "3";
 
     setInputValue(profession, "Eng");
-    const engineerOption = document.querySelector('[data-select-option="Engineer"]');
+    const engineerOption = document.querySelector('[data-select-option="مهندس - Engineer"]');
     engineerOption.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await delay(0);
-    const optionSelectionWorked = profession.value === "Engineer" && nationality.value.includes("Indian");
+    const optionSelectionWorked = profession.value.includes("Engineer") && nationality.value.includes("Indian");
 
     document.querySelector("#add-line").click();
     await delay(0);
@@ -100,6 +103,7 @@ async function runScenario() {
     const payload = JSON.parse(atob(document.documentElement.dataset.savedPayload));
     recordResult({
       professionAfterBlur,
+      unapprovedProfessionRejected: professionAfterBlur === "",
       nationalityAfterBlur,
       otherFieldsPreserved,
       optionSelectionWorked,

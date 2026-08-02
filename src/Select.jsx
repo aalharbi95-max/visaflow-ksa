@@ -8,6 +8,9 @@ export default function Select({
   searchable = false,
   disabled = false,
   allowCustomValue = false,
+  loading = false,
+  error = "",
+  emptyMessage = "No options available",
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -36,9 +39,11 @@ export default function Select({
       <input
         value={open ? query : selectedLabel}
         placeholder={placeholder}
-        disabled={disabled}
+        disabled={disabled || loading || Boolean(error)}
+        aria-invalid={Boolean(error)}
+        aria-busy={loading}
         onFocus={() => {
-          if (disabled) return;
+          if (disabled || loading || error) return;
           setOpen(true);
           setQuery(allowCustomValue ? String(value || "") : "");
         }}
@@ -56,7 +61,7 @@ export default function Select({
           }
         }}
         onChange={(event) => {
-          if (disabled) return;
+          if (disabled || loading || error) return;
           const nextValue = event.target.value;
           setQuery(nextValue);
           setOpen(true);
@@ -64,7 +69,13 @@ export default function Select({
         }}
       />
 
-      {open && !disabled && (
+      {(loading || error) && (
+        <small role={error ? "alert" : "status"} style={{ display: "block", marginTop: 6, color: error ? "#b91c1c" : "#475569", fontWeight: 700 }}>
+          {loading ? "Loading options..." : error}
+        </small>
+      )}
+
+      {open && !disabled && !loading && !error && (
         <div style={{ position: "absolute", background: "#fff", border: "1px solid #ddd", maxHeight: "250px", overflowY: "auto", width: "100%", zIndex: 9999 }}>
           {filtered.slice(0, 80).map((option) => (
             <div
@@ -80,6 +91,9 @@ export default function Select({
               {getOptionLabel(option)}
             </div>
           ))}
+          {filtered.length === 0 && (
+            <div role="status" style={{ padding: "8px", color: "#64748b" }}>{emptyMessage}</div>
+          )}
         </div>
       )}
     </div>

@@ -98,12 +98,13 @@ test("request Profession and Nationality persist through focus changes and reach
     assert.ok(resultMatch, "The browser fixture did not produce a test result.");
     const result = JSON.parse(Buffer.from(resultMatch[1], "base64").toString("utf8"));
 
-    assert.equal(result.professionAfterBlur, "Custom Profession");
+    assert.equal(result.professionAfterBlur, "");
+    assert.equal(result.unapprovedProfessionRejected, true);
     assert.match(result.nationalityAfterBlur, /Indian/);
     assert.equal(result.otherFieldsPreserved, true);
     assert.equal(result.optionSelectionWorked, true);
     assert.deepEqual(result.payload.request_lines, [{
-      profession: "Engineer",
+      profession: "مهندس - Engineer",
       nationality: "Indian",
       gender: "Female",
       quantity: 3,

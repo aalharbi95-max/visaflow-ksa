@@ -5,6 +5,8 @@ export default function RequestLineCustomFields({
   onFieldChange,
   professionOptions,
   nationalityOptions,
+  loading = false,
+  error = "",
 }) {
   return (
     <>
@@ -13,8 +15,10 @@ export default function RequestLineCustomFields({
         onChange={(nextValue) => onFieldChange("profession", nextValue)}
         placeholder="Profession"
         searchable
-        allowCustomValue
         options={professionOptions}
+        loading={loading}
+        error={error}
+        emptyMessage="No approved professions found"
       />
       <Select
         value={value.nationality}
@@ -22,6 +26,9 @@ export default function RequestLineCustomFields({
         placeholder="Nationality / الجنسية"
         searchable
         options={nationalityOptions}
+        loading={loading}
+        error={error}
+        emptyMessage="No approved nationalities found"
       />
     </>
   );

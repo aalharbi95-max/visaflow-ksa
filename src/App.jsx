@@ -42,6 +42,7 @@ import {
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
 import RequestLineCustomFields from "./RequestLineCustomFields";
+import { buildProfessionOptions, isApprovedRequestLine, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
 import {
@@ -6174,6 +6175,8 @@ const [mobilizationForm, setMobilizationForm] = useState({
 });
 const [countries, setCountries] = useState([]);
 const [professions, setProfessions] = useState([]);
+const [requestMasterDataLoading, setRequestMasterDataLoading] = useState(false);
+const [requestMasterDataError, setRequestMasterDataError] = useState("");
 const [professionAliases, setProfessionAliases] = useState([]);
 const [professionForm, setProfessionForm] = useState({ name_ar: "", name_en: "", category: "" });
 const [professionImportReviewRows, setProfessionImportReviewRows] = useState([]);
@@ -7530,6 +7533,7 @@ async function saveSelectedAllocations() {
   const [requestForm, setRequestForm] = useState(emptyRequest);
   const [requestLineForm, setRequestLineForm] = useState(emptyRequestLine);
   const [requestLinesDraft, setRequestLinesDraft] = useState([]);
+  const [requestLineEditingIndex, setRequestLineEditingIndex] = useState(null);
   const [requestEditingId, setRequestEditingId] = useState(null);
   const [requestAgencyNotification, setRequestAgencyNotification] = useState(null);
   const [requestAgencyNotificationSending, setRequestAgencyNotificationSending] = useState(false);
@@ -8075,6 +8079,9 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAgencyScores([]);
     setAgencyScoreHistory([]);
     setAgencyPenalties([]);
+    setCountries([]);
+    setProfessions([]);
+    setRequestMasterDataError("");
     setMarketplaceRequests([]);
     setMarketplaceDeals([]);
     setMarketplaceDealWorkers([]);
@@ -8186,6 +8193,8 @@ Cancel = إضافتها كوظيفة مستقلة`
       return;
     }
     setLoading(true);
+    setRequestMasterDataLoading(true);
+    setRequestMasterDataError("");
     await Promise.all([
       loadRequests(),
       loadRequestLines(),
@@ -8198,8 +8207,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadAgencyScores(),
       loadAgencyScoreHistory(),
       loadAgencyPenalties(),
-       loadCountries(),
-  loadProfessions(),
+       loadRequestMasterData(),
   loadProfessionAliases(),
       loadEducationInstitutions(),
       loadCandidates(),
@@ -8239,6 +8247,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadLocalContentSettings(),
       loadLocalContentProjectTargets(),
     ]);
+    setRequestMasterDataLoading(false);
     setLoading(false);
   }
 
@@ -8691,6 +8700,52 @@ const loadProfessions = async () => {
 console.log("professions total", allProfessions.length);
 setProfessions(allProfessions);
 };
+
+async function loadRequestMasterData() {
+  const requestGeneration = workspaceDataGenerationRef.current;
+  const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+  let countriesResult;
+  let professionsPart1;
+  let professionsPart2;
+  try {
+    [countriesResult, professionsPart1, professionsPart2] = await Promise.all([
+      supabase.from("countries").select("*").range(0, 5000),
+      supabase.from("professions").select("*").range(0, 999),
+      supabase.from("professions").select("*").range(1000, 3000),
+    ]);
+  } catch (error) {
+    if (requestGeneration === workspaceDataGenerationRef.current && requestWorkspaceKey === validatedWorkspaceKey) {
+      setCountries([]);
+      setProfessions([]);
+      setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error?.message || error}`);
+    }
+    return [];
+  }
+
+  if (
+    requestGeneration !== workspaceDataGenerationRef.current
+    || requestWorkspaceKey !== validatedWorkspaceKey
+  ) return [];
+
+  const error = countriesResult.error || professionsPart1.error || professionsPart2.error;
+  if (error) {
+    setCountries([]);
+    setProfessions([]);
+    setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error.message}`);
+    return [];
+  }
+
+  const nextCountries = countriesResult.data || [];
+  const nextProfessions = [...(professionsPart1.data || []), ...(professionsPart2.data || [])];
+  setCountries(nextCountries);
+  setProfessions(nextProfessions);
+  if (!buildProfessionOptions(nextProfessions).length || !buildNationalityOptions(nextCountries).length) {
+    setRequestMasterDataError("Approved professions or nationalities are unavailable for this workspace. Please contact support.");
+    return [];
+  }
+  setRequestMasterDataError("");
+  return [nextCountries, nextProfessions];
+}
 
 async function loadProfessionAliases() {
   try {
@@ -12457,15 +12512,18 @@ function isDuplicateRequestNoError(error) {
   }
 
   function addRequestLineToDraft() {
-    const canonicalNationality = resolveCanonicalNationality(requestLineForm.nationality, countries);
-    if (!requestLineForm.profession || !requestLineForm.quantity || !canonicalNationality) {
-      return alert("Please select Profession, Nationality, and Quantity for the request line.");
+    if (requestMasterDataLoading || requestMasterDataError) {
+      return alert(requestMasterDataError || "Please wait while approved professions and nationalities load.");
+    }
+    const canonicalProfession = resolveApprovedProfession(requestLineForm.profession, professions);
+    const canonicalNationality = resolveApprovedNationality(requestLineForm.nationality, countries, resolveCanonicalNationality);
+    if (!canonicalProfession || !requestLineForm.quantity || !canonicalNationality) {
+      return alert("Please select an approved Profession and Nationality, and enter Quantity for the request line.");
     }
 
-    setRequestLinesDraft((prev) => [
-      ...prev,
-      {
+    const nextLine = {
         ...requestLineForm,
+        profession: canonicalProfession,
         nationality: canonicalNationality,
         quantity: Number(requestLineForm.quantity || 0),
         salary: requestLineForm.salary || "",
@@ -12474,14 +12532,26 @@ function isDuplicateRequestNoError(error) {
           requestLineForm.interview_required === "No Interview"
             ? "N/A"
             : requestLineForm.interview_type || "Online",
-      },
-    ]);
+      };
+    setRequestLinesDraft((prev) => requestLineEditingIndex === null
+      ? [...prev, nextLine]
+      : prev.map((line, index) => index === requestLineEditingIndex ? nextLine : line));
 
     setRequestLineForm(emptyRequestLine);
+    setRequestLineEditingIndex(null);
+  }
+
+  function editRequestLineDraft(index) {
+    setRequestLineForm({ ...requestLinesDraft[index] });
+    setRequestLineEditingIndex(index);
   }
 
   function removeRequestLineFromDraft(index) {
     setRequestLinesDraft((prev) => prev.filter((_, i) => i !== index));
+    if (requestLineEditingIndex === index) {
+      setRequestLineForm(emptyRequestLine);
+      setRequestLineEditingIndex(null);
+    }
   }
 
   function buildRequestLinesToSave() {
@@ -12489,8 +12559,8 @@ function isDuplicateRequestNoError(error) {
 
     if (draftLines.length > 0) {
       return draftLines.map((line) => ({
-        profession: line.profession || "",
-        nationality: resolveCanonicalNationality(line.nationality, countries),
+        profession: resolveApprovedProfession(line.profession, professions),
+        nationality: resolveApprovedNationality(line.nationality, countries, resolveCanonicalNationality),
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || "",
@@ -12503,8 +12573,8 @@ function isDuplicateRequestNoError(error) {
     if (requestForm.profession && requestForm.quantity) {
       return [
         {
-          profession: requestForm.profession || "",
-          nationality: requestForm.nationality || "",
+          profession: resolveApprovedProfession(requestForm.profession, professions),
+          nationality: resolveApprovedNationality(requestForm.nationality, countries, resolveCanonicalNationality),
           gender: requestForm.gender || "",
           quantity: Number(requestForm.quantity || 0),
           salary: "",
@@ -12525,6 +12595,7 @@ function isDuplicateRequestNoError(error) {
     setRequestForm(emptyRequest);
     setRequestLineForm(emptyRequestLine);
     setRequestLinesDraft([]);
+    setRequestLineEditingIndex(null);
     setRequestEditingId(null);
   }
 
@@ -12567,6 +12638,7 @@ function isDuplicateRequestNoError(error) {
         notes: line.notes || "",
       }))
     );
+    setRequestLineEditingIndex(null);
 
     setActivePage("Requests");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -12578,8 +12650,13 @@ function isDuplicateRequestNoError(error) {
 
     const linesToSave = buildRequestLinesToSave();
 
-    if (!requestForm.request_type || linesToSave.length === 0 || linesToSave.some((line) => !line.nationality)) {
-      alert("Please fill Request Type and add at least one request line.");
+    if (requestMasterDataLoading || requestMasterDataError) {
+      return alert(requestMasterDataError || "Please wait while approved professions and nationalities load.");
+    }
+    if (!requestForm.request_type || linesToSave.length === 0 || linesToSave.some((line) =>
+      !isApprovedRequestLine(line, professions, countries, resolveCanonicalNationality)
+    )) {
+      alert("Please fill Request Type and use approved Profession and Nationality values on every request line.");
       return;
     }
 
@@ -31095,10 +31172,10 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                   <RequestLineCustomFields
                     value={requestLineForm}
                     onFieldChange={(field, value) => updateForm(setRequestLineForm, field, value)}
-                    professionOptions={professions.map((p) =>
-                      p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar
-                    )}
+                    professionOptions={buildProfessionOptions(professions)}
                     nationalityOptions={buildNationalityOptions(countries)}
+                    loading={requestMasterDataLoading}
+                    error={requestMasterDataError}
                   />
                   <Select
                     value={requestLineForm.gender}
@@ -31145,8 +31222,8 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                 </div>
 
                 <div className="actions-line">
-                  <button type="button" className="btn" onClick={addRequestLineToDraft}>
-                    Add Line
+                  <button type="button" className="btn" onClick={addRequestLineToDraft} disabled={requestMasterDataLoading || Boolean(requestMasterDataError)}>
+                    {requestLineEditingIndex === null ? "Add Line" : "Update Line"}
                   </button>
                 </div>
 
@@ -31179,6 +31256,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                           <td>{line.salary || "-"}</td>
                           <td>{line.interview_required === "No Interview" ? "No Interview" : line.interview_type || "Online"}</td>
                           <td>
+                            <button type="button" className="light-btn" onClick={() => editRequestLineDraft(index)}>
+                              Edit
+                            </button>{" "}
                             <button type="button" className="danger" onClick={() => removeRequestLineFromDraft(index)}>
                               Remove
                             </button>
