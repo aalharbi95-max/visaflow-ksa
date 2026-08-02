@@ -52,6 +52,7 @@ import {
   buildCandidateCountSnapshot,
   getOperationalCandidates,
 } from "./candidateOperationalMetrics.mjs";
+import { buildBulkAssignmentPreview, getBatchCandidateIds, getMatchingCandidateIds } from "./bulkAssignment.mjs";
 import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
@@ -5975,6 +5976,13 @@ const [candidates, setCandidates] = useState([]);
 const [deletedCandidates, setDeletedCandidates] = useState([]);
 const [candidateUploadBatches, setCandidateUploadBatches] = useState([]);
 const [candidateSelectedIds, setCandidateSelectedIds] = useState([]);
+const [bulkAssignmentOpen, setBulkAssignmentOpen] = useState(false);
+const [bulkAssignmentMode, setBulkAssignmentMode] = useState("selected");
+const [bulkAssignmentCandidateIds, setBulkAssignmentCandidateIds] = useState([]);
+const [bulkAssignmentLines, setBulkAssignmentLines] = useState([]);
+const [bulkAssignmentRequestNo, setBulkAssignmentRequestNo] = useState("");
+const [bulkAssignmentLineId, setBulkAssignmentLineId] = useState("");
+const [bulkAssignmentBusy, setBulkAssignmentBusy] = useState(false);
 const [candidateTechnicalProfiles, setCandidateTechnicalProfiles] = useState([]);
 const [educationInstitutions, setEducationInstitutions] = useState([]);
 const [candidateTechnicalForm, setCandidateTechnicalForm] = useState(emptyCandidateTechnicalProfile);
@@ -14054,6 +14062,101 @@ async function deleteAgreement(id) {
     setInterviewEditingId(existingInterview?.id || null);
     setActivePage(currentRole === "Agency" ? "Office Portal" : "Interviews");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function openBulkAssignment(candidateIds = [], mode = "selected") {
+    const ids = [...new Set(candidateIds.map(String).filter(Boolean))];
+    if (mode !== "matching" && ids.length === 0) return alert("Please select at least one candidate.");
+    setBulkAssignmentBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("bulk_assignment_request_lines_v1");
+      if (error) throw error;
+      setBulkAssignmentLines(data || []);
+      setBulkAssignmentCandidateIds(ids);
+      setBulkAssignmentMode(mode);
+      setBulkAssignmentRequestNo("");
+      setBulkAssignmentLineId("");
+      setBulkAssignmentOpen(true);
+    } catch (error) {
+      alert(error.message || "Unable to load available request lines.");
+    } finally {
+      setBulkAssignmentBusy(false);
+    }
+  }
+
+  function getBulkAssignmentCandidates() {
+    const line = bulkAssignmentLines.find((item) => String(item.request_line_id) === String(bulkAssignmentLineId));
+    const ids = bulkAssignmentMode === "matching" && line
+      ? getMatchingCandidateIds(candidates, line)
+      : bulkAssignmentCandidateIds;
+    return candidates.filter((item) => ids.includes(String(item.id)));
+  }
+
+  async function confirmBulkAssignment() {
+    const line = bulkAssignmentLines.find((item) => String(item.request_line_id) === String(bulkAssignmentLineId));
+    if (!line) return alert("Select Request No and Request Line.");
+    const selected = getBulkAssignmentCandidates();
+    const preview = buildBulkAssignmentPreview(selected, { ...line, quantity: line.required_quantity }, line.linked_quantity);
+    if (!selected.length) return alert("No matching candidates were found.");
+    if (preview.rejectedCount) return alert("All selected candidates must match. Review rejection reasons before confirming.");
+    if (!preview.capacityValid) return alert("Requested quantity capacity would be exceeded.");
+    if (!window.confirm(`Assign ${selected.length} candidate(s) to ${line.request_no} / Line ${line.line_no}?`)) return;
+    setBulkAssignmentBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("bulk_assign_candidates_v1", { p_candidate_ids: selected.map((item) => item.id), p_request_line_id: line.request_line_id });
+      if (error) throw error;
+      setBulkAssignmentOpen(false); setCandidateSelectedIds([]); setOfficeSelectedCandidateIds([]);
+      await loadAll();
+      alert(`Successfully assigned ${Number(data?.assigned_count || selected.length)} candidate(s).`);
+    } catch (error) { alert(error.message || "Bulk assignment failed. No candidates were assigned."); }
+    finally { setBulkAssignmentBusy(false); }
+  }
+
+  async function bulkUnassign(candidateIds = []) {
+    const ids = [...new Set(candidateIds.map(String).filter(Boolean))];
+    if (!ids.length) return alert("Please select at least one assigned candidate.");
+    const reason = window.prompt("Reason for unassignment:");
+    if (!reason || reason.trim().length < 3) return alert("An unassignment reason is required.");
+    if (!window.confirm(`Unassign ${ids.length} candidate(s)? This is allowed only before Authorization or Mobilization.`)) return;
+    setBulkAssignmentBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("bulk_unassign_candidates_v1", { p_candidate_ids: ids, p_reason: reason.trim() });
+      if (error) throw error;
+      setCandidateSelectedIds([]); setOfficeSelectedCandidateIds([]); await loadAll();
+      alert(`Successfully unassigned ${Number(data?.unassigned_count || ids.length)} candidate(s).`);
+    } catch (error) { alert(error.message || "Bulk unassignment failed. No candidates were changed."); }
+    finally { setBulkAssignmentBusy(false); }
+  }
+
+  function renderBulkAssignmentPanel() {
+    if (!bulkAssignmentOpen) return null;
+    const line = bulkAssignmentLines.find((item) => String(item.request_line_id) === String(bulkAssignmentLineId));
+    const preview = line ? buildBulkAssignmentPreview(getBulkAssignmentCandidates(), { ...line, quantity: line.required_quantity }, line.linked_quantity) : null;
+    return <FormCard title="Bulk Assignment Confirmation">
+      <p>Only open request lines for the active authenticated company workspace are available.</p>
+      <div className="form-grid">
+        <Select value={bulkAssignmentRequestNo} onChange={(value) => { setBulkAssignmentRequestNo(value); setBulkAssignmentLineId(""); }} placeholder="Request No" searchable options={[...new Set(bulkAssignmentLines.map((item) => item.request_no))]} />
+        <Select value={bulkAssignmentLineId} onChange={setBulkAssignmentLineId} placeholder="Request Line" searchable options={bulkAssignmentLines.filter((item) => item.request_no === bulkAssignmentRequestNo).map((item) => ({ value: item.request_line_id, label: `Line ${item.line_no} — ${item.profession} — ${item.nationality} — ${item.gender} — Remaining ${item.remaining_quantity}` }))} />
+      </div>
+      {preview && <>
+        <div className="stats-grid" style={{ marginTop: 12 }}>
+          <div className="stat-card"><h3>Selected</h3><strong>{preview.selectedCount}</strong></div>
+          <div className="stat-card"><h3>Required</h3><strong>{preview.required}</strong></div>
+          <div className="stat-card"><h3>Currently Linked</h3><strong>{preview.linked}</strong></div>
+          <div className="stat-card"><h3>Remaining</h3><strong>{preview.remaining}</strong></div>
+          <div className="stat-card"><h3>Profession</h3><strong>{preview.profession}</strong></div>
+          <div className="stat-card"><h3>Nationality</h3><strong>{preview.nationality}</strong></div>
+          <div className="stat-card"><h3>Gender</h3><strong>{preview.gender}</strong></div>
+          <div className="stat-card"><h3>Matching</h3><strong>{preview.matchingCount}</strong></div>
+          <div className="stat-card"><h3>Rejected</h3><strong>{preview.rejectedCount}</strong></div>
+        </div>
+        {preview.rejected.length > 0 && <div className="insight-list">{preview.rejected.map(({ candidate, reasons }) => <p key={candidate.id}><b>{candidate.candidate_name}:</b> {reasons.join(", ")}</p>)}</div>}
+      </>}
+      <div className="actions-line">
+        <button className="save-btn" disabled={bulkAssignmentBusy || !preview?.matchingCount || preview?.rejectedCount > 0 || !preview?.capacityValid} onClick={confirmBulkAssignment}>{bulkAssignmentBusy ? "Assigning..." : "Confirm Assignment"}</button>
+        <button className="light-btn" disabled={bulkAssignmentBusy} onClick={() => setBulkAssignmentOpen(false)}>Cancel</button>
+      </div>
+    </FormCard>;
   }
 
   function toggleOfficeCandidateSelection(candidateId) {
@@ -32907,13 +33010,17 @@ disabled={authorizationWorkflowBusy === "create"}
             )}
             <TableCard title="Candidates List">
   <div className="actions-line" style={{ marginBottom: 12 }}>
-    <button className="light-btn" onClick={() => setCandidateSelectedIds(filteredCandidateTableRows.map((item) => String(item.id)))}>Select All</button>
+    <button className="light-btn" onClick={() => setCandidateSelectedIds(filteredCandidateTableRows.map((item) => String(item.id)))}>Select All Matching</button>
+    <button className="save-btn" disabled={bulkAssignmentBusy || !candidateSelectedIds.length} onClick={() => openBulkAssignment(candidateSelectedIds, "selected")}>Assign Selected to Request ({candidateSelectedIds.length})</button>
+    <button className="new-btn" disabled={bulkAssignmentBusy} onClick={() => openBulkAssignment([], "matching")}>Select All Matching & Assign</button>
+    <button className="light-btn" disabled={bulkAssignmentBusy || !candidateSelectedIds.length} onClick={() => bulkUnassign(candidateSelectedIds)}>Bulk Unassign</button>
     <button className="danger" disabled={!candidateSelectedIds.length} onClick={() => softDeleteCandidates(candidateSelectedIds)}>Delete Selected ({candidateSelectedIds.length})</button>
   </div>
+  {renderBulkAssignmentPanel()}
   <div className="stats-grid" style={{ marginBottom: 12 }}>
     {candidateUploadBatches.map((batch) => {
       const activeCount = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch.id)).length;
-      return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div>;
+      return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><div className="actions-line"><button className="save-btn" disabled={!activeCount || bulkAssignmentBusy} onClick={() => openBulkAssignment(getBatchCandidateIds(candidates, batch.id), "batch")}>Assign Entire Upload Batch to Request</button><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div></div>;
     })}
   </div>
   <SmartTableToolbar
@@ -34662,6 +34769,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         />
 
         <div className="actions-line">
+          <button className="save-btn" disabled={bulkAssignmentBusy || !officeSelectedCandidateIds.length} onClick={() => openBulkAssignment(officeSelectedCandidateIds, "selected")}>Assign Selected to Request ({officeSelectedCandidateIds.length})</button>
+          <button className="new-btn" disabled={bulkAssignmentBusy} onClick={() => openBulkAssignment([], "matching")}>Select All Matching</button>
+          <button className="light-btn" disabled={bulkAssignmentBusy || !officeSelectedCandidateIds.length} onClick={() => bulkUnassign(officeSelectedCandidateIds)}>Bulk Unassign</button>
           <button
             className="save-btn"
             onClick={bulkUpdateOfficeCandidates}
@@ -34675,11 +34785,12 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </div>
       </FormCard>
     )}
+    {renderBulkAssignmentPanel()}
 
     <div className="stats-grid" style={{ marginBottom: 12 }}>
       {candidateUploadBatches.map((batch) => {
         const activeCount = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch.id)).length;
-        return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div>;
+        return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><div className="actions-line"><button className="save-btn" disabled={!activeCount || bulkAssignmentBusy} onClick={() => openBulkAssignment(getBatchCandidateIds(candidates, batch.id), "batch")}>Assign Entire Upload Batch to Request</button><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div></div>;
       })}
     </div>
 
