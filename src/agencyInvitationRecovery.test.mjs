@@ -294,6 +294,32 @@ test("an existing compatible Auth identity receives a recovery invitation link",
   assert.equal(result.request.auth_user_id, "existing-auth");
 });
 
+test("a new Auth identity receives an invite link with the staging activation redirect", async () => {
+  let generatedType = "";
+  let generatedRedirect = "";
+  await runAgencyInvitationAction({
+    body: { action: "invite_existing", agency_id: "agency-a", permissions: DEFAULT_AGENCY_PERMISSIONS },
+    actor: activeActor(),
+    repository: {
+      begin: async () => ({ id: "request-new", agency_id: "agency-a", admin_email: "new@example.test", auth_user_id: null, outcome: "send" }),
+      findRecoverableAuthUser: async () => null,
+      findExistingAuthUser: async () => null,
+      deliverInvitation: async ({ actionLink }) => assert.match(actionLink, /type=invite/),
+      recordAuthUser: async () => {}, complete: async () => ({ status: "Invitation Sent" }),
+      markFailed: async () => assert.fail("must not fail"),
+    },
+    authAdmin: { generateLink: async ({ type, options }) => {
+      generatedType = type;
+      generatedRedirect = options.redirectTo;
+      return { data: { user: { id: "new-auth" }, properties: { action_link: `https://supabase.example.test/auth/v1/verify?type=${type}` } } };
+    } },
+    inviteRedirectUrl: "https://staging.visaflowksa.com/agency/activate?agency_invite=1",
+  });
+  assert.equal(generatedType, "invite");
+  assert.equal(generatedRedirect, "https://staging.visaflowksa.com/agency/activate?agency_invite=1");
+  assert.doesNotMatch(generatedRedirect, /localhost|127\.0\.0\.1|visaflowksa\.com\/(?!agency)/);
+});
+
 test("revocation is tenant-authorized and delegated to the protected repository", async () => {
   let agencyId = "";
   const result = await runAgencyInvitationAction({

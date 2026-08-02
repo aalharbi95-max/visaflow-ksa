@@ -211,11 +211,9 @@ export function isAgencyInvitationUrl(locationLike) {
   try {
     const url = new URL(locationLike?.href || "https://invalid.local/");
     const hash = new URLSearchParams(String(url.hash || "").replace(/^#/, ""));
-    return (
-      url.searchParams.get("type") === "invite" ||
-      hash.get("type") === "invite" ||
-      url.searchParams.get("agency_invite") === "1"
-    );
+    const type = url.searchParams.get("type") || hash.get("type");
+    const activationRoute = url.pathname === "/agency/activate";
+    return activationRoute && (["invite", "recovery"].includes(type || "") || url.searchParams.get("agency_invite") === "1");
   } catch {
     return false;
   }

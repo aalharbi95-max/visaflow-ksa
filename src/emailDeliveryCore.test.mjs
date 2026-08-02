@@ -5,6 +5,7 @@ import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, 
 import { ensureQueuedEmailAttempt, markEmailAttemptFailed } from "../supabase/functions/_shared/emailAttemptCore.mjs";
 import { cleanContractInputVariables, validateSupabaseInvitationUrl } from "../supabase/functions/_shared/emailVariableValidation.mjs";
 import { acquireEmailDispatch, isValidInternalHandoff } from "../supabase/functions/_shared/emailDispatchState.mjs";
+import { renderAgencyInvitationEmail } from "../supabase/functions/_shared/agencyInvitationEmail.mjs";
 
 test("transport test double receives the final provider payload", async () => {
   let received;
@@ -65,6 +66,17 @@ test("validated invitation reaches the mocked transport without exposing its tok
   assert.equal(transportReached, true);
   const safe = sanitizeProviderError({ code: "EAUTH", message: validation.variables.action_url });
   assert.doesNotMatch(JSON.stringify(safe), /private-token|auth\/v1\/verify/);
+});
+
+test("agency invitation email uses a bilingual CTA and never displays the raw token", () => {
+  const actionUrl = "https://staging-ref.supabase.co/auth/v1/verify?token=raw-secret-token&type=invite";
+  const rendered = renderAgencyInvitationEmail({ agencyName: "Agency One", actionUrl, expiresHours: 24 });
+  assert.match(rendered.html, /<a href="[^"]+"[^>]*>Accept Invitation \/ قبول الدعوة<\/a>/);
+  assert.match(rendered.html, /24 hours/);
+  assert.match(rendered.html, /24 ساعة/);
+  assert.doesNotMatch(rendered.text, /raw-secret-token|auth\/v1\/verify/);
+  const visibleHtml = rendered.html.replace(/<[^>]+>/g, " ");
+  assert.doesNotMatch(visibleHtml, /raw-secret-token|auth\/v1\/verify/);
 });
 
 test("email idempotency ignores recipient order", () => {

@@ -118,16 +118,17 @@ test("agency invitation permissions reject unknown or non-boolean values", () =>
 test("invite callback detection supports Supabase invite fragments", () => {
   assert.equal(
     isAgencyInvitationUrl({
-      href: "https://preview.example.test/#access_token=secret&type=invite",
+      href: "https://staging.example.test/agency/activate#access_token=secret&type=invite",
     }),
     true
   );
   assert.equal(
     isAgencyInvitationUrl({
-      href: "https://preview.example.test/?type=recovery",
+      href: "https://staging.example.test/agency/activate?type=recovery",
     }),
-    false
+    true
   );
+  assert.equal(isAgencyInvitationUrl({ href: "https://staging.example.test/?type=invite" }), false);
 });
 
 test("invite callback errors distinguish expired, used, and invalid links", () => {
@@ -186,10 +187,10 @@ test("acceptance messages cover every required failure state", () => {
 
 test("clean invite URL removes callback credentials and invite routing state", () => {
   const cleaned = getCleanAgencyInvitationUrl({
-    href: "https://staging.example.test/?agency_invite=1&safe=kept#access_token=secret&type=invite",
+    href: "https://staging.example.test/agency/activate?agency_invite=1&safe=kept#access_token=secret&type=invite",
   });
   assert.equal(cleaned.origin, "https://staging.example.test");
-  assert.equal(cleaned.pathname, "/");
+  assert.equal(cleaned.pathname, "/agency/activate");
   assert.equal(cleaned.search, "?safe=kept");
   assert.equal(cleaned.hash, "");
 });
@@ -234,9 +235,9 @@ test("App uses the Edge Function and contains no invitation table writes", async
   assert.match(app, /action:\s*"activate"/);
   assert.match(app, /AgencyInvitationPasswordScreen/);
   assert.match(app, /auth\.updateUser\(\{\s*password:/);
-  assert.match(app, /if \(!existingIdentity\) \{[\s\S]{0,300}auth\.updateUser\(\{\s*password:/);
+  assert.match(app, /auth\.updateUser\(\{ password: form\.password \}\)/);
   assert.match(app, /auth_identity_preexisting/);
-  assert.match(app, /Your password will not be changed/);
+  assert.match(app, /PASSWORD_RECOVERY/);
   assert.match(app, /setActivePage\("Office Portal"\)/);
   assert.match(app, /loadAuthenticatedWorkspaceContext/);
   assert.doesNotMatch(app, /get_authenticated_app_user/);

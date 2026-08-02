@@ -5073,7 +5073,7 @@ function AgencyInvitationPasswordScreen({ onAccepted }) {
     });
     const { data: listener } = supabase.auth.onAuthStateChange(
       (event, nextSession) => {
-        if (event === "SIGNED_IN" && nextSession?.user) {
+        if (["SIGNED_IN", "PASSWORD_RECOVERY"].includes(event) && nextSession?.user) {
           window.setTimeout(() => void acceptSession(nextSession), 0);
         }
       }
@@ -5086,11 +5086,11 @@ function AgencyInvitationPasswordScreen({ onAccepted }) {
 
   async function acceptAgencyInvitation() {
     if (!session?.user?.id || busy) return;
-    if (!existingIdentity && form.password.length < 12) {
+    if (form.password.length < 12) {
       setMessage("Password must be at least 12 characters.");
       return;
     }
-    if (!existingIdentity && form.password !== form.confirmation) {
+    if (form.password !== form.confirmation) {
       setMessage("Passwords do not match.");
       return;
     }
@@ -5098,12 +5098,8 @@ function AgencyInvitationPasswordScreen({ onAccepted }) {
     setBusy(true);
     setMessage("");
     try {
-      if (!existingIdentity) {
-        const { error } = await supabase.auth.updateUser({
-          password: form.password,
-        });
-        if (error) throw error;
-      }
+      const { error } = await supabase.auth.updateUser({ password: form.password });
+      if (error) throw error;
 
       const request = await invokeAgencyInvitation(supabase, {
         action: "activate",
@@ -5143,9 +5139,9 @@ function AgencyInvitationPasswordScreen({ onAccepted }) {
         <div className="vf-login-card" style={{ maxWidth: 520 }}>
           <h2>Accept agency invitation</h2>
           <p>{existingIdentity
-            ? "Activate Office Portal access using your existing account. Your password will not be changed."
+            ? "Set a new password to securely activate Office Portal access for your existing account."
             : "Set a password to activate your Office Portal access."}</p>
-          {!existingIdentity && <>
+          <>
             <Input
               type="password"
               placeholder="New Password"
@@ -5164,14 +5160,14 @@ function AgencyInvitationPasswordScreen({ onAccepted }) {
                 setForm((current) => ({ ...current, confirmation: value }))
               }
             />
-          </>}
+          </>
           {message && <p>{message}</p>}
           <button
             className="save-btn"
             disabled={!session || busy}
             onClick={acceptAgencyInvitation}
           >
-            {busy ? "Activating..." : existingIdentity ? "Accept with Existing Account" : "Set Password & Accept"}
+            {busy ? "Activating..." : "Set Password & Accept"}
           </button>
         </div>
       </section>

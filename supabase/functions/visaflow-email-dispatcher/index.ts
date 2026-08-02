@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../_shared/emailDeliveryCore.mjs";
 import { cleanContractInputVariables } from "../_shared/emailVariableValidation.mjs";
 import { acquireEmailDispatch } from "../_shared/emailDispatchState.mjs";
+import { renderAgencyInvitationEmail } from "../_shared/agencyInvitationEmail.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -199,7 +200,12 @@ function approvedUrl(query?: Record<string, string>) {
   return url.toString();
 }
 
-function renderTemplate(contract: MessageContract, variables: Record<string, string>) {
+function renderTemplate(messageType: string, contract: MessageContract, variables: Record<string, string>) {
+  if (messageType === "AGENCY_USER_INVITATION") return renderAgencyInvitationEmail({
+    agencyName: variables.agency_name,
+    actionUrl: variables.action_url,
+    expiresHours: 24,
+  });
   const populated = contract.fields.map(([key, label]) => [label, variables[key] || "-"] as const);
   const text = [contract.subject, "", ...populated.map(([label, value]) => `${label}: ${value}`), "", "VisaFlow KSA"].join("\n").slice(0, 6_000);
   const rows = populated.map(([label, value]) => `<div style="margin:7px 0;"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</div>`).join("");
@@ -615,7 +621,7 @@ Deno.serve(async (req) => {
     const resolved = await resolveMessage(admin, caller, messageType, contract, body, inputVariables);
     const recipients = normalizeEmails(resolved.recipients).slice(0, MAX_RECIPIENTS);
     if (!recipients.length || recipients.length > MAX_RECIPIENTS) throw new RequestFailure(404, "recipient_not_found");
-    const rendered = renderTemplate(contract, resolved.variables);
+    const rendered = renderTemplate(messageType, contract, resolved.variables);
 
     const smtpHost = Deno.env.get("SMTP_HOSTNAME") || "mail.privateemail.com";
     const smtpPort = Number(Deno.env.get("SMTP_PORT") || "465");
