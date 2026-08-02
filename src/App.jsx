@@ -71,6 +71,7 @@ import {
   isAuthorizationCompanyActor,
 } from "./authorizationWorkflow.mjs";
 import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
+import { filterNotificationsForWorkspace } from "./notificationVisibility.mjs";
 import {
   AGENCY_PERMISSION_KEYS,
   DEFAULT_AGENCY_PERMISSIONS,
@@ -9733,18 +9734,9 @@ async function loadNotifications() {
     return [];
   }
 
-  let query = supabase
-    .from("notification_events")
-    .select("id, company_id, user_id, agency_id, agency_name, recipient_role, request_no, type, title, message, priority, status, delivery_status, related_table, related_id, response_status, response_at, rejection_reason, sla_started_at, sla_days, sla_due_at, read_at, created_at, data")
-    .eq("company_id", currentCompanyId)
-    .order("created_at", { ascending: false })
-    .limit(1000);
-
-  if (currentRole === "Agency" && currentUser?.agency_id) {
-    query = query.eq("agency_id", currentUser.agency_id);
-  }
-
-  const { data, error } = await query;
+  const { data, error } = await supabase.rpc("notification_center_list_v1", {
+    p_company_id: currentCompanyId,
+  });
 
   if (
     requestGeneration !== workspaceDataGenerationRef.current ||
@@ -9759,28 +9751,12 @@ async function loadNotifications() {
     return [];
   }
 
-  let rows = data || [];
-
-  if (currentRole === "Agency") {
-    rows = rows.filter((item) => {
-      const payload = item.data || {};
-      return (
-        (!item.recipient_role || item.recipient_role === "Agency") &&
-        (
-          String(item.agency_id || "") === String(currentUser?.agency_id || "") ||
-          normalize(item.agency_name || payload.agency || payload.agency_name) === normalize(currentUser?.agency_name)
-        )
-      );
-    });
-  } else if (["Recruitment Manager", "Recruitment Director"].includes(currentRole)) {
-    rows = rows.filter((item) => (
-      !item.recipient_role ||
-      (
-        item.recipient_role === currentRole &&
-        (!item.user_id || String(item.user_id) === String(currentUser?.auth_user_id || ""))
-      )
-    ));
-  }
+  const rows = filterNotificationsForWorkspace(data || [], {
+    companyId: currentCompanyId,
+    agencyId: currentUser?.agency_id || "",
+    authUserId: currentUser?.auth_user_id || "",
+    role: currentRole,
+  });
 
   setNotifications(rows);
   return rows;
@@ -10101,7 +10077,7 @@ async function loadNotifications() {
     const { error } = await supabase.rpc("notification_event_mutate", {
       p_operation: "mark_read",
       p_notification_id: id,
-      p_payload: {},
+      p_payload: { workspace_company_id: currentCompanyId },
     });
 
     if (error) return alert(error.message);
@@ -10113,7 +10089,7 @@ async function loadNotifications() {
     const { error } = await supabase.rpc("notification_event_mutate", {
       p_operation: "mark_all_read",
       p_notification_id: null,
-      p_payload: {},
+      p_payload: { workspace_company_id: currentCompanyId },
     });
     if (error) return alert(error.message);
     await loadNotifications();
@@ -10126,7 +10102,7 @@ async function loadNotifications() {
     const { error } = await supabase.rpc("notification_event_mutate", {
       p_operation: "delete",
       p_notification_id: id,
-      p_payload: {},
+      p_payload: { workspace_company_id: currentCompanyId },
     });
 
     if (error) return alert(error.message);
@@ -12293,6 +12269,7 @@ function isDuplicateRequestNoError(error) {
       p_operation: "agency_response",
       p_notification_id: item.id,
       p_payload: {
+        workspace_company_id: currentCompanyId,
         agency_name: agencyName,
         request_no: existingData.request_no || item.request_no || "",
         response_status: decision,
