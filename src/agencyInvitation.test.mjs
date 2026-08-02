@@ -252,6 +252,11 @@ test("App uses the Edge Function and contains no invitation table writes", async
   );
 });
 
+test("Vercel serves the agency activation route through the SPA", async () => {
+  const config = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  assert.ok(config.rewrites.some((rewrite) => rewrite.source === "/agency/activate" && rewrite.destination === "/index.html"));
+});
+
 test("Edge validates JWT and keeps the service key server-side", async () => {
   const edge = await readFile(
     new URL(
