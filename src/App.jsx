@@ -36002,8 +36002,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                           </div>
                         </td>
                         <td className="table-actions">
-                          <span>{isSending ? "Queued" : invitationStatus}</span>
-                          {invitationFailureMessage && <small style={{ color: "#b91c1c", maxWidth: 240 }}>{invitationFailureMessage}</small>}
+                          <div style={{ display: "grid", gap: 4, minWidth: 190 }}>
+                            <span><strong>Status:</strong> {isSending ? "Queued" : invitationStatus}</span>
+                            {invitationFailureMessage && <small style={{ color: "#b91c1c", maxWidth: 240 }}><strong>Delivery:</strong> {invitationFailureMessage}</small>}
+                          </div>
                           {canInviteAgencyUsers && (
                             <button
                               disabled={(!canSend && !canResend) || isSending}

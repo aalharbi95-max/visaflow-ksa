@@ -60,9 +60,10 @@ function recoveryHarness({
       );
     },
     async findExistingAuthUser() { return null; },
-    async deliverInvitation({ requestId, actionLink }) {
+    async deliverInvitation({ requestId, actionLink, companyId }) {
       state.deliveryCalls += 1;
       assert.equal(requestId, state.request.id);
+      assert.equal(companyId, "company-a");
       assert.match(actionLink, /^https:\/\/supabase\.example\.test\/auth\/v1\/verify/);
       if (deliveryFailure) throw new Error("provider rejected delivery");
     },

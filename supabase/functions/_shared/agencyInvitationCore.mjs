@@ -219,7 +219,7 @@ export async function runAgencyInvitationAction({
       await repository.deliverInvitation({
         requestId: started.id,
         actionLink,
-        companyId: started.company_id,
+        companyId: started.company_id || actor.companyId,
         agencyId: started.agency_id,
         recipient: started.admin_email,
         attemptCount: started.attempt_count || 0,

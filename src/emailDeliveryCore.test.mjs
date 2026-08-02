@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../supabase/functions/_shared/emailDeliveryCore.mjs";
+import { ensureQueuedEmailAttempt, markEmailAttemptFailed } from "../supabase/functions/_shared/emailAttemptCore.mjs";
 
 test("transport test double receives the final provider payload", async () => {
   let received;
@@ -34,6 +35,34 @@ test("dispatcher retry claim respects failed delivery cooldown", () => {
   assert.equal(canRetryEmailDelivery("Sent", "2026-08-02T11:00:00Z", now), false);
 });
 
+test("failed invitation attempt persists a Failed email log before dispatcher handoff", async () => {
+  const rows = [];
+  const attempt = await ensureQueuedEmailAttempt({
+    queued: { company_id: "company-a", status: "Queued" },
+    lookup: async () => null,
+    insert: async (values) => { const row = { id: "log-a", ...values }; rows.push(row); return row; },
+    requeue: async () => { throw new Error("unexpected requeue"); },
+  });
+  await markEmailAttemptFailed({
+    emailLogId: attempt.id,
+    code: "DISPATCHER_AUTH_FAILED",
+    update: async (id, values) => Object.assign(rows.find((row) => row.id === id), values),
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "Failed");
+  assert.equal(rows[0].error_code, "DISPATCHER_AUTH_FAILED");
+  assert.ok(rows[0].failed_at);
+});
+
+test("email log insert errors are propagated and cannot be replaced by a successful handoff", async () => {
+  await assert.rejects(() => ensureQueuedEmailAttempt({
+    queued: { company_id: "company-a", status: "Queued" },
+    lookup: async () => null,
+    insert: async () => { throw new Error("email_logs insert rejected"); },
+    requeue: async () => null,
+  }), /email_logs insert rejected/);
+});
+
 test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id", async () => {
   const [dispatcher, provisioner, app, migration, securityMigration] = await Promise.all([
     readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8"),
@@ -59,7 +88,7 @@ test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id",
   assert.match(dispatcher, /emailLogId = preparedAgreement\.id/);
   assert.match(provisioner, /DISPATCHER_SECRET_MISSING/);
   assert.match(provisioner, /DISPATCHER_AUTH_FAILED/);
-  assert.match(provisioner, /status: "Failed"/);
+  assert.match(provisioner, /markEmailAttemptFailed/);
   assert.match(provisioner, /buildEmailIdempotencyKey/);
   assert.doesNotMatch(provisioner, /error_message:\s*String\(result/);
   assert.match(migration, /revoke insert, update, delete on table public\.email_logs from anon, authenticated/);

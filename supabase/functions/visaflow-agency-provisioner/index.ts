@@ -17,6 +17,7 @@ import {
   validateAgencyProvisionerRequest,
 } from "../_shared/agencyProvisionerHttp.mjs";
 import { buildEmailIdempotencyKey } from "../_shared/emailDeliveryCore.mjs";
+import { ensureQueuedEmailAttempt, markEmailAttemptFailed } from "../_shared/emailAttemptCore.mjs";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -328,33 +329,38 @@ Deno.serve(async (request) => {
           related_id: requestId,
           idempotency_key: idempotencyKey,
         };
-        const { data: existing, error: lookupError } = await admin.from("email_logs")
-          .select("id,status,retry_count,failed_at").eq("company_id", companyId)
-          .eq("idempotency_key", idempotencyKey).maybeSingle();
-        if (lookupError) throw lookupError;
-        let emailLogId = existing?.id ? String(existing.id) : "";
-        if (!emailLogId) {
-          const { data: inserted, error: insertError } = await admin.from("email_logs")
-            .insert({ ...queued, retry_count: 0 }).select("id").single();
-          if (insertError) throw insertError;
-          emailLogId = String(inserted.id);
-        } else if (existing.status === "Failed") {
-          const { error: retryError } = await admin.from("email_logs").update({
-            ...queued,
-            retry_count: Number(existing.retry_count || 0) + 1,
-            error_code: null,
-            error_message: null,
-            failed_at: null,
-          }).eq("id", emailLogId);
-          if (retryError) throw retryError;
-        }
+        if (!companyId) throw new Error("EMAIL_LOG_COMPANY_ID_MISSING");
+        const attempt = await ensureQueuedEmailAttempt({
+          queued,
+          lookup: async () => {
+            const { data, error } = await admin.from("email_logs")
+              .select("id,status,retry_count,failed_at").eq("company_id", companyId)
+              .eq("idempotency_key", idempotencyKey).maybeSingle();
+            if (error) throw error;
+            return data;
+          },
+          insert: async (values: Record<string, unknown>) => {
+            const { data, error } = await admin.from("email_logs").insert(values).select("id").single();
+            if (error) throw error;
+            return data;
+          },
+          requeue: async (id: string, values: Record<string, unknown>) => {
+            const { data, error } = await admin.from("email_logs").update(values).eq("id", id).select("id").single();
+            if (error) throw error;
+            return data;
+          },
+        });
+        const emailLogId = attempt.id;
         const failAttempt = async (code: string) => {
-          await admin.from("email_logs").update({
-            status: "Failed",
-            error_code: code,
-            error_message: "Email delivery authorization failed.",
-            failed_at: new Date().toISOString(),
-          }).eq("id", emailLogId);
+          await markEmailAttemptFailed({
+            emailLogId,
+            code,
+            update: async (id: string, values: Record<string, unknown>) => {
+              const { data, error } = await admin.from("email_logs").update(values).eq("id", id).select("id").single();
+              if (error) throw error;
+              return data;
+            },
+          });
         };
         if (!EMAIL_DISPATCHER_INTERNAL_SECRET) {
           await failAttempt("DISPATCHER_SECRET_MISSING");
