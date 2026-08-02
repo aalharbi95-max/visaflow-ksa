@@ -43,6 +43,7 @@ import {
 } from "./agencyPerformance.mjs";
 import RequestLineCustomFields from "./RequestLineCustomFields";
 import Select from "./Select";
+import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
 import { buildNationalityOptions, getNationalityMatchKeys, nationalitiesMatch, resolveCanonicalNationality } from "./nationality.mjs";
 import {
   buildAuthorizationTimeline,
@@ -121,6 +122,7 @@ const PAGES = [
   "Penalty Register",
   "Recruitment Performance",
   "Company Management",
+  "Email Logs",
   "Email Settings",
   "Users Management",
   "Permissions",
@@ -196,7 +198,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Administration",
     icon: "⚙️",
-    pages: ["Notifications", "Company Management", "Email Settings", "Users Management", "Permissions", "Master Data"],
+    pages: ["Notifications", "Email Logs", "Company Management", "Email Settings", "Users Management", "Permissions", "Master Data"],
   },
 ];
 
@@ -5848,7 +5850,7 @@ const [marketplaceInvoices, setMarketplaceInvoices] = useState([]);
 const [marketplaceCollections, setMarketplaceCollections] = useState([]);
 const [notifications, setNotifications] = useState([]);
 const [emailLogs, setEmailLogs] = useState([]);
-const [emailLogFilters, setEmailLogFilters] = useState({ eventType: "All", status: "All", agency: "All", date: "", recipient: "" });
+const [emailLogFilters, setEmailLogFilters] = useState({ eventType: "All", status: "All", agency: "All", dateFrom: "", dateTo: "", recipient: "" });
 const [emailTemplates, setEmailTemplates] = useState([]);
 const [notificationFilter, setNotificationFilter] = useState("All");
 const [notificationSearch, setNotificationSearch] = useState("");
@@ -6656,7 +6658,9 @@ const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
 const visiblePages = secureLogFeaturesAvailable
-  ? roleVisiblePages
+  ? (currentUser?.company_id && currentRole !== "Agency"
+      ? Array.from(new Set([...roleVisiblePages, "Email Logs"]))
+      : roleVisiblePages)
   : roleVisiblePages.filter((page) => page !== "Notifications");
 const roleActions = ACTION_PERMISSIONS[currentRole] || ACTION_PERMISSIONS.Viewer;
 const hasAction = (action) => roleActions.includes(action);
@@ -8354,7 +8358,7 @@ Cancel = إضافتها كوظيفة مستقلة`
 
     const { data, error } = await supabase
       .from("agency_provisioning_requests")
-      .select("id, agency_id, status, invitation_sent_at, failed_at, activated_at, updated_at")
+      .select("id, agency_id, status, invitation_sent_at, failed_at, activated_at, updated_at, failure_code, failure_stage")
       .in("agency_id", agencyIds)
       .order("created_at", { ascending: false })
       .range(0, 5000);
@@ -9950,14 +9954,10 @@ async function loadNotifications() {
     skipped: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "skipped").length,
   }), [emailLogs]);
 
-  const filteredEmailLogs = useMemo(() => emailLogs.filter((item) => {
-    const recipient = String(item.recipient || item.to_email || "");
-    return (emailLogFilters.eventType === "All" || (item.event_type || item.type) === emailLogFilters.eventType)
-      && (emailLogFilters.status === "All" || item.status === emailLogFilters.status)
-      && (emailLogFilters.agency === "All" || String(item.agency_id || "") === emailLogFilters.agency)
-      && (!emailLogFilters.date || String(item.created_at || "").startsWith(emailLogFilters.date))
-      && (!emailLogFilters.recipient || normalize(recipient).includes(normalize(emailLogFilters.recipient)));
-  }), [emailLogs, emailLogFilters]);
+  const filteredEmailLogs = useMemo(
+    () => filterEmailLogs(emailLogs, emailLogFilters),
+    [emailLogs, emailLogFilters]
+  );
 
   function displayEmailRecipient(value) {
     const email = String(value || "");
@@ -13302,6 +13302,14 @@ async function inviteAgency(item, action = "invite_existing") {
     }));
     alert("تم إرسال الدعوة إلى المكتب.");
   } catch (error) {
+    setAgencyInvitationStates((current) => ({
+      ...current,
+      [key]: {
+        ...(current[key] || {}), agency_id: item.id, status: "Failed",
+        failure_code: error?.code || "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED",
+        failed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      },
+    }));
     alert(getAgencyInvitationErrorMessage(error));
   } finally {
     setAgencyInvitationSendingId("");
@@ -29358,6 +29366,54 @@ if (!currentUser) {
           </div>
         )}
 
+        {activePage === "Email Logs" && canViewEmailAdministration && (
+          <>
+            <div className="dashboard-grid">
+              <Stat title="Total Email Events" value={emailLogs.length} />
+              <Stat title="Sent" value={emailLogStats.sent} className="passed" />
+              <Stat title="Failed" value={emailLogStats.failed} className={emailLogStats.failed ? "danger" : "passed"} />
+              <Stat title="Queued" value={emailLogs.filter((item) => item.status === "Queued").length} className="warning" />
+            </div>
+            <TableCard title="Email Logs">
+              <div className="actions-line" style={{ marginBottom: "14px" }}>
+                <button className="light-btn" onClick={loadEmailLogs}>Reload Email Logs</button>
+              </div>
+              <div className="form-grid" style={{ marginBottom: "14px" }}>
+                <Select value={emailLogFilters.eventType} placeholder="Event Type" options={["All", ...Array.from(new Set(emailLogs.map((item) => item.event_type || item.type).filter(Boolean)))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, eventType: value }))} />
+                <Select value={emailLogFilters.status} placeholder="Status" options={["All", "Queued", "Sent", "Failed"]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, status: value }))} />
+                <Select value={emailLogFilters.agency} placeholder="Agency" options={[{ value: "All", label: "All agencies" }, ...agencies.map((agency) => ({ value: String(agency.id), label: agency.name }))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, agency: value }))} />
+                <Input placeholder="Recipient" value={emailLogFilters.recipient} onChange={(value) => setEmailLogFilters((current) => ({ ...current, recipient: value }))} />
+                <Input type="date" placeholder="From date" value={emailLogFilters.dateFrom} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateFrom: value }))} />
+                <Input type="date" placeholder="To date" value={emailLogFilters.dateTo} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateTo: value }))} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th>Event Type</th><th>Recipient</th><th>Agency</th><th>Status</th><th>Provider</th>
+                    <th>Provider Message ID</th><th>Error Code</th><th>Safe Error Message</th><th>Retry Count</th>
+                    <th>Created At</th><th>Sent At</th><th>Failed At</th>
+                  </tr></thead>
+                  <tbody>
+                    {filteredEmailLogs.length === 0 ? <tr><td colSpan="12">No email logs match the selected filters.</td></tr> : filteredEmailLogs.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.event_type || item.type || "-"}</td>
+                        <td>{displayEmailRecipient(item.recipient || item.to_email)}</td>
+                        <td>{agencies.find((agency) => String(agency.id) === String(item.agency_id))?.name || "-"}</td>
+                        <td><Badge value={item.status || "-"} /></td><td>{item.provider || "-"}</td>
+                        <td>{item.provider_message_id || item.message_id || "-"}</td><td>{item.error_code || "-"}</td>
+                        <td>{item.error_message || "-"}</td><td>{item.retry_count || 0}</td>
+                        <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                        <td>{item.sent_at ? new Date(item.sent_at).toLocaleString() : "-"}</td>
+                        <td>{item.failed_at ? new Date(item.failed_at).toLocaleString() : "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TableCard>
+          </>
+        )}
+
         {activePage === "Notifications" && (
           <>
             <div className="dashboard-grid">
@@ -29455,7 +29511,8 @@ if (!currentUser) {
                 <Select value={emailLogFilters.eventType} placeholder="Event type" options={["All", ...Array.from(new Set(emailLogs.map((item) => item.event_type || item.type).filter(Boolean)))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, eventType: value }))} />
                 <Select value={emailLogFilters.status} placeholder="Status" options={["All", "Queued", "Sent", "Failed"]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, status: value }))} />
                 <Select value={emailLogFilters.agency} placeholder="Agency" options={[{ value: "All", label: "All agencies" }, ...agencies.map((agency) => ({ value: String(agency.id), label: agency.name }))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, agency: value }))} />
-                <Input type="date" placeholder="Date" value={emailLogFilters.date} onChange={(value) => setEmailLogFilters((current) => ({ ...current, date: value }))} />
+                <Input type="date" placeholder="From date" value={emailLogFilters.dateFrom} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateFrom: value }))} />
+                <Input type="date" placeholder="To date" value={emailLogFilters.dateTo} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateTo: value }))} />
                 <Input placeholder="Recipient" value={emailLogFilters.recipient} onChange={(value) => setEmailLogFilters((current) => ({ ...current, recipient: value }))} />
               </div>
               <div className="table-wrap">
@@ -35159,13 +35216,14 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Labor SLA Penalty</th>
             <th>Guarantee</th>
             <th>Status</th>
+            <th>Delivery Status</th>
             <th>Agency Accepted</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {agencyAgreements.length === 0 ? (
-            <tr><td colSpan="9">No agency agreements yet</td></tr>
+            <tr><td colSpan="10">No agency agreements yet</td></tr>
           ) : (
             agencyAgreements.map((item) => (
               <tr key={item.id}>
@@ -35176,10 +35234,17 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.delay_penalty_type || "-"} / {item.delay_penalty_amount || 0}</td>
                 <td>{item.financial_guarantee_required || "No"}{item.financial_guarantee_amount ? ` / ${Number(item.financial_guarantee_amount).toLocaleString()} SAR` : ""}</td>
                 <td><Badge value={item.status || "Draft"} /></td>
+                <td>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <Badge value={item.email_delivery_status || "Not Sent"} />
+                    {item.email_delivery_status === "Failed" && <small style={{ color: "#b91c1c" }}>{item.email_error_code || "EMAIL_PROVIDER_ERROR"} — {item.email_error_message || "Email delivery failed at the provider."}</small>}
+                  </div>
+                </td>
                 <td>{item.agency_accepted_at ? new Date(item.agency_accepted_at).toLocaleDateString("en-GB") : item.agency_signature || "-"}</td>
                 <td className="table-actions">
                   {canManageAgencyAgreements && <button onClick={() => editAgreement(item)}>Edit</button>}
                   {canManageAgencyAgreements && item.status !== "Pending Signature" && item.status !== "Active" && <button onClick={() => sendExistingAgreementToAgency(item)}>Send</button>}
+                  {canManageAgencyAgreements && canRetryAgreementEmail(item) && <button onClick={() => sendExistingAgreementToAgency(item)}>Retry Email</button>}
                   {canManageAgencyAgreements && <button className="danger" onClick={() => deleteAgreement(item.id)}>Delete</button>}
                 </td>
               </tr>
@@ -35893,6 +35958,11 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     const canSend = canSendAgencyInvitation(invitationStatus);
                     const canResend = canResendAgencyInvitation(invitationRequest);
                     const canRevoke = canRevokeAgencyInvitation(invitationStatus);
+                    const invitationFailureMessage = invitationStatus === "Failed"
+                      ? (invitationRequest?.failure_code === "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED"
+                          ? "Email delivery failed. Retry is available after the cooldown."
+                          : "Invitation delivery failed. Review the activity log before retrying.")
+                      : "";
                     return (
                       <tr key={item.id}>
                         <td>{item.name}</td>
@@ -35932,7 +36002,8 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                           </div>
                         </td>
                         <td className="table-actions">
-                          <span>{isSending ? "Pending" : invitationStatus}</span>
+                          <span>{isSending ? "Queued" : invitationStatus}</span>
+                          {invitationFailureMessage && <small style={{ color: "#b91c1c", maxWidth: 240 }}>{invitationFailureMessage}</small>}
                           {canInviteAgencyUsers && (
                             <button
                               disabled={(!canSend && !canResend) || isSending}
@@ -35943,7 +36014,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                                   : "Invitation cannot be resent in this state"
                               }
                             >
-                              {isSending ? "Pending" : canResend ? "Resend Invitation" : "Send Invitation"}
+                              {isSending ? "Queued" : invitationStatus === "Accepted" ? "Invite Another User" : canResend ? "Resend Invitation" : "Send Invitation"}
                             </button>
                           )}
                           {canInviteAgencyUsers && canRevoke && (

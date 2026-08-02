@@ -25,7 +25,7 @@ test("agency invitation statuses cover the required UI states", () => {
       status: "Provisioning",
       updated_at: "2026-07-30T11:59:00Z",
     }, now),
-    "Pending"
+    "Queued"
   );
   assert.equal(
     getAgencyInvitationStatus({
@@ -55,7 +55,7 @@ test("agency invitation statuses cover the required UI states", () => {
 
 test("send, resend, revoke, and cooldown rules are distinct", () => {
   assert.equal(canSendAgencyInvitation("Not Invited"), true);
-  for (const status of ["Pending", "Sent", "Failed", "Expired", "Revoked", "Accepted"]) {
+  for (const status of ["Queued", "Sent", "Failed", "Expired", "Revoked", "Accepted"]) {
     assert.equal(canSendAgencyInvitation(status), false);
   }
   const now = Date.parse("2026-07-30T12:00:00Z");
@@ -228,6 +228,8 @@ test("App uses the Edge Function and contains no invitation table writes", async
     "utf8"
   );
   assert.match(app, /Send Invitation/);
+  assert.match(app, /Invite Another User/);
+  assert.match(app, /Email delivery failed\. Retry is available after the cooldown\./);
   assert.match(app, /invokeAgencyInvitation/);
   assert.match(app, /action:\s*"activate"/);
   assert.match(app, /AgencyInvitationPasswordScreen/);

@@ -1,6 +1,6 @@
 import nodemailer from "npm:nodemailer@6.9.10";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { buildEmailIdempotencyKey, deliverWithTransport, sanitizeProviderError } from "../_shared/emailDeliveryCore.mjs";
+import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../_shared/emailDeliveryCore.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -278,12 +278,21 @@ async function agencyByUniqueName(admin: any, agencyName: string) {
 }
 
 async function assertAgencyAccess(admin: any, companyId: string, agencyId: string, actorId = "") {
-  let query = admin.from("agency_company_user_access").select("company_id, agency_id, user_id, status")
-    .eq("company_id", companyId).eq("agency_id", agencyId).eq("status", "Active");
-  if (actorId) query = query.eq("user_id", actorId);
+  const query = actorId
+    ? admin.from("agency_company_user_access").select("company_id, agency_id, user_id, status")
+      .eq("company_id", companyId).eq("agency_id", agencyId).eq("user_id", actorId).eq("status", "Active")
+    : admin.from("company_agency_access").select("company_id, agency_id, status")
+      .eq("company_id", companyId).eq("agency_id", agencyId).eq("status", "Active");
   const { data, error } = await query.limit(actorId ? 2 : 1);
   if (error) throw error;
   if (!(data || []).length || (actorId && data.length !== 1)) throw new RequestFailure(403, "forbidden");
+}
+
+async function recordAgreementDelivery(admin: any, messageType: string, agreementId: string, companyId: string | null, values: Json) {
+  if (messageType !== "AGENCY_AGREEMENT_SENT" || !agreementId || !companyId) return;
+  const { error } = await admin.from("agency_agreements").update({ ...values, updated_at: new Date().toISOString() })
+    .eq("id", agreementId).eq("company_id", companyId);
+  if (error) throw error;
 }
 
 async function companyMailbox(admin: any, companyId: string, kind: "notifications" | "agreements" | "support" = "notifications") {
@@ -524,6 +533,9 @@ Deno.serve(async (req) => {
 
   let adminForLog: any = null;
   let emailLogId = "";
+  let deliveryMessageType = "";
+  let deliveryRelatedId = "";
+  let deliveryCompanyId: string | null = null;
   try {
     const supabaseUrl = requireSecret("SUPABASE_URL");
     const serviceRoleKey = requireSecret("SUPABASE_SERVICE_ROLE_KEY");
@@ -548,6 +560,7 @@ Deno.serve(async (req) => {
     }
 
     const messageType = String(body.message_type || "").trim();
+    deliveryMessageType = messageType;
     const contract = messageContracts[messageType];
     if (!contract) return jsonResponse({ ok: false, error: "message_type_not_allowed" }, 400);
     const inputVariables = cleanInputVariables(body.variables, contract.allowedInputVariables);
@@ -567,8 +580,10 @@ Deno.serve(async (req) => {
     const identifier = resolved.deliveryKey || relatedIdentifier;
     const idempotencyKey = buildEmailIdempotencyKey(messageType, identifier, recipients);
     const companyId = resolved.companyId || (caller.kind === "authenticated" ? caller.actor.company_id : String(body.company_id || "")) || null;
+    deliveryRelatedId = relatedIdentifier;
+    deliveryCompanyId = companyId;
     let priorQuery = admin.from("email_logs")
-      .select("id, status, retry_count, provider_message_id, message_id")
+      .select("id, status, retry_count, provider_message_id, message_id, failed_at")
       .eq("idempotency_key", idempotencyKey);
     priorQuery = companyId ? priorQuery.eq("company_id", companyId) : priorQuery.is("company_id", null);
     const { data: priorLogs, error: priorError } = await priorQuery.limit(1);
@@ -577,6 +592,7 @@ Deno.serve(async (req) => {
     if (prior?.status === "Sent") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, provider_message_id: prior.provider_message_id || prior.message_id || null });
     if (prior?.status === "Queued") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
     if (prior?.id) {
+      if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
       emailLogId = String(prior.id);
       const { data: retryClaim, error: retryError } = await admin.from("email_logs").update({ status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
         error_code: null, error_message: null, failed_at: null }).eq("id", prior.id).eq("status", "Failed").select("id").maybeSingle();
@@ -592,17 +608,30 @@ Deno.serve(async (req) => {
       if (insertError) throw insertError;
       emailLogId = String(inserted.id);
     }
+    await recordAgreementDelivery(admin, messageType, relatedIdentifier, companyId, {
+      email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
+      email_last_attempt_at: new Date().toISOString(),
+    });
     const transport = nodemailer.createTransport({ host: smtpHost, port: smtpPort, secure: smtpSecure, auth: { user: smtpUser, pass: smtpPass } });
     const providerResult = await deliverWithTransport(transport, { from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html });
     const { error: sentLogError } = await admin.from("email_logs").update({ status: "Sent", provider_message_id: providerResult.providerMessageId,
       message_id: providerResult.providerMessageId, sent_at: new Date().toISOString(), failed_at: null, error_code: null, error_message: null }).eq("id", emailLogId);
     if (sentLogError) throw sentLogError;
+    await recordAgreementDelivery(admin, messageType, relatedIdentifier, companyId, {
+      email_delivery_status: "Sent", email_provider_message_id: providerResult.providerMessageId,
+      email_sent_at: new Date().toISOString(), email_failed_at: null,
+      email_error_code: null, email_error_message: null,
+    });
     return jsonResponse({ ok: true, message_type: messageType, provider_message_id: providerResult.providerMessageId });
   } catch (error) {
     if (adminForLog && emailLogId) {
       const safe = sanitizeProviderError(error);
       await adminForLog.from("email_logs").update({ status: "Failed", error_code: safe.code,
         error_message: safe.message, failed_at: new Date().toISOString() }).eq("id", emailLogId);
+      await recordAgreementDelivery(adminForLog, deliveryMessageType, deliveryRelatedId, deliveryCompanyId, {
+        email_delivery_status: "Failed", email_error_code: safe.code,
+        email_error_message: safe.message, email_failed_at: new Date().toISOString(),
+      }).catch(() => undefined);
     }
     if (error instanceof RequestFailure) return jsonResponse({ ok: false, error: error.publicCode }, error.status);
     console.error("Email dispatcher internal failure", error instanceof Error ? error.name : "UnknownError");

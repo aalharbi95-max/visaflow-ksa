@@ -129,6 +129,8 @@ before(async () => {
   `);
   const migration = await readFile(new URL("../supabase/migrations/20260801000200_remaining_notes_agency_security.sql", import.meta.url), "utf8");
   await db.exec(migration);
+  const deliveryMigration = await readFile(new URL("../supabase/migrations/20260802000100_email_delivery_observability.sql", import.meta.url), "utf8");
+  await db.exec(deliveryMigration);
 });
 
 after(async () => { await db?.close(); });
@@ -141,6 +143,9 @@ test("remaining-notes migration adds deterministic agreement and email audit col
   for (const name of ["agency_id","user_id","recipient","provider_message_id","error_code","retry_count","sent_at","failed_at","idempotency_key"]) assert.ok(names.has(name));
   const requestColumns = await db.query("select column_name from information_schema.columns where table_name='agency_provisioning_requests'");
   assert.ok(requestColumns.rows.some((row) => row.column_name === "auth_identity_preexisting"));
+  const agreementColumns = await db.query("select column_name from information_schema.columns where table_name='agency_agreements'");
+  const agreementNames = new Set(agreementColumns.rows.map((row) => row.column_name));
+  for (const name of ["email_delivery_status","email_provider_message_id","email_error_code","email_error_message","email_last_attempt_at","email_sent_at","email_failed_at"]) assert.ok(agreementNames.has(name));
 });
 
 test("new SECURITY DEFINER functions pin search_path and expose only intended roles", async () => {
@@ -186,6 +191,11 @@ test("email logs are server-owned and non-admin recipients are masked by the RPC
   await authenticate(ADMIN_AUTH);
   const full = await db.query("select * from public.email_log_list_v1()");
   assert.equal(full.rows[0].recipient, "recipient@example.test");
+  await authenticate(ADMIN_B_AUTH);
+  const otherTenant = await db.query("select * from public.email_log_list_v1()");
+  assert.equal(otherTenant.rows.length, 0);
+  await authenticate(AGENCY_AUTH);
+  await assert.rejects(() => db.query("select * from public.email_log_list_v1()"), /EMAIL_LOG_UNAUTHORIZED/);
 });
 
 test("resend enforces tenant role, cooldown and idempotent state transition", async () => {

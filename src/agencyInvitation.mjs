@@ -138,7 +138,7 @@ export function getAgencyInvitationStatus(request, now = Date.now()) {
     ) {
       return "Failed";
     }
-    return "Pending";
+    return "Queued";
   }
   if (status === "Draft") return "Not Invited";
   if (status === "Invitation Sent") {
@@ -167,7 +167,7 @@ export function canResendAgencyInvitation(request, now = Date.now()) {
 }
 
 export function canRevokeAgencyInvitation(status) {
-  return ["Pending", "Sent", "Expired", "Failed"].includes(status);
+  return ["Queued", "Sent", "Expired", "Failed"].includes(status);
 }
 
 export function canInviteAgencyUser(role, isActive = true) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { buildEmailIdempotencyKey, deliverWithTransport, sanitizeProviderError } from "../supabase/functions/_shared/emailDeliveryCore.mjs";
+import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../supabase/functions/_shared/emailDeliveryCore.mjs";
 
 test("transport test double receives the final provider payload", async () => {
   let received;
@@ -27,6 +27,13 @@ test("email idempotency ignores recipient order", () => {
   );
 });
 
+test("dispatcher retry claim respects failed delivery cooldown", () => {
+  const now = Date.parse("2026-08-02T12:00:00Z");
+  assert.equal(canRetryEmailDelivery("Failed", "2026-08-02T11:58:00Z", now), true);
+  assert.equal(canRetryEmailDelivery("Failed", "2026-08-02T11:59:30Z", now), false);
+  assert.equal(canRetryEmailDelivery("Sent", "2026-08-02T11:00:00Z", now), false);
+});
+
 test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id", async () => {
   const [dispatcher, app, migration] = await Promise.all([
     readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8"),
@@ -36,6 +43,10 @@ test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id",
   assert.doesNotMatch(app, /Resolved securely by Email Dispatcher/);
   assert.match(dispatcher, /agency_id, agency_name/);
   assert.match(dispatcher, /if \(!agreement\.agency_id &&/);
+  assert.match(dispatcher, /from\("company_agency_access"\)/);
+  assert.match(dispatcher, /email_delivery_status: "Failed"/);
+  assert.match(dispatcher, /email_retry_cooldown/);
+  assert.match(dispatcher, /VISAFLOW_EMAIL_DISPATCHER_SECRET/);
   assert.match(dispatcher, /provider_message_id/);
   assert.match(dispatcher, /status: "Queued"/);
   assert.match(dispatcher, /status: "Sent"/);

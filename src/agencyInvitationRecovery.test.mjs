@@ -20,6 +20,7 @@ function recoveryHarness({
   authFailure = false,
   recordFailures = 0,
   completeFailures = 0,
+  deliveryFailure = false,
   persistFailureAuthUser = true,
 } = {}) {
   const state = {
@@ -63,6 +64,7 @@ function recoveryHarness({
       state.deliveryCalls += 1;
       assert.equal(requestId, state.request.id);
       assert.match(actionLink, /^https:\/\/supabase\.example\.test\/auth\/v1\/verify/);
+      if (deliveryFailure) throw new Error("provider rejected delivery");
     },
     async recordAuthUser({ authUserId, existingIdentity }) {
       state.recordCalls += 1;
@@ -136,6 +138,14 @@ test("failure before Auth creation records a retryable AUTH_CREATE stage", async
     harness.state.failure.lastSuccessfulOperation,
     "REQUEST_STARTED"
   );
+});
+
+test("provider handoff failure changes the invitation to Failed and remains retryable", async () => {
+  const harness = recoveryHarness({ deliveryFailure: true });
+  await assert.rejects(harness.run(), (error) => error.code === "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED");
+  assert.equal(harness.state.request.status, "Failed");
+  assert.equal(harness.state.failure.stage, "INVITATION_FINALIZATION");
+  assert.equal(harness.state.failure.metadata.retryable, true);
 });
 
 test("retry after Auth creation reuses the same identity without a second Auth user", async () => {
