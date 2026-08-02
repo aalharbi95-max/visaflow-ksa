@@ -42,6 +42,12 @@ import {
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
 import RequestLineCustomFields from "./RequestLineCustomFields";
+import {
+  getCandidateUploadValidationSummary,
+  isAgencyRequestAssignmentInWorkspace,
+  resolveAgencyUploadWorkspace,
+  secureAgencyCandidatePayload,
+} from "./candidateExcelUpload.mjs";
 import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
@@ -1351,7 +1357,7 @@ async function triggerExternalNotification(type, data = {}) {
     return { ok: false, skipped: true, reason: "auth_required" };
   }
 
-  const workspaceCompanyId = data.company_id || currentCompanyId || null;
+  const workspaceCompanyId = data.company_id || data.workspace_company_id || null;
   const dedupeKey = await buildNotificationDedupeKey(type, data, workspaceCompanyId);
   const payload = {
     workspace_company_id: workspaceCompanyId,
@@ -6839,6 +6845,27 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
       return [];
     }
 
+    const { data: companyAgencyRows, error: companyAgencyError } = await supabase
+      .from("company_agency_access")
+      .select("company_id, agency_id, status")
+      .eq("agency_id", effectiveUser.agency_id)
+      .eq("status", "Active")
+      .in("company_id", companyIds)
+      .range(0, 500);
+
+    if (companyAgencyError) {
+      console.warn("company_agency_access:", companyAgencyError.message);
+      setAgencyClientAccess([]);
+      return [];
+    }
+
+    const activeCompanyAgencyIds = new Set(
+      (companyAgencyRows || []).map((row) => String(row.company_id))
+    );
+    const authorizedAccessRows = (accessRows || []).filter((row) =>
+      activeCompanyAgencyIds.has(String(row.company_id))
+    );
+
     const { data: companyRows, error: companyError } = await supabase
       .from("companies")
       .select("id, name, status, subscription_status")
@@ -6854,7 +6881,7 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
     const companiesById = new Map((companyRows || []).map((company) => [String(company.id), company]));
 
     const workspaces = getUniqueAgencyWorkspaces(
-      (accessRows || [])
+      authorizedAccessRows
         .map((row) => {
           const company = companiesById.get(String(row.company_id));
           if (!company) return null;
@@ -14772,7 +14799,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     });
   }
 
-  async function inferCandidateUploadRequestNo(rows = []) {
+  async function inferCandidateUploadRequestNo(rows = [], uploadCompanyId) {
     const explicitCandidateRequestNo = String(candidateForm.request_no || "").trim();
     if (explicitCandidateRequestNo) return explicitCandidateRequestNo;
 
@@ -14813,7 +14840,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       const { data: approvedRequests, error: requestLookupError } = await supabase
         .from("requests")
         .select("id, request_no, approval_status, status, profession, nationality, gender")
-        .eq("company_id", currentCompanyId)
+        .eq("company_id", uploadCompanyId)
         .in("approval_status", ["Approved by Recruitment", "Approved"])
         .range(0, 5000);
 
@@ -14828,7 +14855,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       const { data: requestLineRows, error: lineLookupError } = await supabase
         .from("request_lines")
         .select("id, request_no, profession, nationality, gender, quantity")
-        .eq("company_id", currentCompanyId)
+        .eq("company_id", uploadCompanyId)
         .in("request_no", Array.from(approvedRequestNos))
         .range(0, 5000);
 
@@ -14881,19 +14908,16 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     setTimeout(() => candidateExcelInputRef.current?.click(), 0);
   }
 
-  async function handleAgencyTalentPoolExcelUpload(rows = []) {
+  async function handleAgencyTalentPoolExcelUpload(rows = [], uploadWorkspace, uploadGeneration) {
     if (currentRole !== "Agency") {
       return alert("Please select Request No before uploading candidate Excel.");
     }
 
-    if (!currentCompanyId) {
-      return alert("Company workspace is missing. Please select the client workspace first.");
+    if (!uploadWorkspace?.ok) {
+      return alert(uploadWorkspace?.message || "Company Workspace and Agency identity are required before upload.");
     }
 
-    const agencyName = currentUser?.agency_name || candidateForm.agency || "";
-    if (!agencyName) {
-      return alert("Agency name is missing from the current user.");
-    }
+    const { companyId: uploadCompanyId, agencyId: uploadAgencyId, agencyName } = uploadWorkspace;
 
     const payloads = [];
     const candidateTechnicalImportMeta = [];
@@ -14930,7 +14954,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           .from("candidates")
           .select("id")
           .eq("passport_no", passportNo)
-          .eq("company_id", currentCompanyId)
+          .eq("company_id", uploadCompanyId)
           .limit(1);
 
         if (duplicateError) {
@@ -14977,15 +15001,12 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         : null;
 
       payloads.push(
-        withCompany(withCreateActor({
+        secureAgencyCandidatePayload(withCreateActor({
           candidate_name: candidateName,
-          request_line_id: null,
           profession: rowProfession,
           nationality: rowNationality,
           gender: rowGender,
           project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || "Agency Talent Pool",
-          request_no: "",
-          agency: agencyName,
           passport_no: isSaudiNationality(rowNationality) ? "" : passportNo,
           civil_id_no: isSaudiNationality(rowNationality) ? String(civilIdNo || "").trim() : "",
           civil_id_expiry_date: isSaudiNationality(rowNationality) ? civilIdExpiryDate : null,
@@ -15007,7 +15028,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           ai_reasoning: technicalScores?.ai_reasoning || "",
           final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
-        }))
+        }), uploadWorkspace)
       );
 
       candidateTechnicalImportMeta.push(
@@ -15022,11 +15043,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       );
     }
 
-    if (!payloads.length) {
-      return alert(
-        "No candidates uploaded.\n\n" +
-          (errors.length ? "Reasons:\n" + errors.slice(0, 15).join("\n") : "")
-      );
+    const validation = getCandidateUploadValidationSummary(payloads, errors);
+    if (!validation.canInsert) return alert(`Candidate upload blocked before insert.\n\n${validation.message}`);
+    if (uploadGeneration !== workspaceDataGenerationRef.current) {
+      return alert("Company Workspace changed during validation. No candidates were uploaded; please retry in the active workspace.");
     }
 
     const { data: insertedCandidates, error: insertError } = await supabase
@@ -15051,21 +15071,28 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       }
     }
 
-    if (secureLogFeaturesAvailable) await triggerExternalNotification("AGENCY_TALENT_POOL_UPLOAD", {
-      agency_id: currentUser?.agency_id || null,
-      title: "Agency Talent Pool Upload",
-      message: `${payloads.length} candidate(s) uploaded by ${agencyName} without request assignment.`,
-      priority: "Medium",
-      status: "Unread",
-      related_table: "candidates",
-      related_id: (insertedCandidates || []).map((candidate) => candidate.id).sort().join(","),
-      data: {
-        agency: agencyName,
-        upload_mode: "Agency Talent Pool",
-        uploaded_count: payloads.length,
-        intelligence_profiles: technicalProfilePayloads.length,
-      },
-    });
+    if (secureLogFeaturesAvailable) {
+      try {
+        await triggerExternalNotification("AGENCY_TALENT_POOL_UPLOAD", {
+          company_id: uploadCompanyId,
+          agency_id: uploadAgencyId,
+          title: "Agency Talent Pool Upload",
+          message: `${payloads.length} candidate(s) uploaded by ${agencyName} without request assignment.`,
+          priority: "Medium",
+          status: "Unread",
+          related_table: "candidates",
+          related_id: (insertedCandidates || []).map((candidate) => candidate.id).sort().join(","),
+          data: {
+            agency: agencyName,
+            upload_mode: "Agency Talent Pool",
+            uploaded_count: payloads.length,
+            intelligence_profiles: technicalProfilePayloads.length,
+          },
+        });
+      } catch (notificationError) {
+        console.warn("Agency Talent Pool notification failed after successful upload", notificationError?.message || notificationError);
+      }
+    }
 
     await loadCandidates();
     await loadCandidateTechnicalProfiles();
@@ -15073,6 +15100,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     alert(
       `Uploaded to Agency Talent Pool: ${payloads.length} candidate(s)\n` +
+        `Accepted rows: ${validation.accepted}\n` +
+        `Rejected rows: ${validation.rejected}\n` +
         `Candidate Intelligence profiles: ${technicalProfilePayloads.length}\n` +
         `Skipped / Errors: ${errors.length}` +
         (errors.length ? `\n\nFirst errors:\n${errors.slice(0, 10).join("\n")}` : "")
@@ -15123,8 +15152,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     );
   }
 
-  async function getAgencyAcceptedRequestAccess(requestNo = "") {
-    if (currentRole !== "Agency" || !requestNo || !currentCompanyId || !currentUser?.agency_id) {
+  async function getAgencyAcceptedRequestAccess(requestNo = "", uploadWorkspace = null) {
+    if (currentRole !== "Agency" || !requestNo || !uploadWorkspace?.ok) {
       return { allowed: currentRole !== "Agency", notification: null, lines: [] };
     }
 
@@ -15140,8 +15169,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     const { data, error } = await supabase
       .from("notification_events")
       .select("id, company_id, agency_id, agency_name, request_no, type, related_id, related_table, response_status, sla_started_at, sla_days, sla_due_at, data, created_at")
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", currentUser.agency_id)
+      .eq("company_id", uploadWorkspace.companyId)
+      .eq("agency_id", uploadWorkspace.agencyId)
       .eq("type", "NEW_REQUEST_AGENCY_ALERT")
       .order("created_at", { ascending: false })
       .range(0, 500);
@@ -15182,6 +15211,18 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   if (!file) return;
 
   try {
+    const uploadGeneration = workspaceDataGenerationRef.current;
+    const uploadWorkspace = currentRole === "Agency"
+      ? resolveAgencyUploadWorkspace({ currentUser, activeAgencyCompanyId, agencyClientAccess })
+      : null;
+    if (currentRole === "Agency" && !uploadWorkspace.ok) {
+      return alert(uploadWorkspace.message);
+    }
+    const uploadCompanyId = uploadWorkspace?.companyId || currentCompanyId;
+    if (!uploadCompanyId) {
+      return alert("Company Workspace is not selected. Please select a client workspace before uploading.");
+    }
+
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data, { cellDates: true });
     const uploadSheetName = workbook.SheetNames.find((name) => normalize(name) === "candidates upload") || workbook.SheetNames[0];
@@ -15194,11 +15235,11 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     let requestNo = excelRequestNo || requestNoFromExcel || candidateForm.request_no || "";
 
     if (!requestNo) {
-      requestNo = await inferCandidateUploadRequestNo(rows);
+      requestNo = await inferCandidateUploadRequestNo(rows, uploadCompanyId);
     }
 
     if (!requestNo && currentRole === "Agency") {
-      return await handleAgencyTalentPoolExcelUpload(rows);
+      return await handleAgencyTalentPoolExcelUpload(rows, uploadWorkspace, uploadGeneration);
     }
 
     if (!requestNo) {
@@ -15206,7 +15247,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     }
 
     const agencyRequestAccess = currentRole === "Agency"
-      ? await getAgencyAcceptedRequestAccess(requestNo)
+      ? await getAgencyAcceptedRequestAccess(requestNo, uploadWorkspace)
       : { allowed: true, notification: null, lines: [] };
 
     if (currentRole === "Agency" && agencyRequestAccess.error) {
@@ -15219,9 +15260,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     const { data: requestDataFromDb, error: requestError } = await supabase
       .from("requests")
-      .select("id, request_no, quantity, project_name, project, approval_status, recruitment_type, profession, nationality, gender")
+      .select("id, company_id, request_no, quantity, project_name, project, approval_status, recruitment_type, profession, nationality, gender")
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId)
+      .eq("company_id", uploadCompanyId)
       .maybeSingle();
 
     if ((requestError || !requestDataFromDb) && currentRole !== "Agency") {
@@ -15230,6 +15271,14 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     const agencyNotificationData = agencyRequestAccess.notification?.data || {};
     const agencyNotificationLines = agencyRequestAccess.lines || [];
+    if (currentRole === "Agency" && !isAgencyRequestAssignmentInWorkspace({
+      requestNo,
+      request: requestDataFromDb,
+      notification: agencyRequestAccess.notification,
+      workspace: uploadWorkspace,
+    })) {
+      return alert("This Request No does not belong to the active Company Workspace and Agency assignment.");
+    }
     const requestData = requestDataFromDb || {
       id: agencyNotificationData.request_id || agencyRequestAccess.notification?.related_id || null,
       request_no: requestNo,
@@ -15254,7 +15303,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       .from("request_lines")
       .select("id, request_id, request_no, line_no, profession, nationality, gender, quantity")
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId)
+      .eq("company_id", uploadCompanyId)
       .order("line_no", { ascending: true });
 
     if (lineError && currentRole !== "Agency") return alert(`request_lines: ${lineError.message}`);
@@ -15285,7 +15334,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       .from("candidates")
       .select("id, request_line_id, request_no, profession, nationality, gender, passport_no, status")
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId)
+      .eq("company_id", uploadCompanyId)
       .range(0, 5000);
 
     if (existingError) return alert(existingError.message);
@@ -15386,7 +15435,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           .from("candidates")
           .select("id")
           .eq("passport_no", passportNo)
-          .eq("company_id", currentCompanyId)
+          .eq("company_id", uploadCompanyId)
           .limit(1);
 
         if (duplicateError) {
@@ -15434,16 +15483,13 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         ? buildCandidateTechnicalScores(technicalFormFromExcel, professionIntelligence)
         : null;
 
-      payloads.push(
-        withCompany(withCreateActor({
+      const candidatePayload = withCreateActor({
           candidate_name: candidateName,
-          request_line_id: matchedLine.source === "agency_notification" ? null : (matchedLine.id || null),
           profession: matchedLine.profession || "",
           nationality: matchedLine.nationality || "",
           gender: matchedLine.gender || "",
           project: requestData.project_name || requestData.project || "",
-          request_no: requestData.request_no || requestNo,
-          agency: currentRole === "Agency" ? (currentUser?.agency_name || "") : getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
+          agency: getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
           passport_no: isSaudiNationality(matchedLine.nationality) ? "" : passportNo,
           civil_id_no: isSaudiNationality(matchedLine.nationality) ? String(civilIdNo || "").trim() : "",
           civil_id_expiry_date: isSaudiNationality(matchedLine.nationality) ? civilIdExpiryDate : null,
@@ -15465,8 +15511,18 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           ai_reasoning: technicalScores?.ai_reasoning || "",
           final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
-        }))
-      );
+      });
+      payloads.push(currentRole === "Agency"
+        ? secureAgencyCandidatePayload(candidatePayload, uploadWorkspace, {
+            requestNo: requestData.request_no || requestNo,
+            requestLineId: matchedLine.source === "agency_notification" ? null : (matchedLine.id || null),
+            project: requestData.project_name || requestData.project || "",
+          })
+        : withCompany({
+            ...candidatePayload,
+            request_line_id: matchedLine.id || null,
+            request_no: requestData.request_no || requestNo,
+          }));
 
       candidateTechnicalImportMeta.push(
         shouldCreateTechnicalProfile
@@ -15480,11 +15536,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       );
     }
 
-    if (!payloads.length) {
-      return alert(
-        "No candidates uploaded.\n\n" +
-          (errors.length ? "Reasons:\n" + errors.slice(0, 15).join("\n") : "")
-      );
+    const validation = getCandidateUploadValidationSummary(payloads, errors);
+    if (!validation.canInsert) return alert(`Candidate upload blocked before insert.\n\n${validation.message}`);
+    if (uploadGeneration !== workspaceDataGenerationRef.current) {
+      return alert("Company Workspace changed during validation. No candidates were uploaded; please retry in the active workspace.");
     }
 
     const { data: insertedCandidates, error: insertError } = await supabase
@@ -15523,7 +15578,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         updated_at: new Date().toISOString(),
       }))
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId);
+      .eq("company_id", uploadCompanyId);
 
     await loadCandidates();
     await loadCandidateTechnicalProfiles();
@@ -15532,6 +15587,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     alert(
       `Uploaded: ${payloads.length} candidate(s)
+` +
+        `Accepted rows: ${validation.accepted}
+` +
+        `Rejected rows: ${validation.rejected}
 ` +
         `Candidate Intelligence profiles: ${technicalProfilePayloads.length}
 ` +
