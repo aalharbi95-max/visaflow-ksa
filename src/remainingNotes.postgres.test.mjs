@@ -136,6 +136,8 @@ before(async () => {
   await db.exec(dispatcherSecurityMigration);
   const dispatchClaimsMigration = await readFile(new URL("../supabase/migrations/20260802000300_email_dispatch_claims.sql", import.meta.url), "utf8");
   await db.exec(dispatchClaimsMigration);
+  const invitationGenerationsMigration = await readFile(new URL("../supabase/migrations/20260802000400_revoked_invitation_generations.sql", import.meta.url), "utf8");
+  await db.exec(invitationGenerationsMigration);
 });
 
 after(async () => { await db?.close(); });
@@ -157,6 +159,7 @@ test("remaining-notes migration adds deterministic agreement and email audit col
 test("new SECURITY DEFINER functions pin search_path and expose only intended roles", async () => {
   const names = ["agency_agreement_accept_v1", "email_log_list_v1", "platform_email_log_summary_v1",
     "agency_invitation_record_auth_user_v3", "agency_invitation_begin_v3", "agency_invitation_revoke_v1",
+    "agency_invitation_begin_v4",
     "agency_user_lifecycle_mutate", "agency_user_lifecycle_list"];
   const functions = await db.query(`select proname,coalesce(array_to_string(proconfig,','),'') config
     from pg_proc join pg_namespace on pg_namespace.oid=pg_proc.pronamespace
@@ -268,4 +271,29 @@ test("revoke and lifecycle actions retain identities and audit tenant-scoped acc
   assert.deepEqual(target.rows[0], { status: "Active", is_active: true, agency_id: AGENCY_A });
   const audits = await db.query("select count(*)::int count from public.system_activity_logs where company_id=$1", [COMPANY_A]);
   assert.ok(audits.rows[0].count >= 3);
+});
+
+test("a new invitation after revoke creates a distinct request and email audit generation", async () => {
+  await db.exec("reset role");
+  const oldResult = await db.query("select id,idempotency_key,status,admin_email from public.agency_provisioning_requests where company_id=$1 order by created_at desc limit 1", [COMPANY_A]);
+  const oldRequest = oldResult.rows[0];
+  assert.equal(oldRequest.status, "Revoked");
+  const oldEmailKey = `AGENCY_USER_INVITATION:${oldRequest.id}:${oldRequest.admin_email}`;
+  await db.query("insert into public.email_logs(company_id,agency_id,event_type,recipient,status,related_id,idempotency_key,sent_at) values($1,$2,'AGENCY_USER_INVITATION',$3,'Sent',$4,$5,now())", [COMPANY_A, AGENCY_A, oldRequest.admin_email, oldRequest.id, oldEmailKey]);
+
+  await authenticate(ADMIN_AUTH);
+  const created = await db.query("select public.agency_invitation_begin_v4($1,$2::jsonb,'invite_existing') result", [AGENCY_A, JSON.stringify({ can_view_requests:true,can_upload_candidates:true,can_update_candidates:true,can_view_interviews:true })]);
+  assert.notEqual(created.rows[0].result.id, oldRequest.id);
+  assert.equal(created.rows[0].result.attempt_count, 1);
+  await db.exec("reset role");
+  const generations = await db.query("select id,idempotency_key,status from public.agency_provisioning_requests where company_id=$1 and agency_id=$2 order by created_at", [COMPANY_A, AGENCY_A]);
+  assert.equal(generations.rows.length, 2);
+  assert.equal(generations.rows[0].status, "Revoked");
+  assert.notEqual(generations.rows[0].idempotency_key, generations.rows[1].idempotency_key);
+  const newEmailKey = `AGENCY_USER_INVITATION:${generations.rows[1].id}:${oldRequest.admin_email}`;
+  await db.query("insert into public.email_logs(company_id,agency_id,event_type,recipient,status,related_id,idempotency_key) values($1,$2,'AGENCY_USER_INVITATION',$3,'Queued',$4,$5)", [COMPANY_A, AGENCY_A, oldRequest.admin_email, generations.rows[1].id, newEmailKey]);
+  const logs = await db.query("select related_id,idempotency_key,status from public.email_logs where event_type='AGENCY_USER_INVITATION' order by created_at");
+  assert.equal(logs.rows.length, 2);
+  assert.notEqual(logs.rows[0].related_id, logs.rows[1].related_id);
+  assert.notEqual(logs.rows[0].idempotency_key, logs.rows[1].idempotency_key);
 });

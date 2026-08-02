@@ -230,6 +230,7 @@ test("App uses the Edge Function and contains no invitation table writes", async
   );
   assert.match(app, /Send Invitation/);
   assert.match(app, /Invite Another User/);
+  assert.match(app, /Send New Invitation/);
   assert.match(app, /Email delivery failed\. Retry is available after the cooldown\./);
   assert.match(app, /invokeAgencyInvitation/);
   assert.match(app, /action:\s*"activate"/);

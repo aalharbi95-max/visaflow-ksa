@@ -13262,7 +13262,7 @@ async function inviteAgency(item, action = "invite_existing") {
   const currentStatus = getAgencyInvitationStatus(currentRequest);
   const allowed = action === "resend_invitation"
     ? canResendAgencyInvitation(currentRequest)
-    : canSendAgencyInvitation(currentStatus);
+    : canSendAgencyInvitation(currentStatus) || currentStatus === "Revoked";
   if (!allowed) {
     alert("المكتب مدعو مسبقًا.");
     return;
@@ -35954,6 +35954,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     const canSend = canSendAgencyInvitation(invitationStatus);
                     const canResend = canResendAgencyInvitation(invitationRequest);
                     const canRevoke = canRevokeAgencyInvitation(invitationStatus);
+                    const isNewAfterRevoke = invitationStatus === "Revoked";
                     const invitationFailureMessage = invitationStatus === "Failed"
                       ? (invitationRequest?.failure_code === "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED"
                           ? "Email delivery failed. Retry is available after the cooldown."
@@ -36005,14 +36006,14 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                           {canInviteAgencyUsers && (
                             <button
                               disabled={(!canSend && !canResend) || isSending}
-                              onClick={() => inviteAgency(item, canResend ? "resend_invitation" : "invite_existing")}
+                              onClick={() => inviteAgency(item, isNewAfterRevoke ? "invite_existing" : canResend ? "resend_invitation" : "invite_existing")}
                               title={
                                 canSend || canResend
                                   ? "Send a secure agency invitation"
                                   : "Invitation cannot be resent in this state"
                               }
                             >
-                              {isSending ? "Queued" : invitationStatus === "Accepted" ? "Invite Another User" : canResend ? "Resend Invitation" : "Send Invitation"}
+                              {isSending ? "Queued" : invitationStatus === "Accepted" ? "Invite Another User" : isNewAfterRevoke ? "Send New Invitation" : canResend ? "Resend Invitation" : "Send Invitation"}
                             </button>
                           )}
                           {canInviteAgencyUsers && canRevoke && (

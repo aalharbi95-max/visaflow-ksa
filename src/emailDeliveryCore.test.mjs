@@ -240,6 +240,7 @@ test("dispatcher owns recipient-aware logs and agreement lookup uses agency_id",
   assert.match(provisioner, /buildEmailIdempotencyKey/);
   assert.doesNotMatch(provisioner, /error_message:\s*String\(result/);
   assert.match(provisioner, /SAFE_DISPATCHER_ERROR_CODES/);
+  assert.match(provisioner, /agency_invitation_begin_v4/);
   assert.doesNotMatch(dispatcher, /console\.(?:log|error)\([^\n]*action_url/);
   assert.match(migration, /revoke insert, update, delete on table public\.email_logs from anon, authenticated/);
   assert.match(securityMigration, /revoke insert, update, delete, truncate, references, trigger/);

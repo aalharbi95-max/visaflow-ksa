@@ -187,7 +187,7 @@ Deno.serve(async (request) => {
         permissions: Record<string, boolean>;
         action: string;
       }) =>
-        rpc(userClient, "agency_invitation_begin_v3", {
+        rpc(userClient, "agency_invitation_begin_v4", {
           p_agency_id: agencyId,
           p_permissions: permissions,
           p_action: action,
