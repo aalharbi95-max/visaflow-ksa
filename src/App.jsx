@@ -5967,6 +5967,9 @@ const [userForm, setUserForm] = useState({
   agency_name: "",
 });
 const [candidates, setCandidates] = useState([]);
+const [deletedCandidates, setDeletedCandidates] = useState([]);
+const [candidateUploadBatches, setCandidateUploadBatches] = useState([]);
+const [candidateSelectedIds, setCandidateSelectedIds] = useState([]);
 const [candidateTechnicalProfiles, setCandidateTechnicalProfiles] = useState([]);
 const [educationInstitutions, setEducationInstitutions] = useState([]);
 const [candidateTechnicalForm, setCandidateTechnicalForm] = useState(emptyCandidateTechnicalProfile);
@@ -8238,6 +8241,7 @@ Cancel = إضافتها كوظيفة مستقلة`
   loadProfessionAliases(),
       loadEducationInstitutions(),
       loadCandidates(),
+      loadCandidateDeletionData(),
       loadCandidateTechnicalProfiles(),
       loadInterviews(),
       loadAIInterviewTemplates(),
@@ -8340,6 +8344,7 @@ Cancel = إضافتها كوظيفة مستقلة`
   if (currentCompanyId && !globalTables.includes(table)) {
     query = query.eq("company_id", currentCompanyId);
   }
+  if (table === "candidates") query = query.is("deleted_at", null);
 
   if (currentRole === "Agency") {
     if (table === "agencies") {
@@ -8842,6 +8847,21 @@ async function loadProfessionAliases() {
   }
 
   const loadCandidates = () => loadTable("candidates", setCandidates);
+  async function loadCandidateDeletionData() {
+    if (!currentCompanyId) {
+      setDeletedCandidates([]);
+      setCandidateUploadBatches([]);
+      return;
+    }
+    const [deletedResult, batchResult] = await Promise.all([
+      currentRole === "Company Admin" || currentRole === "Admin"
+        ? supabase.from("candidates").select("*").eq("company_id", currentCompanyId).not("deleted_at", "is", null).order("deleted_at", { ascending: false }).range(0, 5000)
+        : Promise.resolve({ data: [], error: null }),
+      supabase.from("candidate_upload_batches").select("*").eq("company_id", currentCompanyId).order("created_at", { ascending: false }).range(0, 5000),
+    ]);
+    if (!deletedResult.error) setDeletedCandidates(deletedResult.data || []);
+    if (!batchResult.error) setCandidateUploadBatches(batchResult.data || []);
+  }
   const loadInterviews = () => loadTable("interviews", setInterviews);
 
   async function loadAIInterviewTemplates() {
@@ -14549,13 +14569,62 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   }
 
   async function deleteCandidate(id) {
-    if (!canManageCandidates) return alert("You do not have permission to delete candidates.");
-    if (!window.confirm("Delete this candidate?")) return;
-    const { error } = await supabase.from("candidates").delete().eq("id", id);
+    return softDeleteCandidates([id]);
+  }
+
+  async function softDeleteCandidates(candidateIds = [], batch = null) {
+    const ids = Array.from(new Set(candidateIds.map(String).filter(Boolean)));
+    const selected = candidates.filter((item) => ids.includes(String(item.id)));
+    if (!ids.length || selected.length !== ids.length) return alert("No accessible candidates were selected.");
+    const reason = window.prompt(`Soft delete ${ids.length} candidate(s)${batch ? ` from ${batch.file_name}` : ""}.\nEnter deletion reason:`);
+    if (!String(reason || "").trim()) return alert("Deletion reason is required. No candidates were changed.");
+    if (ids.length >= 100 && window.prompt(`Large batch: ${ids.length} candidates. Type DELETE to confirm.`) !== "DELETE") {
+      return alert("Confirmation did not match. No candidates were changed.");
+    }
+    const protectedRows = selected.filter((item) => ["visa stamped","arrived","arrived ksa","joined","employee","mobilization completed"].includes(String(item.status || "").toLowerCase()));
+    const isCompanyAdmin = ["Admin", "Company Admin"].includes(currentRole);
+    if (protectedRows.length && !isCompanyAdmin) return alert(`${protectedRows.length} candidate(s) are in protected stages and require Company Admin.`);
+    const allowProtected = protectedRows.length
+      ? window.confirm(`WARNING: ${protectedRows.length} candidate(s) reached a protected stage. Company Admin override?`)
+      : false;
+    if (protectedRows.length && !allowProtected) return;
+    const linkedRows = selected.filter((item) => String(item.request_no || "").trim());
+    const confirmLinked = linkedRows.length
+      ? window.confirm(`${linkedRows.length} candidate(s) are linked to a request or authorization. Continue with soft delete?`)
+      : false;
+    if (linkedRows.length && !confirmLinked) return;
+    const { data, error } = await supabase.rpc("candidate_soft_delete_v1", {
+      p_company_id: currentCompanyId,
+      p_candidate_ids: ids,
+      p_reason: String(reason).trim(),
+      p_confirm_linked: confirmLinked,
+      p_allow_protected: allowProtected,
+    });
     if (error) return alert(error.message);
-    loadCandidates();
-    loadCandidateTechnicalProfiles();
-    loadRequests();
+    setCandidateSelectedIds([]);
+    setOfficeSelectedCandidateIds([]);
+    await Promise.all([loadCandidates(), loadCandidateDeletionData(), loadRequests()]);
+    alert(`Successfully soft deleted ${data?.deleted_count || ids.length} candidate(s).`);
+  }
+
+  async function deleteCandidateUploadBatch(batch) {
+    const batchCandidates = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch?.id || ""));
+    if (!batchCandidates.length) return alert("This upload batch has no active candidates.");
+    return softDeleteCandidates(batchCandidates.map((item) => item.id), batch);
+  }
+
+  async function restoreCandidates(candidateIds = []) {
+    const ids = Array.from(new Set(candidateIds.map(String).filter(Boolean)));
+    if (!ids.length) return;
+    const reason = window.prompt(`Restore ${ids.length} candidate(s). Enter restoration note:`) || "Restored by Company Admin";
+    const { data, error } = await supabase.rpc("candidate_restore_v1", {
+      p_company_id: currentCompanyId,
+      p_candidate_ids: ids,
+      p_reason: reason,
+    });
+    if (error) return alert(error.message);
+    await Promise.all([loadCandidates(), loadCandidateDeletionData(), loadRequests()]);
+    alert(`Successfully restored ${data?.restored_count || ids.length} candidate(s).`);
   }
 
   function getCandidateTemplateSampleRows() {
@@ -14908,7 +14977,19 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     setTimeout(() => candidateExcelInputRef.current?.click(), 0);
   }
 
-  async function handleAgencyTalentPoolExcelUpload(rows = [], uploadWorkspace, uploadGeneration) {
+  async function beginCandidateUploadBatch({ uploadCompanyId, uploadAgencyId, fileName, fileHash, rowCount }) {
+    const { data, error } = await supabase.rpc("candidate_upload_batch_begin_v1", {
+      p_company_id: uploadCompanyId,
+      p_agency_id: uploadAgencyId || null,
+      p_file_name: fileName || "Candidate upload",
+      p_file_hash: fileHash,
+      p_row_count: rowCount,
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function handleAgencyTalentPoolExcelUpload(rows = [], uploadWorkspace, uploadGeneration, uploadFile) {
     if (currentRole !== "Agency") {
       return alert("Please select Request No before uploading candidate Excel.");
     }
@@ -15048,6 +15129,18 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     if (uploadGeneration !== workspaceDataGenerationRef.current) {
       return alert("Company Workspace changed during validation. No candidates were uploaded; please retry in the active workspace.");
     }
+    const batch = await beginCandidateUploadBatch({
+      uploadCompanyId,
+      uploadAgencyId,
+      fileName: uploadFile.name,
+      fileHash: uploadFile.hash,
+      rowCount: payloads.length,
+    });
+    payloads.forEach((payload) => {
+      payload.upload_batch_id = batch.id;
+      payload.file_hash = uploadFile.hash;
+      payload.uploaded_by_agency_id = uploadAgencyId;
+    });
 
     const { data: insertedCandidates, error: insertError } = await supabase
       .from("candidates")
@@ -15224,6 +15317,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     }
 
     const data = await file.arrayBuffer();
+    const fileHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", data)))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const uploadFile = { name: file.name || "Candidate upload", hash: fileHash };
     const workbook = XLSX.read(data, { cellDates: true });
     const uploadSheetName = workbook.SheetNames.find((name) => normalize(name) === "candidates upload") || workbook.SheetNames[0];
     const sheet = workbook.Sheets[uploadSheetName];
@@ -15239,7 +15336,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     }
 
     if (!requestNo && currentRole === "Agency") {
-      return await handleAgencyTalentPoolExcelUpload(rows, uploadWorkspace, uploadGeneration);
+      return await handleAgencyTalentPoolExcelUpload(rows, uploadWorkspace, uploadGeneration, uploadFile);
     }
 
     if (!requestNo) {
@@ -15541,6 +15638,18 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     if (uploadGeneration !== workspaceDataGenerationRef.current) {
       return alert("Company Workspace changed during validation. No candidates were uploaded; please retry in the active workspace.");
     }
+    const batch = await beginCandidateUploadBatch({
+      uploadCompanyId,
+      uploadAgencyId: uploadWorkspace?.agencyId || null,
+      fileName: uploadFile.name,
+      fileHash: uploadFile.hash,
+      rowCount: payloads.length,
+    });
+    payloads.forEach((payload) => {
+      payload.upload_batch_id = batch.id;
+      payload.file_hash = uploadFile.hash;
+      payload.uploaded_by_agency_id = uploadWorkspace?.agencyId || null;
+    });
 
     const { data: insertedCandidates, error: insertError } = await supabase
       .from("candidates")
@@ -32813,6 +32922,16 @@ disabled={authorizationWorkflowBusy === "create"}
             </FormCard>
             )}
             <TableCard title="Candidates List">
+  <div className="actions-line" style={{ marginBottom: 12 }}>
+    <button className="light-btn" onClick={() => setCandidateSelectedIds(filteredCandidateTableRows.map((item) => String(item.id)))}>Select All</button>
+    <button className="danger" disabled={!candidateSelectedIds.length} onClick={() => softDeleteCandidates(candidateSelectedIds)}>Delete Selected ({candidateSelectedIds.length})</button>
+  </div>
+  <div className="stats-grid" style={{ marginBottom: 12 }}>
+    {candidateUploadBatches.map((batch) => {
+      const activeCount = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch.id)).length;
+      return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div>;
+    })}
+  </div>
   <SmartTableToolbar
     searchValue={candidateTableFilters.query}
     onSearchChange={(value) => setCandidateTableFilters((current) => ({ ...current, query: value }))}
@@ -32833,6 +32952,7 @@ disabled={authorizationWorkflowBusy === "create"}
   <table>
     <thead>
       <tr>
+        <th><input type="checkbox" checked={filteredCandidateTableRows.length > 0 && filteredCandidateTableRows.every((item) => candidateSelectedIds.includes(String(item.id)))} onChange={(event) => setCandidateSelectedIds(event.target.checked ? filteredCandidateTableRows.map((item) => String(item.id)) : [])} /></th>
         <th>Request No</th>
         <th>Name</th>
         <th>Profession</th>
@@ -32864,6 +32984,7 @@ disabled={authorizationWorkflowBusy === "create"}
     <tbody>
       {pagedCandidateTableRows.map((item) => (
         <tr key={item.id}>
+          <td><input type="checkbox" checked={candidateSelectedIds.includes(String(item.id))} onChange={() => setCandidateSelectedIds((current) => current.includes(String(item.id)) ? current.filter((id) => id !== String(item.id)) : [...current, String(item.id)])} /></td>
           <td>{item.request_no}</td>
           <td>{item.candidate_name}</td>
           <td>{item.profession}</td>
@@ -32941,6 +33062,13 @@ disabled={authorizationWorkflowBusy === "create"}
     onPageChange={setCandidateTablePage}
   />
 </TableCard>
+{["Admin", "Company Admin"].includes(currentRole) && (
+  <TableCard title={`Deleted Candidates (${deletedCandidates.length})`}>
+    <table><thead><tr><th>Name</th><th>Office</th><th>Batch</th><th>Deleted</th><th>Reason</th><th>Action</th></tr></thead>
+      <tbody>{deletedCandidates.map((item) => <tr key={item.id}><td>{item.candidate_name}</td><td>{item.agency || "-"}</td><td>{item.deleted_from_batch_id || "-"}</td><td>{item.deleted_at ? new Date(item.deleted_at).toLocaleString() : "-"}</td><td>{item.deletion_reason || "-"}</td><td><button className="save-btn" onClick={() => restoreCandidates([item.id])}>Restore</button></td></tr>)}</tbody>
+    </table>
+  </TableCard>
+)}
           </>
         )}
 
@@ -34559,9 +34687,17 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </button>
           <button className="light-btn" onClick={resetOfficeBulkForm}>Clear Bulk Fields</button>
           <button className="light-btn" onClick={() => setOfficeSelectedCandidateIds([])}>Clear Selection</button>
+          <button className="danger" disabled={!officeSelectedCandidateIds.length} onClick={() => softDeleteCandidates(officeSelectedCandidateIds)}>Delete Selected ({officeSelectedCandidateIds.length})</button>
         </div>
       </FormCard>
     )}
+
+    <div className="stats-grid" style={{ marginBottom: 12 }}>
+      {candidateUploadBatches.map((batch) => {
+        const activeCount = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch.id)).length;
+        return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div>;
+      })}
+    </div>
 
     <TableCard title="Office Candidates Tracking - Candidate Updates & Interview Scheduling">
       <table>
@@ -34665,6 +34801,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           {getCandidateInterview(item) ? "Update Interview Date" : "Schedule Interview"}
         </button>
       )}
+      <button className="danger" onClick={() => deleteCandidate(item.id)}>Delete</button>
     </>
   ) : (
     "-"
