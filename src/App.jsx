@@ -44,6 +44,13 @@ import {
 import RequestLineCustomFields from "./RequestLineCustomFields";
 import Select from "./Select";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
+import {
+  createAgencyAgreement,
+  getAgencyAgreementSaveError,
+  isSameAgencyWorkspace,
+  retryAgreementDelivery,
+  shouldShowAgencyAgreements,
+} from "./agencyAgreements.mjs";
 import { buildNationalityOptions, getNationalityMatchKeys, nationalitiesMatch, resolveCanonicalNationality } from "./nationality.mjs";
 import {
   buildAuthorizationTimeline,
@@ -5802,6 +5809,7 @@ function App() {
   const [visaAllocations, setVisaAllocations] = useState([]);
 const [agencies, setAgencies] = useState([]);
 const [agencyAgreements, setAgencyAgreements] = useState([]);
+const [agencyAgreementsLoading, setAgencyAgreementsLoading] = useState(false);
 const [agencyScores, setAgencyScores] = useState([]);
 const [agencyScoreHistory, setAgencyScoreHistory] = useState([]);
 const [agencyPenalties, setAgencyPenalties] = useState([]);
@@ -6866,7 +6874,9 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
     if (workspaces.length > 0 && autoSelect) {
       const currentId = activeAgencyCompanyId || effectiveUser.active_company_id || "";
       const selected = workspaces.find((item) => String(item.company_id) === String(currentId)) || workspaces[0];
-      switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
+      if (!isSameAgencyWorkspace(currentId, selected)) {
+        switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
+      }
     }
 
     return workspaces;
@@ -6883,6 +6893,8 @@ function switchAgencyWorkspace(workspace, options = {}) {
   if (!workspace?.company_id) return;
 
   const companyId = String(workspace.company_id || "");
+  const currentId = String(activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "");
+  if (companyId === currentId) return;
   const companyName = workspace.company_name || "Client Workspace";
   const base = options.user || currentUser || {};
   const updated = {
@@ -8484,7 +8496,14 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAgencies(rows);
     await Promise.all([loadAgencyInvitationStates(rows), loadAgencyUsers()]);
   }
-  const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
+  async function loadAgencyAgreements() {
+    setAgencyAgreementsLoading(true);
+    try {
+      return await loadTable("agency_agreements", setAgencyAgreements);
+    } finally {
+      setAgencyAgreementsLoading(false);
+    }
+  }
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
   async function loadAgencyScoreHistory() {
     const requestGeneration = workspaceDataGenerationRef.current;
@@ -13577,19 +13596,6 @@ function refreshAgreementTerms() {
   }));
 }
 
-function generateAgreementNo() {
-  const year = new Date().getFullYear();
-  const prefix = `AGR-${year}-`;
-  const maxNumber = agencyAgreements.reduce((max, item) => {
-    const agreementNo = String(item.agreement_no || "");
-    if (!agreementNo.startsWith(prefix)) return max;
-    const numberPart = Number(agreementNo.replace(prefix, ""));
-    return Number.isFinite(numberPart) ? Math.max(max, numberPart) : max;
-  }, 0);
-  const nextNumber = String(maxNumber + 1).padStart(4, "0");
-  return `${prefix}${nextNumber}`;
-}
-
 function resetAgreementForm() {
   setAgreementForm(emptyAgreement);
   setAgreementEditingId(null);
@@ -13681,7 +13687,6 @@ async function saveAgreement(statusOverride = "") {
   const payload = {
     ...agreementForm,
     agency_id: agreementAgencyMatches[0].id,
-    agreement_no: agreementForm.agreement_no || generateAgreementNo(),
     status: nextStatus,
     sla_days: Number(agreementForm.sla_days || 60),
     response_sla_hours: Number(agreementForm.response_sla_hours || 24),
@@ -13707,9 +13712,9 @@ async function saveAgreement(statusOverride = "") {
         .eq("company_id", currentCompanyId)
         .select("id")
         .single()
-    : await supabase.from("agency_agreements").insert([withCompany(payload)]).select("id").single();
+    : await createAgencyAgreement(supabase, payload);
 
-  if (result.error) return alert(result.error.message);
+  if (result.error) return alert(getAgencyAgreementSaveError(result.error));
 
   let agreementEmailError = "";
   if (nextStatus === "Pending Signature") {
@@ -13761,12 +13766,7 @@ async function sendExistingAgreementToAgency(item) {
   if (error) return alert(error.message);
   let agreementEmailError = "";
   try {
-    await sendAgreementSentEmail({
-      ...item,
-      status: "Pending Signature",
-      sent_to_agency_at: now,
-      terms: item.terms || buildAgreementTermsFromPolicy(item),
-    });
+    await retryAgreementDelivery(dispatchVisaFlowEmail, item);
   } catch (emailError) {
     agreementEmailError = emailError?.message || "Email provider handoff failed";
     console.warn("Agreement email failed", emailError?.message || emailError);
@@ -34139,8 +34139,11 @@ disabled={authorizationWorkflowBusy === "create"}
       </TableCard>
     )}
 
-    {currentRole === "Agency" && agencyAgreements.length > 0 && (
+    {shouldShowAgencyAgreements({ role: currentRole, loading: agencyAgreementsLoading, agreements: agencyAgreements }) && (
       <TableCard title="Agency Agreements / Electronic Signature">
+        {agencyAgreementsLoading && agencyAgreements.length === 0 ? (
+          <div className="empty-state">Loading agreements...</div>
+        ) : (
         <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
           <table>
             <thead>
@@ -34186,6 +34189,7 @@ disabled={authorizationWorkflowBusy === "create"}
             </tbody>
           </table>
         </div>
+        )}
       </TableCard>
     )}
 

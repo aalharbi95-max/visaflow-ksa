@@ -57,11 +57,19 @@ create table public.system_activity_logs (
 );
 create table public.countries (id bigint generated always as identity primary key, name text, nationality text, iso_code text, active boolean default true);
 create table public.agency_agreements (
-  id uuid primary key, company_id uuid, agency_name text, status text default 'Draft',
-  signed_by_agency text, agency_signature text, agency_accepted_by text,
+  id uuid default gen_random_uuid() primary key, company_id uuid, agency_id uuid,
+  agreement_no text, agency_name text, status text default 'Draft', signed_by_company text,
+  company_signature text, signed_by_agency text, agency_signature text, agency_accepted_by text,
   agency_accepted_email text, agency_accepted_at timestamptz, updated_at timestamptz default now(),
-  created_at timestamptz default now()
+  created_at timestamptz default now(), sla_days integer, effective_date date, expiry_date date,
+  terms text, template_type text, policy_name text, response_sla_hours integer,
+  update_frequency_days integer, delay_penalty_type text, delay_penalty_amount numeric,
+  delay_penalty_after_days integer, financial_guarantee_required text,
+  financial_guarantee_amount numeric, replacement_guarantee_days integer,
+  payment_terms text, cancellation_terms text, sent_to_agency_at timestamptz
 );
+create unique index agency_agreements_company_agreement_no_unique
+  on public.agency_agreements(company_id,agreement_no);
 create table public.email_logs (
   id uuid default gen_random_uuid() primary key, company_id uuid, event_type text, status text default 'Queued',
   provider text, from_email text, to_emails text, cc_emails text, bcc_emails text, subject text,
@@ -138,6 +146,8 @@ before(async () => {
   await db.exec(dispatchClaimsMigration);
   const invitationGenerationsMigration = await readFile(new URL("../supabase/migrations/20260802000400_revoked_invitation_generations.sql", import.meta.url), "utf8");
   await db.exec(invitationGenerationsMigration);
+  const agreementNumbersMigration = await readFile(new URL("../supabase/migrations/20260802000500_atomic_agency_agreement_numbers.sql", import.meta.url), "utf8");
+  await db.exec(agreementNumbersMigration);
 });
 
 after(async () => { await db?.close(); });
@@ -158,6 +168,7 @@ test("remaining-notes migration adds deterministic agreement and email audit col
 
 test("new SECURITY DEFINER functions pin search_path and expose only intended roles", async () => {
   const names = ["agency_agreement_accept_v1", "email_log_list_v1", "platform_email_log_summary_v1",
+    "agency_agreement_create_v1",
     "agency_invitation_record_auth_user_v3", "agency_invitation_begin_v3", "agency_invitation_revoke_v1",
     "agency_invitation_begin_v4",
     "agency_user_lifecycle_mutate", "agency_user_lifecycle_list"];
@@ -167,11 +178,16 @@ test("new SECURITY DEFINER functions pin search_path and expose only intended ro
   assert.equal(functions.rows.length, names.length);
   for (const row of functions.rows) assert.match(row.config, /search_path=/);
   const privileges = await db.query(`select
+    has_function_privilege('authenticated','public.agency_agreement_create_v1(jsonb)','execute') agreement_create,
     has_function_privilege('authenticated','public.agency_user_lifecycle_mutate(uuid,bigint,text,text)','execute') lifecycle,
     has_function_privilege('authenticated','public.agency_invitation_record_auth_user_v3(uuid,uuid,uuid,boolean)','execute') auth_record_browser,
     has_function_privilege('service_role','public.agency_invitation_record_auth_user_v3(uuid,uuid,uuid,boolean)','execute') auth_record_server,
     has_table_privilege('authenticated','public.email_logs','insert') email_insert`);
-  assert.deepEqual(privileges.rows[0], { lifecycle: true, auth_record_browser: false, auth_record_server: true, email_insert: false });
+  assert.deepEqual(privileges.rows[0], { agreement_create: true, lifecycle: true, auth_record_browser: false, auth_record_server: true, email_insert: false });
+
+  const agreementCreate = await db.query(`select prosrc from pg_proc join pg_namespace on pg_namespace.oid=pg_proc.pronamespace
+    where nspname='public' and proname='agency_agreement_create_v1'`);
+  assert.match(agreementCreate.rows[0].prosrc, /pg_advisory_xact_lock/);
 });
 
 test("agreement access is tenant-scoped and agency acceptance uses the protected RPC", async () => {
@@ -187,6 +203,36 @@ test("agreement access is tenant-scoped and agency acceptance uses the protected
   const accepted = await db.query("select public.agency_agreement_accept_v1($1) result", [agreementId]);
   assert.equal(accepted.rows[0].result.status, "Active");
   assert.equal(accepted.rows[0].result.company_id, COMPANY_A);
+});
+
+test("company admins create agreements with atomic server-generated numbers", async () => {
+  await authenticate(ADMIN_AUTH);
+  const payload = JSON.stringify({ agency_id: AGENCY_A, status: "Pending Signature", terms: "Test terms" });
+  const [first, second] = await Promise.all([
+    db.query("select public.agency_agreement_create_v1($1::jsonb) result", [payload]),
+    db.query("select public.agency_agreement_create_v1($1::jsonb) result", [payload]),
+  ]);
+  const numbers = [first.rows[0].result.agreement_no, second.rows[0].result.agreement_no];
+  assert.equal(new Set(numbers).size, 2);
+  assert.ok(numbers.every((number) => /^AGR-[0-9]{4}-[0-9]{4}$/.test(number)));
+
+  const visible = await db.query("select agreement_no from public.agency_agreements order by agreement_no");
+  assert.ok(visible.rows.length >= 3);
+  await authenticate(AGENCY_AUTH);
+  const agencyVisible = await db.query("select agreement_no,status from public.agency_agreements where agreement_no=any($1::text[]) order by agreement_no", [numbers]);
+  assert.equal(agencyVisible.rows.length, 2);
+  assert.ok(agencyVisible.rows.every((row) => row.status === "Pending Signature"));
+  await authenticate(ADMIN_B_AUTH);
+  const otherTenant = await db.query("select agreement_no from public.agency_agreements where company_id=$1", [COMPANY_A]);
+  assert.equal(otherTenant.rows.length, 0);
+});
+
+test("agreement create RPC is protected from agency users", async () => {
+  await authenticate(AGENCY_AUTH);
+  await assert.rejects(
+    () => db.query("select public.agency_agreement_create_v1($1::jsonb)", [JSON.stringify({ agency_id: AGENCY_A })]),
+    /AGENCY_AGREEMENT_CREATE_UNAUTHORIZED/
+  );
 });
 
 test("email logs are server-owned and non-admin recipients are masked by the RPC", async () => {
