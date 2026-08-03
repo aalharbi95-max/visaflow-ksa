@@ -4326,6 +4326,43 @@ body:has(.vf-public) {
   margin-bottom: 16px;
 }
 
+.table-column-filter {
+  display: grid;
+  min-width: 118px;
+  gap: 6px;
+}
+
+.table-column-filter > span {
+  white-space: nowrap;
+}
+
+.table-column-filter select {
+  min-height: 30px;
+  padding: 4px 26px 4px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.75);
+  border-radius: 8px;
+  color: #334155;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 11px 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.bulk-action-bar > strong {
+  margin-right: 4px;
+  color: #0f172a;
+}
+
 .notification-folders {
   display: inline-flex;
   gap: 8px;

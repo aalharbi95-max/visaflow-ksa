@@ -73,6 +73,12 @@ import {
 } from "./authorizationWorkflow.mjs";
 import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
 import { buildRedeploymentSuggestions } from "./redeploymentMatching.mjs";
+import { buildExcelSafeRows, getExcelColumnWidths } from "./excelExport.mjs";
+import {
+  filterDemobilizationRows,
+  filterEmployeeRows,
+  selectRowsForBulkExport,
+} from "./workforceTableFilters.mjs";
 import {
   filterNotificationCenterRows,
   getNotificationFolderCounts,
@@ -6034,6 +6040,20 @@ const [candidateTableFilters, setCandidateTableFilters] = useState({
   nationality: "All",
   project: "All",
   agency: "All",
+});
+const [employeeTableFilters, setEmployeeTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  nationality: "All",
+  project: "All",
+});
+const [demobilizationTableFilters, setDemobilizationTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  nationality: "All",
+  project: "All",
 });
 const [candidateTablePage, setCandidateTablePage] = useState(1);
 const [candidateTablePageSize, setCandidateTablePageSize] = useState(25);
@@ -18030,15 +18050,13 @@ function downloadLocalContentExcel() {
 }
 
 const filteredEmployeeRows = useMemo(() => {
-  const keyword = String(search || "").toLowerCase();
-  return employees.filter((item) => {
-    if (!keyword) return true;
-    return [item.employee_no, item.employee_name, item.iqama_no, item.profession, item.nationality, item.project_name, item.project_city, item.project_location]
-      .join(" ")
-      .toLowerCase()
-      .includes(keyword);
-  });
-}, [employees, search]);
+  return filterEmployeeRows(employees, employeeTableFilters);
+}, [employees, employeeTableFilters]);
+
+const filteredDemobilizationRows = useMemo(
+  () => filterDemobilizationRows(demobilizations, demobilizationTableFilters),
+  [demobilizations, demobilizationTableFilters]
+);
 
 const demobilizationIntelligence = useMemo(() => {
   const availableEmployees = demobilizations.filter((item) => item.status === "Available").length;
@@ -18950,18 +18968,16 @@ function exportRowsToExcel(rows, fileName, sheetName = "Data") {
     return;
   }
 
-  const cleanRows = rows.map((row) => {
-    const clean = {};
-    Object.entries(row).forEach(([key, value]) => {
-      if (typeof value !== "object") clean[key] = value ?? "";
-    });
-    return clean;
-  });
+  const cleanRows = buildExcelSafeRows(rows);
 
   const worksheet = XLSX.utils.json_to_sheet(cleanRows);
+  worksheet["!autofilter"] = { ref: worksheet["!ref"] };
+  worksheet["!cols"] = getExcelColumnWidths(cleanRows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, `${fileName}.xlsx`);
+  const datedFileName = `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(workbook, datedFileName);
+  alert(`Excel export completed: ${rows.length.toLocaleString()} row(s) in ${datedFileName}`);
 }
 
 function executiveAlertClass(value) {
@@ -28688,7 +28704,7 @@ function getReportStudioVisualModel() {
 function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
   if (activePage === "Requests") return exportRowsToExcel(filteredRequestTableRows, "VisaFlow_Requests", "Requests");
-  if (activePage === "Candidates") return exportRowsToExcel(filteredCandidateTableRows, "VisaFlow_Candidates", "Candidates");
+  if (activePage === "Candidates") return exportRowsToExcel(selectRowsForBulkExport(filteredCandidateTableRows, candidateSelectedIds), "VisaFlow_Candidates", "Candidates");
   if (activePage === "Visa Inventory") return exportRowsToExcel(filteredVisaBatchTableRows, "VisaFlow_Visa_Inventory", "Visas");
   if (activePage === "Authorization") return exportRowsToExcel(filteredAuthorizationTableRows, "VisaFlow_Authorizations", "Authorizations");
   if (activePage === "Cancellation Register") return exportRowsToExcel(filteredCancellationTableRows, "VisaFlow_Cancellation_Register", "Cancellations");
@@ -28751,11 +28767,11 @@ function exportCurrentPage() {
   );
   if (activePage === "Mobilization") return exportRowsToExcel(mobilizationRequestRows, "VisaFlow_Mobilization_Overview", "Mobilization");
   if (activePage === "Onboarding & Validation") return exportRowsToExcel(filteredOnboardingValidations, "VisaFlow_Onboarding_Validation", "Onboarding Validation");
-  if (activePage === "Employees") return exportRowsToExcel(employees, "VisaFlow_Employees", "Employees");
-  if (activePage === "Demobilization") return exportRowsToExcel(demobilizations, "VisaFlow_Demobilization", "Demobilization");
+  if (activePage === "Employees") return exportRowsToExcel(selectRowsForBulkExport(filteredEmployeeRows, selectedEmployeeIds), "VisaFlow_Employees", "Employees");
+  if (activePage === "Demobilization") return exportRowsToExcel(filteredDemobilizationRows, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
   if (activePage === "Local Content") return downloadLocalContentExcel();
-  if (activePage === "Notifications") return exportRowsToExcel(notifications, "VisaFlow_Notifications", "Notifications");
+  if (activePage === "Notifications") return exportRowsToExcel(filteredNotificationRows, "VisaFlow_Notifications", "Notifications");
   if (activePage === "Reports") {
     if (activeReport === "activityLog") {
       return exportRowsToExcel(
@@ -31723,7 +31739,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <tr>
 <th>Request No</th>
 <th>Type</th>
-<th>Project</th>
+<th><TableColumnFilter label="Project" value={requestTableFilters.project} options={["All", ...getUniqueTableOptions(requests, (item) => item.project_name || item.project)]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, project: value }))} /></th>
 <th>Project No</th>
 <th>City</th>
 <th>Location</th>
@@ -31737,9 +31753,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <th>Request Date</th>
 <th>Project Start</th>
 <th>Created</th>
-<th>Priority</th>
-<th>Status</th>
-<th>Approval</th>
+<th><TableColumnFilter label="Priority" value={requestTableFilters.priority} options={["All", ...getUniqueTableOptions(requests, "priority")]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, priority: value }))} /></th>
+<th><TableColumnFilter label="Status" value={requestTableFilters.status} options={["All", ...getUniqueTableOptions(requests, "status")]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, status: value }))} /></th>
+<th><TableColumnFilter label="Approval" value={requestTableFilters.approval} options={["All", ...getUniqueTableOptions(requests, "approval_status")]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, approval: value }))} /></th>
 <th>Actions</th>
 </tr>
 </thead>
@@ -33034,13 +33050,16 @@ disabled={authorizationWorkflowBusy === "create"}
               <div className="actions-line"><button className="save-btn" onClick={saveCandidate}>{candidateEditingId ? "Update Candidate" : "Save Candidate"}</button><button className="light-btn" onClick={resetCandidateForm}>Clear</button></div>
             </FormCard>
             )}
-            <TableCard title="Candidates List">
-  <div className="actions-line" style={{ marginBottom: 12 }}>
+<TableCard title="Candidates List">
+  <div className="bulk-action-bar" style={{ marginBottom: 12 }}>
+    <strong>{candidateSelectedIds.length} selected</strong>
     <button className="light-btn" onClick={() => setCandidateSelectedIds(filteredCandidateTableRows.map((item) => String(item.id)))}>Select All Matching</button>
     <button className="save-btn" disabled={bulkAssignmentBusy || !candidateSelectedIds.length} onClick={() => openBulkAssignment(candidateSelectedIds, "selected")}>Assign Selected to Request ({candidateSelectedIds.length})</button>
     <button className="new-btn" disabled={bulkAssignmentBusy} onClick={() => openBulkAssignment([], "matching")}>Select All Matching & Assign</button>
     <button className="light-btn" disabled={bulkAssignmentBusy || !candidateSelectedIds.length} onClick={() => bulkUnassign(candidateSelectedIds)}>Bulk Unassign</button>
+    <button className="new-btn" disabled={!candidateSelectedIds.length} onClick={() => exportRowsToExcel(selectRowsForBulkExport(filteredCandidateTableRows, candidateSelectedIds), "VisaFlow_Selected_Candidates", "Selected Candidates")}>Export Selected</button>
     <button className="danger" disabled={!candidateSelectedIds.length} onClick={() => softDeleteCandidates(candidateSelectedIds)}>Delete Selected ({candidateSelectedIds.length})</button>
+    <button className="light-btn" disabled={!candidateSelectedIds.length} onClick={() => setCandidateSelectedIds([])}>Clear Selection</button>
   </div>
   {renderBulkAssignmentPanel()}
   <div className="stats-grid" style={{ marginBottom: 12 }}>
@@ -33072,11 +33091,11 @@ disabled={authorizationWorkflowBusy === "create"}
         <th><input type="checkbox" checked={filteredCandidateTableRows.length > 0 && filteredCandidateTableRows.every((item) => candidateSelectedIds.includes(String(item.id)))} onChange={(event) => setCandidateSelectedIds(event.target.checked ? filteredCandidateTableRows.map((item) => String(item.id)) : [])} /></th>
         <th>Request No</th>
         <th>Name</th>
-        <th>Profession</th>
-        <th>Nationality</th>
+        <th><TableColumnFilter label="Profession" value={candidateTableFilters.profession} options={["All", ...getUniqueTableOptions(candidates, "profession")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, profession: value }))} /></th>
+        <th><TableColumnFilter label="Nationality" value={candidateTableFilters.nationality} options={["All", ...getUniqueTableOptions(candidates, "nationality")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, nationality: value }))} /></th>
         <th>Gender</th>
-        <th>Agency</th>
-        <th>Project</th>
+        <th><TableColumnFilter label="Agency" value={candidateTableFilters.agency} options={["All", ...getUniqueTableOptions(candidates, "agency")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, agency: value }))} /></th>
+        <th><TableColumnFilter label="Project" value={candidateTableFilters.project} options={["All", ...getUniqueTableOptions(candidates, (item) => item.project || requests.find((request) => String(request.request_no || "") === String(item.request_no || ""))?.project_name)]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, project: value }))} /></th>
         <th>Passport / Civil ID</th>
         <th>ID Expiry</th>
         <th>Email</th>
@@ -33093,7 +33112,7 @@ disabled={authorizationWorkflowBusy === "create"}
 <th>Source</th>
 <th>Offer</th>
 <th>Joining Date</th>
-        <th>Status</th>
+        <th><TableColumnFilter label="Status" value={candidateTableFilters.status} options={["All", ...getUniqueTableOptions(candidates, "status")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, status: value }))} /></th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -37197,17 +37216,24 @@ onClick={() => setActiveReport("activityLog")}>
             )}
 
             <TableCard title="Employees Master List">
-              <div className="toolbar">
-                <input placeholder="Search employee, iqama, profession, project" value={search} onChange={(e) => setSearch(e.target.value)} />
-                {canManageMarketplace && (
-                  <>
+              <SmartTableToolbar
+                searchValue={employeeTableFilters.query}
+                onSearchChange={(value) => setEmployeeTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search employee, iqama, profession, nationality, or project..."
+                resultCount={filteredEmployeeRows.length}
+                hasExternalFilter={Object.entries(employeeTableFilters).some(([key, value]) => key !== "query" && value !== "All")}
+                onClear={() => setEmployeeTableFilters({ query: "", status: "All", profession: "All", nationality: "All", project: "All" })}
+              />
+              {canManageMarketplace && (
+                <div className="bulk-action-bar">
+                    <strong>{selectedEmployeeIds.length} selected</strong>
                     <button className="new-btn" onClick={sendSelectedEmployeesToMarketplace} disabled={selectedEmployeeIds.length === 0}>
                       Send Selected to Workforce Marketplace ({selectedEmployeeIds.length})
                     </button>
+                    <button className="new-btn" onClick={() => exportRowsToExcel(selectRowsForBulkExport(filteredEmployeeRows, selectedEmployeeIds), "VisaFlow_Selected_Employees", "Selected Employees")} disabled={selectedEmployeeIds.length === 0}>Export Selected</button>
                     <button className="light-btn" onClick={() => setSelectedEmployeeIds([])} disabled={selectedEmployeeIds.length === 0}>Clear Selection</button>
-                  </>
-                )}
-              </div>
+                </div>
+              )}
               <table>
                 <thead>
                   <tr>
@@ -37216,10 +37242,10 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Name</th>
                     <th>Iqama</th>
                     <th>Iqama Expiry</th>
-                    <th>Profession</th>
-                    <th>Nationality</th>
+                    <th><TableColumnFilter label="Profession" value={employeeTableFilters.profession} options={["All", ...getUniqueTableOptions(employees, "profession")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, profession: value }))} /></th>
+                    <th><TableColumnFilter label="Nationality" value={employeeTableFilters.nationality} options={["All", ...getUniqueTableOptions(employees, "nationality")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, nationality: value }))} /></th>
                     <th>Gender</th>
-                    <th>Project</th>
+                    <th><TableColumnFilter label="Project" value={employeeTableFilters.project} options={["All", ...getUniqueTableOptions(employees, "project_name")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, project: value }))} /></th>
                     <th>City</th>
                     <th>Location</th>
                     <th>Salary</th>
@@ -37227,7 +37253,7 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Contract End</th>
                     <th>Days Remaining</th>
                     <th>Marketplace</th>
-                    <th>Status</th>
+                    <th><TableColumnFilter label="Status" value={employeeTableFilters.status} options={["All", ...getUniqueTableOptions(employees, "status")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, status: value }))} /></th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -37417,16 +37443,24 @@ onClick={() => setActiveReport("activityLog")}>
             )}
 
             <TableCard title="Demobilization List">
+              <SmartTableToolbar
+                searchValue={demobilizationTableFilters.query}
+                onSearchChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search employee, ID, profession, project, or suggested request..."
+                resultCount={filteredDemobilizationRows.length}
+                hasExternalFilter={Object.entries(demobilizationTableFilters).some(([key, value]) => key !== "query" && value !== "All")}
+                onClear={() => setDemobilizationTableFilters({ query: "", status: "All", profession: "All", nationality: "All", project: "All" })}
+              />
               <table>
                 <thead>
                   <tr>
                     <th>Employee</th>
                     <th>Iqama / ID</th>
-                    <th>Profession</th>
-                    <th>Nationality</th>
-                    <th>Current Project</th>
+                    <th><TableColumnFilter label="Profession" value={demobilizationTableFilters.profession} options={["All", ...getUniqueTableOptions(demobilizations, "profession")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, profession: value }))} /></th>
+                    <th><TableColumnFilter label="Nationality" value={demobilizationTableFilters.nationality} options={["All", ...getUniqueTableOptions(demobilizations, "nationality")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, nationality: value }))} /></th>
+                    <th><TableColumnFilter label="Current Project" value={demobilizationTableFilters.project} options={["All", ...getUniqueTableOptions(demobilizations, "current_project")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, project: value }))} /></th>
                     <th>Demob Date</th>
-                    <th>Status</th>
+                    <th><TableColumnFilter label="Status" value={demobilizationTableFilters.status} options={["All", ...getUniqueTableOptions(demobilizations, "status")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, status: value }))} /></th>
                     <th>Suggested Request</th>
                     <th>Match</th>
                     <th>Invoice</th>
@@ -37435,9 +37469,9 @@ onClick={() => setActiveReport("activityLog")}>
                   </tr>
                 </thead>
                 <tbody>
-                  {demobilizations.length === 0 ? (
+                  {filteredDemobilizationRows.length === 0 ? (
                     <tr><td colSpan="12">No demobilization records yet</td></tr>
-                  ) : demobilizations.map((item) => (
+                  ) : filteredDemobilizationRows.map((item) => (
                     <tr key={item.id}>
                       <td>{item.employee_name || "-"}</td>
                       <td>{item.iqama_no || item.employee_id || "-"}</td>
@@ -38966,8 +39000,9 @@ function SmartTableToolbar({
   pageSize = 25,
   onPageSizeChange,
   onClear,
+  hasExternalFilter = false,
 }) {
-  const hasActiveFilter = Boolean(String(searchValue || "").trim()) || filters.some((filter) => !["", "All"].includes(String(filter.value || "")));
+  const hasActiveFilter = hasExternalFilter || Boolean(String(searchValue || "").trim()) || filters.some((filter) => !["", "All"].includes(String(filter.value || "")));
 
   return (
     <div style={{ marginBottom: 14, display: "grid", gap: 10 }}>
@@ -39009,6 +39044,22 @@ function SmartTableToolbar({
         <span>{Number(resultCount || 0).toLocaleString()} matching records</span>
         {hasActiveFilter && <span>Filters are active</span>}
       </div>
+    </div>
+  );
+}
+
+function TableColumnFilter({ label, value = "All", options = [], onChange }) {
+  return (
+    <div className="table-column-filter">
+      <span>{label}</span>
+      <select
+        aria-label={`Filter ${label}`}
+        value={value || "All"}
+        onChange={(event) => onChange?.(event.target.value)}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {options.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}
+      </select>
     </div>
   );
 }
