@@ -1108,9 +1108,6 @@ const emptyDemobilization = {
   invoice_required: "No",
   invoice_amount: "",
   invoice_type: "Redeployment Service",
-  redeployment_cost: "500",
-  estimated_new_recruitment_cost: "3650",
-  estimated_saving: "",
   recruitment_avoided: "Yes",
   notes: "",
 };
@@ -17564,8 +17561,6 @@ const employeeIntelligence = useMemo(() => {
     if (hasMatch) redeploymentMatches += 1;
   });
 
-  const potentialSaving = redeploymentMatches * 3150;
-
   const projectRisk = Object.values(
     expiringSoon.reduce((acc, employee) => {
       const key = employee.project_name || "Unassigned";
@@ -17583,7 +17578,6 @@ const employeeIntelligence = useMemo(() => {
     activeEmployees: activeEmployees.length,
     expiringSoon: expiringSoon.length,
     redeploymentMatches,
-    potentialSaving,
     projectRisk,
   };
 }, [employees, requests, countries]);
@@ -18018,36 +18012,12 @@ const filteredEmployeeRows = useMemo(() => {
   });
 }, [employees, search]);
 
-function estimateRedeploymentCost(source = demobilizationForm, suggestion = null) {
-  const isSaudi = isSaudiNationality(source.nationality);
-  const defaultNewRecruitmentCost = isSaudi ? 1200 : 3650;
-  const redeploymentCost = Number(source.redeployment_cost || 500);
-  const manualNewCost = Number(source.estimated_new_recruitment_cost || 0);
-  const newRecruitmentCost = manualNewCost > 0 ? manualNewCost : defaultNewRecruitmentCost;
-  const estimatedSaving = Math.max(newRecruitmentCost - redeploymentCost, 0);
-
-  return {
-    newRecruitmentCost,
-    redeploymentCost,
-    estimatedSaving,
-    recruitmentAvoided: suggestion?.score >= 60 ? "Yes" : source.recruitment_avoided || "Yes",
-  };
-}
-
 const demobilizationIntelligence = useMemo(() => {
   const availableEmployees = demobilizations.filter((item) => item.status === "Available").length;
   const suggestedEmployees = demobilizations.filter((item) => item.status === "Suggested").length;
   const reassignedEmployees = demobilizations.filter((item) => item.status === "Reassigned").length;
   const invoicesRequired = demobilizations.filter((item) => item.invoice_required === "Yes").length;
   const recruitmentAvoided = demobilizations.filter((item) => item.recruitment_avoided === "Yes" || item.status === "Reassigned" || Number(item.match_score || 0) >= 60).length;
-  const potentialSaving = demobilizations.reduce((sum, item) => {
-    const storedSaving = Number(item.estimated_saving || 0);
-    if (storedSaving > 0) return sum + storedSaving;
-    const newCost = Number(item.estimated_new_recruitment_cost || (isSaudiNationality(item.nationality) ? 1200 : 3650));
-    const redeployCost = Number(item.redeployment_cost || 500);
-    return sum + Math.max(newCost - redeployCost, 0);
-  }, 0);
-
   const openRecruitmentGaps = requests
     .filter((request) => ["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(request.status || "Open"))
     .map((request) => {
@@ -18082,7 +18052,6 @@ const demobilizationIntelligence = useMemo(() => {
         available_matches: matches.length,
         suggested_qty: suggestedQty,
         days_open: request.daysOpen,
-        estimated_saving: suggestedQty * 3150,
         message: `${suggestedQty} available employee(s) can support ${request.request_no} before external recruitment.`,
       });
     }
@@ -18094,7 +18063,6 @@ const demobilizationIntelligence = useMemo(() => {
     reassignedEmployees,
     invoicesRequired,
     recruitmentAvoided,
-    potentialSaving,
     openRecruitmentGaps,
     smartAlerts,
   };
@@ -18140,8 +18108,6 @@ function calculateDemobSuggestions(source = demobilizationForm) {
       if (remaining > 0) score += 5;
       score = Math.min(score, 100);
 
-      const cost = estimateRedeploymentCost(source, { score });
-
       let reason = [];
       if (professionMatch) reason.push("same profession");
       if (nationalityMatch) reason.push("same nationality");
@@ -18162,9 +18128,6 @@ function calculateDemobSuggestions(source = demobilizationForm) {
         remaining,
         days_open: daysOpen,
         score,
-        new_recruitment_cost: cost.newRecruitmentCost,
-        redeployment_cost: cost.redeploymentCost,
-        estimated_saving: cost.estimatedSaving,
         recommendation:
           score >= 85
             ? "Strong redeployment match. Reassign immediately before external sourcing."
@@ -18218,19 +18181,13 @@ function runDemobAI() {
     suggested_project: best.project,
     match_score: String(best.score),
     ai_recommendation: recommendationText,
-    invoice_required: best.estimated_saving > 0 ? "Yes" : prev.invoice_required || "No",
-    invoice_type: prev.invoice_type || "Redeployment Service",
-    invoice_amount: prev.invoice_amount || String(best.redeployment_cost),
-    redeployment_cost: String(best.redeployment_cost),
-    estimated_new_recruitment_cost: String(best.new_recruitment_cost),
-    estimated_saving: String(best.estimated_saving),
     recruitment_avoided: best.score >= 60 ? "Yes" : "No",
   }));
 }
 
 function applyDemobSuggestion(item) {
   if (!item) return;
-  const recommendationText = `Selected match: ${item.request_no} / ${item.project}. Match score ${item.score}%. Estimated saving ${Number(item.estimated_saving || 0).toLocaleString()} SAR. Reason: ${item.reason}. Recommendation: ${item.recommendation}`;
+  const recommendationText = `Selected match: ${item.request_no} / ${item.project}. Match score ${item.score}%. Reason: ${item.reason}. Recommendation: ${item.recommendation}`;
   setDemobilizationForm((prev) => ({
     ...prev,
     status: "Suggested",
@@ -18238,12 +18195,6 @@ function applyDemobSuggestion(item) {
     suggested_project: item.project,
     match_score: String(item.score),
     ai_recommendation: recommendationText,
-    invoice_required: item.estimated_saving > 0 ? "Yes" : prev.invoice_required || "No",
-    invoice_type: prev.invoice_type || "Redeployment Service",
-    invoice_amount: prev.invoice_amount || String(item.redeployment_cost),
-    redeployment_cost: String(item.redeployment_cost),
-    estimated_new_recruitment_cost: String(item.new_recruitment_cost),
-    estimated_saving: String(item.estimated_saving),
     recruitment_avoided: item.score >= 60 ? "Yes" : "No",
   }));
 }
@@ -18269,9 +18220,6 @@ function editDemobilization(item) {
     invoice_required: item.invoice_required || "No",
     invoice_amount: item.invoice_amount || "",
     invoice_type: item.invoice_type || "Redeployment Service",
-    redeployment_cost: item.redeployment_cost || "500",
-    estimated_new_recruitment_cost: item.estimated_new_recruitment_cost || "3650",
-    estimated_saving: item.estimated_saving || "",
     recruitment_avoided: item.recruitment_avoided || "Yes",
     notes: item.notes || "",
   });
@@ -18292,9 +18240,6 @@ async function saveDemobilization() {
     demob_date: demobilizationForm.demob_date || null,
     match_score: Number(demobilizationForm.match_score || 0),
     invoice_amount: Number(demobilizationForm.invoice_amount || 0),
-    redeployment_cost: Number(demobilizationForm.redeployment_cost || 0),
-    estimated_new_recruitment_cost: Number(demobilizationForm.estimated_new_recruitment_cost || 0),
-    estimated_saving: Number(demobilizationForm.estimated_saving || 0),
     updated_at: new Date().toISOString(),
   };
 
@@ -37095,7 +37040,6 @@ onClick={() => setActiveReport("activityLog")}>
                 <Stat title="Active Employees" value={employeeIntelligence.activeEmployees} className="passed" />
                 <Stat title="Contracts Expiring 60 Days" value={employeeIntelligence.expiringSoon} className={employeeIntelligence.expiringSoon > 0 ? "warning" : "passed"} />
                 <Stat title="Redeployment Matches" value={employeeIntelligence.redeploymentMatches} className={employeeIntelligence.redeploymentMatches > 0 ? "passed" : "warning"} />
-                <Stat title="Potential Saving" value={`${Number(employeeIntelligence.potentialSaving || 0).toLocaleString()} SAR`} className="passed" />
               </div>
               {employeeIntelligence.projectRisk && (
                 <div style={{ marginTop: "14px", padding: "16px", borderRadius: "16px", background: "#f8fafc", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
@@ -37226,7 +37170,6 @@ onClick={() => setActiveReport("activityLog")}>
             <div className="dashboard-grid">
               <Stat title="Available Employees" value={demobilizationIntelligence.availableEmployees} className="warning" />
               <Stat title="Matched Employees" value={demobilizationIntelligence.suggestedEmployees + demobilizationIntelligence.reassignedEmployees} className="passed" />
-              <Stat title="Potential Saving" value={`${Number(demobilizationIntelligence.potentialSaving || 0).toLocaleString()} SAR`} className="passed" />
               <Stat title="Recruitment Avoided" value={demobilizationIntelligence.recruitmentAvoided} className="passed" />
               <Stat title="Open Recruitment Gaps" value={demobilizationIntelligence.openRecruitmentGaps.length} className="warning" />
               <Stat title="Invoices Required" value={demobilizationIntelligence.invoicesRequired} className="warning" />
@@ -37242,13 +37185,12 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Remaining</th>
                     <th>Available Matches</th>
                     <th>Days Open</th>
-                    <th>Estimated Saving</th>
                     <th>AI Alert</th>
                   </tr>
                 </thead>
                 <tbody>
                   {demobilizationIntelligence.smartAlerts.length === 0 ? (
-                    <tr><td colSpan="8">No automatic redeployment alerts now</td></tr>
+                    <tr><td colSpan="7">No automatic redeployment alerts now</td></tr>
                   ) : demobilizationIntelligence.smartAlerts.map((alert) => (
                     <tr key={alert.request_no}>
                       <td>{alert.request_no}</td>
@@ -37257,7 +37199,6 @@ onClick={() => setActiveReport("activityLog")}>
                       <td>{alert.remaining}</td>
                       <td>{alert.available_matches}</td>
                       <td>{alert.days_open}</td>
-                      <td>{Number(alert.estimated_saving || 0).toLocaleString()} SAR</td>
                       <td>{alert.message}</td>
                     </tr>
                   ))}
@@ -37296,15 +37237,6 @@ onClick={() => setActiveReport("activityLog")}>
                   <Select value={demobilizationForm.invoice_required || "No"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_required", v)} placeholder="Invoice Required" options={["No", "Yes"]} />
                   <Input placeholder="Invoice Type" value={demobilizationForm.invoice_type || "Redeployment Service"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_type", v)} />
                   <Input type="number" placeholder="Invoice Amount" value={demobilizationForm.invoice_amount} onChange={(v) => updateForm(setDemobilizationForm, "invoice_amount", v)} />
-                  <Input type="number" placeholder="Redeployment Cost" value={demobilizationForm.redeployment_cost} onChange={(v) => {
-                    const cost = estimateRedeploymentCost({ ...demobilizationForm, redeployment_cost: v });
-                    setDemobilizationForm((prev) => ({ ...prev, redeployment_cost: v, estimated_saving: String(cost.estimatedSaving) }));
-                  }} />
-                  <Input type="number" placeholder="New Recruitment Cost" value={demobilizationForm.estimated_new_recruitment_cost} onChange={(v) => {
-                    const cost = estimateRedeploymentCost({ ...demobilizationForm, estimated_new_recruitment_cost: v });
-                    setDemobilizationForm((prev) => ({ ...prev, estimated_new_recruitment_cost: v, estimated_saving: String(cost.estimatedSaving) }));
-                  }} />
-                  <Input type="number" placeholder="Estimated Saving" value={demobilizationForm.estimated_saving} onChange={(v) => updateForm(setDemobilizationForm, "estimated_saving", v)} />
                   <Select value={demobilizationForm.recruitment_avoided || "Yes"} onChange={(v) => updateForm(setDemobilizationForm, "recruitment_avoided", v)} placeholder="Recruitment Avoided" options={["Yes", "No"]} />
                 </div>
 
@@ -37334,7 +37266,6 @@ onClick={() => setActiveReport("activityLog")}>
                       <th>Remaining</th>
                       <th>Days Open</th>
                       <th>Score</th>
-                      <th>Saving</th>
                       <th>AI Recommendation</th>
                       <th>Reason</th>
                       <th>Action</th>
@@ -37342,7 +37273,7 @@ onClick={() => setActiveReport("activityLog")}>
                   </thead>
                   <tbody>
                     {demobAiSuggestion.suggestions.length === 0 ? (
-                      <tr><td colSpan="11">No suggestions found</td></tr>
+                      <tr><td colSpan="10">No suggestions found</td></tr>
                     ) : demobAiSuggestion.suggestions.map((item) => (
                       <tr key={item.request_no}>
                         <td>{item.request_no}</td>
@@ -37352,7 +37283,6 @@ onClick={() => setActiveReport("activityLog")}>
                         <td>{item.remaining}</td>
                         <td>{item.days_open}</td>
                         <td><Badge value={`${item.score}%`} /></td>
-                        <td>{Number(item.estimated_saving || 0).toLocaleString()} SAR</td>
                         <td>{item.recommendation}</td>
                         <td>{item.reason}</td>
                         <td><button className="light-btn" onClick={() => applyDemobSuggestion(item)}>Use</button></td>
@@ -37377,14 +37307,13 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Suggested Request</th>
                     <th>Match</th>
                     <th>Invoice</th>
-                    <th>Saving</th>
                     <th>Recruitment Avoided</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {demobilizations.length === 0 ? (
-                    <tr><td colSpan="13">No demobilization records yet</td></tr>
+                    <tr><td colSpan="12">No demobilization records yet</td></tr>
                   ) : demobilizations.map((item) => (
                     <tr key={item.id}>
                       <td>{item.employee_name || "-"}</td>
@@ -37397,7 +37326,6 @@ onClick={() => setActiveReport("activityLog")}>
                       <td>{item.suggested_request_no || "-"}</td>
                       <td>{item.match_score ? `${item.match_score}%` : "-"}</td>
                       <td>{item.invoice_required === "Yes" ? `${Number(item.invoice_amount || 0).toLocaleString()} SAR` : "No"}</td>
-                      <td>{Number(item.estimated_saving || 0).toLocaleString()} SAR</td>
                       <td><Badge value={item.recruitment_avoided || "-"} /></td>
                       <td className="table-actions">
                         {canManageDemobilization ? (
