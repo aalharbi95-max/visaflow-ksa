@@ -72,6 +72,15 @@ import {
   isAuthorizationCompanyActor,
 } from "./authorizationWorkflow.mjs";
 import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
+import {
+  filterNotificationCenterRows,
+  getNotificationFolderCounts,
+  getNotificationMessage,
+  getNotificationStatus,
+  getNotificationTitle,
+  getNotificationType,
+  selectNotification,
+} from "./notificationCenter.mjs";
 import { filterNotificationsForWorkspace } from "./notificationVisibility.mjs";
 import {
   AGENCY_PERMISSION_KEYS,
@@ -5868,6 +5877,8 @@ const [emailLogFilters, setEmailLogFilters] = useState({ eventType: "All", statu
 const [emailTemplates, setEmailTemplates] = useState([]);
 const [notificationFilter, setNotificationFilter] = useState("All");
 const [notificationSearch, setNotificationSearch] = useState("");
+const [notificationFolder, setNotificationFolder] = useState("Unread");
+const [selectedNotificationId, setSelectedNotificationId] = useState("");
 const [emailTemplateEditingId, setEmailTemplateEditingId] = useState(null);
 const emptyEmailTemplate = {
   template_key: "",
@@ -5879,7 +5890,6 @@ const emptyEmailTemplate = {
   is_active: true,
 };
 const [emailTemplateForm, setEmailTemplateForm] = useState(emptyEmailTemplate);
-const [notificationOpen, setNotificationOpen] = useState(false);
 const [marketplaceRequestEditingId, setMarketplaceRequestEditingId] = useState(null);
 
 const WORKFORCE_DEAL_TYPES = ["Service Rental", "Sponsorship Transfer"];
@@ -10019,45 +10029,29 @@ async function loadNotifications() {
     }
   }
 
-  function getNotificationTitle(item) {
-    const payload = item?.data || {};
-    return item?.title || payload.title || item?.type || item?.status || "Notification";
-  }
-
-  function getNotificationMessage(item) {
-    const payload = item?.data || {};
-    return (
-      item?.message ||
-      payload.message ||
-      payload.provider_message ||
-      payload.recommendation ||
-      payload.candidate_name ||
-      JSON.stringify(payload || {})
-    );
-  }
-
-  function getNotificationStatus(item) {
-    return String(item?.status || "Unread").toLowerCase() === "read" ? "Read" : "Unread";
-  }
-
-  const unreadNotificationsCount = notifications.filter((item) => getNotificationStatus(item) !== "Read").length;
+  const notificationFolderCounts = useMemo(
+    () => getNotificationFolderCounts(notifications),
+    [notifications]
+  );
+  const unreadNotificationsCount = notificationFolderCounts.unread;
 
   const notificationTypes = useMemo(() => {
-    const types = notifications.map((item) => item.type || item.status || "Notification").filter(Boolean);
+    const types = notifications.map(getNotificationType).filter(Boolean);
     return ["All", ...Array.from(new Set(types))];
   }, [notifications]);
 
   const filteredNotificationRows = useMemo(() => {
-    const keyword = normalize(notificationSearch);
-    return notifications.filter((item) => {
-      const type = item.type || item.status || "Notification";
-      const matchesType = notificationFilter === "All" || type === notificationFilter;
-      const searchable = [type, getNotificationTitle(item), getNotificationMessage(item), item.recipient_role, item.priority, item.status]
-        .join(" ")
-        .toLowerCase();
-      return matchesType && (!keyword || searchable.includes(keyword));
+    return filterNotificationCenterRows(notifications, {
+      folder: notificationFolder,
+      type: notificationFilter,
+      search: notificationSearch,
     });
-  }, [notifications, notificationFilter, notificationSearch]);
+  }, [notifications, notificationFolder, notificationFilter, notificationSearch]);
+
+  const selectedNotification = useMemo(
+    () => selectNotification(filteredNotificationRows, selectedNotificationId),
+    [filteredNotificationRows, selectedNotificationId]
+  );
 
   const emailLogStats = useMemo(() => ({
     sent: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "sent").length,
@@ -10077,15 +10071,38 @@ async function loadNotifications() {
     return `${local.slice(0, 2)}${"*".repeat(Math.max(2, local.length - 2))}@${domain}`;
   }
 
-  async function markNotificationRead(id) {
-    if (!id || !secureLogFeaturesAvailable) return;
+  async function markNotificationRead(id, { reload = true } = {}) {
+    if (!id || !secureLogFeaturesAvailable) return false;
     const { error } = await supabase.rpc("notification_event_mutate", {
       p_operation: "mark_read",
       p_notification_id: id,
       p_payload: { workspace_company_id: currentCompanyId },
     });
 
-    if (error) return alert(error.message);
+    if (error) {
+      alert(`Unable to mark the notification as read: ${error.message}`);
+      return false;
+    }
+    if (reload) await loadNotifications();
+    return true;
+  }
+
+  async function openNotification(item) {
+    if (!item?.id) return;
+    setSelectedNotificationId(String(item.id));
+    if (getNotificationStatus(item) === "Read") return;
+
+    setNotificationFolder("Read");
+    setNotifications((current) => current.map((notification) =>
+      String(notification.id) === String(item.id)
+        ? { ...notification, status: "Read", read_at: notification.read_at || new Date().toISOString() }
+        : notification
+    ));
+    const updated = await markNotificationRead(item.id, { reload: false });
+    if (!updated) {
+      await loadNotifications();
+      return;
+    }
     await loadNotifications();
   }
 
@@ -10096,7 +10113,8 @@ async function loadNotifications() {
       p_notification_id: null,
       p_payload: { workspace_company_id: currentCompanyId },
     });
-    if (error) return alert(error.message);
+    if (error) return alert(`Unable to mark all notifications as read: ${error.message}`);
+    setNotificationFolder("Read");
     await loadNotifications();
   }
 
@@ -10110,7 +10128,8 @@ async function loadNotifications() {
       p_payload: { workspace_company_id: currentCompanyId },
     });
 
-    if (error) return alert(error.message);
+    if (error) return alert(`Unable to delete the notification: ${error.message}`);
+    if (String(selectedNotificationId) === String(id)) setSelectedNotificationId("");
     await loadNotifications();
   }
 useEffect(() => {
@@ -29698,80 +29717,120 @@ if (!currentUser) {
             </div>
 
             <TableCard title="Notification Center">
-              <div className="actions-line" style={{ marginBottom: "14px" }}>
+              <div className="notification-center-toolbar">
+                <div className="notification-folders" aria-label="Notification folders">
+                  <button
+                    type="button"
+                    className={notificationFolder === "Unread" ? "notification-folder active" : "notification-folder"}
+                    onClick={() => { setNotificationFolder("Unread"); setSelectedNotificationId(""); }}
+                  >
+                    <span>Unread</span>
+                    <b>{notificationFolderCounts.unread}</b>
+                  </button>
+                  <button
+                    type="button"
+                    className={notificationFolder === "Read" ? "notification-folder active" : "notification-folder"}
+                    onClick={() => { setNotificationFolder("Read"); setSelectedNotificationId(""); }}
+                  >
+                    <span>Read</span>
+                    <b>{notificationFolderCounts.read}</b>
+                  </button>
+                </div>
+                <div className="actions-line">
                 <button className="new-btn" onClick={async () => {
                   const rows = await loadNotifications();
                   if (canViewEmailAdministration) {
                     await loadEmailLogs();
                     await loadEmailTemplates();
                   }
-                  alert(`Notification Center refreshed. Notifications loaded: ${rows?.length || 0}`);
+                  setSelectedNotificationId("");
+                  alert(`Notification Center refreshed successfully. ${rows?.length || 0} notification(s) loaded.`);
                 }}>Refresh Center</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
                 {canViewEmailAdministration && <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>}
+                </div>
               </div>
 
-              <div className="form-grid" style={{ marginBottom: "14px" }}>
+              <div className="notification-search-grid">
                 <Input placeholder="Search notifications" value={notificationSearch} onChange={setNotificationSearch} />
                 <Select placeholder="Notification Type" value={notificationFilter} options={notificationTypes} onChange={setNotificationFilter} />
               </div>
 
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Priority</th>
-                      <th>Recipient</th>
-                      <th>Type</th>
-                      <th>Title</th>
-                      <th>Message</th>
-                      <th>Decision / SLA</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredNotificationRows.length === 0 ? (
-                      <tr>
-                        <td colSpan="9" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
-                          {loading ? "Loading notifications..." : "No notifications found."}
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredNotificationRows.map((item) => (
-                        <tr key={item.id}>
-                          <td>
-                            <span className={getNotificationStatus(item) === "Read" ? "badge passed" : "badge warning"}>
-                              {getNotificationStatus(item)}
-                            </span>
-                          </td>
-                          <td>{item.priority || item.data?.priority || "Medium"}</td>
-                          <td>{item.recipient_role || item.data?.recipient_role || "Company"}</td>
-                          <td>{item.type || item.status || "Notification"}</td>
-                          <td>{getNotificationTitle(item)}</td>
-                          <td style={{ maxWidth: "520px", whiteSpace: "normal" }}>{getNotificationMessage(item)}</td>
-                          <td>{renderAgencyRequestDecisionCell(item)}</td>
-                          <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
-                          <td>
-                            <div className="row-actions">
-                              {currentRole === "Agency" && isAgencyRequestNotification(item) && getAgencyRequestDecision(item) === "Pending" && (
-                                <>
-                                  <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Accepted")} disabled={agencyLegacyActionsRestricted} style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}>Accept</button>
-                                  <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Rejected")} disabled={agencyLegacyActionsRestricted} style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}>Reject</button>
-                                </>
-                              )}
-                              {getNotificationStatus(item) !== "Read" && (
-                                <button className="light-btn" onClick={() => markNotificationRead(item.id)}>Read</button>
-                              )}
-                              <button className="danger-btn" onClick={() => deleteNotification(item.id)}>Delete</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+              <div className="notification-split-view">
+                <aside className="notification-list" aria-label={`${notificationFolder} notifications`}>
+                  <div className="notification-list-heading">
+                    <strong>{notificationFolder}</strong>
+                    <span>{filteredNotificationRows.length} shown</span>
+                  </div>
+                  {filteredNotificationRows.length === 0 ? (
+                    <div className="notification-empty-list">
+                      {loading ? "Loading notifications..." : `No ${notificationFolder.toLowerCase()} notifications match the selected filters.`}
+                    </div>
+                  ) : filteredNotificationRows.map((item) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      className={`notification-list-item ${String(selectedNotification?.id) === String(item.id) ? "active" : ""} ${getNotificationStatus(item) === "Unread" ? "unread" : ""}`}
+                      onClick={() => openNotification(item)}
+                    >
+                      <span className="notification-list-topline">
+                        <b>{getNotificationType(item)}</b>
+                        <time>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</time>
+                      </span>
+                      <strong>{getNotificationTitle(item)}</strong>
+                      <span className="notification-list-preview">{getNotificationMessage(item)}</span>
+                      <span className="notification-list-meta">
+                        <em>{item.priority || item.data?.priority || "Medium"}</em>
+                        <em>{item.recipient_role || item.data?.recipient_role || "Company"}</em>
+                      </span>
+                    </button>
+                  ))}
+                </aside>
+
+                <section className="notification-detail" aria-live="polite">
+                  {!selectedNotification ? (
+                    <div className="notification-detail-empty">
+                      <span>✉</span>
+                      <h3>Select a notification</h3>
+                      <p>Choose a message from the list to view its complete details without leaving this page.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <header className="notification-detail-header">
+                        <div>
+                          <span className={getNotificationStatus(selectedNotification) === "Read" ? "badge passed" : "badge warning"}>
+                            {getNotificationStatus(selectedNotification)}
+                          </span>
+                          <h3>{getNotificationTitle(selectedNotification)}</h3>
+                          <p>{getNotificationType(selectedNotification)} · {selectedNotification.created_at ? new Date(selectedNotification.created_at).toLocaleString() : "Unknown time"}</p>
+                        </div>
+                        <div className="row-actions">
+                          {getNotificationStatus(selectedNotification) !== "Read" && (
+                            <button className="light-btn" onClick={() => openNotification(selectedNotification)}>Mark as Read</button>
+                          )}
+                          <button className="danger-btn" onClick={() => deleteNotification(selectedNotification.id)}>Delete</button>
+                        </div>
+                      </header>
+
+                      <div className="notification-message-body">{getNotificationMessage(selectedNotification)}</div>
+
+                      <div className="notification-detail-grid">
+                        <div><span>Priority</span><strong>{selectedNotification.priority || selectedNotification.data?.priority || "Medium"}</strong></div>
+                        <div><span>Recipient</span><strong>{selectedNotification.recipient_role || selectedNotification.data?.recipient_role || "Company"}</strong></div>
+                        <div><span>Type</span><strong>{getNotificationType(selectedNotification)}</strong></div>
+                        <div><span>Created</span><strong>{selectedNotification.created_at ? new Date(selectedNotification.created_at).toLocaleString() : "-"}</strong></div>
+                        <div className="notification-detail-wide"><span>Decision / SLA</span><strong>{renderAgencyRequestDecisionCell(selectedNotification)}</strong></div>
+                      </div>
+
+                      {currentRole === "Agency" && isAgencyRequestNotification(selectedNotification) && getAgencyRequestDecision(selectedNotification) === "Pending" && (
+                        <div className="notification-decision-actions">
+                          <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(selectedNotification, "Accepted")} disabled={agencyLegacyActionsRestricted}>Accept</button>
+                          <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(selectedNotification, "Rejected")} disabled={agencyLegacyActionsRestricted}>Reject</button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </section>
               </div>
             </TableCard>
 
