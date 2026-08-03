@@ -72,6 +72,7 @@ import {
   isAuthorizationCompanyActor,
 } from "./authorizationWorkflow.mjs";
 import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
+import { buildRedeploymentSuggestions } from "./redeploymentMatching.mjs";
 import {
   filterNotificationCenterRows,
   getNotificationFolderCounts,
@@ -17565,6 +17566,13 @@ const employeeIntelligence = useMemo(() => {
     return endDate >= today && endDate <= next60;
   });
 
+  const expiringEmployees = expiringSoon
+    .map((employee) => ({
+      ...employee,
+      daysRemaining: Math.ceil((new Date(employee.contract_end_date) - today) / 86400000),
+    }))
+    .sort((left, right) => left.daysRemaining - right.daysRemaining);
+
   const openRequests = requests.filter((request) =>
     ["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(request.status || "Open")
   );
@@ -17596,6 +17604,7 @@ const employeeIntelligence = useMemo(() => {
     totalEmployees: employees.length,
     activeEmployees: activeEmployees.length,
     expiringSoon: expiringSoon.length,
+    expiringEmployees,
     redeploymentMatches,
     projectRisk,
   };
@@ -18094,72 +18103,13 @@ function resetDemobilizationForm() {
 }
 
 function calculateDemobSuggestions(source = demobilizationForm) {
-  const openStatuses = ["Open", "Under Recruitment", "Interview Stage", "Visa Process"];
-  const blockedCandidateStatuses = ["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "Joined"];
-
-  return requests
-    .filter((request) => openStatuses.includes(request.status || "Open"))
-    .map((request) => {
-      const requiredQty = Number(request.quantity || request.qty || 0);
-      const activeCount = candidates.filter(
-        (candidate) =>
-          String(candidate.request_no || "") === String(request.request_no || "") &&
-          !blockedCandidateStatuses.includes(candidate.status)
-      ).length;
-      const remaining = Math.max(requiredQty - activeCount, 0);
-      if (remaining <= 0) return null;
-
-      const professionMatch = normalize(request.profession) === normalize(source.profession);
-      const nationalityMatch = nationalitiesMatch(request.nationality, source.nationality, countries);
-      const genderMatch = !request.gender || !source.gender || normalize(request.gender) === normalize(source.gender);
-      const projectDifferent = normalize(request.project_name || request.project) !== normalize(source.current_project);
-      const daysOpen = request.created_at ? Math.floor((new Date() - new Date(request.created_at)) / (1000 * 60 * 60 * 24)) : 0;
-      const delayedRequest = daysOpen >= 15 || ["Under Recruitment", "Interview Stage", "Visa Process"].includes(request.status);
-      const highPriority = ["Urgent", "High"].includes(request.priority);
-
-      let score = 0;
-      if (professionMatch) score += 40;
-      if (nationalityMatch) score += 20;
-      if (genderMatch) score += 10;
-      if (delayedRequest) score += 15;
-      if (highPriority) score += 15;
-      if (projectDifferent) score += 5;
-      if (remaining > 0) score += 5;
-      score = Math.min(score, 100);
-
-      let reason = [];
-      if (professionMatch) reason.push("same profession");
-      if (nationalityMatch) reason.push("same nationality");
-      if (genderMatch) reason.push("gender compatible");
-      if (remaining > 0) reason.push(`${remaining} open position(s)`);
-      if (delayedRequest) reason.push(`recruitment delayed / active for ${daysOpen} day(s)`);
-      if (highPriority) reason.push(`${request.priority} priority`);
-
-      return {
-        request_no: request.request_no,
-        project: request.project_name || request.project || "-",
-        profession: request.profession || "-",
-        nationality: request.nationality || "-",
-        gender: request.gender || "-",
-        priority: request.priority || "Normal",
-        required: requiredQty,
-        active_candidates: activeCount,
-        remaining,
-        days_open: daysOpen,
-        score,
-        recommendation:
-          score >= 85
-            ? "Strong redeployment match. Reassign immediately before external sourcing."
-            : score >= 70
-            ? "Good match. Review with Operations and Recruitment today."
-            : score >= 55
-            ? "Possible match. Needs project approval due to partial mismatch."
-            : "Low match. Keep as backup or hold employee until better request appears.",
-        reason: reason.join(", ") || "limited matching data",
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score);
+  return buildRedeploymentSuggestions({
+    source,
+    requests,
+    candidates,
+    normalizeValue: normalize,
+    nationalityMatches: (left, right) => nationalitiesMatch(left, right, countries),
+  });
 }
 
 function runDemobAI() {
@@ -18218,6 +18168,63 @@ function applyDemobSuggestion(item) {
   }));
 }
 
+async function confirmRedeployment(item) {
+  if (!canManageDemobilization) return alert("You do not have permission to confirm redeployment.");
+  if (!item?.suggested_request_no || !item?.suggested_project) {
+    return alert("Select a valid request and project before confirming redeployment.");
+  }
+  if (!window.confirm(`Confirm redeployment of ${item.employee_name} to ${item.suggested_project} for request ${item.suggested_request_no}?`)) return;
+
+  const employee = employees.find((row) =>
+    String(row.employee_no || "") === String(item.employee_id || "") ||
+    (item.iqama_no && String(row.iqama_no || "") === String(item.iqama_no))
+  );
+  if (!employee) {
+    return alert("The linked employee record could not be found. Open the demobilization record and verify Employee ID or Iqama before confirming.");
+  }
+
+  const previousEmployee = { project_name: employee.project_name || "", status: employee.status || "Active" };
+  const employeeResult = await supabase
+    .from("employees")
+    .update({ project_name: item.suggested_project, status: "Active", updated_at: new Date().toISOString() })
+    .eq("id", employee.id)
+    .eq("company_id", currentCompanyId);
+  if (employeeResult.error) return alert(`Redeployment was not confirmed because the employee could not be updated: ${employeeResult.error.message}`);
+
+  const demobilizationResult = await supabase
+    .from("demobilizations")
+    .update({ status: "Reassigned", recruitment_avoided: "Yes", updated_at: new Date().toISOString() })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+
+  if (demobilizationResult.error) {
+    await supabase.from("employees").update(previousEmployee).eq("id", employee.id).eq("company_id", currentCompanyId);
+    return alert(`Redeployment was not confirmed and the employee change was rolled back: ${demobilizationResult.error.message}`);
+  }
+
+  if (secureLogFeaturesAvailable) {
+    try {
+      await triggerExternalNotification("REDEPLOYMENT_CONFIRMED", {
+        workspace_company_id: currentCompanyId,
+        title: "Employee redeployment confirmed",
+        message: `${item.employee_name} was reassigned from ${item.current_project || "the previous project"} to ${item.suggested_project} for request ${item.suggested_request_no}.`,
+        priority: "High",
+        recipient_role: "Company",
+        related_id: String(item.id),
+        employee_id: item.employee_id,
+        request_no: item.suggested_request_no,
+        source_project: item.current_project,
+        target_project: item.suggested_project,
+      });
+    } catch (notificationError) {
+      console.error("Redeployment notification failed", notificationError);
+    }
+  }
+
+  await Promise.all([loadEmployees(), loadDemobilizations(), loadNotifications()]);
+  alert(`Redeployment confirmed. ${item.employee_name} is now assigned to ${item.suggested_project}.`);
+}
+
 
 function editDemobilization(item) {
   setDemobilizationEditingId(item.id);
@@ -18272,9 +18279,24 @@ async function saveDemobilization() {
 
   if (result.error) return alert(result.error.message);
 
+  const linkedEmployee = employees.find((employee) =>
+    String(employee.employee_no || "") === String(demobilizationForm.employee_id || "") ||
+    (demobilizationForm.iqama_no && String(employee.iqama_no || "") === String(demobilizationForm.iqama_no))
+  );
+  if (linkedEmployee && ["Available", "Suggested", "Exit", "Hold"].includes(payload.status)) {
+    const employeeUpdate = await supabase
+      .from("employees")
+      .update({ status: "Demobilized", updated_at: new Date().toISOString() })
+      .eq("id", linkedEmployee.id)
+      .eq("company_id", currentCompanyId);
+    if (employeeUpdate.error) {
+      alert(`The demobilization record was saved, but the employee status could not be synchronized: ${employeeUpdate.error.message}`);
+    }
+  }
+
   alert(demobilizationEditingId ? "Demobilization updated successfully" : "Demobilization saved successfully");
   resetDemobilizationForm();
-  await loadDemobilizations();
+  await Promise.all([loadDemobilizations(), loadEmployees()]);
 }
 
 async function deleteDemobilization(id) {
@@ -37106,6 +37128,38 @@ onClick={() => setActiveReport("activityLog")}>
                   {employeeIntelligence.projectRisk.professions ? ` Professions: ${employeeIntelligence.projectRisk.professions}.` : ""}
                 </div>
               )}
+              {employeeIntelligence.expiringEmployees.length > 0 && (
+                <div className="table-wrap" style={{ marginTop: "14px" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Project</th>
+                        <th>Profession</th>
+                        <th>Contract End</th>
+                        <th>Days Remaining</th>
+                        <th>Next Step</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {employeeIntelligence.expiringEmployees.map((employee) => (
+                        <tr key={employee.id}>
+                          <td>{employee.employee_name || employee.employee_no || "-"}</td>
+                          <td>{employee.project_name || "Unassigned"}</td>
+                          <td>{employee.profession || "-"}</td>
+                          <td>{employee.contract_end_date}</td>
+                          <td><b style={{ color: employee.daysRemaining <= 30 ? "#dc2626" : "#d97706" }}>{employee.daysRemaining} day(s)</b></td>
+                          <td>
+                            {canManageDemobilization
+                              ? <button className="new-btn" onClick={() => createDemobilizationFromEmployee(employee)}>Start Demobilization</button>
+                              : "Operations review required"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </TableCard>
 
             {canManageEmployees && (
@@ -37325,14 +37379,15 @@ onClick={() => setActiveReport("activityLog")}>
                       <th>Remaining</th>
                       <th>Days Open</th>
                       <th>Score</th>
+                      <th>Confidence</th>
                       <th>AI Recommendation</th>
-                      <th>Reason</th>
+                      <th>Match Evidence</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {demobAiSuggestion.suggestions.length === 0 ? (
-                      <tr><td colSpan="10">No suggestions found</td></tr>
+                      <tr><td colSpan="11">No eligible open request matches the required profession, nationality, and gender criteria.</td></tr>
                     ) : demobAiSuggestion.suggestions.map((item) => (
                       <tr key={item.request_no}>
                         <td>{item.request_no}</td>
@@ -37342,9 +37397,18 @@ onClick={() => setActiveReport("activityLog")}>
                         <td>{item.remaining}</td>
                         <td>{item.days_open}</td>
                         <td><Badge value={`${item.score}%`} /></td>
+                        <td><Badge value={item.confidence} /></td>
                         <td>{item.recommendation}</td>
                         <td>{item.reason}</td>
-                        <td><button className="light-btn" onClick={() => applyDemobSuggestion(item)}>Use</button></td>
+                        <td>
+                          <button
+                            className={demobilizationForm.suggested_request_no === item.request_no ? "save-btn" : "light-btn"}
+                            onClick={() => applyDemobSuggestion(item)}
+                            disabled={demobilizationForm.suggested_request_no === item.request_no}
+                          >
+                            {demobilizationForm.suggested_request_no === item.request_no ? "Selected" : "Use Match"}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -37390,6 +37454,9 @@ onClick={() => setActiveReport("activityLog")}>
                         {canManageDemobilization ? (
                           <>
                             <button onClick={() => editDemobilization(item)}>Edit</button>
+                            {item.status === "Suggested" && item.suggested_request_no && (
+                              <button className="save-btn" onClick={() => confirmRedeployment(item)}>Confirm Redeployment</button>
+                            )}
                             <button className="danger" onClick={() => deleteDemobilization(item.id)}>Delete</button>
                           </>
                         ) : "-"}
