@@ -18964,7 +18964,7 @@ useEffect(() => {
 
 function exportRowsToExcel(rows, fileName, sheetName = "Data") {
   if (!rows || rows.length === 0) {
-    alert("No data to export");
+    alert("No rows are available to export. Clear or adjust the active filters and try again.");
     return;
   }
 
@@ -28704,7 +28704,7 @@ function getReportStudioVisualModel() {
 function exportCurrentPage() {
   if (!canExport) return alert("You do not have permission to export data.");
   if (activePage === "Requests") return exportRowsToExcel(filteredRequestTableRows, "VisaFlow_Requests", "Requests");
-  if (activePage === "Candidates") return exportRowsToExcel(selectRowsForBulkExport(filteredCandidateTableRows, candidateSelectedIds), "VisaFlow_Candidates", "Candidates");
+  if (activePage === "Candidates") return exportRowsToExcel(filteredCandidateTableRows, "VisaFlow_Candidates", "Candidates");
   if (activePage === "Visa Inventory") return exportRowsToExcel(filteredVisaBatchTableRows, "VisaFlow_Visa_Inventory", "Visas");
   if (activePage === "Authorization") return exportRowsToExcel(filteredAuthorizationTableRows, "VisaFlow_Authorizations", "Authorizations");
   if (activePage === "Cancellation Register") return exportRowsToExcel(filteredCancellationTableRows, "VisaFlow_Cancellation_Register", "Cancellations");
@@ -28767,7 +28767,7 @@ function exportCurrentPage() {
   );
   if (activePage === "Mobilization") return exportRowsToExcel(mobilizationRequestRows, "VisaFlow_Mobilization_Overview", "Mobilization");
   if (activePage === "Onboarding & Validation") return exportRowsToExcel(filteredOnboardingValidations, "VisaFlow_Onboarding_Validation", "Onboarding Validation");
-  if (activePage === "Employees") return exportRowsToExcel(selectRowsForBulkExport(filteredEmployeeRows, selectedEmployeeIds), "VisaFlow_Employees", "Employees");
+  if (activePage === "Employees") return exportRowsToExcel(filteredEmployeeRows, "VisaFlow_Employees", "Employees");
   if (activePage === "Demobilization") return exportRowsToExcel(filteredDemobilizationRows, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
   if (activePage === "Local Content") return downloadLocalContentExcel();
