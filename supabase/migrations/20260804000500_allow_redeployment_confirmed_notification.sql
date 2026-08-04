@@ -22,7 +22,7 @@ begin
 
   updated_definition := replace(
     existing_definition,
-    $nedle$'WORKFORCE_REDEPLOYMENT_REVIEW','AGENCY_PENALTY_SENT'$needle$,
+    $needle$'WORKFORCE_REDEPLOYMENT_REVIEW','AGENCY_PENALTY_SENT'$needle$,
     $replacement$'WORKFORCE_REDEPLOYMENT_REVIEW','REDEPLOYMENT_CONFIRMED','AGENCY_PENALTY_SENT'$replacement$
   );
 

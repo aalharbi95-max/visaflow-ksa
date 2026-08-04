@@ -18818,6 +18818,8 @@ function selectCandidateForMobilization(candidateId) {
 
 function openMobilizationFromCandidate(candidate) {
   selectCandidateForMobilization(candidate.id);
+  setSelectedMobilizationRequestNo(candidate.request_no || "");
+  setSearch("");
   setActivePage("Mobilization");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -18841,6 +18843,8 @@ function editMobilization(item) {
     mobilization_status: item.mobilization_status || "New",
     remarks: item.remarks || "",
   });
+  setSelectedMobilizationRequestNo(item.request_no || "");
+  setSearch("");
   setActivePage("Mobilization");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
