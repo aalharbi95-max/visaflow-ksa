@@ -14734,9 +14734,12 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
    
 
-  await loadRequests();
   resetCandidateForm();
-  await Promise.all([loadCandidates(), loadCandidateTechnicalProfiles()]);
+  await Promise.all([
+    currentRole === "Agency" ? Promise.resolve() : loadRequests(),
+    loadCandidates(),
+    loadCandidateTechnicalProfiles(),
+  ]);
   setCandidateSaveFeedback({
     type: notificationWarning ? "warning" : "success",
     message: `${candidateEditingId ? "Candidate updated successfully." : "Candidate saved successfully."}${notificationWarning}`,
@@ -18507,7 +18510,7 @@ async function saveMobilization() {
   }
 
   const payload = {
-    candidate_id: Number(mobilizationForm.candidate_id),
+    candidate_id: String(mobilizationForm.candidate_id),
     request_no: candidate?.request_no || mobilizationForm.request_no || "",
     candidate_name: candidate?.candidate_name || mobilizationForm.candidate_name || "",
     profession: candidate?.profession || mobilizationForm.profession || "",
@@ -34085,6 +34088,36 @@ disabled={authorizationWorkflowBusy === "create"}
         onChange={(e) => setSearch(e.target.value)}
       />
     </div>
+
+    {mobilizationForm.candidate_id && canManageMobilization && (
+      <FormCard title={mobilizationEditingId ? "Update Mobilization" : "Create Mobilization"}>
+        <div style={{ marginBottom: 12, color: "#475569" }}>
+          <strong>{mobilizationForm.candidate_name || "Candidate"}</strong>
+          {` · ${mobilizationForm.request_no || "No Request"}`}
+        </div>
+        <div className="form-grid">
+          <Select value={mobilizationForm.medical_status} onChange={(v) => updateForm(setMobilizationForm, "medical_status", v)} placeholder="Medical Status" options={["Pending", "Fit", "Unfit"]} />
+          <Input type="date" placeholder="Medical Date" value={mobilizationForm.medical_date || ""} onChange={(v) => updateForm(setMobilizationForm, "medical_date", v)} />
+          <Select value={mobilizationForm.visa_status} onChange={(v) => updateForm(setMobilizationForm, "visa_status", v)} placeholder="Visa Status" options={["Pending", "Ready", "Stamped"]} />
+          <Input type="date" placeholder="Visa Date" value={mobilizationForm.visa_date || ""} onChange={(v) => updateForm(setMobilizationForm, "visa_date", v)} />
+          <Input placeholder="Ticket No" value={mobilizationForm.ticket_no || ""} onChange={(v) => updateForm(setMobilizationForm, "ticket_no", v)} />
+          <Input type="date" placeholder="Flight Date" value={mobilizationForm.flight_date || ""} onChange={(v) => updateForm(setMobilizationForm, "flight_date", v)} />
+          <Input type="date" placeholder="Arrival Date" value={mobilizationForm.arrival_date || ""} onChange={(v) => updateForm(setMobilizationForm, "arrival_date", v)} />
+          <Input type="date" placeholder="Joining Date" value={mobilizationForm.joining_date || ""} onChange={(v) => updateForm(setMobilizationForm, "joining_date", v)} />
+          <Select
+            value={mobilizationForm.mobilization_status}
+            onChange={(v) => updateForm(setMobilizationForm, "mobilization_status", v)}
+            placeholder="Mobilization Status"
+            options={["New", "Medical Fit", "Visa Ready", "Ticket Issued", "Departure", "Arrived KSA", "Joined"]}
+          />
+        </div>
+        <textarea rows="3" placeholder="Mobilization Remarks" value={mobilizationForm.remarks || ""} onChange={(event) => updateForm(setMobilizationForm, "remarks", event.target.value)} />
+        <div className="actions-line" style={{ marginTop: 12 }}>
+          <button className="save-btn" onClick={saveMobilization}>{mobilizationEditingId ? "Update Mobilization" : "Save Mobilization"}</button>
+          <button className="light-btn" onClick={resetMobilizationForm}>Cancel</button>
+        </div>
+      </FormCard>
+    )}
 
     {selectedMobilizationRow && (
       <>
