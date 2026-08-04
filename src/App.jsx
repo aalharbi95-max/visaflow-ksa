@@ -5859,6 +5859,7 @@ const [agencyAgreementsLoading, setAgencyAgreementsLoading] = useState(false);
 const [agencyScores, setAgencyScores] = useState([]);
 const [agencyScoreHistory, setAgencyScoreHistory] = useState([]);
 const [agencyPenalties, setAgencyPenalties] = useState([]);
+const penaltyAutoSyncRef = useRef("");
 const [agreementEditingId, setAgreementEditingId] = useState(null);
 
 const emptyAgreement = {
@@ -10184,6 +10185,54 @@ async function loadNotifications() {
     if (String(selectedNotificationId) === String(id)) setSelectedNotificationId("");
     await loadNotifications();
   }
+
+useEffect(() => {
+  if (
+    !canApprovePenalties ||
+    !workspaceAuthReady ||
+    validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser) ||
+    !currentCompanyId ||
+    !notifications.length ||
+    !agencyAgreements.length
+  ) {
+    return;
+  }
+
+  const calculatedRows = calculatePenaltyRegisterRows();
+  const actionableRows = calculatedRows.filter((row) => {
+    const existing = agencyPenalties.find((item) => getPenaltyRowUniqueKey(item) === getPenaltyRowUniqueKey(row));
+    return !existing || !["Approved", "Reduced", "Waived"].includes(existing.status);
+  });
+  if (!actionableRows.length) {
+    penaltyAutoSyncRef.current = "";
+    return;
+  }
+
+  const syncKey = actionableRows
+    .map((row) => `${getPenaltyRowUniqueKey(row)}:${row.delay_days}:${row.calculated_amount}`)
+    .sort()
+    .join("|");
+  if (!syncKey || penaltyAutoSyncRef.current === syncKey) return;
+
+  penaltyAutoSyncRef.current = syncKey;
+  syncCalculatedPenaltyRegister({ silent: true }).catch((error) => {
+    penaltyAutoSyncRef.current = "";
+    console.warn("Automatic penalty register sync failed", error?.message || error);
+  });
+}, [
+  canApprovePenalties,
+  workspaceAuthReady,
+  validatedWorkspaceKey,
+  currentCompanyId,
+  currentUser,
+  notifications,
+  agencyAgreements,
+  agencyPenalties,
+  agencies,
+  candidates,
+  requests,
+]);
+
 useEffect(() => {
   let mounted = true;
 
@@ -19985,10 +20034,12 @@ function getPenaltyRegisterDisplayRows() {
   });
 }
 
-async function generatePenaltyRegister() {
-  if (!canApprovePenalties) return alert("You do not have permission to generate penalty records.");
+async function syncCalculatedPenaltyRegister({ silent = false } = {}) {
   const liveRows = calculatePenaltyRegisterRows();
-  if (!liveRows.length) return alert("No calculated penalties found based on the active agreements.");
+  if (!liveRows.length) {
+    if (!silent) alert("No calculated penalties found based on the active agreements.");
+    return { inserted: 0, updated: 0 };
+  }
 
   let inserted = 0;
   let updated = 0;
@@ -20019,17 +20070,31 @@ async function generatePenaltyRegister() {
         .update(payload)
         .eq("id", existing.id)
         .eq("company_id", currentCompanyId);
-      if (error) return alert(error.message);
+      if (error) {
+        if (silent) throw error;
+        alert(error.message);
+        return { inserted, updated };
+      }
       updated += 1;
     } else {
       const { error } = await supabase.from("agency_penalties").insert([withCompany({ ...payload, created_at: new Date().toISOString() })]);
-      if (error) return alert(error.message);
+      if (error) {
+        if (silent) throw error;
+        alert(error.message);
+        return { inserted, updated };
+      }
       inserted += 1;
     }
   }
 
   await loadAgencyPenalties();
-  alert(`Penalty register updated. Inserted: ${inserted}, Updated: ${updated}`);
+  if (!silent) alert(`Penalty register updated. Inserted: ${inserted}, Updated: ${updated}`);
+  return { inserted, updated };
+}
+
+async function generatePenaltyRegister() {
+  if (!canApprovePenalties) return alert("You do not have permission to generate penalty records.");
+  return syncCalculatedPenaltyRegister();
 }
 
 async function createPenaltyRecord(item) {

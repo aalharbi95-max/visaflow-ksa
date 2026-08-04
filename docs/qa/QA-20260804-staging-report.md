@@ -10,7 +10,7 @@ Test prefix: `QA-20260804`
 
 The application builds successfully, the automated suite passes, all company-side navigation screens are reachable, the core request-to-authorization path works, and the agency account is UI-isolated to its authorized workspace pages.
 
-The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. AI Interview template, campaign, candidate-validation, and queue-read permissions are now proven on stable Staging. The release remains unsuitable for Production approval until the remaining notification-delivery findings and untested outbound AI invitation launch are resolved.
+The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. AI Interview template, campaign, candidate-validation, and queue-read permissions are now proven on stable Staging. Agency-originated candidate notifications are also proven through company-side visibility. The release remains unsuitable for Production approval until the remaining outbound AI invitation launch and penalty-decision workflow are verified.
 
 ## Verified successfully
 
@@ -42,6 +42,8 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 - QA campaign `QA-20260804 AI Interview Campaign` was created with a default seven-day deadline. One QA candidate was added and revalidated as `Valid`, moving the campaign to `Ready`.
 - `ai_interview_campaigns` insert, `ai_interview_campaign_candidates` insert/revalidation, and `ai_interview_invitation_jobs` read access were verified without the previous `permission denied for table users` diagnostics.
 - The campaign was intentionally not launched, so no invitation job or external email was created during this test.
+- Agency candidate `QA-20260804 Notification Retest` was created after a fresh load of the latest Staging bundle. Notification event `CANDIDATE_CREATED` was queued for the correct company workspace with recipient role `Company`.
+- The Company Admin refreshed Notification Center and the new agency-originated candidate notification appeared in the Unread split-view folder. Database recipient isolation and company-side UI visibility were both verified.
 
 ## Findings requiring follow-up
 
@@ -54,23 +56,18 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 
 ### Medium
 
-2. Candidate save feedback and notification isolation
-   - Agency candidate persistence succeeded, but the secondary `notification_events` insert returned `agency_company_access_denied`, leaving the form uncleared and making the successful save look failed.
-   - The UI now treats candidate persistence as the primary result, catches notification queue failure, reloads the data, and shows a non-blocking success/warning message.
-   - The underlying notification policy/recipient design still requires review so an agency-originated candidate event reaches the intended company recipients.
-
-3. Agency notification proof
-   - On the older preview dataset, the selected agency notification did not appear in Notification Center after sending.
-   - Re-run this on the stable isolated Staging URL and verify three outputs: notification row, agency visibility, and email log status.
-
-4. AI Interview outbound launch
+2. AI Interview outbound launch
    - Template approval, campaign creation, candidate insert/revalidation, and queue reads are verified.
    - Campaign launch and invitation delivery remain intentionally untested to avoid sending an external QA email without a dedicated controlled recipient.
    - The dedicated `generate-ai-interview-template` Edge Function is not present in the repository/deployment. The guarded fallback keeps the workflow usable, but the real AI generator should still be implemented and deployed before Production.
 
-5. Searchable select usability
+3. Searchable select usability
    - Typing a profession or nationality is not enough; the user must click a matching suggestion.
    - This is documented in the guide, but the control should also show an inline validation message when text has not been selected.
+
+4. Penalty objection and manager decision
+   - The Office Portal and Penalty Register screens are present, but the complete automatic creation -> agency objection -> Recruitment Manager confirm/reduce/cancel lifecycle still requires live Staging proof.
+   - The active QA agreement currently shows a fixed daily penalty amount of zero, so a meaningful financial penalty cannot be validated until a non-zero controlled QA rule is configured.
 
 ## Screen coverage
 
