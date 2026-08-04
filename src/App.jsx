@@ -5860,6 +5860,15 @@ const [agencyScores, setAgencyScores] = useState([]);
 const [agencyScoreHistory, setAgencyScoreHistory] = useState([]);
 const [agencyPenalties, setAgencyPenalties] = useState([]);
 const penaltyAutoSyncRef = useRef("");
+const [penaltyAgencyForm, setPenaltyAgencyForm] = useState({
+  penaltyId: "",
+  mode: "justification",
+  reason: "",
+  file: null,
+  busy: false,
+  message: "",
+  error: "",
+});
 const [agreementEditingId, setAgreementEditingId] = useState(null);
 
 const emptyAgreement = {
@@ -8190,6 +8199,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAgencyScores([]);
     setAgencyScoreHistory([]);
     setAgencyPenalties([]);
+    setPenaltyAgencyForm({ penaltyId: "", mode: "justification", reason: "", file: null, busy: false, message: "", error: "" });
     setCountries([]);
     setProfessions([]);
     setRequestMasterDataError("");
@@ -20226,7 +20236,7 @@ async function waivePenalty(item, defaultNote = "") {
   await loadAgencyPenalties();
 }
 
-async function submitPenaltyJustification(item) {
+async function submitPenaltyJustificationLegacy(item) {
   if (currentRole !== "Agency") return alert("Only agency users can submit justifications.");
   if (!item?.id) return;
 
@@ -20268,6 +20278,144 @@ async function submitPenaltyJustification(item) {
   }
   await loadAgencyPenalties();
   alert(isFinalDecision ? "Objection submitted to company for review." : "Justification submitted to company for review.");
+}
+
+function openPenaltyAgencyForm(item) {
+  if (!item?.id) return;
+  const isFinalDecision = ["Approved", "Reduced"].includes(String(item.status || ""));
+  if (isFinalDecision && !canAgencySubmitPenaltyObjection(item)) {
+    alert("Final decision has already been issued after the agency objection. This penalty is finalized.");
+    return;
+  }
+  setPenaltyAgencyForm({
+    penaltyId: String(item.id),
+    mode: isFinalDecision ? "objection" : "justification",
+    reason: "",
+    file: null,
+    busy: false,
+    message: "",
+    error: "",
+  });
+}
+
+function closePenaltyAgencyForm() {
+  setPenaltyAgencyForm({ penaltyId: "", mode: "justification", reason: "", file: null, busy: false, message: "", error: "" });
+}
+
+function getPenaltyEvidence(item = {}) {
+  return Array.isArray(item.agency_evidence) ? item.agency_evidence : [];
+}
+
+async function openPenaltyEvidence(evidence = {}) {
+  if (!evidence?.storage_path) return;
+  const { data, error } = await supabase.storage
+    .from(evidence.storage_bucket || "penalty-evidence")
+    .createSignedUrl(evidence.storage_path, 120);
+  if (error || !data?.signedUrl) {
+    alert(`Unable to open attachment: ${error?.message || "Signed link was not created."}`);
+    return;
+  }
+  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+}
+
+async function submitPenaltyJustification(item) {
+  if (currentRole !== "Agency") {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Only agency users can submit justifications." }));
+    return;
+  }
+  if (!item?.id || String(penaltyAgencyForm.penaltyId) !== String(item.id)) return;
+
+  const justification = String(penaltyAgencyForm.reason || "").trim();
+  if (justification.length < 15) {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Provide a clear reason of at least 15 characters / اكتب سببًا واضحًا لا يقل عن 15 حرفًا." }));
+    return;
+  }
+
+  const attachment = penaltyAgencyForm.file;
+  const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
+  if (attachment && !allowedTypes.includes(attachment.type)) {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Attachment must be PDF, JPG, or PNG / المرفق يجب أن يكون PDF أو JPG أو PNG." }));
+    return;
+  }
+  if (attachment && attachment.size > 10 * 1024 * 1024) {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Attachment must not exceed 10 MB / يجب ألا يتجاوز المرفق 10 ميجابايت." }));
+    return;
+  }
+
+  setPenaltyAgencyForm((current) => ({ ...current, busy: true, error: "", message: "Submitting to company / جارٍ الإرسال للشركة..." }));
+  let uploadedEvidence = null;
+  try {
+    const isFinalDecision = ["Approved", "Reduced"].includes(String(item.status || ""));
+    if (isFinalDecision && !canAgencySubmitPenaltyObjection(item)) {
+      throw new Error("Final decision has already been issued after the agency objection. This penalty is finalized.");
+    }
+
+    const now = new Date().toISOString();
+    if (attachment) {
+      const storagePath = `${currentCompanyId}/${currentUser?.agency_id || item.agency_id}/${item.id}/${Date.now()}-${talentSafeFileName(attachment.name)}`;
+      const { error: uploadError } = await supabase.storage
+        .from("penalty-evidence")
+        .upload(storagePath, attachment, { contentType: attachment.type, cacheControl: "3600", upsert: false });
+      if (uploadError) throw uploadError;
+      uploadedEvidence = {
+        storage_bucket: "penalty-evidence",
+        storage_path: storagePath,
+        file_name: attachment.name,
+        mime_type: attachment.type,
+        size_bytes: attachment.size,
+        uploaded_at: now,
+        uploaded_by: currentUser?.name || currentUser?.email || "Agency User",
+      };
+    }
+
+    const nextStatus = isFinalDecision ? "Agency Objection Submitted" : "Justification Submitted";
+    const existingNotes = String(item.decision_notes || "").trim();
+    const objectionNote = isFinalDecision
+      ? `${existingNotes ? `${existingNotes}\n` : ""}Agency submitted an objection after final decision on ${new Date().toLocaleString()}.`
+      : existingNotes;
+    const evidence = uploadedEvidence ? [...getPenaltyEvidence(item), uploadedEvidence] : getPenaltyEvidence(item);
+
+    const { error } = await supabase
+      .from("agency_penalties")
+      .update({
+        status: nextStatus,
+        agency_justification: justification,
+        agency_justification_by: currentUser?.name || currentUser?.email || "Agency User",
+        agency_justification_email: currentUser?.email || "",
+        agency_justification_at: now,
+        agency_evidence: evidence,
+        decision_notes: objectionNote,
+        updated_at: now,
+      })
+      .eq("id", item.id)
+      .eq("company_id", currentCompanyId);
+    if (error) throw error;
+
+    try {
+      await sendPenaltyJustificationEmail(item, justification);
+    } catch (emailError) {
+      console.warn("Penalty justification email failed", emailError?.message || emailError);
+    }
+    await loadAgencyPenalties();
+    setPenaltyAgencyForm((current) => ({
+      ...current,
+      busy: false,
+      file: null,
+      error: "",
+      message: isFinalDecision
+        ? "Objection submitted to company / تم إرسال الاعتراض للشركة."
+        : "Justification submitted to company / تم إرسال المبررات للشركة.",
+    }));
+  } catch (error) {
+    if (uploadedEvidence?.storage_path) {
+      try {
+        await supabase.storage.from("penalty-evidence").remove([uploadedEvidence.storage_path]);
+      } catch {
+        // Best-effort cleanup after a failed database update.
+      }
+    }
+    setPenaltyAgencyForm((current) => ({ ...current, busy: false, message: "", error: error?.message || "Unable to submit the justification." }));
+  }
 }
 
 async function approveFinalPenalty(item, defaultNote = "") {
@@ -35075,21 +35223,79 @@ disabled={authorizationWorkflowBusy === "create"}
                     <td>{Number(item.calculated_amount || 0).toLocaleString()} SAR</td>
                     <td><b>{Number(item.approved_amount ?? item.calculated_amount ?? 0).toLocaleString()} SAR</b></td>
                     <td><Badge value={item.status || "-"} /></td>
-                    <td>{item.agency_justification || item.decision_notes || "-"}</td>
+                    <td>
+                      <div>{item.agency_justification || item.decision_notes || "-"}</div>
+                      {getPenaltyEvidence(item).length > 0 && (
+                        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                          {getPenaltyEvidence(item).map((evidence, evidenceIndex) => (
+                            <button
+                              key={`${evidence.storage_path || evidence.file_name}-${evidenceIndex}`}
+                              type="button"
+                              className="light-btn"
+                              onClick={() => openPenaltyEvidence(evidence)}
+                            >
+                              Attachment: {evidence.file_name || `Evidence ${evidenceIndex + 1}`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td className="table-actions">
                       {item.status === "Sent to Agency" ? (
-                        <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Justification</button>
+                        <button className="save-btn" onClick={() => openPenaltyAgencyForm(item)}>Submit Justification</button>
                       ) : item.status === "Justification Submitted" ? (
                         <span>Under company review</span>
                       ) : item.status === "Agency Objection Submitted" ? (
                         <span>Objection under company review</span>
                       ) : canAgencySubmitPenaltyObjection(item) ? (
-                        <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Objection</button>
+                        <button className="save-btn" onClick={() => openPenaltyAgencyForm(item)}>Submit Objection</button>
                       ) : ["Approved", "Reduced"].includes(item.status) ? (
                         <span>Finalized</span>
                       ) : ["Cancelled", "Waived"].includes(item.status) ? (
                         <span>Cancelled</span>
                       ) : "-"}
+                      {String(penaltyAgencyForm.penaltyId) === String(item.id) && (
+                        <div style={{ minWidth: 320, marginTop: 10, padding: 14, border: "1px solid #cbd5e1", borderRadius: 12, background: "#f8fafc", display: "grid", gap: 10 }}>
+                          <strong>
+                            {penaltyAgencyForm.mode === "objection"
+                              ? "Agency Objection / اعتراض المكتب"
+                              : "Agency Justification / مبررات المكتب"}
+                          </strong>
+                          <div style={{ fontSize: 12, color: "#475569" }}>
+                            Explain the delay and what decision you request. The company will review this before the final decision.
+                          </div>
+                          <textarea
+                            rows="5"
+                            value={penaltyAgencyForm.reason}
+                            onChange={(event) => setPenaltyAgencyForm((current) => ({ ...current, reason: event.target.value, error: "", message: "" }))}
+                            placeholder="Write the justification or objection / اكتب المبررات أو الاعتراض"
+                            disabled={penaltyAgencyForm.busy}
+                          />
+                          <label style={{ display: "grid", gap: 6, fontSize: 12, fontWeight: 700 }}>
+                            Supporting attachment (optional) / مرفق داعم (اختياري)
+                            <input
+                              type="file"
+                              accept="application/pdf,image/jpeg,image/png"
+                              onChange={(event) => setPenaltyAgencyForm((current) => ({ ...current, file: event.target.files?.[0] || null, error: "", message: "" }))}
+                              disabled={penaltyAgencyForm.busy}
+                            />
+                          </label>
+                          <div style={{ fontSize: 11, color: "#64748b" }}>PDF, JPG, or PNG up to 10 MB.</div>
+                          {penaltyAgencyForm.error && <div style={{ color: "#b91c1c", fontWeight: 700 }}>{penaltyAgencyForm.error}</div>}
+                          {penaltyAgencyForm.message && <div style={{ color: "#047857", fontWeight: 700 }}>{penaltyAgencyForm.message}</div>}
+                          <div className="actions-line">
+                            <button
+                              type="button"
+                              className="save-btn"
+                              onClick={() => submitPenaltyJustification(item)}
+                              disabled={penaltyAgencyForm.busy}
+                            >
+                              {penaltyAgencyForm.busy ? "Submitting..." : "Confirm & Submit"}
+                            </button>
+                            <button type="button" className="light-btn" onClick={closePenaltyAgencyForm} disabled={penaltyAgencyForm.busy}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -36302,7 +36508,23 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{Number(item.calculated_amount || 0).toLocaleString()} SAR</td>
                 <td><b>{Number(item.approved_amount ?? item.calculated_amount ?? 0).toLocaleString()} SAR</b></td>
                 <td><Badge value={item.status || "Pending Review"} /></td>
-                <td>{item.agency_justification || "-"}</td>
+                <td>
+                  <div>{item.agency_justification || "-"}</div>
+                  {getPenaltyEvidence(item).length > 0 && (
+                    <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                      {getPenaltyEvidence(item).map((evidence, evidenceIndex) => (
+                        <button
+                          key={`${evidence.storage_path || evidence.file_name}-${evidenceIndex}`}
+                          type="button"
+                          className="light-btn"
+                          onClick={() => openPenaltyEvidence(evidence)}
+                        >
+                          Open: {evidence.file_name || `Evidence ${evidenceIndex + 1}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </td>
                 <td>{item.decision_notes || "-"}</td>
                 <td className="table-actions">
                   {item.source === "live" ? (
