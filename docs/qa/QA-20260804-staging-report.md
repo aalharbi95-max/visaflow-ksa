@@ -26,6 +26,10 @@ The release is suitable for continued Staging verification, but not yet for Prod
 - The Notification Center Split View, table filters, bulk/export helpers, demobilization filters, and redeployment matching are covered by passing automated tests.
 - An illustrated, role-aware User Guide is now available from the sidebar for both company and agency users.
 - The missing permanent Staging alias was repaired. The stable URL above now resolves to the latest Staging deployment.
+- Authorization `2121222` was verified on isolated Staging through `New -> Acknowledged -> Accepted`, including actor names, timestamps, and QA notes in the timeline.
+- The authorization action no longer depends on `window.prompt`; the agency now confirms acknowledge/accept/reject in an inline form.
+- Supabase Edge Function CORS was corrected for the stable Staging origin and the preflight changed from HTTP 403 `origin_not_allowed` to HTTP 200.
+- Agency candidate `QA-20260804 Staging Candidate` / passport `QA20260804STG01` was created in isolated Staging; the active candidate count changed from 198 to 199.
 
 ## Findings requiring follow-up
 
@@ -42,15 +46,20 @@ The release is suitable for continued Staging verification, but not yet for Prod
 
 ### Medium
 
-3. Candidate save feedback
-   - The previous order displayed a blocking alert before clearing the form and reloading candidate data, making the result appear incomplete.
-   - The code now clears the form and awaits request/candidate reloads before displaying success. Retest the saved row on the stable Staging URL.
+3. Candidate save feedback and notification isolation
+   - Agency candidate persistence succeeded, but the secondary `notification_events` insert returned `agency_company_access_denied`, leaving the form uncleared and making the successful save look failed.
+   - The UI now treats candidate persistence as the primary result, catches notification queue failure, reloads the data, and shows a non-blocking success/warning message.
+   - The underlying notification policy/recipient design still requires review so an agency-originated candidate event reaches the intended company recipients.
 
-4. Agency notification proof
+4. Agency candidate update permission
+   - The test agency can create and view candidates, but the attempted stage update from `Medical Passed` to `Ticket Booked` did not persist during this run.
+   - Verify `agency_company_user_access.can_update_candidates` for the test membership and align Office Portal Edit visibility with that permission.
+
+5. Agency notification proof
    - On the older preview dataset, the selected agency notification did not appear in Notification Center after sending.
    - Re-run this on the stable isolated Staging URL and verify three outputs: notification row, agency visibility, and email log status.
 
-5. Searchable select usability
+6. Searchable select usability
    - Typing a profession or nationality is not enough; the user must click a matching suggestion.
    - This is documented in the guide, but the control should also show an inline validation message when text has not been selected.
 
