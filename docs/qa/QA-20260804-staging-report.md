@@ -39,7 +39,7 @@ A second live redeployment cycle now proves the full project-end path after the 
 - Live redeployment matching correctly rejected the two open requests because one had a different profession/nationality and the other required a different gender. The `Use` action remains covered by automated matching tests but was not presented in this live no-match case.
 - Workspace horizontal overflow was contained and wide operational tables now scroll within their cards; primary form actions remain visible.
 - Mobilization and Demobilization saves now show inline progress, success, warning, and database error feedback instead of opaque alerts.
-- AI Interview template generation now calls the dedicated secure Edge Function. With the Staging AI secret absent, the UI fails safely with a configuration message and does not save an incomplete template.
+- The Staging OpenAI secret and secure generator were verified live with QA OpenAI Key Verification 20260804: 10 bilingual questions, JD quality 78, model metadata recorded, Pending Review, and inactive until human approval.
 - QA template `QA-20260804 AI Interview Template` was created with 10 bilingual questions, a verified 100% total weight, published by the Company Admin, and locked after approval.
 - QA campaign `QA-20260804 AI Interview Campaign` was created with a default seven-day deadline. One QA candidate was added and revalidated as `Valid`, moving the campaign to `Ready`.
 - `ai_interview_campaigns` insert, `ai_interview_campaign_candidates` insert/revalidation, and `ai_interview_invitation_jobs` read access were verified without the previous `permission denied for table users` diagnostics.
@@ -74,7 +74,7 @@ A second live redeployment cycle now proves the full project-end path after the 
 2. AI Interview outbound launch
    - Template approval, campaign creation, candidate insert/revalidation, and queue reads are verified.
    - Campaign launch and invitation delivery remain intentionally untested to avoid sending an external QA email without a dedicated controlled recipient.
-   - The secure `generate-ai-interview-template` Edge Function is implemented and deployed to Staging, but Staging does not yet have the required `OPENAI_API_KEY` Edge Function secret. The UI fails safely, explains the missing configuration, and does not save an incomplete template. Configure the secret before Production approval.
+   - OPENAI_API_KEY is configured in Staging and live template generation is verified. The only remaining AI Interview launch check is controlled invitation delivery to a dedicated QA recipient.
 
 ## Screen coverage
 
