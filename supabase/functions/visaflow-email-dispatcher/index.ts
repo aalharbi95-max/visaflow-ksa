@@ -424,6 +424,9 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
       .eq("id", sessionId);
     if (caller.kind === "authenticated") sessionQuery = sessionQuery.eq("company_id", caller.actor.company_id);
     const session = await exactlyOne(sessionQuery, "interview_session_not_found");
+    if (caller.kind === "internal" && String(body.company_id || "") !== String(session.company_id)) {
+      throw new RequestFailure(403, "forbidden");
+    }
     if (!session.candidate_id) throw new RequestFailure(404, "interview_invitation_not_ready");
     const candidate = await exactlyOne(admin.from("candidates").select("id, company_id, candidate_name, email, profession, request_no")
       .eq("id", session.candidate_id).eq("company_id", session.company_id), "candidate_not_found");

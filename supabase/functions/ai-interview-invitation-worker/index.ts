@@ -1,5 +1,13 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { corsHeaders, json } from "../_shared/visaflow-security.ts";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-visaflow-worker-secret",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Content-Type": "application/json",
+};
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: corsHeaders });
 
 function secureEqual(left: string, right: string) {
   const encoder = new TextEncoder();
@@ -18,8 +26,9 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
   const dispatcherSecret = Deno.env.get("VISAFLOW_EMAIL_DISPATCHER_SECRET") || "";
+  const workerSecret = Deno.env.get("AI_INTERVIEW_WORKER_SECRET") || "";
   const suppliedSecret = req.headers.get("x-visaflow-worker-secret") || "";
-  if (!supabaseUrl || !serviceKey || !dispatcherSecret || !secureEqual(suppliedSecret, dispatcherSecret)) {
+  if (!supabaseUrl || !serviceKey || !dispatcherSecret || !workerSecret || !secureEqual(suppliedSecret, workerSecret)) {
     return json({ ok: false, message: "Unauthorized." }, 401);
   }
 
@@ -34,38 +43,46 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   let failed = 0;
+  const errors: string[] = [];
   for (const job of jobs || []) {
     try {
-      if (!job?.id || !job?.session_id) throw new Error("invalid_job");
+      if (!job?.id || !job?.session_id || !job?.company_id) throw new Error("invalid_job");
       const response = await fetch(`${supabaseUrl}/functions/v1/visaflow-email-dispatcher`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${serviceKey}`,
+          "apikey": serviceKey,
           "x-visaflow-email-secret": dispatcherSecret,
         },
         body: JSON.stringify({
           message_type: "AI_INTERVIEW_INVITATION",
           interview_session_id: job.session_id,
+          company_id: job.company_id,
         }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok || result?.ok !== true) throw new Error("delivery_failed");
+      if (!response.ok || result?.ok !== true) {
+        throw new Error(`delivery_failed:${response.status}:${String(result?.error || result?.message || "unknown")}`);
+      }
       const { error: completeError } = await admin.rpc("complete_ai_interview_invitation_job", {
         p_job_id: job.id,
-        p_message_id: "",
+        p_message_id: String(result?.message_id || ""),
         p_provider: "VisaFlow Email Dispatcher",
       });
       if (completeError) throw new Error("completion_failed");
       sent += 1;
-    } catch {
+    } catch (error) {
       failed += 1;
+      const errorMessage = error instanceof Error ? error.message.slice(0, 180) : "unknown_error";
+      errors.push(errorMessage);
       await admin.rpc("fail_ai_interview_invitation_job", {
         p_job_id: job?.id,
-        p_error: "Secure invitation delivery failed.",
+        p_error: errorMessage,
         p_retry_delay_minutes: 5,
       });
     }
   }
 
-  return json({ ok: true, claimed: (jobs || []).length, sent, failed });
+  return json({ ok: true, claimed: (jobs || []).length, sent, failed, errors });
 });
