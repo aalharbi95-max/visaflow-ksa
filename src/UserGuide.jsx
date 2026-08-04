@@ -50,6 +50,30 @@ const guideSteps = [
   },
 ];
 
+const agencySteps = [
+  {
+    number: "01",
+    title: "Review assigned authorization | مراجعة التفويض",
+    body: "Open the assigned authorization, review the request line and quantity, then acknowledge it before accepting or rejecting the assignment.",
+    tip: "Acknowledge confirms receipt only. Accept or Reject is the formal agency decision that starts or closes the SLA.",
+    image: "/user-guide/08-agency-portal.png",
+  },
+  {
+    number: "02",
+    title: "Submit and update candidates | رفع وتحديث المرشحين",
+    body: "Use Office Portal to add candidates individually or upload the Excel template. Assigned candidates must match the request profession, nationality, and gender exactly.",
+    tip: "Leave Request No blank only for the Agency Talent Pool. The company controls final interview, arrival validation, joining, and employee conversion.",
+    image: "/user-guide/03-add-candidate.png",
+  },
+  {
+    number: "03",
+    title: "Follow notifications and SLA | متابعة التنبيهات والمهلة",
+    body: "Use Notifications to respond to sourcing alerts, follow company decisions, and confirm that every update belongs to the currently displayed client workspace.",
+    tip: "The agency workspace must never expose company administration, other agencies, or another client without an authorized workspace switch.",
+    image: "/user-guide/02-notify-agency.png",
+  },
+];
+
 const lifecycle = [
   "Request",
   "Recruitment Approval",
@@ -67,6 +91,12 @@ const lifecycle = [
 ];
 
 export default function UserGuide({ currentRole }) {
+  const isAgency = currentRole === "Agency";
+  const visibleSteps = isAgency ? agencySteps : guideSteps;
+  const visibleLifecycle = isAgency
+    ? ["Authorization", "Acknowledge", "Accept / Reject", "Candidate Submission", "Agency Updates", "Company Decision"]
+    : lifecycle;
+
   return (
     <div style={{ display: "grid", gap: 18 }}>
       <section className="table-card" style={{ background: "linear-gradient(135deg, #0b2149, #155eef)", color: "#fff", overflow: "hidden" }}>
@@ -83,15 +113,15 @@ export default function UserGuide({ currentRole }) {
       <section className="table-card">
         <h2>End-to-end lifecycle | دورة العمل الكاملة</h2>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {lifecycle.map((item, index) => (
-            <span key={item} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 999, background: index === lifecycle.length - 1 ? "#dcfce7" : "#eff6ff", color: "#153e75", fontWeight: 800 }}>
+          {visibleLifecycle.map((item, index) => (
+            <span key={item} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 999, background: index === visibleLifecycle.length - 1 ? "#dcfce7" : "#eff6ff", color: "#153e75", fontWeight: 800 }}>
               {index + 1}. {item}
             </span>
           ))}
         </div>
       </section>
 
-      {guideSteps.map((step) => (
+      {visibleSteps.map((step) => (
         <section key={step.number} className="table-card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 0.85fr) minmax(360px, 1.4fr)", gap: 0 }}>
             <div style={{ padding: 24 }}>
