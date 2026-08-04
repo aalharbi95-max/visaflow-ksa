@@ -6210,6 +6210,8 @@ const [demobilizationEditingId, setDemobilizationEditingId] = useState(null);
 const [demobilizationForm, setDemobilizationForm] = useState(emptyDemobilization);
 const [demobAiSuggestion, setDemobAiSuggestion] = useState(null);
 const [mobilizationEditingId, setMobilizationEditingId] = useState(null);
+const [mobilizationSaveFeedback, setMobilizationSaveFeedback] = useState(null);
+const [mobilizationSaving, setMobilizationSaving] = useState(false);
 const [onboardingEditingId, setOnboardingEditingId] = useState(null);
 const [onboardingValidationForm, setOnboardingValidationForm] = useState(emptyOnboardingValidation);
 const [onboardingFilter, setOnboardingFilter] = useState("All");
@@ -18493,8 +18495,15 @@ function editMobilization(item) {
 }
 
 async function saveMobilization() {
-  if (!canManageMobilization) return alert("You do not have permission to manage mobilization.");
-  if (!mobilizationForm.candidate_id) return alert("Candidate is required.");
+  const showMobilizationError = (message) => {
+    setMobilizationSaveFeedback({ type: "error", message: String(message || "Mobilization could not be saved.") });
+    return null;
+  };
+
+  if (!canManageMobilization) return showMobilizationError("You do not have permission to manage mobilization.");
+  if (!mobilizationForm.candidate_id) return showMobilizationError("Candidate is required.");
+  setMobilizationSaving(true);
+  setMobilizationSaveFeedback({ type: "info", message: "Saving mobilization data..." });
 
   const candidate = candidates.find(
     (c) => String(c.id) === String(mobilizationForm.candidate_id)
@@ -18506,7 +18515,8 @@ async function saveMobilization() {
   );
 
   if (existing) {
-    return alert("This candidate already has a mobilization record. Use Edit instead.");
+    setMobilizationSaving(false);
+    return showMobilizationError("This candidate already has a mobilization record. Use Edit instead.");
   }
 
   const payload = {
@@ -18532,7 +18542,10 @@ async function saveMobilization() {
     ? await supabase.from("mobilizations").update(payload).eq("id", mobilizationEditingId)
     : await supabase.from("mobilizations").insert([withCompany(payload)]);
 
-  if (result.error) return alert(result.error.message);
+  if (result.error) {
+    setMobilizationSaving(false);
+    return showMobilizationError(result.error.message);
+  }
 
   let candidateStatus = candidate?.status || "New";
   if (payload.mobilization_status === "Joined") candidateStatus = "Joined";
@@ -18542,7 +18555,7 @@ async function saveMobilization() {
   else if (payload.medical_status === "Fit") candidateStatus = "Medical Passed";
   else if (payload.medical_status === "Unfit") candidateStatus = "Medical Failed";
 
-  await supabase
+  const candidateUpdateResult = await supabase
     .from("candidates")
     .update(withUpdateActor({
       status: candidateStatus,
@@ -18555,7 +18568,16 @@ async function saveMobilization() {
     }))
     .eq("id", payload.candidate_id);
 
-  alert(mobilizationEditingId ? "Mobilization updated successfully" : "Mobilization saved successfully");
+  if (candidateUpdateResult.error) {
+    setMobilizationSaving(false);
+    return showMobilizationError(`Mobilization saved, but candidate status could not be updated: ${candidateUpdateResult.error.message}`);
+  }
+
+  setMobilizationSaveFeedback({
+    type: "success",
+    message: mobilizationEditingId ? "Mobilization updated successfully." : "Mobilization saved successfully.",
+  });
+  setMobilizationSaving(false);
   resetMobilizationForm();
   await loadMobilizations();
   await loadCandidates();
@@ -34089,6 +34111,12 @@ disabled={authorizationWorkflowBusy === "create"}
       />
     </div>
 
+    {mobilizationSaveFeedback && (
+      <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: mobilizationSaveFeedback.type === "error" ? "#fef2f2" : mobilizationSaveFeedback.type === "info" ? "#eff6ff" : "#ecfdf5", color: mobilizationSaveFeedback.type === "error" ? "#991b1b" : mobilizationSaveFeedback.type === "info" ? "#1d4ed8" : "#166534" }}>
+        {mobilizationSaveFeedback.message}
+      </div>
+    )}
+
     {mobilizationForm.candidate_id && canManageMobilization && (
       <FormCard title={mobilizationEditingId ? "Update Mobilization" : "Create Mobilization"}>
         <div style={{ marginBottom: 12, color: "#475569" }}>
@@ -34113,7 +34141,7 @@ disabled={authorizationWorkflowBusy === "create"}
         </div>
         <textarea rows="3" placeholder="Mobilization Remarks" value={mobilizationForm.remarks || ""} onChange={(event) => updateForm(setMobilizationForm, "remarks", event.target.value)} />
         <div className="actions-line" style={{ marginTop: 12 }}>
-          <button className="save-btn" onClick={saveMobilization}>{mobilizationEditingId ? "Update Mobilization" : "Save Mobilization"}</button>
+          <button className="save-btn" disabled={mobilizationSaving} onClick={saveMobilization}>{mobilizationSaving ? "Saving..." : mobilizationEditingId ? "Update Mobilization" : "Save Mobilization"}</button>
           <button className="light-btn" onClick={resetMobilizationForm}>Cancel</button>
         </div>
       </FormCard>
