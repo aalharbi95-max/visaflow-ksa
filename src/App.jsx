@@ -20397,15 +20397,7 @@ async function submitPenaltyJustification(item) {
       console.warn("Penalty justification email failed", emailError?.message || emailError);
     }
     await loadAgencyPenalties();
-    setPenaltyAgencyForm((current) => ({
-      ...current,
-      busy: false,
-      file: null,
-      error: "",
-      message: isFinalDecision
-        ? "Objection submitted to company / تم إرسال الاعتراض للشركة."
-        : "Justification submitted to company / تم إرسال المبررات للشركة.",
-    }));
+    closePenaltyAgencyForm();
   } catch (error) {
     if (uploadedEvidence?.storage_path) {
       try {
