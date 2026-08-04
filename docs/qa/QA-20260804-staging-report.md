@@ -10,7 +10,7 @@ Test prefix: `QA-20260804`
 
 The application builds successfully, the automated suite passes, all company-side navigation screens are reachable, the core request-to-authorization path works, and the agency account is UI-isolated to its authorized workspace pages.
 
-The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. AI Interview template, campaign, candidate-validation, and queue-read permissions are now proven on stable Staging. Agency-originated candidate notifications are also proven through company-side visibility. The release remains unsuitable for Production approval until the remaining outbound AI invitation launch and penalty-decision workflow are verified.
+The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. AI Interview template, campaign, candidate-validation, and queue-read permissions are now proven on stable Staging. Agency-originated candidate notifications and the automatic penalty-to-agency-to-manager decision lifecycle are also proven. The release remains unsuitable for Production approval until the remaining outbound AI invitation launch is verified and the remaining usability findings are resolved.
 
 ## Verified successfully
 
@@ -44,6 +44,10 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 - The campaign was intentionally not launched, so no invitation job or external email was created during this test.
 - Agency candidate `QA-20260804 Notification Retest` was created after a fresh load of the latest Staging bundle. Notification event `CANDIDATE_CREATED` was queued for the correct company workspace with recipient role `Company`.
 - The Company Admin refreshed Notification Center and the new agency-originated candidate notification appeared in the Unread split-view folder. Database recipient isolation and company-side UI visibility were both verified.
+- Penalty `PEN-2026-0001` was automatically created from controlled delayed-request source `QA-PEN-20260804`: two delayed workers, five chargeable days, 25 SAR per worker/day, calculated amount 250 SAR.
+- The Recruitment Manager sent the penalty to the agency. It appeared in Office Portal with status `Sent to Agency`, the required amount, and a justification action.
+- An authenticated agency objection changed the record to `Justification Submitted` and Office Portal showed `Under company review`. The manager then saw all three final actions: approve, reduce, and accept objection/cancel.
+- The manager decision was tested with `Reduced`: approved amount 125 SAR, final role `Recruitment Manager`, and the register showed `Final`. The temporary QA role and agreement settings were restored afterward to Company Admin, 60-day SLA, zero default penalty, and seven-day grace period.
 
 ## Findings requiring follow-up
 
@@ -65,9 +69,9 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
    - Typing a profession or nationality is not enough; the user must click a matching suggestion.
    - This is documented in the guide, but the control should also show an inline validation message when text has not been selected.
 
-4. Penalty objection and manager decision
-   - The Office Portal and Penalty Register screens are present, but the complete automatic creation -> agency objection -> Recruitment Manager confirm/reduce/cancel lifecycle still requires live Staging proof.
-   - The active QA agreement currently shows a fixed daily penalty amount of zero, so a meaningful financial penalty cannot be validated until a non-zero controlled QA rule is configured.
+4. Penalty objection input
+   - The lifecycle and tenant permissions are verified, but the agency objection action still uses `window.prompt`.
+   - Replace it with an inline bilingual form with required reason, attachment support, confirmation text, progress state, and durable success/error feedback.
 
 ## Screen coverage
 
