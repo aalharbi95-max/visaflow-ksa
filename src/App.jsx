@@ -28068,6 +28068,13 @@ function getReportStudioVisualModel() {
       if (error) throw error;
 
       const result = Array.isArray(data) ? data[0] : data;
+      const { error: workerTriggerError } = await supabase.rpc(
+        "trigger_ai_interview_invitation_worker",
+        { p_campaign_id: campaign.id }
+      );
+      if (workerTriggerError) {
+        console.warn("AI interview worker immediate trigger failed; scheduled delivery remains active.", workerTriggerError.message);
+      }
       await Promise.all([
         loadCandidates(),
         loadAIInterviewCampaigns(),
@@ -28275,7 +28282,7 @@ function getReportStudioVisualModel() {
         `Campaign launched. Sessions created: ${result?.sessions_created ?? 0}. ` +
         `Existing sessions: ${result?.existing_sessions ?? 0}. ` +
         `Invitations queued: ${result?.invitation_jobs_queued ?? 0}. ` +
-        `The automatic worker sends up to 20 invitations every minute.`
+        `Delivery starts immediately, with an automatic retry sweep every five minutes.`
       );
     } catch (error) {
       console.warn("launch campaign failed", error?.message || error);

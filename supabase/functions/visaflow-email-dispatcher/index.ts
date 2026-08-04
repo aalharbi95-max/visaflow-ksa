@@ -309,7 +309,136 @@ async function prepareAgreementAttempt(admin: any, caller: Caller, messageType: 
   };
   if (prior?.id) {
     if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
-    const { data: claimed, error: claimError } = await admin.from("email_logs").update…2167 tokens truncated…  : await agencyByUniqueName(admin, String(agreement.agency_name || ""));
+    const { data: claimed, error: claimError } = await admin.from("email_logs").update({
+      status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
+      error_code: null, error_message: null, failed_at: null, dispatch_claimed_at: new Date().toISOString(),
+    }).eq("id", prior.id).eq("status", "Failed").select("id").maybeSingle();
+    if (claimError) throw claimError;
+    return { id: String(claimed?.id || prior.id), owned: Boolean(claimed?.id), companyId: caller.actor.company_id, agreementId };
+  }
+  const recipient = recipients[0];
+  const { data: inserted, error: insertError } = await admin.from("email_logs").insert({
+    company_id: caller.actor.company_id, agency_id: agency.id, user_id: caller.actor.id,
+    event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
+    recipient, to_email: recipient, to_emails: recipient,
+    subject: messageContracts[messageType].subject, related_id: agreementId,
+    idempotency_key: idempotencyKey, retry_count: 0, dispatch_claimed_at: new Date().toISOString(),
+  }).select("id").single();
+  if (insertError) throw insertError;
+  await recordAgreementDelivery(admin, messageType, agreementId, caller.actor.company_id, {
+    email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
+    email_last_attempt_at: new Date().toISOString(),
+  });
+  return { id: String(inserted.id), owned: true, companyId: caller.actor.company_id, agreementId };
+}
+
+async function companyMailbox(admin: any, companyId: string, kind: "notifications" | "agreements" | "support" = "notifications") {
+  const { data: settings, error } = await admin.from("company_email_settings")
+    .select("notifications_email, agreements_email, support_email, is_active")
+    .eq("company_id", companyId).eq("is_active", true).limit(2);
+  if (error) throw error;
+  if ((settings || []).length > 1) throw new RequestFailure(404, "company_mailbox_not_found");
+  const row = settings?.[0] || {};
+  const preferred = kind === "agreements" ? row.agreements_email : kind === "support" ? row.support_email : row.notifications_email;
+  const emails = normalizeEmails([preferred, row.notifications_email, row.support_email, row.agreements_email]);
+  if (emails.length) return [emails[0]];
+
+  const { data: users, error: userError } = await admin.from("users")
+    .select("email").eq("company_id", companyId).eq("status", "Active").eq("is_active", true)
+    .in("role", ["Admin", "Company Admin", "Recruitment Manager"]).limit(MAX_RECIPIENTS);
+  if (userError) throw userError;
+  const fallback = normalizeEmails((users || []).map((user: Json) => user.email));
+  if (!fallback.length) throw new RequestFailure(404, "company_mailbox_not_found");
+  return fallback.slice(0, MAX_RECIPIENTS);
+}
+
+async function companyManagers(admin: any, companyId: string) {
+  const { data, error } = await admin.from("users").select("email")
+    .eq("company_id", companyId).eq("status", "Active").eq("is_active", true)
+    .in("role", ["Recruitment Manager", "Admin", "Company Admin"]).limit(MAX_RECIPIENTS);
+  if (error) throw error;
+  const emails = normalizeEmails((data || []).map((row: Json) => row.email));
+  if (!emails.length) throw new RequestFailure(404, "manager_recipient_not_found");
+  return emails.slice(0, MAX_RECIPIENTS);
+}
+
+function agencyRecipients(agency: Json) {
+  const emails = normalizeEmails([agency.email]);
+  if (!emails.length) throw new RequestFailure(404, "agency_recipient_not_found");
+  return [emails[0]];
+}
+
+async function resolveMessage(admin: any, caller: Caller, type: string, contract: MessageContract, body: Json, input: Record<string, string>): Promise<ResolvedMessage> {
+  if (caller.kind === "authenticated") {
+    if (!contract.browserEnabled || !contract.roles.includes(caller.actor.role)) throw new RequestFailure(403, "forbidden");
+    if (body.company_id !== undefined) throw new RequestFailure(400, "company_id_not_allowed");
+  } else if (!contract.internalEnabled) throw new RequestFailure(403, "forbidden");
+
+  if (type === "EMAIL_TEMPLATE_TEST") return { recipients: [caller.kind === "authenticated" ? caller.actor.email : ""], variables: input };
+  if (type === "COMPANY_EMAIL_TEST") {
+    if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
+    const company = await exactlyOne(admin.from("companies").select("id, name").eq("id", caller.actor.company_id).eq("status", "Active"), "company_not_found");
+    return { recipients: [caller.actor.email], variables: { company_name: String(company.name || "Company") } };
+  }
+
+  if (type === "AGENCY_REQUEST_RESPONSE_EMAIL") {
+    if (caller.kind !== "authenticated" || !caller.actor.agency_id) throw new RequestFailure(403, "forbidden");
+    const id = safeId(body.notification_event_id, "notification_event_id");
+    const event = await exactlyOne(admin.from("notification_events")
+      .select("id, company_id, agency_id, agency_name, request_no, response_status, rejection_reason, sla_due_at, data")
+      .eq("id", id).eq("agency_id", caller.actor.agency_id), "notification_not_found");
+    await assertAgencyAccess(admin, String(event.company_id), caller.actor.agency_id, caller.actor.id);
+    const eventData = event.data && typeof event.data === "object" ? event.data : {};
+    return { recipients: await companyMailbox(admin, String(event.company_id), "notifications"), variables: {
+      agency_name: String(event.agency_name || eventData.agency_name || "Agency"), request_no: String(event.request_no || eventData.request_no || "-"),
+      response_status: String(event.response_status || eventData.response_status || "-"), response_notes: String(event.rejection_reason || eventData.response_notes || "-"),
+      sla_due_at: String(event.sla_due_at || eventData.sla_due_at || "-"),
+    } };
+  }
+
+  if (type === "AGENCY_USER_INVITATION") {
+    if (caller.kind !== "internal") throw new RequestFailure(403, "forbidden");
+    const requestId = safeId(body.request_id, "request_id");
+    const invitation = await exactlyOne(admin.from("agency_provisioning_requests")
+      .select("id, company_id, agency_id, agency_name, admin_email, status, attempt_count")
+      .eq("id", requestId).eq("status", "Provisioning"), "agency_invitation_not_found");
+    await assertAgencyAccess(admin, String(invitation.company_id), String(invitation.agency_id));
+    const actionUrl = new URL(String(input.action_url || ""));
+    const supabaseOrigin = new URL(requireSecret("SUPABASE_URL")).origin;
+    if (actionUrl.origin !== supabaseOrigin || actionUrl.pathname !== "/auth/v1/verify") {
+      throw new RequestFailure(400, "invalid_invitation_link");
+    }
+    const recipients = normalizeEmails([invitation.admin_email]);
+    if (recipients.length !== 1) throw new RequestFailure(404, "agency_recipient_not_found");
+    return { recipients, variables: { agency_name: String(invitation.agency_name), action_url: actionUrl.toString() },
+      companyId: String(invitation.company_id), agencyId: String(invitation.agency_id),
+      deliveryKey: String(invitation.id) };
+  }
+
+  if (type === "NEW_REQUEST_AGENCY_ALERT_EMAIL") {
+    if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
+    const requestId = safeId(body.request_id, "request_id");
+    const agencyId = safeId(body.agency_id, "agency_id");
+    const request = await exactlyOne(admin.from("requests").select("id, company_id, request_no, project_name, priority")
+      .eq("id", requestId).eq("company_id", caller.actor.company_id), "request_not_found");
+    const agency = await activeAgency(admin, agencyId);
+    await assertAgencyAccess(admin, caller.actor.company_id, agencyId);
+    return { recipients: agencyRecipients(agency), variables: {
+      agency_name: String(agency.name || "Agency"), request_no: String(request.request_no || request.id),
+      project: String(request.project_name || "-"), priority: String(request.priority || "Medium"), action_url: approvedUrl(),
+    } };
+  }
+
+  if (type === "AGENCY_AGREEMENT_SENT" || type === "AGENCY_AGREEMENT_ACCEPTED") {
+    const agreementId = safeId(body.agreement_id, "agreement_id");
+    let query = admin.from("agency_agreements").select("id, company_id, agency_id, agency_name, agreement_no, sla_days, status").eq("id", agreementId);
+    if (caller.kind === "authenticated" && caller.actor.company_id) query = query.eq("company_id", caller.actor.company_id);
+    const agreement = await exactlyOne(query, "agreement_not_found");
+    const agency = caller.kind === "authenticated" && caller.actor.role === "Agency"
+      ? await activeAgency(admin, String(caller.actor.agency_id))
+      : agreement.agency_id
+        ? await activeAgency(admin, String(agreement.agency_id))
+        : await agencyByUniqueName(admin, String(agreement.agency_name || ""));
     // agency_id is the immutable ownership key. Compare names only for legacy
     // agreements that predate the agency_id column and require name fallback.
     if (!agreement.agency_id && String(agency.name || "").trim().toLowerCase() !== String(agreement.agency_name || "").trim().toLowerCase()) throw new RequestFailure(403, "forbidden");
