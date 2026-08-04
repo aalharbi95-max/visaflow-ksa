@@ -14455,7 +14455,7 @@ arrival_date: item.arrival_date || "",
 
   async function saveCandidate() {
     if (!canManageCandidates && !canManageOfficePortal) return showCandidateSaveError("You do not have permission to manage candidates.");
-    setCandidateSaveFeedback(null);
+    setCandidateSaveFeedback({ type: "info", message: "Saving candidate data..." });
     const { data: requestData } = await supabase
   .from("requests")
   .select("approval_status, quantity, remaining_qty, recruitment_type, nationality")
