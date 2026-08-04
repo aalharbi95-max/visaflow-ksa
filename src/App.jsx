@@ -14695,6 +14695,7 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
         await triggerExternalNotification(
           candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
           {
+            company_id: currentCompanyId,
             agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
             title: candidateEditingId ? "Candidate Updated" : "New Candidate Added",
             message: `${candidateForm.candidate_name || "Candidate"} / ${candidateForm.request_no || "No Request"} / ${autoStatus}`,
