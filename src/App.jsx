@@ -17,6 +17,15 @@ import {
   verifyWorkspaceAuthSession,
 } from "./authSession.mjs";
 import {
+  getWorkspaceLoginErrorMessage,
+  loadAuthenticatedWorkspaceContext,
+} from "./workspaceContext.mjs";
+import {
+  getCompanyAdminPages,
+  getWorkspaceRoleLabel,
+  normalizeWorkspaceRole,
+} from "./workspacePermissions.mjs";
+import {
   buildPublicViewUrl,
   getPublicViewFromLocation,
   PUBLIC_VIEW,
@@ -32,6 +41,79 @@ import {
   calculateInterviewQuality,
   formatOptionalPercentage,
 } from "./agencyPerformance.mjs";
+import RequestLineCustomFields from "./RequestLineCustomFields";
+import {
+  getCandidateUploadValidationSummary,
+  isAgencyRequestAssignmentInWorkspace,
+  resolveAgencyUploadWorkspace,
+  secureAgencyCandidatePayload,
+} from "./candidateExcelUpload.mjs";
+import {
+  buildCandidateCountSnapshot,
+  getOperationalCandidates,
+} from "./candidateOperationalMetrics.mjs";
+import { buildBulkAssignmentPreview, getBatchCandidateIds, getMatchingCandidateIds } from "./bulkAssignment.mjs";
+import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
+import Select from "./Select";
+import UserGuide from "./UserGuide";
+import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
+import {
+  createAgencyAgreement,
+  getAgencyAgreementSaveError,
+  isSameAgencyWorkspace,
+  retryAgreementDelivery,
+  shouldShowAgencyAgreements,
+} from "./agencyAgreements.mjs";
+import { buildNationalityOptions, getNationalityMatchKeys, nationalitiesMatch, resolveCanonicalNationality } from "./nationality.mjs";
+import {
+  buildAuthorizationTimeline,
+  getAuthorizationActions,
+  getAuthorizationAgencyStatus,
+  invokeAuthorizationWorkflow,
+  isAuthorizationCompanyActor,
+} from "./authorizationWorkflow.mjs";
+import { buildNotificationDedupeKey } from "./notificationDedupe.mjs";
+import { buildRedeploymentSuggestions } from "./redeploymentMatching.mjs";
+import { buildExcelSafeRows, getExcelColumnWidths } from "./excelExport.mjs";
+import {
+  filterDemobilizationRows,
+  filterEmployeeRows,
+  selectRowsForBulkExport,
+} from "./workforceTableFilters.mjs";
+import {
+  filterNotificationCenterRows,
+  getNotificationFolderCounts,
+  getNotificationMessage,
+  getNotificationStatus,
+  getNotificationTitle,
+  getNotificationType,
+  selectNotification,
+} from "./notificationCenter.mjs";
+import { filterNotificationsForWorkspace } from "./notificationVisibility.mjs";
+import {
+  AGENCY_PERMISSION_KEYS,
+  DEFAULT_AGENCY_PERMISSIONS,
+  buildAgencyInvitationPayload,
+  buildAgencyInvitationRevokePayload,
+  canInviteAgencyUser,
+  canResendAgencyInvitation,
+  canRevokeAgencyInvitation,
+  canSendAgencyInvitation,
+  createAgencyInvitationAcceptanceError,
+  getAgencyInvitationAcceptanceMessage,
+  getAgencyInvitationCallbackError,
+  getCleanAgencyInvitationUrl,
+  getAgencyInvitationErrorMessage,
+  getAgencyInvitationStatus,
+  isAgencyInvitationUrl,
+  invokeAgencyInvitation,
+} from "./agencyInvitation.mjs";
+import {
+  buildAgencyMaintenanceUpdate,
+  buildCompanySettingsUpdate,
+  getAgencyAdministrationErrorMessage,
+  invokeAgencyAdministration,
+} from "./agencyAdministration.mjs";
 import {
   buildWorkspaceRecoveryRedirectUrl,
   clearWorkspaceRecoveryLocalState,
@@ -77,6 +159,7 @@ const PAGES = [
   "Penalty Register",
   "Recruitment Performance",
   "Company Management",
+  "Email Logs",
   "Email Settings",
   "Users Management",
   "Permissions",
@@ -84,6 +167,7 @@ const PAGES = [
   "Office Portal",
   "Notifications",
   "Reports",
+  "User Guide",
  "Platform Dashboard",
 "Platform Intelligence",
 "Client Usage Monitor",
@@ -134,6 +218,11 @@ const SIDEBAR_GROUPS = [
     pages: ["Recruitment Performance", "Reports"],
   },
   {
+    title: "Help & Guidance",
+    icon: "📘",
+    pages: ["User Guide"],
+  },
+  {
     title: "Platform Administration",
     icon: "👑",
     pages: [
@@ -152,7 +241,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Administration",
     icon: "⚙️",
-    pages: ["Notifications", "Company Management", "Email Settings", "Users Management", "Permissions", "Master Data"],
+    pages: ["Notifications", "Email Logs", "Company Management", "Email Settings", "Users Management", "Permissions", "Master Data"],
   },
 ];
 
@@ -186,6 +275,7 @@ const ROLE_OPTIONS = [
   "CEO",
   "Operations Manager",
   "Project Manager",
+  "Recruitment Director",
   "Recruitment Manager",
   "Recruitment Officer",
   "Visa Team",
@@ -271,6 +361,16 @@ const ACTION_PERMISSIONS = {
     "viewPerformance",
   ],
 
+  "Recruitment Director": [
+    "view",
+    "create",
+    "edit",
+    "approve",
+    "export",
+    "approveAgencies",
+    "viewPerformance",
+  ],
+
   "Recruitment Officer": ["view", "create", "edit"],
 
   "Visa Team": ["view", "createVisa", "editVisa", "deleteVisa", "export"],
@@ -287,6 +387,7 @@ const ROLE_DESCRIPTIONS = {
   "Operations Manager": "Operations leader. Follows manpower requests, mobilization, employees, demobilization and operational reports. Views recruitment and agency performance.",
   "Project Manager": "Project-level manager. Follows project manpower requests, mobilization, employees and reports for operational follow-up.",
   "Recruitment Manager": "Recruitment leader. Manages recruitment requests, approvals, candidates, interviews, recruiter performance, agency performance and agency approvals.",
+  "Recruitment Director": "Recruitment executive. Oversees recruitment workflow, agency decisions, notifications and launch readiness.",
   "Recruitment Officer": "Recruiter. Handles daily recruitment operations: requests, candidates, interviews and candidate follow-up.",
   "Visa Team": "Visa coordinator. Manages visa inventory, allocation, authorizations and cancellation register.",
   Agency: "External office user. Uses Office Portal for candidate updates, mobilization tracking and interview scheduling only. Interview results remain controlled by the company.",
@@ -463,6 +564,14 @@ const emptyAgency = {
   email: "",
   phone: "",
   status: "Active",
+};
+
+const emptyAgencyMaintenance = {
+  name: "",
+  country: "",
+  contact_person: "",
+  email: "",
+  phone: "",
 };
 
 const emptyCandidate = {
@@ -665,6 +774,18 @@ const EMPTY_AI_INTERVIEW_CAMPAIGN_FORM = {
   final_reminder_before_hours: 24,
   notes: "",
 };
+
+function createEmptyAIInterviewCampaignForm() {
+  const defaultDeadline = new Date(Date.now() + (7 * 24 * 60 * 60 * 1000));
+  const localDeadline = new Date(defaultDeadline.getTime() - (defaultDeadline.getTimezoneOffset() * 60 * 1000))
+    .toISOString()
+    .slice(0, 16);
+
+  return {
+    ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM,
+    interview_deadline: localDeadline,
+  };
+}
 
 const AI_INTERVIEW_CAMPAIGN_TABS = [
   "Campaigns",
@@ -1022,10 +1143,7 @@ const emptyDemobilization = {
   invoice_required: "No",
   invoice_amount: "",
   invoice_type: "Redeployment Service",
-  redeployment_cost: "500",
-  estimated_new_recruitment_cost: "3650",
-  estimated_saving: "",
-  recruitment_avoided: "Yes",
+  recruitment_avoided: "No",
   notes: "",
 };
 
@@ -1145,15 +1263,16 @@ function isCompatibleText(left, right) {
   return shared.length >= 1;
 }
 
-function isCompatibleVisaLineForRequestLine(reqLine, visaLine) {
+function isCompatibleVisaLineForRequestLine(reqLine, visaLine, countries = []) {
   return (
     isCompatibleText(reqLine.profession, visaLine.profession) &&
-    normalize(reqLine.nationality) === normalize(visaLine.nationality) &&
+    nationalitiesMatch(reqLine.nationality, visaLine.nationality, countries) &&
     (!reqLine.gender || !visaLine.gender || normalize(reqLine.gender) === normalize(visaLine.gender))
   );
 }
 
 function isSaudiNationality(value) {
+  if (resolveCanonicalNationality(value) === "Saudi") return true;
   const text = normalize(value || "");
   const compact = text.replace(/[\s\-_()/]+/g, "");
 
@@ -1276,15 +1395,16 @@ async function triggerExternalNotification(type, data = {}) {
     return { ok: false, skipped: true, reason: "auth_required" };
   }
 
+  const workspaceCompanyId = data.company_id || data.workspace_company_id || null;
+  const dedupeKey = await buildNotificationDedupeKey(type, data, workspaceCompanyId);
   const payload = {
-    company_id: data.company_id || null,
-    user_id: data.user_id || null,
+    workspace_company_id: workspaceCompanyId,
     agency_id: data.agency_id || null,
+    dedupe_key: dedupeKey,
     type,
     title: data.title || type,
     message: data.message || data.provider_message || data.candidate_name || type,
     priority: data.priority || "Medium",
-    status: "Unread",
     related_table: data.related_table || "",
     related_id: data.related_id || "",
     request_no: data.request_no || data.requestNo || "",
@@ -1296,13 +1416,13 @@ async function triggerExternalNotification(type, data = {}) {
     sla_days: data.sla_days || null,
     sla_due_at: data.sla_due_at || null,
     data,
-    created_at: new Date().toISOString(),
   };
 
-  const { data: insertedRows, error: insertError } = await supabase
-    .from("notification_events")
-    .insert([payload])
-    .select("id, company_id, agency_id, agency_name, request_no, type, title, response_status, sla_started_at, sla_days, sla_due_at, created_at");
+  const { data: insertedRow, error: insertError } = await supabase.rpc("notification_event_mutate", {
+    p_operation: "create",
+    p_notification_id: null,
+    p_payload: payload,
+  });
 
   if (insertError) {
     console.error("notification_events insert failed", insertError.message);
@@ -1311,7 +1431,7 @@ async function triggerExternalNotification(type, data = {}) {
 
   const webhookUrl = import.meta.env?.VITE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) {
-    return { ok: true, notification: insertedRows?.[0] || null, webhook: "not_configured", payload };
+    return { ok: true, notification: insertedRow || null, webhook: "not_configured", payload };
   }
 
   try {
@@ -1320,10 +1440,10 @@ async function triggerExternalNotification(type, data = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    return { ok: true, notification: insertedRows?.[0] || null, webhook: "sent", payload };
+    return { ok: true, notification: insertedRow || null, webhook: "sent", payload };
   } catch (error) {
     console.warn("External notification webhook failed", error?.message || error);
-    return { ok: true, notification: insertedRows?.[0] || null, webhook: "failed", payload };
+    return { ok: true, notification: insertedRow || null, webhook: "failed", payload };
   }
 }
 
@@ -4912,6 +5032,201 @@ function clearWorkspaceRecoveryCallbackUrl() {
   }
 }
 
+function AgencyInvitationPasswordScreen({ onAccepted }) {
+  const [session, setSession] = useState(null);
+  const [existingIdentity, setExistingIdentity] = useState(false);
+  const [form, setForm] = useState({ password: "", confirmation: "" });
+  const [message, setMessage] = useState("Validating your secure agency invitation...");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    let validationSequence = 0;
+    const callbackError = getAgencyInvitationCallbackError(window.location);
+    if (callbackError) {
+      setMessage(getAgencyInvitationAcceptanceMessage(callbackError));
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const acceptSession = async (nextSession) => {
+      const sequence = ++validationSequence;
+      const user = nextSession?.user;
+      if (
+        !user?.id ||
+        user.user_metadata?.account_type !== "agency" ||
+        !user.user_metadata?.provisioning_request_id
+      ) {
+        if (mounted && sequence === validationSequence) {
+          setSession(null);
+          setMessage(
+            getAgencyInvitationAcceptanceMessage(
+              "AGENCY_INVITATION_LINK_INVALID"
+            )
+          );
+        }
+        return;
+      }
+
+      const { data: invitation, error } = await supabase
+        .from("agency_provisioning_requests")
+        .select("id, agency_id, auth_user_id, auth_identity_preexisting, status")
+        .eq("id", user.user_metadata.provisioning_request_id)
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+
+      if (!mounted || sequence !== validationSequence) return;
+      if (error || !invitation?.id || !invitation.agency_id) {
+        setSession(null);
+        setMessage(
+          getAgencyInvitationAcceptanceMessage(
+            "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+          )
+        );
+        return;
+      }
+      if (invitation.status === "Active") {
+        setSession(null);
+        setMessage(
+          getAgencyInvitationAcceptanceMessage(
+            "AGENCY_INVITATION_LINK_USED"
+          )
+        );
+        return;
+      }
+      if (invitation.status !== "Invitation Sent") {
+        setSession(null);
+        setMessage(
+          getAgencyInvitationAcceptanceMessage(
+            "AGENCY_INVITATION_LINK_INVALID"
+          )
+        );
+        return;
+      }
+
+      setSession(nextSession);
+      setExistingIdentity(invitation.auth_identity_preexisting === true);
+      setMessage("");
+    };
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        if (mounted) {
+          setMessage(
+            getAgencyInvitationAcceptanceMessage(
+              "AGENCY_INVITATION_LINK_INVALID"
+            )
+          );
+        }
+        return;
+      }
+      void acceptSession(data?.session);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (event, nextSession) => {
+        if (["SIGNED_IN", "PASSWORD_RECOVERY"].includes(event) && nextSession?.user) {
+          window.setTimeout(() => void acceptSession(nextSession), 0);
+        }
+      }
+    );
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  async function acceptAgencyInvitation() {
+    if (!session?.user?.id || busy) return;
+    if (form.password.length < 12) {
+      setMessage("Password must be at least 12 characters.");
+      return;
+    }
+    if (form.password !== form.confirmation) {
+      setMessage("Passwords do not match.");
+      return;
+    }
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const { error } = await supabase.auth.updateUser({ password: form.password });
+      if (error) throw error;
+
+      const request = await invokeAgencyInvitation(supabase, {
+        action: "activate",
+      });
+      if (request?.status !== "Active") {
+        throw createAgencyInvitationAcceptanceError(
+          "AGENCY_INVITATION_ACTIVATION_FAILED"
+        );
+      }
+
+      const { data: refreshed, error: sessionError } =
+        await supabase.auth.getSession();
+      if (
+        sessionError ||
+        !refreshed?.session?.user?.id ||
+        refreshed.session.user.id !== session.user.id ||
+        refreshed.session.user.user_metadata?.account_type !== "agency"
+      ) {
+        throw createAgencyInvitationAcceptanceError(
+          "AGENCY_INVITATION_LINK_INVALID"
+        );
+      }
+
+      await onAccepted({
+        request,
+        session: refreshed.session,
+      });
+    } catch (error) {
+      setMessage(getAgencyInvitationAcceptanceMessage(error));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="vf-login-shell" dir="ltr" lang="en">
+      <section className="vf-login-right" style={{ width: "100%" }}>
+        <div className="vf-login-card" style={{ maxWidth: 520 }}>
+          <h2>Accept agency invitation</h2>
+          <p>{existingIdentity
+            ? "Set a new password to securely activate Office Portal access for your existing account."
+            : "Set a password to activate your Office Portal access."}</p>
+          <>
+            <Input
+              type="password"
+              placeholder="New Password"
+              value={form.password}
+              disabled={!session || busy}
+              onChange={(value) =>
+                setForm((current) => ({ ...current, password: value }))
+              }
+            />
+            <Input
+              type="password"
+              placeholder="Confirm Password"
+              value={form.confirmation}
+              disabled={!session || busy}
+              onChange={(value) =>
+                setForm((current) => ({ ...current, confirmation: value }))
+              }
+            />
+          </>
+          {message && <p>{message}</p>}
+          <button
+            className="save-btn"
+            disabled={!session || busy}
+            onClick={acceptAgencyInvitation}
+          >
+            {busy ? "Activating..." : "Set Password & Accept"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
   const isArabic = language === "AR";
   const initialState = useMemo(
@@ -5506,6 +5821,9 @@ function App() {
     []
   );
   const workspaceRecoveryRequested = workspaceRecoveryState.requested;
+  const [agencyInvitationRequested, setAgencyInvitationRequested] = useState(
+    () => isAgencyInvitationUrl(window.location)
+  );
   const workspaceRecoveryLoginState = useMemo(
     () =>
       getWorkspaceRecoveryLoginGuard({
@@ -5529,12 +5847,28 @@ function App() {
   const [visaRecords, setVisaRecords] = useState([]);
   const [visaBatchLines, setVisaBatchLines] = useState([]);
   const [visaAuthorizations, setVisaAuthorizations] = useState([]);
+  const [selectedAuthorization, setSelectedAuthorization] = useState(null);
+  const [authorizationTimelineEvents, setAuthorizationTimelineEvents] = useState([]);
+  const [authorizationWorkflowBusy, setAuthorizationWorkflowBusy] = useState("");
+  const [authorizationWorkflowFeedback, setAuthorizationWorkflowFeedback] = useState(null);
+  const [agencyAuthorizationAction, setAgencyAuthorizationAction] = useState(null);
   const [visaAllocations, setVisaAllocations] = useState([]);
 const [agencies, setAgencies] = useState([]);
 const [agencyAgreements, setAgencyAgreements] = useState([]);
+const [agencyAgreementsLoading, setAgencyAgreementsLoading] = useState(false);
 const [agencyScores, setAgencyScores] = useState([]);
 const [agencyScoreHistory, setAgencyScoreHistory] = useState([]);
 const [agencyPenalties, setAgencyPenalties] = useState([]);
+const penaltyAutoSyncRef = useRef("");
+const [penaltyAgencyForm, setPenaltyAgencyForm] = useState({
+  penaltyId: "",
+  mode: "justification",
+  reason: "",
+  file: null,
+  busy: false,
+  message: "",
+  error: "",
+});
 const [agreementEditingId, setAgreementEditingId] = useState(null);
 
 const emptyAgreement = {
@@ -5576,9 +5910,12 @@ const [marketplaceInvoices, setMarketplaceInvoices] = useState([]);
 const [marketplaceCollections, setMarketplaceCollections] = useState([]);
 const [notifications, setNotifications] = useState([]);
 const [emailLogs, setEmailLogs] = useState([]);
+const [emailLogFilters, setEmailLogFilters] = useState({ eventType: "All", status: "All", agency: "All", dateFrom: "", dateTo: "", recipient: "" });
 const [emailTemplates, setEmailTemplates] = useState([]);
 const [notificationFilter, setNotificationFilter] = useState("All");
 const [notificationSearch, setNotificationSearch] = useState("");
+const [notificationFolder, setNotificationFolder] = useState("Unread");
+const [selectedNotificationId, setSelectedNotificationId] = useState("");
 const [emailTemplateEditingId, setEmailTemplateEditingId] = useState(null);
 const emptyEmailTemplate = {
   template_key: "",
@@ -5590,7 +5927,6 @@ const emptyEmailTemplate = {
   is_active: true,
 };
 const [emailTemplateForm, setEmailTemplateForm] = useState(emptyEmailTemplate);
-const [notificationOpen, setNotificationOpen] = useState(false);
 const [marketplaceRequestEditingId, setMarketplaceRequestEditingId] = useState(null);
 
 const WORKFORCE_DEAL_TYPES = ["Service Rental", "Sponsorship Transfer"];
@@ -5681,6 +6017,16 @@ const [userForm, setUserForm] = useState({
   agency_name: "",
 });
 const [candidates, setCandidates] = useState([]);
+const [deletedCandidates, setDeletedCandidates] = useState([]);
+const [candidateUploadBatches, setCandidateUploadBatches] = useState([]);
+const [candidateSelectedIds, setCandidateSelectedIds] = useState([]);
+const [bulkAssignmentOpen, setBulkAssignmentOpen] = useState(false);
+const [bulkAssignmentMode, setBulkAssignmentMode] = useState("selected");
+const [bulkAssignmentCandidateIds, setBulkAssignmentCandidateIds] = useState([]);
+const [bulkAssignmentLines, setBulkAssignmentLines] = useState([]);
+const [bulkAssignmentRequestNo, setBulkAssignmentRequestNo] = useState("");
+const [bulkAssignmentLineId, setBulkAssignmentLineId] = useState("");
+const [bulkAssignmentBusy, setBulkAssignmentBusy] = useState(false);
 const [candidateTechnicalProfiles, setCandidateTechnicalProfiles] = useState([]);
 const [educationInstitutions, setEducationInstitutions] = useState([]);
 const [candidateTechnicalForm, setCandidateTechnicalForm] = useState(emptyCandidateTechnicalProfile);
@@ -5694,7 +6040,7 @@ const [aiInterviewCampaignCandidates, setAIInterviewCampaignCandidates] = useSta
 const [aiInterviewInvitationJobs, setAIInterviewInvitationJobs] = useState([]);
 const [selectedAIInterviewCampaignId, setSelectedAIInterviewCampaignId] = useState("");
 const [aiInterviewCampaignTab, setAIInterviewCampaignTab] = useState("Campaigns");
-const [aiInterviewCampaignForm, setAIInterviewCampaignForm] = useState({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
+const [aiInterviewCampaignForm, setAIInterviewCampaignForm] = useState(() => createEmptyAIInterviewCampaignForm());
 const [selectedCampaignCandidateIds, setSelectedCampaignCandidateIds] = useState([]);
 const [aiInterviewCandidateSearch, setAIInterviewCandidateSearch] = useState("");
 const [aiInterviewCandidateRequestFilter, setAIInterviewCandidateRequestFilter] = useState("");
@@ -5724,6 +6070,20 @@ const [candidateTableFilters, setCandidateTableFilters] = useState({
   nationality: "All",
   project: "All",
   agency: "All",
+});
+const [employeeTableFilters, setEmployeeTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  nationality: "All",
+  project: "All",
+});
+const [demobilizationTableFilters, setDemobilizationTableFilters] = useState({
+  query: "",
+  status: "All",
+  profession: "All",
+  nationality: "All",
+  project: "All",
 });
 const [candidateTablePage, setCandidateTablePage] = useState(1);
 const [candidateTablePageSize, setCandidateTablePageSize] = useState(25);
@@ -5871,7 +6231,11 @@ const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
 const [demobilizationEditingId, setDemobilizationEditingId] = useState(null);
 const [demobilizationForm, setDemobilizationForm] = useState(emptyDemobilization);
 const [demobAiSuggestion, setDemobAiSuggestion] = useState(null);
+const [demobilizationSaveFeedback, setDemobilizationSaveFeedback] = useState(null);
+const [demobilizationSaving, setDemobilizationSaving] = useState(false);
 const [mobilizationEditingId, setMobilizationEditingId] = useState(null);
+const [mobilizationSaveFeedback, setMobilizationSaveFeedback] = useState(null);
+const [mobilizationSaving, setMobilizationSaving] = useState(false);
 const [onboardingEditingId, setOnboardingEditingId] = useState(null);
 const [onboardingValidationForm, setOnboardingValidationForm] = useState(emptyOnboardingValidation);
 const [onboardingFilter, setOnboardingFilter] = useState("All");
@@ -5895,6 +6259,8 @@ const [mobilizationForm, setMobilizationForm] = useState({
 });
 const [countries, setCountries] = useState([]);
 const [professions, setProfessions] = useState([]);
+const [requestMasterDataLoading, setRequestMasterDataLoading] = useState(false);
+const [requestMasterDataError, setRequestMasterDataError] = useState("");
 const [professionAliases, setProfessionAliases] = useState([]);
 const [professionForm, setProfessionForm] = useState({ name_ar: "", name_en: "", category: "" });
 const [professionImportReviewRows, setProfessionImportReviewRows] = useState([]);
@@ -5942,6 +6308,14 @@ const currentCompanyId = isCurrentPlatformUser
   : isCurrentAgencyUser
     ? (activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "")
     : (currentUser?.company_id || "");
+
+// Operational UI, dashboards, alerts and exports share this defensive source.
+// The database query also filters deleted_at, but this keeps stale/in-flight state
+// from ever reintroducing a soft-deleted row into a count after a workspace reload.
+const operationalCandidates = useMemo(
+  () => getOperationalCandidates(candidates, currentCompanyId),
+  [candidates, currentCompanyId]
+);
 
 function getWorkspaceIdentityKey(user = null) {
   if (!user?.id) return "";
@@ -6185,14 +6559,7 @@ const [subscriptionInvoiceForm, setSubscriptionInvoiceForm] = useState(emptySubs
 const [supportTicketForm, setSupportTicketForm] = useState(emptySupportTicket);
 
 function normalizeUserRole(role) {
-  const value = String(role || "Viewer").trim();
-  if (value === "Recruitment") return "Recruitment Officer";
-
-  const matchedRole = ROLE_OPTIONS.find(
-    (item) => item.toLowerCase() === value.toLowerCase()
-  );
-
-  return matchedRole || value || "Viewer";
+  return normalizeWorkspaceRole(role, ROLE_OPTIONS);
 }
 
 const currentRole = normalizeUserRole(currentUser?.role);
@@ -6243,7 +6610,7 @@ const ROLE_PAGES = {
 "Platform Support User": PLATFORM_SUPPORT_PAGES,
 
   // Company Admin: full tenant administration and all company operations, excluding SaaS platform screens.
-  Admin: [...PAGES.filter((page) => !PLATFORM_PAGES.includes(page)), "RequestDetails"],
+  Admin: getCompanyAdminPages(PAGES, PLATFORM_PAGES),
 
   // CEO: executive visibility and read-only reporting.
   CEO: [
@@ -6332,6 +6699,19 @@ const ROLE_PAGES = {
     "Reports",
   ],
 
+  "Recruitment Director": [
+    "Executive Dashboard",
+    "Dashboard",
+    "Requests",
+    "RequestDetails",
+    "Candidates",
+    "Interviews",
+    "Authorization",
+    "Agency Performance",
+    "Notifications",
+    "Reports",
+  ],
+
   // Recruiter / Recruitment Officer: daily recruitment operation only.
   "Recruitment Officer": [
     "Dashboard",
@@ -6376,9 +6756,12 @@ const ROLE_PAGES = {
 const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
+const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePages, "User Guide"]));
 const visiblePages = secureLogFeaturesAvailable
-  ? roleVisiblePages
-  : roleVisiblePages.filter((page) => page !== "Notifications");
+  ? (currentUser?.company_id && currentRole !== "Agency"
+      ? Array.from(new Set([...roleVisiblePagesWithGuide, "Email Logs"]))
+      : roleVisiblePagesWithGuide)
+  : roleVisiblePagesWithGuide.filter((page) => page !== "Notifications");
 const roleActions = ACTION_PERMISSIONS[currentRole] || ACTION_PERMISSIONS.Viewer;
 const hasAction = (action) => roleActions.includes(action);
 
@@ -6404,10 +6787,21 @@ const canManagePlatformSupport = [
 
 const canManageUsers =
   currentRole === "Admin" || canManagePlatformAccounts;
+const canAdministerCompanySettings =
+  ["Admin", "Company Admin"].includes(currentRole) || isPlatformOwner;
 const canManagePermissions = currentRole === "Admin";
-const canManageAgencies = ["Admin", "Recruitment Manager"].includes(currentRole);
+const canManageAgencies = [
+  "Admin",
+  "Company Admin",
+  "Recruitment Manager",
+].includes(currentRole);
+const canInviteAgencyUsers = canInviteAgencyUser(
+  currentRole,
+  currentUser?.status === "Active" && currentUser?.is_active !== false
+);
+const canAdministerAgencies = ["Admin", "Company Admin"].includes(currentRole);
 const canNotifyAgencies = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
-const canManageAgencyAgreements = ["Admin", "Recruitment Manager"].includes(currentRole);
+const canManageAgencyAgreements = ["Admin", "Company Admin", "Recruitment Manager"].includes(currentRole);
 const canApprovePenalties = ["Admin", "Recruitment Manager", "CEO"].includes(currentRole);
 const canViewAgenciesOnly = ["CEO", "Operations Manager"].includes(currentRole);
 
@@ -6416,12 +6810,14 @@ const canEditRequest = ["Admin", "Operations Manager", "Project Manager", "Recru
 const canApproveRequest = ["Admin", "Recruitment Manager"].includes(currentRole);
 const canDeleteRequest = currentRole === "Admin";
 
-const canManageVisas = ["Admin", "Visa Team"].includes(currentRole);
+const canManageVisas = ["Admin", "Company Admin", "Visa Team"].includes(currentRole);
+const canManageAuthorizationWorkflow = isAuthorizationCompanyActor(currentRole);
 const canManageCandidates = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageOfficePortal = ["Admin", "Agency"].includes(currentRole);
 const canViewCandidateIntelligence = Boolean(currentUser) && currentRole !== "Agency" && !isCurrentPlatformUser;
 const canUseCandidateUploadTemplate = canManageCandidates || canManageOfficePortal;
 const canViewEmailAdministration = currentRole !== "Agency";
+const canViewFullEmailRecipient = ["Admin", "Company Admin"].includes(currentRole);
 const canManageInterviews = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
 const canManageInterviewResults = canManageInterviews;
 const canManageAIInterviewCampaigns = ["Admin", "Recruitment Manager", "Recruitment Officer"].includes(currentRole);
@@ -6536,6 +6932,27 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
       return [];
     }
 
+    const { data: companyAgencyRows, error: companyAgencyError } = await supabase
+      .from("company_agency_access")
+      .select("company_id, agency_id, status")
+      .eq("agency_id", effectiveUser.agency_id)
+      .eq("status", "Active")
+      .in("company_id", companyIds)
+      .range(0, 500);
+
+    if (companyAgencyError) {
+      console.warn("company_agency_access:", companyAgencyError.message);
+      setAgencyClientAccess([]);
+      return [];
+    }
+
+    const activeCompanyAgencyIds = new Set(
+      (companyAgencyRows || []).map((row) => String(row.company_id))
+    );
+    const authorizedAccessRows = (accessRows || []).filter((row) =>
+      activeCompanyAgencyIds.has(String(row.company_id))
+    );
+
     const { data: companyRows, error: companyError } = await supabase
       .from("companies")
       .select("id, name, status, subscription_status")
@@ -6551,7 +6968,7 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
     const companiesById = new Map((companyRows || []).map((company) => [String(company.id), company]));
 
     const workspaces = getUniqueAgencyWorkspaces(
-      (accessRows || [])
+      authorizedAccessRows
         .map((row) => {
           const company = companiesById.get(String(row.company_id));
           if (!company) return null;
@@ -6574,7 +6991,9 @@ async function loadAgencyClientAccess(user = currentUser, autoSelect = true) {
     if (workspaces.length > 0 && autoSelect) {
       const currentId = activeAgencyCompanyId || effectiveUser.active_company_id || "";
       const selected = workspaces.find((item) => String(item.company_id) === String(currentId)) || workspaces[0];
-      switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
+      if (!isSameAgencyWorkspace(currentId, selected)) {
+        switchAgencyWorkspace(selected, { silent: true, user: effectiveUser });
+      }
     }
 
     return workspaces;
@@ -6591,6 +7010,8 @@ function switchAgencyWorkspace(workspace, options = {}) {
   if (!workspace?.company_id) return;
 
   const companyId = String(workspace.company_id || "");
+  const currentId = String(activeAgencyCompanyId || currentUser?.active_company_id || currentUser?.company_id || "");
+  if (companyId === currentId) return;
   const companyName = workspace.company_name || "Client Workspace";
   const base = options.user || currentUser || {};
   const updated = {
@@ -6637,6 +7058,7 @@ function getActiveAgencyWorkspaceName() {
 
 const [authForm,setAuthForm] = useState({
 
+  agency_id:"",
   agency:"",
   authorization_no:"",
   allocated_qty:0
@@ -6653,9 +7075,13 @@ const [allocationSearch, setAllocationSearch] = useState("");
 async function saveAuthorization(){
   if (!canManageVisas) return alert("You do not have permission to manage authorizations.");
   if (!selectedVisa) {
-  alert("Please select visa allocation");
-  return;
-}
+    setAuthorizationWorkflowFeedback({ type: "error", message: "Please select a visa allocation." });
+    return;
+  }
+  if (!authForm.agency_id || !authForm.authorization_no || Number(authForm.allocated_qty || 0) <= 0) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: "Agency, authorization number and a positive quantity are required." });
+    return;
+  }
 const allocationQty = Number(
   visaAllocations.find((a) => String(a.id) === String(selectedVisa?.id))
     ?.allocated_qty || 0
@@ -6675,7 +7101,7 @@ const alreadyAuthorized = visaAuthorizations
       String(a.visa_no) === String(selectedVisa?.visa_no) &&
       String(a.request_no) === String(selectedVisa?.request_no) &&
       (!a.profession || !selectedVisa?.profession || normalize(a.profession) === normalize(selectedVisa.profession)) &&
-      (!a.nationality || !selectedVisa?.nationality || normalize(a.nationality) === normalize(selectedVisa.nationality)) &&
+      (!a.nationality || !selectedVisa?.nationality || nationalitiesMatch(a.nationality, selectedVisa.nationality, countries)) &&
       (!a.gender || !selectedVisa?.gender || normalize(a.gender) === normalize(selectedVisa.gender))
     );
   })
@@ -6684,9 +7110,10 @@ const alreadyAuthorized = visaAuthorizations
 const requestedAuthQty = Number(authForm.allocated_qty || 0);
 
 if (alreadyAuthorized + requestedAuthQty > allocationQty) {
-  alert(
-    `Cannot authorize more than allocated quantity. Allocated: ${allocationQty}, Already authorized: ${alreadyAuthorized}, Remaining: ${allocationQty - alreadyAuthorized}`
-  );
+  setAuthorizationWorkflowFeedback({
+    type: "error",
+    message: `Cannot authorize more than allocated quantity. Allocated: ${allocationQty}, already authorized: ${alreadyAuthorized}, remaining: ${allocationQty - alreadyAuthorized}.`,
+  });
   return;
 }
 const payload={
@@ -6702,36 +7129,116 @@ profession: selectedVisa?.profession || "",
 nationality: selectedVisa?.nationality || "",
 gender: selectedVisa?.gender || "",
 authorization_no: authForm.authorization_no,
-agency: authForm.agency,
+agency_id: authForm.agency_id,
 office_country: authForm.office_country,
 allocated_qty: Number(authForm.allocated_qty || 0),
-received_candidates: 0,
-interview_passed: 0,
-mobilized: 0,
-status: "Open"
 };
-const {error}=await supabase
-.from("visa_authorizations")
-.insert([withCompany(withCreateActor(payload))]);
-
-if(error){
-alert(error.message);
-return;
+  setAuthorizationWorkflowBusy("create");
+  setAuthorizationWorkflowFeedback(null);
+  try {
+    const result = await invokeAuthorizationWorkflow(supabase, "create", null, payload);
+    setVisaAuthorizations((rows) => [result.authorization, ...rows]);
+    setSelectedAuthorization(result.authorization);
+    setAuthorizationTimelineEvents(result.events || []);
+    setShowAuthForm(false);
+    setAuthForm({ agency_id: "", agency: "", authorization_no: "", allocated_qty: 0 });
+    setAuthorizationWorkflowFeedback({ type: "success", message: "Authorization created successfully. It is ready to send to the agency." });
+    await loadVisaAuthorizations();
+  } catch (error) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: error?.message || "Authorization could not be created." });
+  } finally {
+    setAuthorizationWorkflowBusy("");
+  }
 }
 
-loadVisaAuthorizations();
-
-setShowAuthForm(false);
-
-setAuthForm({
-agency:"",
-authorization_no:"",
-allocated_qty:0
-});
-
+async function loadAuthorizationTimeline(authorizationId) {
+  if (!authorizationId) {
+    setAuthorizationTimelineEvents([]);
+    return [];
+  }
+  const { data, error } = await supabase
+    .from("authorization_events")
+    .select("id, event_type, actor_name, actor_email, actor_role, reason, metadata, created_at")
+    .eq("authorization_id", authorizationId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+  if (error) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: `Timeline could not be loaded: ${error.message}` });
+    return [];
+  }
+  setAuthorizationTimelineEvents(data || []);
+  return data || [];
 }
+
+async function runAuthorizationWorkflowAction(action, item, input = {}) {
+  if (!item?.id || authorizationWorkflowBusy) return null;
+  const busyKey = `${action}:${item.id}`;
+  setAuthorizationWorkflowBusy(busyKey);
+  setAuthorizationWorkflowFeedback(null);
+  try {
+    const result = await invokeAuthorizationWorkflow(supabase, action, item.id, input);
+    setVisaAuthorizations((rows) => rows.map((row) => row.id === item.id ? result.authorization : row));
+    setSelectedAuthorization(result.authorization);
+    setAuthorizationTimelineEvents(result.events || []);
+    setAuthorizationWorkflowFeedback({
+      type: "success",
+      message: action === "send"
+        ? (item.sent_at ? "Authorization resent to the agency." : "Authorization sent to the agency.")
+        : action === "view"
+          ? "Authorization marked as viewed."
+          : `Authorization ${action} completed successfully.`,
+    });
+    await Promise.all([loadVisaAuthorizations(), loadNotifications()]);
+    return result.authorization;
+  } catch (error) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: error?.message || `Authorization ${action} failed.` });
+    return null;
+  } finally {
+    setAuthorizationWorkflowBusy("");
+  }
+}
+
+async function openAuthorizationWorkflow(item, { markViewed = false } = {}) {
+  setSelectedAuthorization(item);
+  if (markViewed && currentRole === "Agency" && getAuthorizationAgencyStatus(item) === "New") {
+    await runAuthorizationWorkflowAction("view", item);
+    return;
+  }
+  await loadAuthorizationTimeline(item.id);
+}
+
+async function sendAuthorizationToAgency(item) {
+  const isResend = Boolean(item.sent_at);
+  if (isResend && !window.confirm("This authorization was already sent. Resend it to the agency?")) return;
+  await runAuthorizationWorkflowAction(isResend ? "resend" : "send", item, {
+    confirm_resend: isResend,
+  });
+}
+
+function handleAgencyAuthorizationAction(action, item) {
+  setAuthorizationWorkflowFeedback(null);
+  setAgencyAuthorizationAction({ action, item, reason: "" });
+}
+
+async function submitAgencyAuthorizationAction() {
+  if (!agencyAuthorizationAction?.item) return;
+  const reason = String(agencyAuthorizationAction.reason || "").trim();
+  if (agencyAuthorizationAction.action === "reject" && !reason) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: "A rejection reason is required." });
+    return;
+  }
+  const result = await runAuthorizationWorkflowAction(
+    agencyAuthorizationAction.action,
+    agencyAuthorizationAction.item,
+    { reason }
+  );
+  if (result) setAgencyAuthorizationAction(null);
+}
+
 async function cancelAuthorization(id) {
   if (!canManageVisas) return alert("You do not have permission to cancel authorizations.");
+  const item = visaAuthorizations.find((authorization) => String(authorization.id) === String(id));
+  if (!item) return;
   const cancellationNo = window.prompt("Enter cancellation authorization number:");
 
   if (!cancellationNo) {
@@ -6746,22 +7253,10 @@ async function cancelAuthorization(id) {
     return;
   }
 
-  const { error } = await supabase
-    .from("visa_authorizations")
-    .update(withUpdateActor({
-      status: "Cancelled",
-      cancellation_no: cancellationNo,
-      cancelled_at: cancellationDate,
-    }))
-    .eq("id", id);
-
-  if (error) {
-    alert(error.message);
-    return;
-  }
-
-  await loadVisaAuthorizations();
-  alert("Authorization cancelled");
+  await runAuthorizationWorkflowAction("cancel", item, {
+    cancellation_no: cancellationNo,
+    cancelled_at: cancellationDate,
+  });
 }
 function openAuthorization(item){
   // Authorization must be linked to a specific visa allocation line, not only visa batch.
@@ -6872,7 +7367,7 @@ const getVisaBalanceForRequest = (req) => {
     .filter(
       (line) =>
         normalize(line.profession) === normalize(req.profession) &&
-        normalize(line.nationality) === normalize(req.nationality) &&
+        nationalitiesMatch(line.nationality, req.nationality, countries) &&
         normalize(line.gender) === normalize(req.gender)
     )
     .reduce((sum, line) => sum + Math.max(getVisaLineRemainingQty(line), 0), 0);
@@ -6898,7 +7393,7 @@ const extraVisaRequests = visaInventoryLines.filter((line) => {
       (r) =>
         !isSaudiRequest(r) &&
         normalize(r.profession) === normalize(line.profession) &&
-        normalize(r.nationality) === normalize(line.nationality) &&
+        nationalitiesMatch(r.nationality, line.nationality, countries) &&
         normalize(r.gender) === normalize(line.gender)
     )
     .reduce((sum, r) => sum + Number(r.quantity || 0), 0);
@@ -6940,10 +7435,10 @@ const extraVisaRequests = visaInventoryLines.filter((line) => {
   const selectedLineMatchesRequest = requestLinesForSelectedRequest.length === 0
     ? (
         isCompatibleText(req.profession, selectedLine.profession) &&
-        normalize(req.nationality) === normalize(selectedLine.nationality) &&
+        nationalitiesMatch(req.nationality, selectedLine.nationality, countries) &&
         (!req.gender || !selectedLine.gender || normalize(req.gender) === normalize(selectedLine.gender))
       )
-    : requestLinesForSelectedRequest.some((reqLine) => isCompatibleVisaLineForRequestLine(reqLine, selectedLine));
+    : requestLinesForSelectedRequest.some((reqLine) => isCompatibleVisaLineForRequestLine(reqLine, selectedLine, countries));
 
   if (!selectedLineMatchesRequest) {
     alert("Selected visa line does not match request profession, nationality, and gender");
@@ -7119,7 +7614,7 @@ async function saveSelectedAllocations() {
     }
 
     const lineMatchesRequest = summary.lines.length === 0 || summary.lines.some(
-      (reqLine) => isCompatibleVisaLineForRequestLine(reqLine, row.line)
+      (reqLine) => isCompatibleVisaLineForRequestLine(reqLine, row.line, countries)
     );
     if (!lineMatchesRequest) {
       return alert(`Visa line ${row.line.visa_no} / ${row.line.profession || "-"} does not match this request.`);
@@ -7156,6 +7651,7 @@ async function saveSelectedAllocations() {
   const [requestForm, setRequestForm] = useState(emptyRequest);
   const [requestLineForm, setRequestLineForm] = useState(emptyRequestLine);
   const [requestLinesDraft, setRequestLinesDraft] = useState([]);
+  const [requestLineEditingIndex, setRequestLineEditingIndex] = useState(null);
   const [requestEditingId, setRequestEditingId] = useState(null);
   const [requestAgencyNotification, setRequestAgencyNotification] = useState(null);
   const [requestAgencyNotificationSending, setRequestAgencyNotificationSending] = useState(false);
@@ -7165,10 +7661,23 @@ async function saveSelectedAllocations() {
   const [visaLinesDraft, setVisaLinesDraft] = useState([]);
   const [visaEditingId, setVisaEditingId] = useState(null);
   const [agencyForm, setAgencyForm] = useState(emptyAgency);
-  const [agencyEditingId, setAgencyEditingId] = useState(null);
+  const [agencyInvitationStates, setAgencyInvitationStates] = useState({});
+  const [agencyInvitationPermissions, setAgencyInvitationPermissions] =
+    useState({});
+  const [agencyInvitationSendingId, setAgencyInvitationSendingId] = useState("");
+  const [agencyUsers, setAgencyUsers] = useState([]);
+  const [agencyUserLifecycleLoadingId, setAgencyUserLifecycleLoadingId] = useState("");
+  const [agencyMaintenanceId, setAgencyMaintenanceId] = useState("");
+  const [agencyMaintenanceForm, setAgencyMaintenanceForm] = useState(
+    emptyAgencyMaintenance
+  );
+  const [agencyMaintenanceLoading, setAgencyMaintenanceLoading] = useState(false);
+  const [agencyMaintenanceMessage, setAgencyMaintenanceMessage] = useState("");
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
+  const [candidateSaveFeedback, setCandidateSaveFeedback] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
+  const [officeCandidateSearch, setOfficeCandidateSearch] = useState("");
   const [officeBulkForm, setOfficeBulkForm] = useState(emptyOfficeBulkUpdate);
   const [officeBulkLoading, setOfficeBulkLoading] = useState(false);
   const [interviewForm, setInterviewForm] = useState(emptyInterview);
@@ -7674,12 +8183,26 @@ Cancel = إضافتها كوظيفة مستقلة`
     setVisaRecords([]);
     setVisaBatchLines([]);
     setVisaAuthorizations([]);
+    setSelectedAuthorization(null);
+    setAuthorizationTimelineEvents([]);
+    setAuthorizationWorkflowBusy("");
+    setAuthorizationWorkflowFeedback(null);
     setVisaAllocations([]);
     setAgencies([]);
+    setAgencyInvitationStates({});
+    setAgencyInvitationSendingId("");
+    setAgencyMaintenanceId("");
+    setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    setAgencyMaintenanceLoading(false);
+    setAgencyMaintenanceMessage("");
     setAgencyAgreements([]);
     setAgencyScores([]);
     setAgencyScoreHistory([]);
     setAgencyPenalties([]);
+    setPenaltyAgencyForm({ penaltyId: "", mode: "justification", reason: "", file: null, busy: false, message: "", error: "" });
+    setCountries([]);
+    setProfessions([]);
+    setRequestMasterDataError("");
     setMarketplaceRequests([]);
     setMarketplaceDeals([]);
     setMarketplaceDealWorkers([]);
@@ -7763,6 +8286,7 @@ Cancel = إضافتها كوظيفة مستقلة`
   function activateWorkspaceUser(user, { persist = true, legacy = false } = {}) {
     const normalizedUser = {
       ...user,
+      role_label: getWorkspaceRoleLabel(user?.role),
       role: normalizeUserRole(user?.role),
     };
     clearTenantSensitiveState();
@@ -7790,6 +8314,8 @@ Cancel = إضافتها كوظيفة مستقلة`
       return;
     }
     setLoading(true);
+    setRequestMasterDataLoading(true);
+    setRequestMasterDataError("");
     await Promise.all([
       loadRequests(),
       loadRequestLines(),
@@ -7802,11 +8328,11 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadAgencyScores(),
       loadAgencyScoreHistory(),
       loadAgencyPenalties(),
-       loadCountries(),
-  loadProfessions(),
+       loadRequestMasterData(),
   loadProfessionAliases(),
       loadEducationInstitutions(),
       loadCandidates(),
+      loadCandidateDeletionData(),
       loadCandidateTechnicalProfiles(),
       loadInterviews(),
       loadAIInterviewTemplates(),
@@ -7843,6 +8369,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadLocalContentSettings(),
       loadLocalContentProjectTargets(),
     ]);
+    setRequestMasterDataLoading(false);
     setLoading(false);
   }
 
@@ -7908,6 +8435,7 @@ Cancel = إضافتها كوظيفة مستقلة`
   if (currentCompanyId && !globalTables.includes(table)) {
     query = query.eq("company_id", currentCompanyId);
   }
+  if (table === "candidates") query = query.is("deleted_at", null);
 
   if (currentRole === "Agency") {
     if (table === "agencies") {
@@ -7918,6 +8446,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       // Agency users should see penalties sent to their agency even if the agency display name changed.
       // Fetch all non-internal penalties for the active company, then filter safely in the browser by agency_id / agency_name / email.
       query = query.neq("status", "Pending Review");
+    } else if (table === "visa_authorizations") {
+      if (!currentUser?.agency_id) { setter([]); return; }
+      query = query.eq("agency_id", currentUser.agency_id);
     } else if (agencyNameFields[table]) {
       if (!currentUser?.agency_name) { setter([]); return; }
       query = query.eq(agencyNameFields[table], currentUser.agency_name);
@@ -7956,6 +8487,44 @@ Cancel = إضافتها كوظيفة مستقلة`
   const loadVisaBatchLines = () => loadTable("visa_batch_lines", setVisaBatchLines);
   const loadVisaAuthorizations = () => loadTable("visa_authorizations", setVisaAuthorizations);
   const loadVisaAllocations = () => loadTable("visa_allocations", setVisaAllocations);
+  async function loadAgencyInvitationStates(agencyRows) {
+    const agencyIds = (agencyRows || [])
+      .map((agency) => agency?.id)
+      .filter(Boolean);
+    if (!canManageAgencies || !agencyIds.length) {
+      setAgencyInvitationStates({});
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("agency_provisioning_requests")
+      .select("id, agency_id, status, invitation_sent_at, failed_at, activated_at, updated_at, failure_code, failure_stage")
+      .in("agency_id", agencyIds)
+      .order("created_at", { ascending: false })
+      .range(0, 5000);
+
+    if (error) {
+      console.warn("agency invitation status:", error.message);
+      setAgencyInvitationStates({});
+      return;
+    }
+
+    const nextStates = {};
+    (data || []).forEach((request) => {
+      const key = String(request.agency_id || "");
+      if (key && !nextStates[key]) nextStates[key] = request;
+    });
+    setAgencyInvitationStates(nextStates);
+  }
+
+  async function loadAgencyUsers() {
+    if (!canInviteAgencyUsers) { setAgencyUsers([]); return []; }
+    const { data, error } = await supabase.rpc("agency_user_lifecycle_list");
+    if (error) { console.warn("agency user lifecycle:", error.message); setAgencyUsers([]); return []; }
+    setAgencyUsers(data || []);
+    return data || [];
+  }
+
   async function loadAgencies() {
     if (canManagePlatform) {
       const { data, error } = await supabase
@@ -8057,8 +8626,16 @@ Cancel = إضافتها كوظيفة مستقلة`
     );
 
     setAgencies(rows);
+    await Promise.all([loadAgencyInvitationStates(rows), loadAgencyUsers()]);
   }
-  const loadAgencyAgreements = () => loadTable("agency_agreements", setAgencyAgreements);
+  async function loadAgencyAgreements() {
+    setAgencyAgreementsLoading(true);
+    try {
+      return await loadTable("agency_agreements", setAgencyAgreements);
+    } finally {
+      setAgencyAgreementsLoading(false);
+    }
+  }
   const loadAgencyScores = () => loadTable("agency_scores", setAgencyScores);
   async function loadAgencyScoreHistory() {
     const requestGeneration = workspaceDataGenerationRef.current;
@@ -8247,6 +8824,51 @@ console.log("professions total", allProfessions.length);
 setProfessions(allProfessions);
 };
 
+async function loadRequestMasterData() {
+  const requestGeneration = workspaceDataGenerationRef.current;
+  const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
+  let countriesResult;
+  let professionsResult;
+  const isCurrentWorkspace = () => (
+    requestGeneration === workspaceDataGenerationRef.current
+    && requestWorkspaceKey === validatedWorkspaceKey
+  );
+  try {
+    [countriesResult, professionsResult] = await Promise.all([
+      supabase.from("countries").select("*").range(0, 5000),
+      loadAllProfessionPages(supabase, { isCurrentWorkspace }),
+    ]);
+  } catch (error) {
+    if (isCurrentWorkspace()) {
+      setCountries([]);
+      setProfessions([]);
+      setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error?.message || error}`);
+    }
+    return [];
+  }
+
+  if (!isCurrentWorkspace() || professionsResult.cancelled) return [];
+
+  const error = countriesResult.error || professionsResult.error;
+  if (error) {
+    setCountries([]);
+    setProfessions([]);
+    setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error.message}`);
+    return [];
+  }
+
+  const nextCountries = countriesResult.data || [];
+  const nextProfessions = professionsResult.data || [];
+  setCountries(nextCountries);
+  setProfessions(nextProfessions);
+  if (!buildProfessionOptions(nextProfessions).length || !buildNationalityOptions(nextCountries).length) {
+    setRequestMasterDataError("Approved professions or nationalities are unavailable for this workspace. Please contact support.");
+    return [];
+  }
+  setRequestMasterDataError("");
+  return [nextCountries, nextProfessions];
+}
+
 async function loadProfessionAliases() {
   try {
     const { data, error } = await supabase
@@ -8315,7 +8937,24 @@ async function loadProfessionAliases() {
     setCandidateTechnicalProfiles(data || []);
   }
 
-  const loadCandidates = () => loadTable("candidates", setCandidates);
+  const loadCandidates = () => loadTable("candidates", (rows) => {
+    setCandidates(getOperationalCandidates(rows, currentCompanyId));
+  });
+  async function loadCandidateDeletionData() {
+    if (!currentCompanyId) {
+      setDeletedCandidates([]);
+      setCandidateUploadBatches([]);
+      return;
+    }
+    const [deletedResult, batchResult] = await Promise.all([
+      currentRole === "Company Admin" || currentRole === "Admin"
+        ? supabase.from("candidates").select("*").eq("company_id", currentCompanyId).not("deleted_at", "is", null).order("deleted_at", { ascending: false }).range(0, 5000)
+        : Promise.resolve({ data: [], error: null }),
+      supabase.from("candidate_upload_batches").select("*").eq("company_id", currentCompanyId).order("created_at", { ascending: false }).range(0, 5000),
+    ]);
+    if (!deletedResult.error) setDeletedCandidates(deletedResult.data || []);
+    if (!batchResult.error) setCandidateUploadBatches(batchResult.data || []);
+  }
   const loadInterviews = () => loadTable("interviews", setInterviews);
 
   async function loadAIInterviewTemplates() {
@@ -8676,6 +9315,17 @@ async function loadProfessionAliases() {
       }
     };
 
+    const fetchPlatformEmailSummary = async () => {
+      try {
+        const { data, error } = await supabase.rpc("platform_email_log_summary_v1");
+        if (error) throw error;
+        return data || [];
+      } catch (error) {
+        errors.push(`email_logs: ${error.message || error}`);
+        return [];
+      }
+    };
+
     const getClientCompanyId = (client) => String(client?.operational_company_id || client?.company_id || "").trim();
     const getRowCompanyId = (row) => String(row?.company_id || "").trim();
     const isThisMonth = (value) => value && new Date(value) >= monthStart;
@@ -8714,7 +9364,7 @@ async function loadProfessionAliases() {
       fetchRows("visa_authorizations", "visa_authorizations", "company_id, created_at, status"),
       fetchRows("onboarding_validations", "onboarding_validations", "company_id, created_at, status, agency_impact_eligible"),
       fetchRows("notification_events", "notification_events", "company_id, created_at, type"),
-      fetchRows("email_logs", "email_logs", "company_id, created_at, type, status"),
+      fetchPlatformEmailSummary(),
       fetchRows("system_activity_logs", "system_activity_logs", "company_id, created_at, module_name, action_type, source", 20000),
     ]);
 
@@ -9162,18 +9812,9 @@ async function loadNotifications() {
     return [];
   }
 
-  let query = supabase
-    .from("notification_events")
-    .select("id, company_id, user_id, agency_id, agency_name, request_no, type, title, message, priority, status, delivery_status, related_table, related_id, response_status, response_at, rejection_reason, sla_started_at, sla_days, sla_due_at, read_at, created_at, data")
-    .eq("company_id", currentCompanyId)
-    .order("created_at", { ascending: false })
-    .limit(1000);
-
-  if (currentRole === "Agency" && currentUser?.agency_id) {
-    query = query.eq("agency_id", currentUser.agency_id);
-  }
-
-  const { data, error } = await query;
+  const { data, error } = await supabase.rpc("notification_center_list_v1", {
+    p_company_id: currentCompanyId,
+  });
 
   if (
     requestGeneration !== workspaceDataGenerationRef.current ||
@@ -9188,17 +9829,12 @@ async function loadNotifications() {
     return [];
   }
 
-  let rows = data || [];
-
-  if (currentRole === "Agency") {
-    rows = rows.filter((item) => {
-      const payload = item.data || {};
-      return (
-        String(item.agency_id || "") === String(currentUser?.agency_id || "") ||
-        normalize(item.agency_name || payload.agency || payload.agency_name) === normalize(currentUser?.agency_name)
-      );
-    });
-  }
+  const rows = filterNotificationsForWorkspace(data || [], {
+    companyId: currentCompanyId,
+    agencyId: currentUser?.agency_id || "",
+    authUserId: currentUser?.auth_user_id || "",
+    role: currentRole,
+  });
 
   setNotifications(rows);
   return rows;
@@ -9219,11 +9855,7 @@ async function loadNotifications() {
 
     try {
       const { data, error } = await supabase
-        .from("email_logs")
-        .select("id, company_id, type, status, to_email, subject, provider, message_id, error_message, created_at")
-        .eq("company_id", currentCompanyId)
-        .order("created_at", { ascending: false })
-        .limit(100);
+        .rpc("email_log_list_v1");
 
       if (
         requestGeneration !== workspaceDataGenerationRef.current ||
@@ -9460,68 +10092,29 @@ async function loadNotifications() {
     }
   }
 
-  async function recordEmailLog(row = {}) {
-    if (!secureLogFeaturesAvailable) return;
-    try {
-      await supabase.from("email_logs").insert([
-        withCompany({
-          type: row.type || "EMAIL",
-          status: row.status || "Pending",
-          to_email: Array.isArray(row.to_email) ? row.to_email.join(", ") : row.to_email || "",
-          cc_email: row.cc_email || "",
-          bcc_email: row.bcc_email || "",
-          subject: row.subject || "",
-          provider: row.provider || companyEmailSettings?.provider || "VisaFlow Dispatcher",
-          message_id: row.message_id || "",
-          error_message: row.error_message || "",
-          payload: row.payload || {},
-          created_at: new Date().toISOString(),
-        }),
-      ]);
-    } catch (error) {
-      console.warn("email log insert failed", error?.message || error);
-    }
-  }
-
-  function getNotificationTitle(item) {
-    const payload = item?.data || {};
-    return item?.title || payload.title || item?.type || item?.status || "Notification";
-  }
-
-  function getNotificationMessage(item) {
-    const payload = item?.data || {};
-    return (
-      item?.message ||
-      payload.message ||
-      payload.provider_message ||
-      payload.recommendation ||
-      payload.candidate_name ||
-      JSON.stringify(payload || {})
-    );
-  }
-
-  function getNotificationStatus(item) {
-    return String(item?.status || "Unread").toLowerCase() === "read" ? "Read" : "Unread";
-  }
-
-  const unreadNotificationsCount = notifications.filter((item) => getNotificationStatus(item) !== "Read").length;
+  const notificationFolderCounts = useMemo(
+    () => getNotificationFolderCounts(notifications),
+    [notifications]
+  );
+  const unreadNotificationsCount = notificationFolderCounts.unread;
 
   const notificationTypes = useMemo(() => {
-    const types = notifications.map((item) => item.type || item.status || "Notification").filter(Boolean);
+    const types = notifications.map(getNotificationType).filter(Boolean);
     return ["All", ...Array.from(new Set(types))];
   }, [notifications]);
 
   const filteredNotificationRows = useMemo(() => {
-    const keyword = normalize(notificationSearch);
-    return notifications.filter((item) => {
-      const type = item.type || item.status || "Notification";
-      const matchesType = notificationFilter === "All" || type === notificationFilter;
-      const searchable = [type, getNotificationTitle(item), getNotificationMessage(item), item.priority, item.status]
-        .join(" ")
-        .toLowerCase();
-      return matchesType && (!keyword || searchable.includes(keyword));
+    return filterNotificationCenterRows(notifications, {
+      folder: notificationFolder,
+      type: notificationFilter,
+      search: notificationSearch,
     });
-  }, [notifications, notificationFilter, notificationSearch]);
+  }, [notifications, notificationFolder, notificationFilter, notificationSearch]);
+
+  const selectedNotification = useMemo(
+    () => selectNotification(filteredNotificationRows, selectedNotificationId),
+    [filteredNotificationRows, selectedNotificationId]
+  );
 
   const emailLogStats = useMemo(() => ({
     sent: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "sent").length,
@@ -9529,32 +10122,62 @@ async function loadNotifications() {
     skipped: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "skipped").length,
   }), [emailLogs]);
 
-  async function markNotificationRead(id) {
-    if (!id || !secureLogFeaturesAvailable) return;
-    const { error } = await supabase
-      .from("notification_events")
-      .update({ status: "Read", read_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("company_id", currentCompanyId);
+  const filteredEmailLogs = useMemo(
+    () => filterEmailLogs(emailLogs, emailLogFilters),
+    [emailLogs, emailLogFilters]
+  );
 
-    if (error) return alert(error.message);
+  function displayEmailRecipient(value) {
+    const email = String(value || "");
+    if (canViewFullEmailRecipient || !email.includes("@")) return email || "-";
+    const [local, domain] = email.split("@");
+    return `${local.slice(0, 2)}${"*".repeat(Math.max(2, local.length - 2))}@${domain}`;
+  }
+
+  async function markNotificationRead(id, { reload = true } = {}) {
+    if (!id || !secureLogFeaturesAvailable) return false;
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "mark_read",
+      p_notification_id: id,
+      p_payload: { workspace_company_id: currentCompanyId },
+    });
+
+    if (error) {
+      alert(`Unable to mark the notification as read: ${error.message}`);
+      return false;
+    }
+    if (reload) await loadNotifications();
+    return true;
+  }
+
+  async function openNotification(item) {
+    if (!item?.id) return;
+    setSelectedNotificationId(String(item.id));
+    if (getNotificationStatus(item) === "Read") return;
+
+    setNotificationFolder("Read");
+    setNotifications((current) => current.map((notification) =>
+      String(notification.id) === String(item.id)
+        ? { ...notification, status: "Read", read_at: notification.read_at || new Date().toISOString() }
+        : notification
+    ));
+    const updated = await markNotificationRead(item.id, { reload: false });
+    if (!updated) {
+      await loadNotifications();
+      return;
+    }
     await loadNotifications();
   }
 
   async function markAllNotificationsRead() {
     if (!secureLogFeaturesAvailable) return;
-    let query = supabase
-      .from("notification_events")
-      .update({ status: "Read", read_at: new Date().toISOString() })
-      .eq("company_id", currentCompanyId)
-      .neq("status", "Read");
-
-    if (currentRole === "Agency" && currentUser?.agency_id) {
-      query = query.eq("agency_id", currentUser.agency_id);
-    }
-
-    const { error } = await query;
-    if (error) return alert(error.message);
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "mark_all_read",
+      p_notification_id: null,
+      p_payload: { workspace_company_id: currentCompanyId },
+    });
+    if (error) return alert(`Unable to mark all notifications as read: ${error.message}`);
+    setNotificationFolder("Read");
     await loadNotifications();
   }
 
@@ -9562,17 +10185,82 @@ async function loadNotifications() {
     if (!id || !secureLogFeaturesAvailable) return;
     if (!window.confirm("Delete this notification?")) return;
 
-    const { error } = await supabase
-      .from("notification_events")
-      .delete()
-      .eq("id", id)
-      .eq("company_id", currentCompanyId);
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "delete",
+      p_notification_id: id,
+      p_payload: { workspace_company_id: currentCompanyId },
+    });
 
-    if (error) return alert(error.message);
+    if (error) return alert(`Unable to delete the notification: ${error.message}`);
+    if (String(selectedNotificationId) === String(id)) setSelectedNotificationId("");
     await loadNotifications();
   }
+
+useEffect(() => {
+  if (
+    !canApprovePenalties ||
+    !workspaceAuthReady ||
+    validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser) ||
+    !currentCompanyId ||
+    !notifications.length ||
+    !agencyAgreements.length
+  ) {
+    return;
+  }
+
+  const calculatedRows = calculatePenaltyRegisterRows();
+  const actionableRows = calculatedRows.filter((row) => {
+    const existing = agencyPenalties.find((item) => getPenaltyRowUniqueKey(item) === getPenaltyRowUniqueKey(row));
+    return !existing || !["Approved", "Reduced", "Cancelled", "Waived"].includes(existing.status);
+  });
+  if (!actionableRows.length) {
+    penaltyAutoSyncRef.current = "";
+    return;
+  }
+
+  const syncKey = actionableRows
+    .map((row) => `${getPenaltyRowUniqueKey(row)}:${row.delay_days}:${row.calculated_amount}`)
+    .sort()
+    .join("|");
+  if (!syncKey || penaltyAutoSyncRef.current === syncKey) return;
+
+  penaltyAutoSyncRef.current = syncKey;
+  syncCalculatedPenaltyRegister({ silent: true }).catch((error) => {
+    penaltyAutoSyncRef.current = "";
+    console.warn("Automatic penalty register sync failed", error?.message || error);
+  });
+}, [
+  canApprovePenalties,
+  workspaceAuthReady,
+  validatedWorkspaceKey,
+  currentCompanyId,
+  currentUser,
+  notifications,
+  agencyAgreements,
+  agencyPenalties,
+  agencies,
+  candidates,
+  requests,
+]);
+
 useEffect(() => {
   let mounted = true;
+
+  if (agencyInvitationRequested) {
+    workspaceAuthReadyRef.current = false;
+    currentWorkspaceUserRef.current = null;
+    setWorkspaceAuthReady(false);
+    setValidatedWorkspaceKey("");
+    clearTenantSensitiveState();
+    clearStoredWorkspaceIdentity();
+    setAgencyClientAccess([]);
+    setActiveAgencyCompanyId("");
+    setActiveAgencyCompanyName("");
+    setCurrentUser(null);
+    return () => {
+      mounted = false;
+    };
+  }
 
   if (workspaceRecoveryRequested || workspaceRecoveryLoginGuard) {
     workspaceAuthReadyRef.current = false;
@@ -9655,15 +10343,20 @@ useEffect(() => {
       return;
     }
 
-    const { data: linkedUser, error } = await supabase.rpc("get_authenticated_app_user");
+    let workspaceContext = null;
+    let linkedUser = null;
+    try {
+      workspaceContext = await loadAuthenticatedWorkspaceContext(
+        supabase,
+        verifiedAuth.authUser.id
+      );
+      linkedUser = workspaceContext.actor;
+    } catch {
+      // Reconciliation is intentionally silent; manual sign-in shows the safe cause.
+    }
     if (!mounted || sequence !== workspaceAuthSequenceRef.current) return;
 
-    const linkedUserMatchesSession = Boolean(
-      !error &&
-      linkedUser?.id &&
-      linkedUser?.auth_user_id &&
-      String(linkedUser.auth_user_id) === String(verifiedAuth.authUser.id)
-    );
+    const linkedUserMatchesSession = Boolean(linkedUser?.id);
     reportSafeAuthDiagnostics(
       verifiedAuth.session,
       linkedUser,
@@ -9679,7 +10372,11 @@ useEffect(() => {
       return;
     }
 
-    activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+    activateWorkspaceUser({
+      ...linkedUser,
+      company_name: workspaceContext?.company?.name || "",
+      subscription_status: workspaceContext?.company?.subscription_status || "",
+    }, { persist: true, legacy: false });
     if (transition.shouldResetPage) {
       const nextRole = normalizeUserRole(linkedUser.role);
       setActivePage((ROLE_PAGES[nextRole] || ROLE_PAGES.Viewer)[0]);
@@ -9700,7 +10397,11 @@ useEffect(() => {
     mounted = false;
     authListener?.subscription?.unsubscribe();
   };
-}, [workspaceRecoveryRequested, workspaceRecoveryLoginGuard]);
+}, [
+  agencyInvitationRequested,
+  workspaceRecoveryRequested,
+  workspaceRecoveryLoginGuard,
+]);
 
 useEffect(() => {
   currentWorkspaceUserRef.current = currentUser;
@@ -10006,7 +10707,7 @@ const getVisaAvailableQty = (visaNo) => {
               String(item.visa_no || "") === String(selectedVisa.visa_no || "") &&
               String(item.request_no || "") === String(selectedVisa.request_no || "") &&
               (!item.profession || !selectedVisa.profession || normalize(item.profession) === normalize(selectedVisa.profession)) &&
-              (!item.nationality || !selectedVisa.nationality || normalize(item.nationality) === normalize(selectedVisa.nationality)) &&
+              (!item.nationality || !selectedVisa.nationality || nationalitiesMatch(item.nationality, selectedVisa.nationality, countries)) &&
               (!item.gender || !selectedVisa.gender || normalize(item.gender) === normalize(selectedVisa.gender))
             )
       );
@@ -10460,10 +11161,10 @@ function getSaudiHiringRowCandidates(row) {
 
 const stats = useMemo(() => {
     const totalQty = visaRecords.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    const totalCandidates = candidates.length;
+    const totalCandidates = operationalCandidates.length;
 
 const totalRemaining = requests.reduce((sum, item) => {
-  const used = candidates.filter(
+  const used = operationalCandidates.filter(
     (c) => c.request_no === item.request_no
   ).length;
 
@@ -10478,7 +11179,7 @@ const visaProcessCount = requests.filter(
   (x) => x.status === "Visa Process"
 ).length;
 
-const totalMobilizationCost = candidates.reduce((sum, candidate) => sum + getCandidateTotalCost(candidate), 0);
+const totalMobilizationCost = operationalCandidates.reduce((sum, candidate) => sum + getCandidateTotalCost(candidate), 0);
 
 const totalRequestBudget = requests.reduce((sum, request) => {
   const qty = Number(request.quantity || 0);
@@ -10498,7 +11199,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
 
   approvedRequests: requests.filter((item) => item.approval_status === "Approved by Recruitment").length,
   pendingApprovals: requests.filter((item) => item.approval_status === "Pending Recruitment Approval").length,
-  joinedCandidates: candidates.filter((item) => item.status === "Joined").length,
+  joinedCandidates: operationalCandidates.filter((item) => item.status === "Joined").length,
   arrivedMobilizations: mobilizations.filter((item) => item.mobilization_status === "Arrived KSA").length,
   joinedMobilizations: mobilizations.filter((item) => item.mobilization_status === "Joined").length,
   pendingMedicalMobilizations: mobilizations.filter((item) => item.medical_status === "Pending").length,
@@ -10514,7 +11215,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
   openRequests: requests.filter((item) => item.status === "Open").length,
   urgentRequests: requests.filter((item) => item.priority === "Urgent").length,
 };
-  }, [visaRecords, agencies, requests, candidates, interviews, mobilizations]);
+  }, [visaRecords, agencies, requests, operationalCandidates, interviews, mobilizations]);
   const reports = useMemo(() => {
   const today = new Date();
 
@@ -10542,7 +11243,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
     visaAuthorizations.some((a) => a.visa_no === visa.visa_no);
 
   const authHasCandidates = (auth) =>
-    candidates.some(
+    operationalCandidates.some(
       (c) =>
         c.visa_no === auth.visa_no ||
         c.authorization_no === auth.authorization_no
@@ -10569,7 +11270,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
       (a) => !authHasCandidates(a)
     ),
 
-    candidatesWithoutInterviews: candidates.filter(
+    candidatesWithoutInterviews: operationalCandidates.filter(
       (c) => !candidateHasInterview(c)
     ),
 
@@ -10605,7 +11306,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
         relatedVisas.some((v) => v.visa_no === a.visa_no)
       );
 
-      const relatedCandidates = candidates.filter(
+      const relatedCandidates = operationalCandidates.filter(
         (c) =>
           c.request_no === r.request_no ||
           relatedVisas.some((v) => v.visa_no === c.visa_no)
@@ -10651,7 +11352,7 @@ const totalRequestBudget = requests.reduce((sum, request) => {
       };
     }),
   };
-}, [requests, requestLines, visaRecords, visaAuthorizations, candidates, interviews, mobilizations]);
+}, [requests, requestLines, visaRecords, visaAuthorizations, operationalCandidates, interviews, mobilizations]);
 
 const activityRequestOptions = useMemo(() => {
   const requestNos = [
@@ -10735,13 +11436,13 @@ const mobilizationRequestRows = useMemo(() => {
     const interviewRequiredQty = sumLineQty(interviewRequiredLines);
     const noInterviewQty = sumLineQty(noInterviewLines);
 
-    const requestCandidates = candidates.filter(
+    const requestCandidates = operationalCandidates.filter(
       (candidate) =>
         String(candidate.request_no || "") === String(requestNo || "") &&
         !["Rejected", "Interview Failed", "Medical Failed", "Cancelled"].includes(candidate.status)
     );
 
-    const allRequestCandidates = candidates.filter(
+    const allRequestCandidates = operationalCandidates.filter(
       (candidate) => String(candidate.request_no || "") === String(requestNo || "")
     );
 
@@ -10964,7 +11665,7 @@ const mobilizationRequestRows = useMemo(() => {
       approval_status: request.approval_status || "-",
     };
   });
-}, [requests, requestLines, candidates, interviews, mobilizations, visaAllocations, visaAuthorizations]);
+}, [requests, requestLines, operationalCandidates, interviews, mobilizations, visaAllocations, visaAuthorizations]);
 
 const selectedMobilizationRow =
   mobilizationRequestRows.find((row) => row.request_no === selectedMobilizationRequestNo) ||
@@ -11167,23 +11868,18 @@ const onboardingValidationStats = useMemo(() => ({
 }), [onboardingValidations]);
 
 const executiveDashboard = useMemo(() => {
-  const excludedCandidateStatuses = [
-    "Rejected",
-    "Interview Failed",
-    "Cancelled",
-    "Medical Failed",
-    "Medical Fail",
-  ];
-
-  const isActiveCandidate = (candidate) =>
-    !excludedCandidateStatuses.includes(candidate.status);
-
-  const activeCandidates = candidates.filter(isActiveCandidate);
-
   const totalRequired = requests.reduce(
     (sum, request) => sum + getRequestTotalQty(request),
     0
   );
+  const candidateSnapshot = buildCandidateCountSnapshot({
+    candidates: operationalCandidates,
+    companyId: currentCompanyId,
+    required: totalRequired,
+    interviews,
+  });
+  const activeCandidates = candidateSnapshot.activeCandidates;
+  const recruitmentProgress = candidateSnapshot.recruitmentProgress;
 
   const saudiRequests = requests.filter(isSaudiRequest);
   const foreignRequests = requests.filter((request) => !isSaudiRequest(request));
@@ -11207,10 +11903,6 @@ const executiveDashboard = useMemo(() => {
   }).length;
 
   const totalJoined = activeCandidates.filter((candidate) => candidate.status === "Joined").length;
-  const recruitmentProgress = totalRequired
-    ? Math.round((activeCandidates.length / totalRequired) * 100)
-    : 0;
-
   const allocatedVisas = visaAllocations.reduce(
     (sum, allocation) => sum + Number(allocation.allocated_qty || 0),
     0
@@ -11387,7 +12079,7 @@ const executiveDashboard = useMemo(() => {
     arrivalsNext30Days,
     recruitmentFunnel,
   };
-}, [requests, requestLines, visaRecords, visaAllocations, visaAuthorizations, candidates, interviews, reports]);
+}, [requests, requestLines, visaRecords, visaAllocations, visaAuthorizations, operationalCandidates, currentCompanyId, interviews, reports]);
 
  async function generateRequestNo() {
   const year = new Date().getFullYear();
@@ -11534,32 +12226,7 @@ function isDuplicateRequestNoError(error) {
   }
 
   function getNationalityMatchValues(value) {
-    const raw = String(value || "").trim();
-    const values = new Set();
-    const addValue = (item) => {
-      const normalized = normalizeMatchText(item);
-      if (normalized) values.add(normalized);
-    };
-
-    addValue(raw);
-
-    const parenthesisMatch = raw.match(/\(([^)]+)\)/);
-    if (parenthesisMatch?.[1]) addValue(parenthesisMatch[1]);
-
-    countries.forEach((country) => {
-      const countryValues = [country.name, country.nationality].filter(Boolean);
-      const matched = countryValues.some((item) => {
-        const normalizedItem = normalizeMatchText(item);
-        const normalizedRaw = normalizeMatchText(raw);
-        return normalizedItem && normalizedRaw && (normalizedRaw.includes(normalizedItem) || normalizedItem.includes(normalizedRaw));
-      });
-
-      if (matched) {
-        countryValues.forEach(addValue);
-      }
-    });
-
-    return Array.from(values);
+    return getNationalityMatchKeys(value, countries);
   }
 
   function agencyMatchesRequestLine(agency, line) {
@@ -11733,11 +12400,11 @@ function isDuplicateRequestNoError(error) {
       sla_due_at: slaDueAt,
     };
 
-    const { error } = await supabase
-      .from("notification_events")
-      .update({
-        status: "Read",
-        read_at: now,
+    const { error } = await supabase.rpc("notification_event_mutate", {
+      p_operation: "agency_response",
+      p_notification_id: item.id,
+      p_payload: {
+        workspace_company_id: currentCompanyId,
         agency_name: agencyName,
         request_no: existingData.request_no || item.request_no || "",
         response_status: decision,
@@ -11747,9 +12414,8 @@ function isDuplicateRequestNoError(error) {
         sla_days: nextData.sla_days,
         sla_due_at: nextData.sla_due_at,
         data: nextData,
-      })
-      .eq("id", item.id)
-      .eq("company_id", currentCompanyId);
+      },
+    });
 
     if (error) return alert(`Agency response failed: ${error.message}`);
 
@@ -11777,6 +12443,7 @@ function isDuplicateRequestNoError(error) {
         sla_started_at: nextData.sla_started_at,
         sla_days: nextData.sla_days,
         sla_due_at: nextData.sla_due_at,
+        lines: Array.isArray(nextData.lines) ? nextData.lines : [],
       });
     } catch (notifyError) {
       console.warn("Company response notification failed", notifyError?.message || notifyError);
@@ -12009,14 +12676,19 @@ function isDuplicateRequestNoError(error) {
   }
 
   function addRequestLineToDraft() {
-    if (!requestLineForm.profession || !requestLineForm.quantity) {
-      return alert("Please fill Profession and Quantity for the request line.");
+    if (requestMasterDataLoading || requestMasterDataError) {
+      return alert(requestMasterDataError || "Please wait while approved professions and nationalities load.");
+    }
+    const canonicalProfession = resolveApprovedProfession(requestLineForm.profession, professions);
+    const canonicalNationality = resolveApprovedNationality(requestLineForm.nationality, countries, resolveCanonicalNationality);
+    if (!canonicalProfession || !requestLineForm.quantity || !canonicalNationality) {
+      return alert("Please select an approved Profession and Nationality, and enter Quantity for the request line.");
     }
 
-    setRequestLinesDraft((prev) => [
-      ...prev,
-      {
+    const nextLine = {
         ...requestLineForm,
+        profession: canonicalProfession,
+        nationality: canonicalNationality,
         quantity: Number(requestLineForm.quantity || 0),
         salary: requestLineForm.salary || "",
         interview_required: requestLineForm.interview_required || "Required",
@@ -12024,14 +12696,26 @@ function isDuplicateRequestNoError(error) {
           requestLineForm.interview_required === "No Interview"
             ? "N/A"
             : requestLineForm.interview_type || "Online",
-      },
-    ]);
+      };
+    setRequestLinesDraft((prev) => requestLineEditingIndex === null
+      ? [...prev, nextLine]
+      : prev.map((line, index) => index === requestLineEditingIndex ? nextLine : line));
 
     setRequestLineForm(emptyRequestLine);
+    setRequestLineEditingIndex(null);
+  }
+
+  function editRequestLineDraft(index) {
+    setRequestLineForm({ ...requestLinesDraft[index] });
+    setRequestLineEditingIndex(index);
   }
 
   function removeRequestLineFromDraft(index) {
     setRequestLinesDraft((prev) => prev.filter((_, i) => i !== index));
+    if (requestLineEditingIndex === index) {
+      setRequestLineForm(emptyRequestLine);
+      setRequestLineEditingIndex(null);
+    }
   }
 
   function buildRequestLinesToSave() {
@@ -12039,8 +12723,8 @@ function isDuplicateRequestNoError(error) {
 
     if (draftLines.length > 0) {
       return draftLines.map((line) => ({
-        profession: line.profession || "",
-        nationality: line.nationality || "",
+        profession: resolveApprovedProfession(line.profession, professions),
+        nationality: resolveApprovedNationality(line.nationality, countries, resolveCanonicalNationality),
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         salary: line.salary || "",
@@ -12053,8 +12737,8 @@ function isDuplicateRequestNoError(error) {
     if (requestForm.profession && requestForm.quantity) {
       return [
         {
-          profession: requestForm.profession || "",
-          nationality: requestForm.nationality || "",
+          profession: resolveApprovedProfession(requestForm.profession, professions),
+          nationality: resolveApprovedNationality(requestForm.nationality, countries, resolveCanonicalNationality),
           gender: requestForm.gender || "",
           quantity: Number(requestForm.quantity || 0),
           salary: "",
@@ -12075,6 +12759,7 @@ function isDuplicateRequestNoError(error) {
     setRequestForm(emptyRequest);
     setRequestLineForm(emptyRequestLine);
     setRequestLinesDraft([]);
+    setRequestLineEditingIndex(null);
     setRequestEditingId(null);
   }
 
@@ -12117,6 +12802,7 @@ function isDuplicateRequestNoError(error) {
         notes: line.notes || "",
       }))
     );
+    setRequestLineEditingIndex(null);
 
     setActivePage("Requests");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -12128,8 +12814,13 @@ function isDuplicateRequestNoError(error) {
 
     const linesToSave = buildRequestLinesToSave();
 
-    if (!requestForm.request_type || linesToSave.length === 0) {
-      alert("Please fill Request Type and add at least one request line.");
+    if (requestMasterDataLoading || requestMasterDataError) {
+      return alert(requestMasterDataError || "Please wait while approved professions and nationalities load.");
+    }
+    if (!requestForm.request_type || linesToSave.length === 0 || linesToSave.some((line) =>
+      !isApprovedRequestLine(line, professions, countries, resolveCanonicalNationality)
+    )) {
+      alert("Please fill Request Type and use approved Profession and Nationality values on every request line.");
       return;
     }
 
@@ -12320,7 +13011,8 @@ function isDuplicateRequestNoError(error) {
   }
 
   function addVisaLineToDraft() {
-    if (!visaLineForm.profession || !visaLineForm.nationality || !visaLineForm.gender || !visaLineForm.quantity) {
+    const canonicalNationality = resolveCanonicalNationality(visaLineForm.nationality, countries);
+    if (!visaLineForm.profession || !canonicalNationality || !visaLineForm.gender || !visaLineForm.quantity) {
       return alert("Please fill profession, nationality, gender and quantity for the visa line.");
     }
 
@@ -12328,6 +13020,7 @@ function isDuplicateRequestNoError(error) {
       ...prev,
       {
         ...visaLineForm,
+        nationality: canonicalNationality,
         quantity: Number(visaLineForm.quantity || 0),
       },
     ]);
@@ -12343,7 +13036,7 @@ function isDuplicateRequestNoError(error) {
     if (visaLinesDraft.length > 0) {
       return visaLinesDraft.map((line) => ({
         profession: line.profession || "",
-        nationality: line.nationality || "",
+        nationality: resolveCanonicalNationality(line.nationality, countries),
         gender: line.gender || "",
         quantity: Number(line.quantity || 0),
         notes: line.notes || "",
@@ -12354,7 +13047,7 @@ function isDuplicateRequestNoError(error) {
       return [
         {
           profession: visaForm.profession || "",
-          nationality: visaForm.nationality || "",
+          nationality: resolveCanonicalNationality(visaForm.nationality, countries),
           gender: visaForm.gender || "",
           quantity: Number(visaForm.quantity || 0),
           notes: visaForm.notes || "",
@@ -12411,7 +13104,7 @@ async function saveVisa() {
   if (!visaForm.visa_no) return alert("Visa No is required.");
 
   const linesToSave = buildVisaLinesToSave();
-  if (linesToSave.length === 0) {
+  if (linesToSave.length === 0 || linesToSave.some((line) => !line.nationality)) {
     return alert("Please add at least one visa line with profession, nationality, gender and quantity.");
   }
 
@@ -12497,20 +13190,6 @@ async function saveVisa() {
 
   function resetAgencyForm() {
     setAgencyForm(emptyAgency);
-    setAgencyEditingId(null);
-  }
-
-  function editAgency(item) {
-    setAgencyEditingId(item.id);
-    setAgencyForm({
-      name: item.name || "",
-      country: item.country || "",
-      contact_person: item.contact_person || "",
-      email: item.email || "",
-      phone: item.phone || "",
-      status: item.status || "Active",
-    });
-    setActivePage("Agencies");
   }
 
 function editCompany(company) {
@@ -12565,7 +13244,6 @@ function buildEmailCardHtml(title, lines = [], actionText = "") {
 }
 
 async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} }) {
-  try {
     const verifiedAuth = await verifyWorkspaceAuthSession(supabase.auth);
     const { session, error: sessionError } = verifiedAuth;
     reportSafeAuthDiagnostics(
@@ -12598,35 +13276,15 @@ async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} })
       },
     });
 
-    if (error) throw new Error(error.message || "Email dispatcher failed");
+    if (error) {
+      let responseBody = data;
+      if (!responseBody?.error && error?.context && typeof error.context.json === "function") {
+        try { responseBody = await error.context.json(); } catch { /* retain SDK error */ }
+      }
+      throw new Error(responseBody?.error || error.message || "Email dispatcher failed");
+    }
     if (data && data.ok === false) throw new Error(data.error || "Email dispatcher failed");
-
-    await recordEmailLog({
-      type,
-      status: "Sent",
-      to_email: "Resolved securely by Email Dispatcher",
-      cc_email: "",
-      bcc_email: "",
-      subject: type,
-      provider: companyEmailSettings?.provider || "VisaFlow Dispatcher",
-      message_id: "",
-      payload: { identifiers, variables: Object.keys(variables || {}) },
-    });
-
     return data || { ok: true };
-  } catch (error) {
-    await recordEmailLog({
-      type,
-      status: "Failed",
-      to_email: "Resolved securely by Email Dispatcher",
-      cc_email: "",
-      bcc_email: "",
-      subject: type,
-      error_message: error.message || "Email dispatcher failed",
-      payload: { identifiers, variables: Object.keys(variables || {}) },
-    });
-    throw error;
-  }
 }
 
 async function saveCompanyEmailSettings({ silent = false } = {}) {
@@ -12752,29 +13410,23 @@ async function testCompanyEmailSettings() {
 }
 
 async function saveCompany() {
-  if (!canManageUsers) return alert("You do not have permission to manage company settings.");
+  if (!canAdministerCompanySettings) {
+    return alert("You do not have permission to manage company settings.");
+  }
   if (!companyEditingId) return alert("Please select a company to update.");
   if (!companyForm.name) return alert("Company name is required.");
 
-  const payload = {
-    name: companyForm.name,
-    domain: companyForm.domain || "",
-    status: companyForm.status || "Active",
-    subscription_plan: companyForm.subscription_plan || "Trial",
-    subscription_status: companyForm.subscription_status || "Active",
-    subscription_start: companyForm.subscription_start || null,
-    subscription_end: companyForm.subscription_end || null,
-    max_users: Number(companyForm.max_users || 5),
-    notes: companyForm.notes || "",
-  };
-
-  const { error } = await supabase
-    .from("companies")
-    .update(payload)
-    .eq("id", companyEditingId)
-    .eq("id", currentCompanyId);
-
-  if (error) return alert(error.message);
+  try {
+    await invokeAgencyAdministration(supabase, {
+      action: "update_company_settings",
+      company_id: companyEditingId,
+      settings: buildCompanySettingsUpdate(companyForm, {
+        platform: isPlatformOwner,
+      }),
+    });
+  } catch (error) {
+    return alert(getAgencyAdministrationErrorMessage(error));
+  }
 
   setCompanyEditingId(null);
   setCompanyForm({
@@ -12810,20 +13462,6 @@ async function saveUser() {
   alert("User management is temporarily restricted during the security migration.");
 }
 
-async function findExistingAgencyByName(name) {
-  const normalizedName = normalize(name);
-  if (!normalizedName) return null;
-
-  const { data, error } = await supabase
-    .from("agencies")
-    .select("*")
-    .range(0, 5000);
-
-  if (error) throw error;
-
-  return (data || []).find((agency) => normalize(agency.name) === normalizedName) || null;
-}
-
 async function saveAgency() {
   if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
   if (!agencyForm.name) return alert("Agency name is required.");
@@ -12837,64 +13475,224 @@ async function saveAgency() {
     email: agencyForm.email || "",
     phone: agencyForm.phone || "",
     status: agencyForm.status || "Active",
-    company_id: null,
-    updated_at: new Date().toISOString(),
   };
 
-  let agencyId = agencyEditingId || null;
-  let linkedExistingAgency = false;
-
   try {
-    if (agencyEditingId) {
-      const { error } = await supabase
-        .from("agencies")
-        .update(payload)
-        .eq("id", agencyEditingId);
+    const { data, error } = await supabase.rpc("company_agency_create", {
+      p_payload: payload,
+    });
 
-      if (error) return alert(error.message);
-    } else {
-      const existingAgency = await findExistingAgencyByName(cleanName);
+    if (error) throw error;
 
-      if (existingAgency) {
-        agencyId = existingAgency.id;
-        linkedExistingAgency = true;
-      } else {
-        const { data, error } = await supabase
-          .from("agencies")
-          .insert([payload])
-          .select("*")
-          .single();
-
-        if (error) return alert(error.message);
-        agencyId = data.id;
-      }
-    }
-
-    if (currentCompanyId && agencyId) {
-      const { error: accessError } = await supabase
-        .from("company_agency_access")
-        .upsert(
-          [{
-            company_id: currentCompanyId,
-            agency_id: agencyId,
-            status: "Active",
-            can_view_requests: true,
-            can_upload_candidates: true,
-            can_update_candidates: true,
-            can_view_interviews: true,
-          }],
-          { onConflict: "company_id,agency_id" }
-        );
-
-      if (accessError) return alert(accessError.message);
-    }
+    resetAgencyForm();
+    await loadAgencies();
+    alert(data?.idempotent
+      ? "This agency is already linked to your company."
+      : "Agency saved and linked to your company.");
   } catch (error) {
-    return alert(error.message || "Agency save failed.");
+    const message = String(error?.message || "");
+    if (message.includes("COMPANY_AGENCY_CREATE_UNAUTHORIZED")) {
+      return alert("You are not authorized to create agencies.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_ALREADY_EXISTS")) {
+      return alert("An agency with the same email or identity already exists.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_USER_INACTIVE")) {
+      return alert("Your user account is inactive.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_COMPANY_INACTIVE")) {
+      return alert("Your company is missing or inactive.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_INVALID_INPUT") ||
+        message.includes("COMPANY_AGENCY_CREATE_INVALID_FIELDS")) {
+      return alert("Agency details are invalid.");
+    }
+    return alert("Agency creation failed unexpectedly. Please try again.");
+  }
+}
+
+async function inviteAgency(item, action = "invite_existing") {
+  if (!canInviteAgencyUsers) {
+    alert("غير مخول.");
+    return;
   }
 
-  resetAgencyForm();
-  await loadAgencies();
-  alert(linkedExistingAgency ? "Existing agency has been linked to this company." : agencyEditingId ? "Agency updated successfully." : "Agency saved and linked to this company.");
+  const key = String(item?.id || "");
+  const currentRequest = agencyInvitationStates[key] || null;
+  const currentStatus = getAgencyInvitationStatus(currentRequest);
+  const allowed = action === "resend_invitation"
+    ? canResendAgencyInvitation(currentRequest)
+    : canSendAgencyInvitation(currentStatus) || currentStatus === "Revoked";
+  if (!allowed) {
+    alert("المكتب مدعو مسبقًا.");
+    return;
+  }
+  if (!String(item?.email || "").trim()) {
+    alert("يجب حفظ بريد صحيح للوكالة قبل إرسال الدعوة.");
+    return;
+  }
+
+  setAgencyInvitationSendingId(key);
+  setAgencyInvitationStates((current) => ({
+    ...current,
+    [key]: {
+      ...(current[key] || {}),
+      agency_id: item.id,
+      status: "Provisioning",
+      updated_at: new Date().toISOString(),
+    },
+  }));
+
+  try {
+    const request = await invokeAgencyInvitation(
+      supabase,
+      buildAgencyInvitationPayload(
+        item,
+        agencyInvitationPermissions[key] || DEFAULT_AGENCY_PERMISSIONS,
+        action
+      )
+    );
+    setAgencyInvitationStates((current) => ({
+      ...current,
+      [key]: request,
+    }));
+    alert("تم إرسال الدعوة إلى المكتب.");
+  } catch (error) {
+    setAgencyInvitationStates((current) => ({
+      ...current,
+      [key]: {
+        ...(current[key] || {}), agency_id: item.id, status: "Failed",
+        failure_code: error?.code || "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED",
+        failed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      },
+    }));
+    alert(getAgencyInvitationErrorMessage(error));
+  } finally {
+    setAgencyInvitationSendingId("");
+    await loadAgencyInvitationStates(agencies);
+  }
+}
+
+async function revokeAgencyInvitation(item) {
+  const key = String(item?.id || "");
+  const currentStatus = getAgencyInvitationStatus(agencyInvitationStates[key] || null);
+  if (!canInviteAgencyUsers || !canRevokeAgencyInvitation(currentStatus)) return;
+  if (!window.confirm("Revoke this agency invitation?")) return;
+  setAgencyInvitationSendingId(key);
+  try {
+    const request = await invokeAgencyInvitation(supabase, buildAgencyInvitationRevokePayload(item));
+    setAgencyInvitationStates((current) => ({ ...current, [key]: request }));
+    alert("Agency invitation revoked.");
+  } catch (error) {
+    alert(getAgencyInvitationErrorMessage(error));
+  } finally {
+    setAgencyInvitationSendingId("");
+    await loadAgencyInvitationStates(agencies);
+  }
+}
+
+async function mutateAgencyUserLifecycle(item, action, role = null) {
+  if (!canInviteAgencyUsers || !item?.agency_id || !item?.user_id) return;
+  const key = `${item.agency_id}:${item.user_id}`;
+  if (["disable", "unlink"].includes(action) && !window.confirm(`${action === "unlink" ? "Unlink" : "Disable"} this agency user access?`)) return;
+  setAgencyUserLifecycleLoadingId(key);
+  try {
+    const { error } = await supabase.rpc("agency_user_lifecycle_mutate", {
+      p_agency_id: item.agency_id, p_user_id: item.user_id, p_action: action, p_role: role,
+    });
+    if (error) throw error;
+    await loadAgencyUsers();
+    alert("Agency user access updated.");
+  } catch (error) {
+    alert(error?.message || "Agency user lifecycle update failed.");
+  } finally {
+    setAgencyUserLifecycleLoadingId("");
+  }
+}
+
+function beginAgencyMaintenance(item) {
+  if (!canAdministerAgencies || !item?.id) return;
+  setAgencyMaintenanceId(item.id);
+  setAgencyMaintenanceForm({
+    name: item.name || "",
+    country: item.country || "",
+    contact_person: item.contact_person || "",
+    email: item.email || "",
+    phone: item.phone || "",
+  });
+  setAgencyMaintenanceMessage("");
+}
+
+function cancelAgencyMaintenance() {
+  setAgencyMaintenanceId("");
+  setAgencyMaintenanceForm(emptyAgencyMaintenance);
+  setAgencyMaintenanceMessage("");
+}
+
+async function saveAgencyMaintenance() {
+  if (
+    !canAdministerAgencies ||
+    !agencyMaintenanceId ||
+    agencyMaintenanceLoading
+  ) return;
+  if (!String(agencyMaintenanceForm.name || "").trim()) {
+    return setAgencyMaintenanceMessage("Agency name is required.");
+  }
+
+  setAgencyMaintenanceLoading(true);
+  setAgencyMaintenanceMessage("");
+  try {
+    await invokeAgencyAdministration(supabase, {
+      action: "update_agency",
+      agency_id: agencyMaintenanceId,
+      agency: buildAgencyMaintenanceUpdate(agencyMaintenanceForm),
+    });
+    await loadAgencies();
+    setAgencyMaintenanceId("");
+    setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    setAgencyMaintenanceMessage("Agency details updated successfully.");
+  } catch (error) {
+    setAgencyMaintenanceMessage(
+      getAgencyAdministrationErrorMessage(error)
+    );
+  } finally {
+    setAgencyMaintenanceLoading(false);
+  }
+}
+
+async function unlinkExistingAgency(item) {
+  if (!canAdministerAgencies || !item?.id || agencyMaintenanceLoading) return;
+  const confirmed = window.confirm(
+    "Unlink this agency from your company?\n\n" +
+    "Company access will be disabled. The global agency, Supabase Auth user, " +
+    "and public user record will not be deleted."
+  );
+  if (!confirmed) return;
+
+  setAgencyMaintenanceLoading(true);
+  setAgencyMaintenanceMessage("");
+  try {
+    const result = await invokeAgencyAdministration(supabase, {
+      action: "unlink_agency",
+      agency_id: item.id,
+    });
+    await loadAgencies();
+    if (agencyMaintenanceId === item.id) {
+      setAgencyMaintenanceId("");
+      setAgencyMaintenanceForm(emptyAgencyMaintenance);
+    }
+    setAgencyMaintenanceMessage(
+      result?.status === "Suspended"
+        ? "Agency access was suspended. The agency and user records were retained."
+        : "Agency was unlinked. The agency and user records were retained."
+    );
+  } catch (error) {
+    setAgencyMaintenanceMessage(
+      getAgencyAdministrationErrorMessage(error)
+    );
+  } finally {
+    setAgencyMaintenanceLoading(false);
+  }
 }
   function editUser(user) {
   if (!canCurrentUserEditTargetUser(user)) {
@@ -12925,41 +13723,6 @@ async function saveAgency() {
 async function deleteUser(id) {
   alert("User management is temporarily restricted during the security migration.");
 }
-
-  async function deleteAgency(id) {
-    if (!canManageAgencies) return alert("You do not have permission to manage agencies.");
-
-    if (canManagePlatform) {
-      if (!window.confirm("Delete this agency from the whole platform? This may affect all linked companies.")) return;
-      const { error } = await supabase.from("agencies").delete().eq("id", id);
-      if (error) return alert(error.message);
-      await loadAgencies();
-      return;
-    }
-
-    if (!currentCompanyId) return alert("Company ID is missing.");
-    if (!window.confirm("Remove this agency access from this company? The agency itself will remain available for other companies.")) return;
-
-    const { error: userAccessError } = await supabase
-      .from("agency_company_user_access")
-      .delete()
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", id);
-
-    if (userAccessError) return alert(userAccessError.message);
-
-    const { error: companyAccessError } = await supabase
-      .from("company_agency_access")
-      .delete()
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", id);
-
-    if (companyAccessError) return alert(companyAccessError.message);
-
-    await loadAgencies();
-    await loadUsers();
-    alert("Agency access has been removed from this company.");
-  }
 
 function getAgreementTemplateDefaults(templateType) {
   const type = templateType || "Standard Recruitment SLA";
@@ -13074,19 +13837,6 @@ function refreshAgreementTerms() {
   }));
 }
 
-function generateAgreementNo() {
-  const year = new Date().getFullYear();
-  const prefix = `AGR-${year}-`;
-  const maxNumber = agencyAgreements.reduce((max, item) => {
-    const agreementNo = String(item.agreement_no || "");
-    if (!agreementNo.startsWith(prefix)) return max;
-    const numberPart = Number(agreementNo.replace(prefix, ""));
-    return Number.isFinite(numberPart) ? Math.max(max, numberPart) : max;
-  }, 0);
-  const nextNumber = String(maxNumber + 1).padStart(4, "0");
-  return `${prefix}${nextNumber}`;
-}
-
 function resetAgreementForm() {
   setAgreementForm(emptyAgreement);
   setAgreementEditingId(null);
@@ -13166,6 +13916,10 @@ async function sendPenaltyDecisionEmail(penalty) {
 async function saveAgreement(statusOverride = "") {
   if (!canManageAgencyAgreements) return alert("You do not have permission to manage agency agreements.");
   if (!agreementForm.agency_name) return alert("Agency name is required.");
+  const agreementAgencyMatches = agencies.filter((agency) =>
+    normalize(agency.name) === normalize(agreementForm.agency_name) && normalize(agency.status || "Active") !== "inactive"
+  );
+  if (agreementAgencyMatches.length !== 1) return alert("Select one active agency with an unambiguous identifier.");
 
   const nextStatus = statusOverride || agreementForm.status || "Draft";
   const now = new Date().toISOString();
@@ -13173,7 +13927,7 @@ async function saveAgreement(statusOverride = "") {
 
   const payload = {
     ...agreementForm,
-    agreement_no: agreementForm.agreement_no || generateAgreementNo(),
+    agency_id: agreementAgencyMatches[0].id,
     status: nextStatus,
     sla_days: Number(agreementForm.sla_days || 60),
     response_sla_hours: Number(agreementForm.response_sla_hours || 24),
@@ -13199,10 +13953,11 @@ async function saveAgreement(statusOverride = "") {
         .eq("company_id", currentCompanyId)
         .select("id")
         .single()
-    : await supabase.from("agency_agreements").insert([withCompany(payload)]).select("id").single();
+    : await createAgencyAgreement(supabase, payload);
 
-  if (result.error) return alert(result.error.message);
+  if (result.error) return alert(getAgencyAgreementSaveError(result.error));
 
+  let agreementEmailError = "";
   if (nextStatus === "Pending Signature") {
     await triggerExternalNotification("AGENCY_AGREEMENT_SENT", {
       company_id: currentCompanyId,
@@ -13210,18 +13965,23 @@ async function saveAgreement(statusOverride = "") {
       message: `${payload.agreement_no} sent to ${payload.agency_name} for electronic acceptance.`,
       priority: "Medium",
       related_table: "agency_agreements",
-      related_id: String(agreementEditingId || ""),
+      related_id: String(result.data?.id || agreementEditingId || ""),
       agency_name: payload.agency_name,
     });
 
     try {
       await sendAgreementSentEmail({ ...payload, id: result.data?.id || agreementEditingId });
     } catch (emailError) {
+      agreementEmailError = emailError?.message || "Email provider handoff failed";
       console.warn("Agreement email failed", emailError?.message || emailError);
     }
   }
 
-  alert(nextStatus === "Pending Signature" ? "Agreement sent to agency portal" : agreementEditingId ? "Agreement updated successfully" : "Agreement saved successfully");
+  alert(nextStatus === "Pending Signature"
+    ? agreementEmailError
+      ? `Agreement is available in the agency portal, but email delivery failed: ${agreementEmailError}. See Email Logs before retrying.`
+      : "Agreement sent to the agency portal and handed off to the email provider."
+    : agreementEditingId ? "Agreement updated successfully" : "Agreement saved successfully");
   resetAgreementForm();
   await loadAgencyAgreements();
 }
@@ -13245,40 +14005,28 @@ async function sendExistingAgreementToAgency(item) {
     .eq("company_id", currentCompanyId);
 
   if (error) return alert(error.message);
+  let agreementEmailError = "";
   try {
-    await sendAgreementSentEmail({
-      ...item,
-      status: "Pending Signature",
-      sent_to_agency_at: now,
-      terms: item.terms || buildAgreementTermsFromPolicy(item),
-    });
+    await retryAgreementDelivery(dispatchVisaFlowEmail, item);
   } catch (emailError) {
+    agreementEmailError = emailError?.message || "Email provider handoff failed";
     console.warn("Agreement email failed", emailError?.message || emailError);
   }
   await loadAgencyAgreements();
-  alert("Agreement sent to agency portal");
+  alert(agreementEmailError
+    ? `Agreement is available in the agency portal, but email delivery failed: ${agreementEmailError}. See Email Logs before retrying.`
+    : "Agreement sent to the agency portal and handed off to the email provider.");
 }
 
 async function acceptAgreementByAgency(item) {
   if (currentRole !== "Agency") return alert("Only agency users can accept agreements from Office Portal.");
   if (!window.confirm("Accept this agreement electronically?")) return;
 
-  const now = new Date().toISOString();
   const agencySigner = currentUser?.name || currentUser?.email || "Agency User";
 
-  const { error } = await supabase
-    .from("agency_agreements")
-    .update({
-      status: "Active",
-      signed_by_agency: item.signed_by_agency || agencySigner,
-      agency_signature: `Accepted electronically by ${agencySigner} (${currentUser?.email || ""})`,
-      agency_accepted_by: agencySigner,
-      agency_accepted_email: currentUser?.email || "",
-      agency_accepted_at: now,
-      updated_at: now,
-    })
-    .eq("id", item.id)
-    .eq("company_id", currentCompanyId);
+  const { error } = await supabase.rpc("agency_agreement_accept_v1", {
+    p_agreement_id: item.id,
+  });
 
   if (error) return alert(error.message);
 
@@ -13323,7 +14071,28 @@ async function deleteAgreement(id) {
   }
 
   function getOfficeVisibleCandidates() {
-    return candidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
+    return operationalCandidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
+  }
+
+  function getOfficeFilteredCandidates() {
+    const query = normalize(officeCandidateSearch);
+    const rows = getOfficeVisibleCandidates();
+    if (!query) return rows;
+    return rows.filter((item) => normalize([
+      item.request_no,
+      item.candidate_name,
+      item.passport_no,
+      item.profession,
+      item.nationality,
+      item.agency,
+      item.status,
+      item.mobile,
+      item.notes,
+    ].filter(Boolean).join(" ")).includes(query));
+  }
+
+  function getOfficeRenderedCandidates() {
+    return getOfficeFilteredCandidates().slice(0, 50);
   }
 
   function isCurrentAgencyPenaltyRecord(item = {}) {
@@ -13444,6 +14213,101 @@ async function deleteAgreement(id) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function openBulkAssignment(candidateIds = [], mode = "selected") {
+    const ids = [...new Set(candidateIds.map(String).filter(Boolean))];
+    if (mode !== "matching" && ids.length === 0) return alert("Please select at least one candidate.");
+    setBulkAssignmentBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("bulk_assignment_request_lines_v1");
+      if (error) throw error;
+      setBulkAssignmentLines(data || []);
+      setBulkAssignmentCandidateIds(ids);
+      setBulkAssignmentMode(mode);
+      setBulkAssignmentRequestNo("");
+      setBulkAssignmentLineId("");
+      setBulkAssignmentOpen(true);
+    } catch (error) {
+      alert(error.message || "Unable to load available request lines.");
+    } finally {
+      setBulkAssignmentBusy(false);
+    }
+  }
+
+  function getBulkAssignmentCandidates() {
+    const line = bulkAssignmentLines.find((item) => String(item.request_line_id) === String(bulkAssignmentLineId));
+    const ids = bulkAssignmentMode === "matching" && line
+      ? getMatchingCandidateIds(candidates, line)
+      : bulkAssignmentCandidateIds;
+    return candidates.filter((item) => ids.includes(String(item.id)));
+  }
+
+  async function confirmBulkAssignment() {
+    const line = bulkAssignmentLines.find((item) => String(item.request_line_id) === String(bulkAssignmentLineId));
+    if (!line) return alert("Select Request No and Request Line.");
+    const selected = getBulkAssignmentCandidates();
+    const preview = buildBulkAssignmentPreview(selected, { ...line, quantity: line.required_quantity }, line.linked_quantity);
+    if (!selected.length) return alert("No matching candidates were found.");
+    if (preview.rejectedCount) return alert("All selected candidates must match. Review rejection reasons before confirming.");
+    if (!preview.capacityValid) return alert("Requested quantity capacity would be exceeded.");
+    if (!window.confirm(`Assign ${selected.length} candidate(s) to ${line.request_no} / Line ${line.line_no}?`)) return;
+    setBulkAssignmentBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("bulk_assign_candidates_v1", { p_candidate_ids: selected.map((item) => item.id), p_request_line_id: line.request_line_id });
+      if (error) throw error;
+      setBulkAssignmentOpen(false); setCandidateSelectedIds([]); setOfficeSelectedCandidateIds([]);
+      await loadAll();
+      alert(`Successfully assigned ${Number(data?.assigned_count || selected.length)} candidate(s).`);
+    } catch (error) { alert(error.message || "Bulk assignment failed. No candidates were assigned."); }
+    finally { setBulkAssignmentBusy(false); }
+  }
+
+  async function bulkUnassign(candidateIds = []) {
+    const ids = [...new Set(candidateIds.map(String).filter(Boolean))];
+    if (!ids.length) return alert("Please select at least one assigned candidate.");
+    const reason = window.prompt("Reason for unassignment:");
+    if (!reason || reason.trim().length < 3) return alert("An unassignment reason is required.");
+    if (!window.confirm(`Unassign ${ids.length} candidate(s)? This is allowed only before Authorization or Mobilization.`)) return;
+    setBulkAssignmentBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("bulk_unassign_candidates_v1", { p_candidate_ids: ids, p_reason: reason.trim() });
+      if (error) throw error;
+      setCandidateSelectedIds([]); setOfficeSelectedCandidateIds([]); await loadAll();
+      alert(`Successfully unassigned ${Number(data?.unassigned_count || ids.length)} candidate(s).`);
+    } catch (error) { alert(error.message || "Bulk unassignment failed. No candidates were changed."); }
+    finally { setBulkAssignmentBusy(false); }
+  }
+
+  function renderBulkAssignmentPanel() {
+    if (!bulkAssignmentOpen) return null;
+    const line = bulkAssignmentLines.find((item) => String(item.request_line_id) === String(bulkAssignmentLineId));
+    const preview = line ? buildBulkAssignmentPreview(getBulkAssignmentCandidates(), { ...line, quantity: line.required_quantity }, line.linked_quantity) : null;
+    return <FormCard title="Bulk Assignment Confirmation">
+      <p>Only open request lines for the active authenticated company workspace are available.</p>
+      <div className="form-grid">
+        <Select value={bulkAssignmentRequestNo} onChange={(value) => { setBulkAssignmentRequestNo(value); setBulkAssignmentLineId(""); }} placeholder="Request No" searchable options={[...new Set(bulkAssignmentLines.map((item) => item.request_no))]} />
+        <Select value={bulkAssignmentLineId} onChange={setBulkAssignmentLineId} placeholder="Request Line" searchable options={bulkAssignmentLines.filter((item) => item.request_no === bulkAssignmentRequestNo).map((item) => ({ value: item.request_line_id, label: `Line ${item.line_no} — ${item.profession} — ${item.nationality} — ${item.gender} — Remaining ${item.remaining_quantity}` }))} />
+      </div>
+      {preview && <>
+        <div className="stats-grid" style={{ marginTop: 12 }}>
+          <div className="stat-card"><h3>Selected</h3><strong>{preview.selectedCount}</strong></div>
+          <div className="stat-card"><h3>Required</h3><strong>{preview.required}</strong></div>
+          <div className="stat-card"><h3>Currently Linked</h3><strong>{preview.linked}</strong></div>
+          <div className="stat-card"><h3>Remaining</h3><strong>{preview.remaining}</strong></div>
+          <div className="stat-card"><h3>Profession</h3><strong>{preview.profession}</strong></div>
+          <div className="stat-card"><h3>Nationality</h3><strong>{preview.nationality}</strong></div>
+          <div className="stat-card"><h3>Gender</h3><strong>{preview.gender}</strong></div>
+          <div className="stat-card"><h3>Matching</h3><strong>{preview.matchingCount}</strong></div>
+          <div className="stat-card"><h3>Rejected</h3><strong>{preview.rejectedCount}</strong></div>
+        </div>
+        {preview.rejected.length > 0 && <div className="insight-list">{preview.rejected.map(({ candidate, reasons }) => <p key={candidate.id}><b>{candidate.candidate_name}:</b> {reasons.join(", ")}</p>)}</div>}
+      </>}
+      <div className="actions-line">
+        <button className="save-btn" disabled={bulkAssignmentBusy || !preview?.matchingCount || preview?.rejectedCount > 0 || !preview?.capacityValid} onClick={confirmBulkAssignment}>{bulkAssignmentBusy ? "Assigning..." : "Confirm Assignment"}</button>
+        <button className="light-btn" disabled={bulkAssignmentBusy} onClick={() => setBulkAssignmentOpen(false)}>Cancel</button>
+      </div>
+    </FormCard>;
+  }
+
   function toggleOfficeCandidateSelection(candidateId) {
     const id = String(candidateId || "");
     if (!id) return;
@@ -13453,7 +14317,7 @@ async function deleteAgreement(id) {
   }
 
   function toggleAllOfficeCandidates() {
-    const visibleIds = getOfficeVisibleCandidates().map((item) => String(item.id));
+    const visibleIds = getOfficeRenderedCandidates().map((item) => String(item.id));
     if (visibleIds.length === 0) return;
     const allSelected = visibleIds.every((id) => officeSelectedCandidateIds.includes(id));
     setOfficeSelectedCandidateIds(allSelected ? [] : visibleIds);
@@ -13556,10 +14420,8 @@ async function deleteAgreement(id) {
         if (error) throw error;
       }
 
-      if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
-        user_id: null,
+      if (secureLogFeaturesAvailable) await triggerExternalNotification("OFFICE_BULK_CANDIDATE_UPDATE", {
         agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
-        type: "OFFICE_BULK_CANDIDATE_UPDATE",
         title: "Office Bulk Candidate Update",
         message: `${selectedCandidates.length} candidates updated in Office Portal`,
         priority: "Medium",
@@ -13571,7 +14433,7 @@ async function deleteAgreement(id) {
           status: officeBulkForm.status || "",
           medical_status: officeBulkForm.medical_status || "",
         },
-      })]);
+      });
 
       const touchedRequestNos = [...new Set(selectedCandidates.map((item) => item.request_no).filter(Boolean))];
       for (const requestNo of touchedRequestNos) {
@@ -13583,6 +14445,7 @@ async function deleteAgreement(id) {
           .select("*", { count: "exact", head: true })
           .eq("request_no", requestNo)
           .eq("company_id", currentCompanyId)
+          .is("deleted_at", null)
           .in("status", completedStatuses);
 
         const requiredQty = Number(requestRow?.quantity || 0);
@@ -13661,8 +14524,14 @@ arrival_date: item.arrival_date || "",
 
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+  function showCandidateSaveError(message) {
+    setCandidateSaveFeedback({ type: "error", message: String(message || "Candidate could not be saved.") });
+    return null;
+  }
+
   async function saveCandidate() {
-    if (!canManageCandidates && !canManageOfficePortal) return alert("You do not have permission to manage candidates.");
+    if (!canManageCandidates && !canManageOfficePortal) return showCandidateSaveError("You do not have permission to manage candidates.");
+    setCandidateSaveFeedback({ type: "info", message: "Saving candidate data..." });
     const { data: requestData } = await supabase
   .from("requests")
   .select("approval_status, quantity, remaining_qty, recruitment_type, nationality")
@@ -13675,7 +14544,7 @@ if (
   requestData.approval_status !== "Approved by Recruitment" &&
   requestData.approval_status !== "Approved"
 ) {
-  return alert("Candidates cannot be added until the request is approved.");
+  return showCandidateSaveError("Candidates cannot be added until the request is approved.");
 }
 
     let matchedCandidateLine = null;
@@ -13690,18 +14559,18 @@ if (
           if (candidateForm.request_line_id && String(candidateForm.request_line_id) === String(line.id)) return true;
           return (
             isCompatibleText(candidateForm.profession, line.profession) &&
-            normalize(candidateForm.nationality) === normalize(line.nationality) &&
+            nationalitiesMatch(candidateForm.nationality, line.nationality, countries) &&
             (!candidateForm.gender || !line.gender || normalize(candidateForm.gender) === normalize(line.gender))
           );
         });
 
         if (!matchedCandidateLine) {
-          return alert("Please select or enter a candidate profession, nationality, and gender matching one request line exactly.");
+          return showCandidateSaveError("Please select a profession, nationality, and gender matching one approved request line exactly.");
         }
       }
     }
 
-    if (!candidateForm.candidate_name) return alert("Candidate name is required.");
+    if (!candidateForm.candidate_name) return showCandidateSaveError("Candidate name is required.");
     const oldCandidate = candidateEditingId
   ? candidates.find((c) => String(c.id) === String(candidateEditingId))
   : null;
@@ -13728,7 +14597,7 @@ const saudiCandidateFlow = isSaudiRequest(selectedCandidateRequest) || isSaudiNa
 
 if (saudiCandidateFlow) {
   if (!String(candidateForm.civil_id_no || "").trim() || !candidateForm.civil_id_expiry_date) {
-    return alert("Saudi candidate requires Civil ID No and Civil ID Expiry Date. Please enter them in the Candidates form.");
+    return showCandidateSaveError("Saudi candidate requires Civil ID No and Civil ID Expiry Date. Please enter them in the Candidates form.");
   }
 }
 
@@ -13806,7 +14675,7 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
           .select("id")
           .single();
 
-    if (result.error) return alert(result.error.message);
+    if (result.error) return showCandidateSaveError(result.error.message);
 
     const savedCandidateId = candidateEditingId || result.data?.id;
 
@@ -13880,30 +14749,41 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
       }
     }
 
-    if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
-      user_id: null,
-      agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
-      type: candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
-      title: candidateEditingId ? "Candidate Updated" : "New Candidate Added",
-      message: `${candidateForm.candidate_name || "Candidate"} / ${candidateForm.request_no || "No Request"} / ${autoStatus}`,
-      priority: "Medium",
-      status: "Unread",
-      related_table: "candidates",
-      related_id: String(savedCandidateId || ""),
-      data: {
-        candidate_name: candidateForm.candidate_name,
-        request_no: candidateForm.request_no,
-        agency: currentRole === "Agency" ? currentUser?.agency_name : candidateForm.agency,
-        status: autoStatus,
-      },
-    })]);
+    let notificationWarning = "";
+    if (secureLogFeaturesAvailable) {
+      try {
+        await triggerExternalNotification(
+          candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
+          {
+            company_id: currentCompanyId,
+            agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
+            title: candidateEditingId ? "Candidate Updated" : "New Candidate Added",
+            message: `${candidateForm.candidate_name || "Candidate"} / ${candidateForm.request_no || "No Request"} / ${autoStatus}`,
+            priority: "Medium",
+            status: "Unread",
+            related_table: "candidates",
+            related_id: String(savedCandidateId || ""),
+            data: {
+              candidate_name: candidateForm.candidate_name,
+              request_no: candidateForm.request_no,
+              agency: currentRole === "Agency" ? currentUser?.agency_name : candidateForm.agency,
+              status: autoStatus,
+            },
+          }
+        );
+      } catch (error) {
+        notificationWarning = " Candidate data was saved, but its notification could not be queued.";
+        console.error("Candidate notification failed after save", error);
+      }
+    }
 
 const { count: completedCandidateCount } = await supabase
   .from("candidates")
   .select("*", { count: "exact", head: true })
   .eq("request_no", candidateForm.request_no)
   .eq("status", saudiCandidateFlow ? "Joined" : "Arrived KSA")
-  .eq("company_id", currentCompanyId);
+  .eq("company_id", currentCompanyId)
+  .is("deleted_at", null);
 
 const requestRemaining =
   Number(requestData?.quantity || 0) - Number(completedCandidateCount || 0);
@@ -13931,22 +14811,75 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
    
 
-  await loadRequests();
-
-    alert(candidateEditingId ? "Candidate updated successfully" : "Candidate saved successfully");
-    resetCandidateForm();
-    loadCandidates();
-    loadCandidateTechnicalProfiles();
+  resetCandidateForm();
+  await Promise.all([
+    currentRole === "Agency" ? Promise.resolve() : loadRequests(),
+    loadCandidates(),
+    loadCandidateTechnicalProfiles(),
+  ]);
+  setCandidateSaveFeedback({
+    type: notificationWarning ? "warning" : "success",
+    message: `${candidateEditingId ? "Candidate updated successfully." : "Candidate saved successfully."}${notificationWarning}`,
+  });
   }
 
   async function deleteCandidate(id) {
-    if (!canManageCandidates) return alert("You do not have permission to delete candidates.");
-    if (!window.confirm("Delete this candidate?")) return;
-    const { error } = await supabase.from("candidates").delete().eq("id", id);
+    return softDeleteCandidates([id]);
+  }
+
+  async function softDeleteCandidates(candidateIds = [], batch = null) {
+    const ids = Array.from(new Set(candidateIds.map(String).filter(Boolean)));
+    const selected = candidates.filter((item) => ids.includes(String(item.id)));
+    if (!ids.length || selected.length !== ids.length) return alert("No accessible candidates were selected.");
+    const reason = window.prompt(`Soft delete ${ids.length} candidate(s)${batch ? ` from ${batch.file_name}` : ""}.\nEnter deletion reason:`);
+    if (!String(reason || "").trim()) return alert("Deletion reason is required. No candidates were changed.");
+    if (ids.length >= 100 && window.prompt(`Large batch: ${ids.length} candidates. Type DELETE to confirm.`) !== "DELETE") {
+      return alert("Confirmation did not match. No candidates were changed.");
+    }
+    const protectedRows = selected.filter((item) => ["visa stamped","arrived","arrived ksa","joined","employee","mobilization completed"].includes(String(item.status || "").toLowerCase()));
+    const isCompanyAdmin = ["Admin", "Company Admin"].includes(currentRole);
+    if (protectedRows.length && !isCompanyAdmin) return alert(`${protectedRows.length} candidate(s) are in protected stages and require Company Admin.`);
+    const allowProtected = protectedRows.length
+      ? window.confirm(`WARNING: ${protectedRows.length} candidate(s) reached a protected stage. Company Admin override?`)
+      : false;
+    if (protectedRows.length && !allowProtected) return;
+    const linkedRows = selected.filter((item) => String(item.request_no || "").trim());
+    const confirmLinked = linkedRows.length
+      ? window.confirm(`${linkedRows.length} candidate(s) are linked to a request or authorization. Continue with soft delete?`)
+      : false;
+    if (linkedRows.length && !confirmLinked) return;
+    const { data, error } = await supabase.rpc("candidate_soft_delete_v1", {
+      p_company_id: currentCompanyId,
+      p_candidate_ids: ids,
+      p_reason: String(reason).trim(),
+      p_confirm_linked: confirmLinked,
+      p_allow_protected: allowProtected,
+    });
     if (error) return alert(error.message);
-    loadCandidates();
-    loadCandidateTechnicalProfiles();
-    loadRequests();
+    setCandidateSelectedIds([]);
+    setOfficeSelectedCandidateIds([]);
+    await Promise.all([loadCandidates(), loadCandidateDeletionData(), loadRequests()]);
+    alert(`Successfully soft deleted ${data?.deleted_count || ids.length} candidate(s).`);
+  }
+
+  async function deleteCandidateUploadBatch(batch) {
+    const batchCandidates = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch?.id || ""));
+    if (!batchCandidates.length) return alert("This upload batch has no active candidates.");
+    return softDeleteCandidates(batchCandidates.map((item) => item.id), batch);
+  }
+
+  async function restoreCandidates(candidateIds = []) {
+    const ids = Array.from(new Set(candidateIds.map(String).filter(Boolean)));
+    if (!ids.length) return;
+    const reason = window.prompt(`Restore ${ids.length} candidate(s). Enter restoration note:`) || "Restored by Company Admin";
+    const { data, error } = await supabase.rpc("candidate_restore_v1", {
+      p_company_id: currentCompanyId,
+      p_candidate_ids: ids,
+      p_reason: reason,
+    });
+    if (error) return alert(error.message);
+    await Promise.all([loadCandidates(), loadCandidateDeletionData(), loadRequests()]);
+    alert(`Successfully restored ${data?.restored_count || ids.length} candidate(s).`);
   }
 
   function getCandidateTemplateSampleRows() {
@@ -14190,7 +15123,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     });
   }
 
-  async function inferCandidateUploadRequestNo(rows = []) {
+  async function inferCandidateUploadRequestNo(rows = [], uploadCompanyId) {
     const explicitCandidateRequestNo = String(candidateForm.request_no || "").trim();
     if (explicitCandidateRequestNo) return explicitCandidateRequestNo;
 
@@ -14216,7 +15149,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         if (agencyName && auth.agency && normalize(auth.agency) !== normalize(agencyName)) return false;
         return (
           isCompatibleText(rowProfession, auth.profession) &&
-          (!rowNationality || !auth.nationality || normalize(rowNationality) === normalize(auth.nationality)) &&
+          (!rowNationality || !auth.nationality || nationalitiesMatch(rowNationality, auth.nationality, countries)) &&
           (!rowGender || !auth.gender || normalize(rowGender) === normalize(auth.gender))
         );
       });
@@ -14231,7 +15164,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       const { data: approvedRequests, error: requestLookupError } = await supabase
         .from("requests")
         .select("id, request_no, approval_status, status, profession, nationality, gender")
-        .eq("company_id", currentCompanyId)
+        .eq("company_id", uploadCompanyId)
         .in("approval_status", ["Approved by Recruitment", "Approved"])
         .range(0, 5000);
 
@@ -14246,7 +15179,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       const { data: requestLineRows, error: lineLookupError } = await supabase
         .from("request_lines")
         .select("id, request_no, profession, nationality, gender, quantity")
-        .eq("company_id", currentCompanyId)
+        .eq("company_id", uploadCompanyId)
         .in("request_no", Array.from(approvedRequestNos))
         .range(0, 5000);
 
@@ -14273,7 +15206,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         const matches = fallbackLines.filter((line) =>
           approvedRequestNos.has(String(line.request_no || "")) &&
           isCompatibleText(rowProfession, line.profession) &&
-          (!rowNationality || !line.nationality || normalize(rowNationality) === normalize(line.nationality)) &&
+          (!rowNationality || !line.nationality || nationalitiesMatch(rowNationality, line.nationality, countries)) &&
           (!rowGender || !line.gender || normalize(rowGender) === normalize(line.gender))
         );
 
@@ -14299,19 +15232,28 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     setTimeout(() => candidateExcelInputRef.current?.click(), 0);
   }
 
-  async function handleAgencyTalentPoolExcelUpload(rows = []) {
+  async function beginCandidateUploadBatch({ uploadCompanyId, uploadAgencyId, fileName, fileHash, rowCount }) {
+    const { data, error } = await supabase.rpc("candidate_upload_batch_begin_v1", {
+      p_company_id: uploadCompanyId,
+      p_agency_id: uploadAgencyId || null,
+      p_file_name: fileName || "Candidate upload",
+      p_file_hash: fileHash,
+      p_row_count: rowCount,
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function handleAgencyTalentPoolExcelUpload(rows = [], uploadWorkspace, uploadGeneration, uploadFile) {
     if (currentRole !== "Agency") {
       return alert("Please select Request No before uploading candidate Excel.");
     }
 
-    if (!currentCompanyId) {
-      return alert("Company workspace is missing. Please select the client workspace first.");
+    if (!uploadWorkspace?.ok) {
+      return alert(uploadWorkspace?.message || "Company Workspace and Agency identity are required before upload.");
     }
 
-    const agencyName = currentUser?.agency_name || candidateForm.agency || "";
-    if (!agencyName) {
-      return alert("Agency name is missing from the current user.");
-    }
+    const { companyId: uploadCompanyId, agencyId: uploadAgencyId, agencyName } = uploadWorkspace;
 
     const payloads = [];
     const candidateTechnicalImportMeta = [];
@@ -14348,7 +15290,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           .from("candidates")
           .select("id")
           .eq("passport_no", passportNo)
-          .eq("company_id", currentCompanyId)
+          .eq("company_id", uploadCompanyId)
           .limit(1);
 
         if (duplicateError) {
@@ -14395,15 +15337,12 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         : null;
 
       payloads.push(
-        withCompany(withCreateActor({
+        secureAgencyCandidatePayload(withCreateActor({
           candidate_name: candidateName,
-          request_line_id: null,
           profession: rowProfession,
           nationality: rowNationality,
           gender: rowGender,
           project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || "Agency Talent Pool",
-          request_no: "",
-          agency: agencyName,
           passport_no: isSaudiNationality(rowNationality) ? "" : passportNo,
           civil_id_no: isSaudiNationality(rowNationality) ? String(civilIdNo || "").trim() : "",
           civil_id_expiry_date: isSaudiNationality(rowNationality) ? civilIdExpiryDate : null,
@@ -14425,7 +15364,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           ai_reasoning: technicalScores?.ai_reasoning || "",
           final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
-        }))
+        }), uploadWorkspace)
       );
 
       candidateTechnicalImportMeta.push(
@@ -14440,12 +15379,23 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       );
     }
 
-    if (!payloads.length) {
-      return alert(
-        "No candidates uploaded.\n\n" +
-          (errors.length ? "Reasons:\n" + errors.slice(0, 15).join("\n") : "")
-      );
+    const validation = getCandidateUploadValidationSummary(payloads, errors);
+    if (!validation.canInsert) return alert(`Candidate upload blocked before insert.\n\n${validation.message}`);
+    if (uploadGeneration !== workspaceDataGenerationRef.current) {
+      return alert("Company Workspace changed during validation. No candidates were uploaded; please retry in the active workspace.");
     }
+    const batch = await beginCandidateUploadBatch({
+      uploadCompanyId,
+      uploadAgencyId,
+      fileName: uploadFile.name,
+      fileHash: uploadFile.hash,
+      rowCount: payloads.length,
+    });
+    payloads.forEach((payload) => {
+      payload.upload_batch_id = batch.id;
+      payload.file_hash = uploadFile.hash;
+      payload.uploaded_by_agency_id = uploadAgencyId;
+    });
 
     const { data: insertedCandidates, error: insertError } = await supabase
       .from("candidates")
@@ -14469,23 +15419,28 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       }
     }
 
-    if (secureLogFeaturesAvailable) await supabase.from("notification_events").insert([withCompany({
-      user_id: null,
-      agency_id: currentUser?.agency_id || null,
-      type: "AGENCY_TALENT_POOL_UPLOAD",
-      title: "Agency Talent Pool Upload",
-      message: `${payloads.length} candidate(s) uploaded by ${agencyName} without request assignment.`,
-      priority: "Medium",
-      status: "Unread",
-      related_table: "candidates",
-      related_id: "",
-      data: {
-        agency: agencyName,
-        upload_mode: "Agency Talent Pool",
-        uploaded_count: payloads.length,
-        intelligence_profiles: technicalProfilePayloads.length,
-      },
-    })]);
+    if (secureLogFeaturesAvailable) {
+      try {
+        await triggerExternalNotification("AGENCY_TALENT_POOL_UPLOAD", {
+          company_id: uploadCompanyId,
+          agency_id: uploadAgencyId,
+          title: "Agency Talent Pool Upload",
+          message: `${payloads.length} candidate(s) uploaded by ${agencyName} without request assignment.`,
+          priority: "Medium",
+          status: "Unread",
+          related_table: "candidates",
+          related_id: (insertedCandidates || []).map((candidate) => candidate.id).sort().join(","),
+          data: {
+            agency: agencyName,
+            upload_mode: "Agency Talent Pool",
+            uploaded_count: payloads.length,
+            intelligence_profiles: technicalProfilePayloads.length,
+          },
+        });
+      } catch (notificationError) {
+        console.warn("Agency Talent Pool notification failed after successful upload", notificationError?.message || notificationError);
+      }
+    }
 
     await loadCandidates();
     await loadCandidateTechnicalProfiles();
@@ -14493,6 +15448,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     alert(
       `Uploaded to Agency Talent Pool: ${payloads.length} candidate(s)\n` +
+        `Accepted rows: ${validation.accepted}\n` +
+        `Rejected rows: ${validation.rejected}\n` +
         `Candidate Intelligence profiles: ${technicalProfilePayloads.length}\n` +
         `Skipped / Errors: ${errors.length}` +
         (errors.length ? `\n\nFirst errors:\n${errors.slice(0, 10).join("\n")}` : "")
@@ -14538,13 +15495,13 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     return (
       isCompatibleText(notificationLine.profession, dbLine.profession) &&
-      normalize(notificationLine.nationality) === normalize(dbLine.nationality) &&
+      nationalitiesMatch(notificationLine.nationality, dbLine.nationality, countries) &&
       (!notificationLine.gender || !dbLine.gender || normalize(notificationLine.gender) === normalize(dbLine.gender))
     );
   }
 
-  async function getAgencyAcceptedRequestAccess(requestNo = "") {
-    if (currentRole !== "Agency" || !requestNo || !currentCompanyId || !currentUser?.agency_id) {
+  async function getAgencyAcceptedRequestAccess(requestNo = "", uploadWorkspace = null) {
+    if (currentRole !== "Agency" || !requestNo || !uploadWorkspace?.ok) {
       return { allowed: currentRole !== "Agency", notification: null, lines: [] };
     }
 
@@ -14560,8 +15517,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     const { data, error } = await supabase
       .from("notification_events")
       .select("id, company_id, agency_id, agency_name, request_no, type, related_id, related_table, response_status, sla_started_at, sla_days, sla_due_at, data, created_at")
-      .eq("company_id", currentCompanyId)
-      .eq("agency_id", currentUser.agency_id)
+      .eq("company_id", uploadWorkspace.companyId)
+      .eq("agency_id", uploadWorkspace.agencyId)
       .eq("type", "NEW_REQUEST_AGENCY_ALERT")
       .order("created_at", { ascending: false })
       .range(0, 500);
@@ -14602,7 +15559,23 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   if (!file) return;
 
   try {
+    const uploadGeneration = workspaceDataGenerationRef.current;
+    const uploadWorkspace = currentRole === "Agency"
+      ? resolveAgencyUploadWorkspace({ currentUser, activeAgencyCompanyId, agencyClientAccess })
+      : null;
+    if (currentRole === "Agency" && !uploadWorkspace.ok) {
+      return alert(uploadWorkspace.message);
+    }
+    const uploadCompanyId = uploadWorkspace?.companyId || currentCompanyId;
+    if (!uploadCompanyId) {
+      return alert("Company Workspace is not selected. Please select a client workspace before uploading.");
+    }
+
     const data = await file.arrayBuffer();
+    const fileHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", data)))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const uploadFile = { name: file.name || "Candidate upload", hash: fileHash };
     const workbook = XLSX.read(data, { cellDates: true });
     const uploadSheetName = workbook.SheetNames.find((name) => normalize(name) === "candidates upload") || workbook.SheetNames[0];
     const sheet = workbook.Sheets[uploadSheetName];
@@ -14614,11 +15587,11 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     let requestNo = excelRequestNo || requestNoFromExcel || candidateForm.request_no || "";
 
     if (!requestNo) {
-      requestNo = await inferCandidateUploadRequestNo(rows);
+      requestNo = await inferCandidateUploadRequestNo(rows, uploadCompanyId);
     }
 
     if (!requestNo && currentRole === "Agency") {
-      return await handleAgencyTalentPoolExcelUpload(rows);
+      return await handleAgencyTalentPoolExcelUpload(rows, uploadWorkspace, uploadGeneration, uploadFile);
     }
 
     if (!requestNo) {
@@ -14626,7 +15599,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     }
 
     const agencyRequestAccess = currentRole === "Agency"
-      ? await getAgencyAcceptedRequestAccess(requestNo)
+      ? await getAgencyAcceptedRequestAccess(requestNo, uploadWorkspace)
       : { allowed: true, notification: null, lines: [] };
 
     if (currentRole === "Agency" && agencyRequestAccess.error) {
@@ -14639,9 +15612,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     const { data: requestDataFromDb, error: requestError } = await supabase
       .from("requests")
-      .select("id, request_no, quantity, project_name, project, approval_status, recruitment_type, profession, nationality, gender")
+      .select("id, company_id, request_no, quantity, project_name, project, approval_status, recruitment_type, profession, nationality, gender")
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId)
+      .eq("company_id", uploadCompanyId)
       .maybeSingle();
 
     if ((requestError || !requestDataFromDb) && currentRole !== "Agency") {
@@ -14650,6 +15623,14 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     const agencyNotificationData = agencyRequestAccess.notification?.data || {};
     const agencyNotificationLines = agencyRequestAccess.lines || [];
+    if (currentRole === "Agency" && !isAgencyRequestAssignmentInWorkspace({
+      requestNo,
+      request: requestDataFromDb,
+      notification: agencyRequestAccess.notification,
+      workspace: uploadWorkspace,
+    })) {
+      return alert("This Request No does not belong to the active Company Workspace and Agency assignment.");
+    }
     const requestData = requestDataFromDb || {
       id: agencyNotificationData.request_id || agencyRequestAccess.notification?.related_id || null,
       request_no: requestNo,
@@ -14674,7 +15655,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       .from("request_lines")
       .select("id, request_id, request_no, line_no, profession, nationality, gender, quantity")
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId)
+      .eq("company_id", uploadCompanyId)
       .order("line_no", { ascending: true });
 
     if (lineError && currentRole !== "Agency") return alert(`request_lines: ${lineError.message}`);
@@ -14705,7 +15686,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       .from("candidates")
       .select("id, request_line_id, request_no, profession, nationality, gender, passport_no, status")
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId)
+      .eq("company_id", uploadCompanyId)
       .range(0, 5000);
 
     if (existingError) return alert(existingError.message);
@@ -14761,7 +15742,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         matchedLine = requestLinesForImport.find(
           (line) =>
             isCompatibleText(rowProfession, line.profession) &&
-            normalize(rowNationality) === normalize(line.nationality) &&
+            nationalitiesMatch(rowNationality, line.nationality, countries) &&
             (!rowGender || !line.gender || normalize(rowGender) === normalize(line.gender))
         );
       }
@@ -14806,7 +15787,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           .from("candidates")
           .select("id")
           .eq("passport_no", passportNo)
-          .eq("company_id", currentCompanyId)
+          .eq("company_id", uploadCompanyId)
           .limit(1);
 
         if (duplicateError) {
@@ -14854,16 +15835,13 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         ? buildCandidateTechnicalScores(technicalFormFromExcel, professionIntelligence)
         : null;
 
-      payloads.push(
-        withCompany(withCreateActor({
+      const candidatePayload = withCreateActor({
           candidate_name: candidateName,
-          request_line_id: matchedLine.source === "agency_notification" ? null : (matchedLine.id || null),
           profession: matchedLine.profession || "",
           nationality: matchedLine.nationality || "",
           gender: matchedLine.gender || "",
           project: requestData.project_name || requestData.project || "",
-          request_no: requestData.request_no || requestNo,
-          agency: currentRole === "Agency" ? (currentUser?.agency_name || "") : getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
+          agency: getRowValue(row, ["Agency", "Office", "Agency Name", "المكتب"]),
           passport_no: isSaudiNationality(matchedLine.nationality) ? "" : passportNo,
           civil_id_no: isSaudiNationality(matchedLine.nationality) ? String(civilIdNo || "").trim() : "",
           civil_id_expiry_date: isSaudiNationality(matchedLine.nationality) ? civilIdExpiryDate : null,
@@ -14885,8 +15863,18 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
           ai_reasoning: technicalScores?.ai_reasoning || "",
           final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
           updated_at: new Date().toISOString(),
-        }))
-      );
+      });
+      payloads.push(currentRole === "Agency"
+        ? secureAgencyCandidatePayload(candidatePayload, uploadWorkspace, {
+            requestNo: requestData.request_no || requestNo,
+            requestLineId: matchedLine.source === "agency_notification" ? null : (matchedLine.id || null),
+            project: requestData.project_name || requestData.project || "",
+          })
+        : withCompany({
+            ...candidatePayload,
+            request_line_id: matchedLine.id || null,
+            request_no: requestData.request_no || requestNo,
+          }));
 
       candidateTechnicalImportMeta.push(
         shouldCreateTechnicalProfile
@@ -14900,12 +15888,23 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       );
     }
 
-    if (!payloads.length) {
-      return alert(
-        "No candidates uploaded.\n\n" +
-          (errors.length ? "Reasons:\n" + errors.slice(0, 15).join("\n") : "")
-      );
+    const validation = getCandidateUploadValidationSummary(payloads, errors);
+    if (!validation.canInsert) return alert(`Candidate upload blocked before insert.\n\n${validation.message}`);
+    if (uploadGeneration !== workspaceDataGenerationRef.current) {
+      return alert("Company Workspace changed during validation. No candidates were uploaded; please retry in the active workspace.");
     }
+    const batch = await beginCandidateUploadBatch({
+      uploadCompanyId,
+      uploadAgencyId: uploadWorkspace?.agencyId || null,
+      fileName: uploadFile.name,
+      fileHash: uploadFile.hash,
+      rowCount: payloads.length,
+    });
+    payloads.forEach((payload) => {
+      payload.upload_batch_id = batch.id;
+      payload.file_hash = uploadFile.hash;
+      payload.uploaded_by_agency_id = uploadWorkspace?.agencyId || null;
+    });
 
     const { data: insertedCandidates, error: insertError } = await supabase
       .from("candidates")
@@ -14943,7 +15942,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         updated_at: new Date().toISOString(),
       }))
       .eq("request_no", requestNo)
-      .eq("company_id", currentCompanyId);
+      .eq("company_id", uploadCompanyId);
 
     await loadCandidates();
     await loadCandidateTechnicalProfiles();
@@ -14952,6 +15951,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     alert(
       `Uploaded: ${payloads.length} candidate(s)
+` +
+        `Accepted rows: ${validation.accepted}
+` +
+        `Rejected rows: ${validation.rejected}
 ` +
         `Candidate Intelligence profiles: ${technicalProfilePayloads.length}
 ` +
@@ -15029,6 +16032,231 @@ ${errors.slice(0, 10).join("\n")}` : "")
     );
   }
 
+  function buildGuardedAIInterviewQuestionFallback({ profession = "", difficulty = "Medium", questionCount = 10 } = {}) {
+    const role = String(profession || "the role").trim();
+    const safeDifficulty = AI_INTERVIEW_DIFFICULTY_LEVELS.includes(difficulty) ? difficulty : "Medium";
+    const bank = [
+      {
+        question_type: "Experience",
+        competency: "Relevant Experience",
+        question_text_en: `Summarize your most relevant experience for the ${role} position and explain your personal responsibilities.`,
+        question_text_ar: `لخّص خبرتك الأكثر ارتباطًا بوظيفة ${role} واشرح مسؤولياتك الشخصية فيها.`,
+        key_points: ["relevant experience", "personal responsibility", "measurable result"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Technical Judgment",
+        question_text_en: `Describe a difficult technical problem you solved in a ${role} assignment. How did you diagnose it and verify the result?`,
+        question_text_ar: `اشرح مشكلة فنية صعبة عالجتها في عمل مرتبط بوظيفة ${role}. كيف شخصتها وتحققت من النتيجة؟`,
+        key_points: ["diagnosis", "evidence", "verification", "result"],
+      },
+      {
+        question_type: "Safety",
+        competency: "Safety and Risk Control",
+        question_text_en: `What are the most important safety risks in this role, and what controls must be confirmed before work starts?`,
+        question_text_ar: "ما أهم مخاطر السلامة في هذه الوظيفة، وما الضوابط التي يجب التأكد منها قبل بدء العمل؟",
+        key_points: ["hazard identification", "permit to work", "controls", "stop work"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Accountability",
+        question_text_en: "Give an example of an error or missed assumption you discovered in your work. What did you do next?",
+        question_text_ar: "اذكر مثالًا على خطأ أو افتراض غير صحيح اكتشفته في عملك. ماذا فعلت بعد ذلك؟",
+        key_points: ["ownership", "correction", "communication", "prevention"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Quality Control",
+        question_text_en: `How do you verify that ${role} work complies with drawings, specifications, quality requirements, and applicable standards?`,
+        question_text_ar: `كيف تتحقق من أن أعمال ${role} مطابقة للرسومات والمواصفات ومتطلبات الجودة والمعايير المعمول بها؟`,
+        key_points: ["inspection", "specification", "documentation", "nonconformance"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Communication",
+        question_text_en: "Describe a situation where you had to explain a technical risk to a non-technical stakeholder. What was the outcome?",
+        question_text_ar: "اشرح موقفًا اضطررت فيه إلى توضيح خطر فني لشخص غير متخصص. ما النتيجة؟",
+        key_points: ["clear communication", "risk", "decision", "outcome"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Planning and Prioritization",
+        question_text_en: "When several urgent issues compete for attention, how do you prioritize the work and protect project commitments?",
+        question_text_ar: "عند وجود عدة مشكلات عاجلة في الوقت نفسه، كيف ترتب الأولويات وتحافظ على التزامات المشروع؟",
+        key_points: ["risk based priority", "dependencies", "resources", "communication"],
+      },
+      {
+        question_type: "Experience",
+        competency: "Root Cause Analysis",
+        question_text_en: "Walk through a root-cause investigation you performed. Which evidence changed or confirmed your conclusion?",
+        question_text_ar: "اشرح تحقيقًا أجريته لتحديد السبب الجذري. ما الأدلة التي غيّرت استنتاجك أو أكدته؟",
+        key_points: ["evidence", "root cause", "corrective action", "effectiveness"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Team Coordination",
+        question_text_en: `How do you coordinate ${role} activities with other disciplines, contractors, and site teams to avoid delays or rework?`,
+        question_text_ar: `كيف تنسق أعمال ${role} مع التخصصات الأخرى والمقاولين وفرق الموقع لتجنب التأخير أو إعادة العمل؟`,
+        key_points: ["interfaces", "coordination", "documentation", "follow up"],
+      },
+      {
+        question_type: "Closing",
+        competency: "Professional Readiness",
+        question_text_en: `What information would you request during your first week to perform effectively and safely in the ${role} position?`,
+        question_text_ar: `ما المعلومات التي ستطلبها خلال أسبوعك الأول للعمل بكفاءة وأمان في وظيفة ${role}؟`,
+        key_points: ["scope", "standards", "risks", "stakeholders"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Change Control",
+        question_text_en: "How do you assess and document the technical, schedule, cost, and safety impact of a proposed change?",
+        question_text_ar: "كيف تقيّم وتوثق أثر التغيير المقترح فنيًا وعلى الجدول والتكلفة والسلامة؟",
+        key_points: ["impact assessment", "approval", "traceability", "risk"],
+      },
+      {
+        question_type: "Safety",
+        competency: "Incident Response",
+        question_text_en: "What are your immediate and follow-up actions when you identify an unsafe condition or a serious near miss?",
+        question_text_ar: "ما إجراءاتك الفورية واللاحقة عند اكتشاف حالة غير آمنة أو حادث وشيك خطير؟",
+        key_points: ["stop work", "secure area", "report", "corrective action"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Document Control",
+        question_text_en: "How do you ensure the team is working from the latest approved technical information and records?",
+        question_text_ar: "كيف تضمن أن الفريق يعمل باستخدام أحدث المعلومات والسجلات الفنية المعتمدة؟",
+        key_points: ["revision control", "approval", "distribution", "records"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Decision Making",
+        question_text_en: "Describe a time you had to make a decision with incomplete information. How did you control the risk?",
+        question_text_ar: "اشرح موقفًا اتخذت فيه قرارًا بمعلومات غير مكتملة. كيف سيطرت على المخاطر؟",
+        key_points: ["assumptions", "risk", "consultation", "review"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Continuous Improvement",
+        question_text_en: "Give an example of an improvement you introduced. How did you measure whether it worked?",
+        question_text_ar: "اذكر مثالًا على تحسين طبقته. كيف قست نجاحه؟",
+        key_points: ["baseline", "improvement", "measurement", "sustainability"],
+      },
+    ];
+
+    const selected = bank.slice(0, Math.min(bank.length, Math.max(3, Number(questionCount || 10))));
+    const baseWeight = Math.floor((10000 / selected.length)) / 100;
+    return selected.map((question, index) => ({
+      ...question,
+      difficulty_level: safeDifficulty,
+      weight: index === selected.length - 1
+        ? Number((100 - (baseWeight * (selected.length - 1))).toFixed(2))
+        : baseWeight,
+      maximum_answer_seconds: 120,
+    }));
+  }
+
+  async function saveGuardedAIInterviewTemplateFallback({
+    targetCompanyId,
+    templateName,
+    profession,
+    professionCategory,
+    jobDescription,
+    questionCount,
+    passingScore,
+  }) {
+    const actor = getAIInterviewActorName();
+    const now = new Date().toISOString();
+    const difficulty = AI_INTERVIEW_DIFFICULTY_LEVELS.includes(aiInterviewGenerationForm.difficulty)
+      ? aiInterviewGenerationForm.difficulty
+      : "Medium";
+    const questions = buildGuardedAIInterviewQuestionFallback({ profession, difficulty, questionCount });
+
+    const { data: template, error: templateError } = await supabase
+      .from("ai_interview_templates")
+      .insert([{
+        company_id: targetCompanyId,
+        template_name: templateName,
+        profession,
+        profession_category: professionCategory,
+        language: aiInterviewGenerationForm.language || "Bilingual",
+        interview_mode: "Voice",
+        description: `Structured interview generated from the approved job description for ${profession}.`,
+        candidate_instructions: "Answer with specific examples. The company will review the AI-assisted assessment before making any decision.",
+        duration_minutes: Math.max(10, Math.ceil(questions.length * 2)),
+        maximum_questions: questions.length,
+        passing_score: passingScore,
+        status: "Draft",
+        is_active: false,
+        source_type: "Job Description",
+        job_description: jobDescription,
+        job_description_language: "Auto",
+        request_no: String(aiInterviewGenerationForm.request_no || "").trim(),
+        request_line_id: String(aiInterviewGenerationForm.request_line_id || "").trim(),
+        requested_question_count: questions.length,
+        interview_difficulty: difficulty,
+        generation_status: "Generated",
+        approval_status: "Pending Review",
+        ai_model: "VisaFlow Guarded Fallback",
+        prompt_version: "JD-INTERVIEW-FALLBACK-V1",
+        generated_at: now,
+        last_generated_by: actor,
+        created_by: actor,
+        updated_by: actor,
+      }])
+      .select("*")
+      .single();
+
+    if (templateError) throw templateError;
+
+    const questionRows = questions.map((question, index) => ({
+      company_id: targetCompanyId,
+      template_id: template.id,
+      question_order: index + 1,
+      question_text: question.question_text_ar || question.question_text_en,
+      question_text_ar: question.question_text_ar,
+      question_text_en: question.question_text_en,
+      question_type: question.question_type,
+      competency: question.competency,
+      difficulty_level: question.difficulty_level,
+      weight: question.weight,
+      maximum_answer_seconds: question.maximum_answer_seconds,
+      expected_keywords: question.key_points,
+      key_points: question.key_points,
+      scoring_guide: {
+        scale: "0-100",
+        rule: "Score only job-relevant evidence stated in the answer. Do not infer protected or sensitive traits.",
+      },
+      ideal_answer: question.key_points.join(" • "),
+      recruiter_notes: "Fallback question set requires company review before publishing.",
+      source_type: "AI Guarded Fallback",
+      is_ai_generated: false,
+      ai_generation_notes: "Created because the dedicated generation service was unavailable.",
+      allow_follow_up: true,
+      maximum_follow_ups: 1,
+      is_required: true,
+      is_active: true,
+      created_by: actor,
+      updated_by: actor,
+    }));
+
+    const { error: questionsError } = await supabase
+      .from("ai_interview_questions")
+      .insert(questionRows);
+
+    if (questionsError) {
+      await supabase.from("ai_interview_templates").delete().eq("id", template.id).eq("company_id", targetCompanyId);
+      throw questionsError;
+    }
+
+    return {
+      ok: true,
+      template_id: template.id,
+      template_name: template.template_name,
+      generated_question_count: questionRows.length,
+      used_guarded_fallback: true,
+    };
+  }
+
   async function generateAIInterviewTemplateFromJobDescription() {
     if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to generate AI interview templates.");
@@ -15083,10 +16311,29 @@ ${errors.slice(0, 10).join("\n")}` : "")
         }
       );
 
-      if (error) throw error;
-      if (!data?.ok) {
-        throw new Error(data?.error || `Template generation failed at ${data?.stage || "unknown stage"}.`);
+      if (error || !data?.ok) {
+        let errorCode = data?.error || "";
+        if (!errorCode && error?.context?.clone) {
+          try {
+            const errorBody = await error.context.clone().json();
+            errorCode = errorBody?.error || "";
+          } catch {
+            // Keep the safe generic error below when the Edge response is not JSON.
+          }
+        }
+        errorCode = errorCode || error?.message || "ai_interview_generation_failed";
+        const errorMessages = {
+          ai_service_not_configured: "The AI interview service is not configured. Add OPENAI_API_KEY to the Staging Edge Function secrets.",
+          ai_generation_failed: "The AI service could not generate the interview. Please retry after checking the generation log.",
+          ai_output_invalid: "The AI response did not match the required interview structure. Please retry.",
+          ai_output_incomplete: "The AI response was incomplete and was not saved. Please retry.",
+          rate_limit_exceeded: "Too many interview generation requests. Wait one minute and retry.",
+          interview_generation_denied: "Your role does not have permission to generate interview templates.",
+          cross_tenant_company_denied: "The selected company does not match your active workspace.",
+        };
+        throw new Error(errorMessages[errorCode] || `AI interview generation failed (${errorCode}).`);
       }
+      const generationData = data;
 
       // Delivery is intentionally not saved on the template.
       // The campaign copies its own delivery settings into each candidate session at launch.
@@ -15100,7 +16347,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         normalizeMatchText(jobDescription) === normalizeMatchText(preparedCatalogItem.job_description)
       );
 
-      if (isPreparedEngineeringMaster && data.template_id) {
+      if (isPreparedEngineeringMaster && generationData.template_id && !generationData.used_guarded_fallback) {
         const { error: markerError } = await supabase
           .from("ai_interview_templates")
           .update({
@@ -15108,7 +16355,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
             updated_by: getAIInterviewActorName(),
             updated_at: new Date().toISOString(),
           })
-          .eq("id", data.template_id)
+          .eq("id", generationData.template_id)
           .eq("company_id", targetCompanyId);
 
         if (markerError) {
@@ -15117,11 +16364,11 @@ ${errors.slice(0, 10).join("\n")}` : "")
       }
 
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
-      setAIInterviewGenerationResult(data);
-      setSelectedAIInterviewTemplateId(data.template_id || "");
+      setAIInterviewGenerationResult(generationData);
+      setSelectedAIInterviewTemplateId(generationData.template_id || "");
       setEditingAIInterviewQuestionId("");
       setAIInterviewMessage(
-        `${data.template_name || templateName} generated with ${data.generated_question_count || questionCount} questions and saved as Pending Review.`
+        `${generationData.template_name || templateName} generated with ${generationData.generated_question_count || questionCount} AI questions and saved as Pending Review. Human approval is required before publishing.`
       );
     } catch (error) {
       console.warn("AI interview job-description generation failed", error?.message || error);
@@ -16597,7 +17844,7 @@ async function saveEmployee() {
     joining_date: employeeForm.joining_date || null,
     contract_end_date: employeeForm.contract_end_date || null,
     status: employeeForm.status || "Active",
-    source_candidate_id: employeeForm.source_candidate_id ? Number(employeeForm.source_candidate_id) : null,
+    source_candidate_id: employeeForm.source_candidate_id ? String(employeeForm.source_candidate_id) : null,
     notes: employeeForm.notes || "",
     updated_at: new Date().toISOString(),
   };
@@ -16681,7 +17928,7 @@ async function convertCandidateToEmployee(candidate) {
     joining_date: candidate.joining_date || candidate.arrival_date || new Date().toISOString().slice(0, 10),
     contract_end_date: null,
     status: "Active",
-    source_candidate_id: Number(candidate.id || 0) || null,
+    source_candidate_id: candidate.id ? String(candidate.id) : null,
     notes: `Converted from candidate ${candidate.candidate_name || ""} / Request ${candidate.request_no || "-"}`,
     updated_at: new Date().toISOString(),
   };
@@ -16714,6 +17961,13 @@ const employeeIntelligence = useMemo(() => {
     return endDate >= today && endDate <= next60;
   });
 
+  const expiringEmployees = expiringSoon
+    .map((employee) => ({
+      ...employee,
+      daysRemaining: Math.ceil((new Date(employee.contract_end_date) - today) / 86400000),
+    }))
+    .sort((left, right) => left.daysRemaining - right.daysRemaining);
+
   const openRequests = requests.filter((request) =>
     ["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(request.status || "Open")
   );
@@ -16723,13 +17977,11 @@ const employeeIntelligence = useMemo(() => {
     const hasMatch = openRequests.some(
       (request) =>
         normalize(request.profession) === normalize(employee.profession) &&
-        (!request.nationality || !employee.nationality || normalize(request.nationality) === normalize(employee.nationality)) &&
+        (!request.nationality || !employee.nationality || nationalitiesMatch(request.nationality, employee.nationality, countries)) &&
         (!request.gender || !employee.gender || normalize(request.gender) === normalize(employee.gender))
     );
     if (hasMatch) redeploymentMatches += 1;
   });
-
-  const potentialSaving = redeploymentMatches * 3150;
 
   const projectRisk = Object.values(
     expiringSoon.reduce((acc, employee) => {
@@ -16747,11 +17999,11 @@ const employeeIntelligence = useMemo(() => {
     totalEmployees: employees.length,
     activeEmployees: activeEmployees.length,
     expiringSoon: expiringSoon.length,
+    expiringEmployees,
     redeploymentMatches,
-    potentialSaving,
     projectRisk,
   };
-}, [employees, requests]);
+}, [employees, requests, countries]);
 
 
 function getNumericPercent(value, fallback = 0) {
@@ -16909,14 +18161,14 @@ const localContentDashboard = useMemo(() => {
       if (line?.id && !String(line.id).includes("legacy")) {
         return String(candidate.request_line_id || "") === String(line.id || "") || (
           isUnifiedProfessionMatch(candidate.profession, line.profession) &&
-          (isAnyValue(line.nationality) || isAnyValue(candidate.nationality) || normalizeMatchText(candidate.nationality) === normalizeMatchText(line.nationality)) &&
+          (isAnyValue(line.nationality) || isAnyValue(candidate.nationality) || nationalitiesMatch(candidate.nationality, line.nationality, countries)) &&
           (isAnyValue(line.gender) || isAnyValue(candidate.gender) || normalize(candidate.gender) === normalize(line.gender))
         );
       }
 
       return (
         isUnifiedProfessionMatch(candidate.profession, line?.profession || request.profession) &&
-        (isAnyValue(line?.nationality || request.nationality) || isAnyValue(candidate.nationality) || normalizeMatchText(candidate.nationality) === normalizeMatchText(line?.nationality || request.nationality)) &&
+        (isAnyValue(line?.nationality || request.nationality) || isAnyValue(candidate.nationality) || nationalitiesMatch(candidate.nationality, line?.nationality || request.nationality, countries)) &&
         (isAnyValue(line?.gender || request.gender) || isAnyValue(candidate.gender) || normalize(candidate.gender) === normalize(line?.gender || request.gender))
       );
     }).slice(0, qtyField || undefined).length;
@@ -16932,7 +18184,7 @@ const localContentDashboard = useMemo(() => {
 
     const nationalityMatches = isAnyValue(demandNationality) || isAnyValue(employeeNationality) ||
       (isSaudiNationality(demandNationality) && isSaudiNationality(employeeNationality)) ||
-      normalizeMatchText(demandNationality) === normalizeMatchText(employeeNationality);
+      nationalitiesMatch(demandNationality, employeeNationality, countries);
 
     const genderMatches = isAnyValue(demandGender) || isAnyValue(employeeGender) || normalize(demandGender) === normalize(employeeGender);
 
@@ -17028,7 +18280,7 @@ const localContentDashboard = useMemo(() => {
     expectedPenalty,
     transferSuggestions,
   };
-}, [employees, requests, requestLines, candidates, professions, professionAliases, localContentSettings, localContentProjectTargets, localContentSelectedProject]);
+}, [employees, requests, requestLines, candidates, professions, professionAliases, countries, localContentSettings, localContentProjectTargets, localContentSelectedProject]);
 
 function resetLocalContentProjectForm() {
   setLocalContentEditingProjectId(null);
@@ -17173,31 +18425,13 @@ function downloadLocalContentExcel() {
 }
 
 const filteredEmployeeRows = useMemo(() => {
-  const keyword = String(search || "").toLowerCase();
-  return employees.filter((item) => {
-    if (!keyword) return true;
-    return [item.employee_no, item.employee_name, item.iqama_no, item.profession, item.nationality, item.project_name, item.project_city, item.project_location]
-      .join(" ")
-      .toLowerCase()
-      .includes(keyword);
-  });
-}, [employees, search]);
+  return filterEmployeeRows(employees, employeeTableFilters);
+}, [employees, employeeTableFilters]);
 
-function estimateRedeploymentCost(source = demobilizationForm, suggestion = null) {
-  const isSaudi = isSaudiNationality(source.nationality);
-  const defaultNewRecruitmentCost = isSaudi ? 1200 : 3650;
-  const redeploymentCost = Number(source.redeployment_cost || 500);
-  const manualNewCost = Number(source.estimated_new_recruitment_cost || 0);
-  const newRecruitmentCost = manualNewCost > 0 ? manualNewCost : defaultNewRecruitmentCost;
-  const estimatedSaving = Math.max(newRecruitmentCost - redeploymentCost, 0);
-
-  return {
-    newRecruitmentCost,
-    redeploymentCost,
-    estimatedSaving,
-    recruitmentAvoided: suggestion?.score >= 60 ? "Yes" : source.recruitment_avoided || "Yes",
-  };
-}
+const filteredDemobilizationRows = useMemo(
+  () => filterDemobilizationRows(demobilizations, demobilizationTableFilters),
+  [demobilizations, demobilizationTableFilters]
+);
 
 const demobilizationIntelligence = useMemo(() => {
   const availableEmployees = demobilizations.filter((item) => item.status === "Available").length;
@@ -17205,14 +18439,6 @@ const demobilizationIntelligence = useMemo(() => {
   const reassignedEmployees = demobilizations.filter((item) => item.status === "Reassigned").length;
   const invoicesRequired = demobilizations.filter((item) => item.invoice_required === "Yes").length;
   const recruitmentAvoided = demobilizations.filter((item) => item.recruitment_avoided === "Yes" || item.status === "Reassigned" || Number(item.match_score || 0) >= 60).length;
-  const potentialSaving = demobilizations.reduce((sum, item) => {
-    const storedSaving = Number(item.estimated_saving || 0);
-    if (storedSaving > 0) return sum + storedSaving;
-    const newCost = Number(item.estimated_new_recruitment_cost || (isSaudiNationality(item.nationality) ? 1200 : 3650));
-    const redeployCost = Number(item.redeployment_cost || 500);
-    return sum + Math.max(newCost - redeployCost, 0);
-  }, 0);
-
   const openRecruitmentGaps = requests
     .filter((request) => ["Open", "Under Recruitment", "Interview Stage", "Visa Process"].includes(request.status || "Open"))
     .map((request) => {
@@ -17234,7 +18460,7 @@ const demobilizationIntelligence = useMemo(() => {
   openRecruitmentGaps.slice(0, 6).forEach((request) => {
     const matches = availableWithProfession.filter((employee) =>
       normalize(employee.profession) === normalize(request.profession) &&
-      (!request.nationality || !employee.nationality || normalize(employee.nationality) === normalize(request.nationality)) &&
+      (!request.nationality || !employee.nationality || nationalitiesMatch(employee.nationality, request.nationality, countries)) &&
       (!request.gender || !employee.gender || normalize(employee.gender) === normalize(request.gender))
     );
     if (matches.length > 0) {
@@ -17247,7 +18473,6 @@ const demobilizationIntelligence = useMemo(() => {
         available_matches: matches.length,
         suggested_qty: suggestedQty,
         days_open: request.daysOpen,
-        estimated_saving: suggestedQty * 3150,
         message: `${suggestedQty} available employee(s) can support ${request.request_no} before external recruitment.`,
       });
     }
@@ -17259,11 +18484,10 @@ const demobilizationIntelligence = useMemo(() => {
     reassignedEmployees,
     invoicesRequired,
     recruitmentAvoided,
-    potentialSaving,
     openRecruitmentGaps,
     smartAlerts,
   };
-}, [demobilizations, requests, candidates]);
+}, [demobilizations, requests, candidates, countries]);
 
 function resetDemobilizationForm() {
   setDemobilizationForm(emptyDemobilization);
@@ -17272,77 +18496,13 @@ function resetDemobilizationForm() {
 }
 
 function calculateDemobSuggestions(source = demobilizationForm) {
-  const openStatuses = ["Open", "Under Recruitment", "Interview Stage", "Visa Process"];
-  const blockedCandidateStatuses = ["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "Joined"];
-
-  return requests
-    .filter((request) => openStatuses.includes(request.status || "Open"))
-    .map((request) => {
-      const requiredQty = Number(request.quantity || request.qty || 0);
-      const activeCount = candidates.filter(
-        (candidate) =>
-          String(candidate.request_no || "") === String(request.request_no || "") &&
-          !blockedCandidateStatuses.includes(candidate.status)
-      ).length;
-      const remaining = Math.max(requiredQty - activeCount, 0);
-      if (remaining <= 0) return null;
-
-      const professionMatch = normalize(request.profession) === normalize(source.profession);
-      const nationalityMatch = normalize(request.nationality) === normalize(source.nationality);
-      const genderMatch = !request.gender || !source.gender || normalize(request.gender) === normalize(source.gender);
-      const projectDifferent = normalize(request.project_name || request.project) !== normalize(source.current_project);
-      const daysOpen = request.created_at ? Math.floor((new Date() - new Date(request.created_at)) / (1000 * 60 * 60 * 24)) : 0;
-      const delayedRequest = daysOpen >= 15 || ["Under Recruitment", "Interview Stage", "Visa Process"].includes(request.status);
-      const highPriority = ["Urgent", "High"].includes(request.priority);
-
-      let score = 0;
-      if (professionMatch) score += 40;
-      if (nationalityMatch) score += 20;
-      if (genderMatch) score += 10;
-      if (delayedRequest) score += 15;
-      if (highPriority) score += 15;
-      if (projectDifferent) score += 5;
-      if (remaining > 0) score += 5;
-      score = Math.min(score, 100);
-
-      const cost = estimateRedeploymentCost(source, { score });
-
-      let reason = [];
-      if (professionMatch) reason.push("same profession");
-      if (nationalityMatch) reason.push("same nationality");
-      if (genderMatch) reason.push("gender compatible");
-      if (remaining > 0) reason.push(`${remaining} open position(s)`);
-      if (delayedRequest) reason.push(`recruitment delayed / active for ${daysOpen} day(s)`);
-      if (highPriority) reason.push(`${request.priority} priority`);
-
-      return {
-        request_no: request.request_no,
-        project: request.project_name || request.project || "-",
-        profession: request.profession || "-",
-        nationality: request.nationality || "-",
-        gender: request.gender || "-",
-        priority: request.priority || "Normal",
-        required: requiredQty,
-        active_candidates: activeCount,
-        remaining,
-        days_open: daysOpen,
-        score,
-        new_recruitment_cost: cost.newRecruitmentCost,
-        redeployment_cost: cost.redeploymentCost,
-        estimated_saving: cost.estimatedSaving,
-        recommendation:
-          score >= 85
-            ? "Strong redeployment match. Reassign immediately before external sourcing."
-            : score >= 70
-            ? "Good match. Review with Operations and Recruitment today."
-            : score >= 55
-            ? "Possible match. Needs project approval due to partial mismatch."
-            : "Low match. Keep as backup or hold employee until better request appears.",
-        reason: reason.join(", ") || "limited matching data",
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score);
+  return buildRedeploymentSuggestions({
+    source,
+    requests,
+    candidates,
+    normalizeValue: normalize,
+    nationalityMatches: (left, right) => nationalitiesMatch(left, right, countries),
+  });
 }
 
 function runDemobAI() {
@@ -17365,6 +18525,7 @@ function runDemobAI() {
       suggested_project: "",
       match_score: "0",
       ai_recommendation: "No suitable request found. Keep employee available or proceed with exit/hold decision.",
+      recruitment_avoided: "No",
     }));
     return;
   }
@@ -17383,19 +18544,13 @@ function runDemobAI() {
     suggested_project: best.project,
     match_score: String(best.score),
     ai_recommendation: recommendationText,
-    invoice_required: best.estimated_saving > 0 ? "Yes" : prev.invoice_required || "No",
-    invoice_type: prev.invoice_type || "Redeployment Service",
-    invoice_amount: prev.invoice_amount || String(best.redeployment_cost),
-    redeployment_cost: String(best.redeployment_cost),
-    estimated_new_recruitment_cost: String(best.new_recruitment_cost),
-    estimated_saving: String(best.estimated_saving),
     recruitment_avoided: best.score >= 60 ? "Yes" : "No",
   }));
 }
 
 function applyDemobSuggestion(item) {
   if (!item) return;
-  const recommendationText = `Selected match: ${item.request_no} / ${item.project}. Match score ${item.score}%. Estimated saving ${Number(item.estimated_saving || 0).toLocaleString()} SAR. Reason: ${item.reason}. Recommendation: ${item.recommendation}`;
+  const recommendationText = `Selected match: ${item.request_no} / ${item.project}. Match score ${item.score}%. Reason: ${item.reason}. Recommendation: ${item.recommendation}`;
   setDemobilizationForm((prev) => ({
     ...prev,
     status: "Suggested",
@@ -17403,14 +18558,68 @@ function applyDemobSuggestion(item) {
     suggested_project: item.project,
     match_score: String(item.score),
     ai_recommendation: recommendationText,
-    invoice_required: item.estimated_saving > 0 ? "Yes" : prev.invoice_required || "No",
-    invoice_type: prev.invoice_type || "Redeployment Service",
-    invoice_amount: prev.invoice_amount || String(item.redeployment_cost),
-    redeployment_cost: String(item.redeployment_cost),
-    estimated_new_recruitment_cost: String(item.new_recruitment_cost),
-    estimated_saving: String(item.estimated_saving),
     recruitment_avoided: item.score >= 60 ? "Yes" : "No",
   }));
+}
+
+async function confirmRedeployment(item) {
+  if (!canManageDemobilization) return alert("You do not have permission to confirm redeployment.");
+  if (!item?.suggested_request_no || !item?.suggested_project) {
+    return alert("Select a valid request and project before confirming redeployment.");
+  }
+  if (!window.confirm(`Confirm redeployment of ${item.employee_name} to ${item.suggested_project} for request ${item.suggested_request_no}?`)) return;
+
+  const employee = employees.find((row) =>
+    String(row.employee_no || "") === String(item.employee_id || "") ||
+    (item.iqama_no && String(row.iqama_no || "") === String(item.iqama_no))
+  );
+  if (!employee) {
+    return alert("The linked employee record could not be found. Open the demobilization record and verify Employee ID or Iqama before confirming.");
+  }
+
+  const previousEmployee = { project_name: employee.project_name || "", status: employee.status || "Active" };
+  const employeeResult = await supabase
+    .from("employees")
+    .update({ project_name: item.suggested_project, status: "Active", updated_at: new Date().toISOString() })
+    .eq("id", employee.id)
+    .eq("company_id", currentCompanyId);
+  if (employeeResult.error) return alert(`Redeployment was not confirmed because the employee could not be updated: ${employeeResult.error.message}`);
+
+  const demobilizationResult = await supabase
+    .from("demobilizations")
+    .update({ status: "Reassigned", recruitment_avoided: "Yes", updated_at: new Date().toISOString() })
+    .eq("id", item.id)
+    .eq("company_id", currentCompanyId);
+
+  if (demobilizationResult.error) {
+    await supabase.from("employees").update(previousEmployee).eq("id", employee.id).eq("company_id", currentCompanyId);
+    return alert(`Redeployment was not confirmed and the employee change was rolled back: ${demobilizationResult.error.message}`);
+  }
+
+  let redeploymentNotificationWarning = "";
+
+  if (secureLogFeaturesAvailable) {
+    try {
+      await triggerExternalNotification("REDEPLOYMENT_CONFIRMED", {
+        workspace_company_id: currentCompanyId,
+        title: "Employee redeployment confirmed",
+        message: `${item.employee_name} was reassigned from ${item.current_project || "the previous project"} to ${item.suggested_project} for request ${item.suggested_request_no}.`,
+        priority: "High",
+        recipient_role: "Company",
+        related_id: String(item.id),
+        employee_id: item.employee_id,
+        request_no: item.suggested_request_no,
+        source_project: item.current_project,
+        target_project: item.suggested_project,
+      });
+    } catch (notificationError) {
+      console.error("Redeployment notification failed", notificationError);
+      redeploymentNotificationWarning = " The employee and demobilization records were updated, but Notification Center could not record the confirmation.";
+    }
+  }
+
+  await Promise.all([loadEmployees(), loadDemobilizations(), loadNotifications()]);
+  alert(`Redeployment confirmed. ${item.employee_name} is now assigned to ${item.suggested_project}.${redeploymentNotificationWarning}`);
 }
 
 
@@ -17434,10 +18643,7 @@ function editDemobilization(item) {
     invoice_required: item.invoice_required || "No",
     invoice_amount: item.invoice_amount || "",
     invoice_type: item.invoice_type || "Redeployment Service",
-    redeployment_cost: item.redeployment_cost || "500",
-    estimated_new_recruitment_cost: item.estimated_new_recruitment_cost || "3650",
-    estimated_saving: item.estimated_saving || "",
-    recruitment_avoided: item.recruitment_avoided || "Yes",
+    recruitment_avoided: item.recruitment_avoided || "No",
     notes: item.notes || "",
   });
   setActivePage("Demobilization");
@@ -17445,21 +18651,38 @@ function editDemobilization(item) {
 }
 
 async function saveDemobilization() {
-  if (!canManageDemobilization) return alert("You do not have permission to manage demobilization.");
+  const showDemobilizationError = (message) => {
+    setDemobilizationSaveFeedback({ type: "error", message: String(message || "Demobilization could not be saved.") });
+    return null;
+  };
+
+  if (!canManageDemobilization) return showDemobilizationError("You do not have permission to manage demobilization.");
   if (!demobilizationForm.employee_name || !demobilizationForm.profession) {
-    return alert("Employee name and profession are required.");
+    return showDemobilizationError("Employee name and profession are required.");
   }
+  setDemobilizationSaving(true);
+  setDemobilizationSaveFeedback({ type: "info", message: "Saving demobilization data..." });
 
   const payload = {
-    ...demobilizationForm,
+    employee_name: demobilizationForm.employee_name || "",
+    employee_id: demobilizationForm.employee_id || "",
+    iqama_no: demobilizationForm.iqama_no || "",
+    profession: demobilizationForm.profession || "",
+    nationality: demobilizationForm.nationality || "",
+    gender: demobilizationForm.gender || "",
+    current_project: demobilizationForm.current_project || "",
+    reason: demobilizationForm.reason || "Project End",
+    status: demobilizationForm.status || "Available",
+    suggested_request_no: demobilizationForm.suggested_request_no || "",
+    suggested_project: demobilizationForm.suggested_project || "",
+    invoice_required: demobilizationForm.invoice_required || "No",
+    invoice_type: demobilizationForm.invoice_type || "Redeployment Service",
+    recruitment_avoided: demobilizationForm.recruitment_avoided || "No",
     notes: demobilizationForm.notes || "",
     ai_recommendation: demobilizationForm.ai_recommendation || "",
     demob_date: demobilizationForm.demob_date || null,
     match_score: Number(demobilizationForm.match_score || 0),
     invoice_amount: Number(demobilizationForm.invoice_amount || 0),
-    redeployment_cost: Number(demobilizationForm.redeployment_cost || 0),
-    estimated_new_recruitment_cost: Number(demobilizationForm.estimated_new_recruitment_cost || 0),
-    estimated_saving: Number(demobilizationForm.estimated_saving || 0),
     updated_at: new Date().toISOString(),
   };
 
@@ -17471,11 +18694,34 @@ async function saveDemobilization() {
         .eq("company_id", currentCompanyId)
     : await supabase.from("demobilizations").insert([withCompany(payload)]);
 
-  if (result.error) return alert(result.error.message);
+  if (result.error) {
+    setDemobilizationSaving(false);
+    return showDemobilizationError(result.error.message);
+  }
 
-  alert(demobilizationEditingId ? "Demobilization updated successfully" : "Demobilization saved successfully");
+  let demobilizationWarning = "";
+  const linkedEmployee = employees.find((employee) =>
+    String(employee.employee_no || "") === String(demobilizationForm.employee_id || "") ||
+    (demobilizationForm.iqama_no && String(employee.iqama_no || "") === String(demobilizationForm.iqama_no))
+  );
+  if (linkedEmployee && ["Available", "Suggested", "Exit", "Hold"].includes(payload.status)) {
+    const employeeUpdate = await supabase
+      .from("employees")
+      .update({ status: "Demobilized", updated_at: new Date().toISOString() })
+      .eq("id", linkedEmployee.id)
+      .eq("company_id", currentCompanyId);
+    if (employeeUpdate.error) {
+      demobilizationWarning = ` The record was saved, but the employee status could not be synchronized: ${employeeUpdate.error.message}`;
+    }
+  }
+
+  setDemobilizationSaveFeedback({
+    type: demobilizationWarning ? "warning" : "success",
+    message: `${demobilizationEditingId ? "Demobilization updated successfully." : "Demobilization saved successfully."}${demobilizationWarning}`,
+  });
+  setDemobilizationSaving(false);
   resetDemobilizationForm();
-  await loadDemobilizations();
+  await Promise.all([loadDemobilizations(), loadEmployees()]);
 }
 
 async function deleteDemobilization(id) {
@@ -17600,8 +18846,15 @@ function editMobilization(item) {
 }
 
 async function saveMobilization() {
-  if (!canManageMobilization) return alert("You do not have permission to manage mobilization.");
-  if (!mobilizationForm.candidate_id) return alert("Candidate is required.");
+  const showMobilizationError = (message) => {
+    setMobilizationSaveFeedback({ type: "error", message: String(message || "Mobilization could not be saved.") });
+    return null;
+  };
+
+  if (!canManageMobilization) return showMobilizationError("You do not have permission to manage mobilization.");
+  if (!mobilizationForm.candidate_id) return showMobilizationError("Candidate is required.");
+  setMobilizationSaving(true);
+  setMobilizationSaveFeedback({ type: "info", message: "Saving mobilization data..." });
 
   const candidate = candidates.find(
     (c) => String(c.id) === String(mobilizationForm.candidate_id)
@@ -17613,11 +18866,12 @@ async function saveMobilization() {
   );
 
   if (existing) {
-    return alert("This candidate already has a mobilization record. Use Edit instead.");
+    setMobilizationSaving(false);
+    return showMobilizationError("This candidate already has a mobilization record. Use Edit instead.");
   }
 
   const payload = {
-    candidate_id: Number(mobilizationForm.candidate_id),
+    candidate_id: String(mobilizationForm.candidate_id),
     request_no: candidate?.request_no || mobilizationForm.request_no || "",
     candidate_name: candidate?.candidate_name || mobilizationForm.candidate_name || "",
     profession: candidate?.profession || mobilizationForm.profession || "",
@@ -17639,7 +18893,10 @@ async function saveMobilization() {
     ? await supabase.from("mobilizations").update(payload).eq("id", mobilizationEditingId)
     : await supabase.from("mobilizations").insert([withCompany(payload)]);
 
-  if (result.error) return alert(result.error.message);
+  if (result.error) {
+    setMobilizationSaving(false);
+    return showMobilizationError(result.error.message);
+  }
 
   let candidateStatus = candidate?.status || "New";
   if (payload.mobilization_status === "Joined") candidateStatus = "Joined";
@@ -17649,7 +18906,7 @@ async function saveMobilization() {
   else if (payload.medical_status === "Fit") candidateStatus = "Medical Passed";
   else if (payload.medical_status === "Unfit") candidateStatus = "Medical Failed";
 
-  await supabase
+  const candidateUpdateResult = await supabase
     .from("candidates")
     .update(withUpdateActor({
       status: candidateStatus,
@@ -17662,7 +18919,61 @@ async function saveMobilization() {
     }))
     .eq("id", payload.candidate_id);
 
-  alert(mobilizationEditingId ? "Mobilization updated successfully" : "Mobilization saved successfully");
+  if (candidateUpdateResult.error) {
+    setMobilizationSaving(false);
+    return showMobilizationError(`Mobilization saved, but candidate status could not be updated: ${candidateUpdateResult.error.message}`);
+  }
+
+  if (payload.mobilization_status === "Joined") {
+    const { data: existingOnboarding, error: onboardingLookupError } = await supabase
+      .from("onboarding_validations")
+      .select("id")
+      .eq("company_id", currentCompanyId)
+      .eq("candidate_id", payload.candidate_id)
+      .limit(1);
+
+    if (onboardingLookupError) {
+      setMobilizationSaving(false);
+      return showMobilizationError(`Mobilization saved, but onboarding monitoring could not be checked: ${onboardingLookupError.message}`);
+    }
+
+    if (!existingOnboarding?.length) {
+      const agencyImpactEligible = Boolean(candidate?.agency_id || candidate?.agency_name);
+      const { error: onboardingInsertError } = await supabase
+        .from("onboarding_validations")
+        .insert([withCompany({
+          candidate_id: payload.candidate_id,
+          request_no: payload.request_no,
+          candidate_name: payload.candidate_name,
+          passport_no: candidate?.passport_no || candidate?.passport_number || "",
+          agency_name: candidate?.agency_name || "",
+          agency_id: candidate?.agency_id || null,
+          profession: payload.profession,
+          nationality: payload.nationality,
+          project: candidate?.project || candidate?.project_name || "",
+          arrival_date: payload.arrival_date,
+          joining_date: payload.joining_date,
+          worker_validation_required: true,
+          agency_impact_eligible: agencyImpactEligible,
+          validation_scope: agencyImpactEligible ? "Worker + Agency Impact" : "Worker Only",
+          status: "Active Monitoring",
+          final_result: "Under Monitoring",
+          notes: "Created automatically when mobilization status changed to Joined.",
+          updated_at: new Date().toISOString(),
+        })]);
+
+      if (onboardingInsertError) {
+        setMobilizationSaving(false);
+        return showMobilizationError(`Mobilization saved, but onboarding monitoring could not be started: ${onboardingInsertError.message}`);
+      }
+    }
+  }
+
+  setMobilizationSaveFeedback({
+    type: "success",
+    message: mobilizationEditingId ? "Mobilization updated successfully." : "Mobilization saved successfully.",
+  });
+  setMobilizationSaving(false);
   resetMobilizationForm();
   await loadMobilizations();
   await loadCandidates();
@@ -17692,7 +19003,7 @@ async function createVisaFromRequest(item) {
     (line) =>
       !isSaudiNationality(line.nationality) &&
       normalize(line.profession) === normalize(firstLine.profession || item.profession) &&
-      normalize(line.nationality) === normalize(firstLine.nationality || item.nationality) &&
+      nationalitiesMatch(line.nationality, firstLine.nationality || item.nationality, countries) &&
       (!firstLine.gender || !line.gender || normalize(line.gender) === normalize(firstLine.gender)) &&
       getVisaLineRemainingQty(line) >= neededQty
   );
@@ -17924,10 +19235,16 @@ async function handleLogin() {
       password,
     });
 
-    let userData = null;
+    if (authError || !authData?.user?.id) {
+      await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      setWorkspaceAuthReady(true);
+      alert(getWorkspaceLoginErrorMessage("auth", authError));
+      return;
+    }
 
-    if (!authError && authData?.user?.id) {
-      const verifiedSession = authData.session || null;
+    let userData = null;
+    let workspaceContext = null;
+    const verifiedSession = authData.session || null;
       if (
         !verifiedSession?.access_token ||
         !verifiedSession?.user?.id ||
@@ -17958,9 +19275,35 @@ async function handleLogin() {
         return;
       }
 
-      const { data: linkedUser, error: linkedUserError } = await supabase.rpc(
-        "get_authenticated_app_user"
-      );
+      if (
+        authData.user.user_metadata?.account_type === "agency" &&
+        authData.user.user_metadata?.provisioning_request_id
+      ) {
+        try {
+          await invokeAgencyInvitation(supabase, { action: "activate" });
+        } catch {
+          alert("تعذر تفعيل دعوة المكتب. تواصل مع مسؤول النظام.");
+          return;
+        }
+      }
+
+      try {
+        workspaceContext = await loadAuthenticatedWorkspaceContext(
+          supabase,
+          verifiedSession.user.id
+        );
+      } catch (error) {
+        reportSafeAuthDiagnostics(
+          persistedAuth.session,
+          null,
+          "password_sign_in_workspace_failed",
+          persistedAuth.authUser
+        );
+        alert(getWorkspaceLoginErrorMessage("workspace", error));
+        return;
+      }
+
+      const linkedUser = workspaceContext.actor;
 
       reportSafeAuthDiagnostics(
         persistedAuth.session,
@@ -17969,86 +19312,15 @@ async function handleLogin() {
         persistedAuth.authUser
       );
 
-      if (
-        linkedUserError ||
-        !linkedUser?.auth_user_id ||
-        String(linkedUser.auth_user_id) !== String(verifiedSession.user.id)
-      ) {
-        alert("Invalid email or password");
-        return;
-      }
-
       userData = linkedUser;
-    } else {
-      // A legacy browser session must not inherit a different Supabase Auth identity.
-      legacyWorkspaceActiveRef.current = true;
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        legacyWorkspaceActiveRef.current = false;
-        alert("Login failed. Please try again.");
-        return;
-      }
-
-      const { data: legacyResult, error: legacyError } = await supabase.rpc(
-        "legacy_app_login",
-        { p_email: email, p_password: password }
-      );
-
-      if (legacyError || !legacyResult?.ok || !legacyResult?.user) {
-        legacyWorkspaceActiveRef.current = false;
-        setWorkspaceAuthReady(true);
-        alert("Invalid email or password");
-        return;
-      }
-
-      userData = legacyResult.user;
-    }
 
     const userStatus = String(userData.status || "").trim().toLowerCase();
     if (userStatus !== "active" || userData.is_active === false) {
-      alert("This user is not active");
+      alert("Your account is inactive.");
       return;
     }
 
-    let companyData = null;
-
-    if (userData.company_id) {
-      const { data: company, error: companyError } = await supabase
-        .from("companies")
-        .select("id, name, status, subscription_status, subscription_end")
-        .eq("id", userData.company_id)
-        .maybeSingle();
-
-      if (companyError) {
-        console.warn("Company check failed:", companyError.message);
-      }
-
-      companyData = company;
-
-      const companyStatus = String(companyData?.status || "").trim().toLowerCase();
-      const subscriptionStatus = String(companyData?.subscription_status || "").trim().toLowerCase();
-
-      // Important:
-      // If companyData is null, the frontend likely cannot read the companies table
-      // because of RLS / policy settings. Do not block login in this case.
-      // The user's company_id will still isolate all operational data through currentCompanyId.
-      if (companyData) {
-        if (companyStatus !== "active" || !isLoginAllowedSubscriptionStatus(subscriptionStatus)) {
-          alert("Company subscription is not active. Please contact the system administrator.");
-          return;
-        }
-
-        if (companyData.subscription_end) {
-          const endDate = new Date(companyData.subscription_end);
-          endDate.setHours(23, 59, 59, 999);
-          if (endDate < new Date()) {
-            alert("Company subscription has expired. Please contact the system administrator.");
-            return;
-          }
-        }
-      }
-    }
+    const companyData = workspaceContext.company;
 
     const loggedUser = {
       ...userData,
@@ -18083,7 +19355,7 @@ async function handleLogin() {
     setWorkspaceRecoveryLoginGuard(false);
     activateWorkspaceUser(loggedUser, {
       persist: true,
-      legacy: !loggedUser.auth_user_id,
+      legacy: false,
     });
     setActivePage((ROLE_PAGES[loggedUser.role] || ROLE_PAGES.Viewer)[0]);
   } finally {
@@ -18164,22 +19436,20 @@ useEffect(() => {
 
 function exportRowsToExcel(rows, fileName, sheetName = "Data") {
   if (!rows || rows.length === 0) {
-    alert("No data to export");
+    alert("No rows are available to export. Clear or adjust the active filters and try again.");
     return;
   }
 
-  const cleanRows = rows.map((row) => {
-    const clean = {};
-    Object.entries(row).forEach(([key, value]) => {
-      if (typeof value !== "object") clean[key] = value ?? "";
-    });
-    return clean;
-  });
+  const cleanRows = buildExcelSafeRows(rows);
 
   const worksheet = XLSX.utils.json_to_sheet(cleanRows);
+  worksheet["!autofilter"] = { ref: worksheet["!ref"] };
+  worksheet["!cols"] = getExcelColumnWidths(cleanRows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, `${fileName}.xlsx`);
+  const datedFileName = `${fileName}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(workbook, datedFileName);
+  alert(`Excel export completed: ${rows.length.toLocaleString()} row(s) in ${datedFileName}`);
 }
 
 function executiveAlertClass(value) {
@@ -18584,7 +19854,7 @@ function candidateMatchesPenaltyLine(candidate, line) {
   }
 
   const professionOk = isUnifiedProfessionMatch(candidate.profession, line.profession);
-  const nationalityOk = normalize(candidate.nationality) === normalize(line.nationality);
+  const nationalityOk = nationalitiesMatch(candidate.nationality, line.nationality, countries);
   const genderOk = !candidate.gender || !line.gender || normalize(candidate.gender) === normalize(line.gender);
 
   return professionOk && nationalityOk && genderOk;
@@ -18633,6 +19903,7 @@ function getAcceptedAgencyRequestPenaltyAlerts() {
   const penaltyNotificationTypes = new Set([
     "NEW_REQUEST_AGENCY_ALERT",
     "AGENCY_REQUEST_NOTIFICATION",
+    "AGENCY_REQUEST_RESPONSE",
   ]);
 
   return (notifications || []).filter((item) => {
@@ -18780,15 +20051,17 @@ function getPenaltyRegisterDisplayRows() {
     .filter((item) => !savedKeys.has(getPenaltyRowUniqueKey(item)))
     .map((item) => ({ ...item, status: "Calculated - Not Saved", source: "live" }));
   return [...savedRows, ...liveRows].sort((a, b) => {
-    const statusWeight = { "Agency Objection Submitted": 0, "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Waived: 6 };
+    const statusWeight = { "Agency Objection Submitted": 0, "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Cancelled: 6, Waived: 6 };
     return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) || Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0);
   });
 }
 
-async function generatePenaltyRegister() {
-  if (!canApprovePenalties) return alert("You do not have permission to generate penalty records.");
+async function syncCalculatedPenaltyRegister({ silent = false } = {}) {
   const liveRows = calculatePenaltyRegisterRows();
-  if (!liveRows.length) return alert("No calculated penalties found based on the active agreements.");
+  if (!liveRows.length) {
+    if (!silent) alert("No calculated penalties found based on the active agreements.");
+    return { inserted: 0, updated: 0 };
+  }
 
   let inserted = 0;
   let updated = 0;
@@ -18813,23 +20086,37 @@ async function generatePenaltyRegister() {
     delete payload.penalty_key;
 
     if (existing?.id) {
-      if (["Approved", "Reduced", "Waived"].includes(existing.status)) continue;
+      if (["Approved", "Reduced", "Cancelled", "Waived"].includes(existing.status)) continue;
       const { error } = await supabase
         .from("agency_penalties")
         .update(payload)
         .eq("id", existing.id)
         .eq("company_id", currentCompanyId);
-      if (error) return alert(error.message);
+      if (error) {
+        if (silent) throw error;
+        alert(error.message);
+        return { inserted, updated };
+      }
       updated += 1;
     } else {
       const { error } = await supabase.from("agency_penalties").insert([withCompany({ ...payload, created_at: new Date().toISOString() })]);
-      if (error) return alert(error.message);
+      if (error) {
+        if (silent) throw error;
+        alert(error.message);
+        return { inserted, updated };
+      }
       inserted += 1;
     }
   }
 
   await loadAgencyPenalties();
-  alert(`Penalty register updated. Inserted: ${inserted}, Updated: ${updated}`);
+  if (!silent) alert(`Penalty register updated. Inserted: ${inserted}, Updated: ${updated}`);
+  return { inserted, updated };
+}
+
+async function generatePenaltyRegister() {
+  if (!canApprovePenalties) return alert("You do not have permission to generate penalty records.");
+  return syncCalculatedPenaltyRegister();
 }
 
 async function createPenaltyRecord(item) {
@@ -18932,17 +20219,17 @@ async function reduceAndSendPenalty(item) {
 }
 
 async function waivePenalty(item, defaultNote = "") {
-  if (!canApprovePenalties) return alert("You do not have permission to waive penalties.");
+  if (!canApprovePenalties) return alert("You do not have permission to cancel penalties.");
   if (!item?.id) return alert("Please generate the penalty register first.");
-  const note = window.prompt("Reason for waiving this penalty", defaultNote || item.decision_notes || "") || defaultNote || "Waived by management.";
+  const note = window.prompt("Reason for cancelling this penalty", defaultNote || item.decision_notes || "") || defaultNote || "Cancelled by Recruitment Manager.";
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("agency_penalties")
     .update({
-      status: "Waived",
+      status: "Cancelled",
       approved_amount: 0,
       decision_notes: note,
-      final_decision: "Waived",
+      final_decision: "Cancelled",
       final_decision_by: currentUser?.name || currentUser?.email || "Company User",
       final_decision_role: currentRole,
       final_decision_at: now,
@@ -18952,14 +20239,14 @@ async function waivePenalty(item, defaultNote = "") {
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
   try {
-    await sendPenaltyDecisionEmail(item, "Waived", 0, note);
+    await sendPenaltyDecisionEmail(item, "Cancelled", 0, note);
   } catch (emailError) {
     console.warn("Penalty decision email failed", emailError?.message || emailError);
   }
   await loadAgencyPenalties();
 }
 
-async function submitPenaltyJustification(item) {
+async function submitPenaltyJustificationLegacy(item) {
   if (currentRole !== "Agency") return alert("Only agency users can submit justifications.");
   if (!item?.id) return;
 
@@ -19001,6 +20288,136 @@ async function submitPenaltyJustification(item) {
   }
   await loadAgencyPenalties();
   alert(isFinalDecision ? "Objection submitted to company for review." : "Justification submitted to company for review.");
+}
+
+function openPenaltyAgencyForm(item) {
+  if (!item?.id) return;
+  const isFinalDecision = ["Approved", "Reduced"].includes(String(item.status || ""));
+  if (isFinalDecision && !canAgencySubmitPenaltyObjection(item)) {
+    alert("Final decision has already been issued after the agency objection. This penalty is finalized.");
+    return;
+  }
+  setPenaltyAgencyForm({
+    penaltyId: String(item.id),
+    mode: isFinalDecision ? "objection" : "justification",
+    reason: "",
+    file: null,
+    busy: false,
+    message: "",
+    error: "",
+  });
+}
+
+function closePenaltyAgencyForm() {
+  setPenaltyAgencyForm({ penaltyId: "", mode: "justification", reason: "", file: null, busy: false, message: "", error: "" });
+}
+
+function getPenaltyEvidence(item = {}) {
+  return Array.isArray(item.agency_evidence) ? item.agency_evidence : [];
+}
+
+async function openPenaltyEvidence(evidence = {}) {
+  if (!evidence?.storage_path) return;
+  const { data, error } = await supabase.storage
+    .from(evidence.storage_bucket || "penalty-evidence")
+    .createSignedUrl(evidence.storage_path, 120);
+  if (error || !data?.signedUrl) {
+    alert(`Unable to open attachment: ${error?.message || "Signed link was not created."}`);
+    return;
+  }
+  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+}
+
+async function submitPenaltyJustification(item) {
+  if (currentRole !== "Agency") {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Only agency users can submit justifications." }));
+    return;
+  }
+  if (!item?.id || String(penaltyAgencyForm.penaltyId) !== String(item.id)) return;
+
+  const justification = String(penaltyAgencyForm.reason || "").trim();
+  if (justification.length < 15) {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Provide a clear reason of at least 15 characters / اكتب سببًا واضحًا لا يقل عن 15 حرفًا." }));
+    return;
+  }
+
+  const attachment = penaltyAgencyForm.file;
+  const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
+  if (attachment && !allowedTypes.includes(attachment.type)) {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Attachment must be PDF, JPG, or PNG / المرفق يجب أن يكون PDF أو JPG أو PNG." }));
+    return;
+  }
+  if (attachment && attachment.size > 10 * 1024 * 1024) {
+    setPenaltyAgencyForm((current) => ({ ...current, error: "Attachment must not exceed 10 MB / يجب ألا يتجاوز المرفق 10 ميجابايت." }));
+    return;
+  }
+
+  setPenaltyAgencyForm((current) => ({ ...current, busy: true, error: "", message: "Submitting to company / جارٍ الإرسال للشركة..." }));
+  let uploadedEvidence = null;
+  try {
+    const isFinalDecision = ["Approved", "Reduced"].includes(String(item.status || ""));
+    if (isFinalDecision && !canAgencySubmitPenaltyObjection(item)) {
+      throw new Error("Final decision has already been issued after the agency objection. This penalty is finalized.");
+    }
+
+    const now = new Date().toISOString();
+    if (attachment) {
+      const storagePath = `${currentCompanyId}/${currentUser?.agency_id || item.agency_id}/${item.id}/${Date.now()}-${talentSafeFileName(attachment.name)}`;
+      const { error: uploadError } = await supabase.storage
+        .from("penalty-evidence")
+        .upload(storagePath, attachment, { contentType: attachment.type, cacheControl: "3600", upsert: false });
+      if (uploadError) throw uploadError;
+      uploadedEvidence = {
+        storage_bucket: "penalty-evidence",
+        storage_path: storagePath,
+        file_name: attachment.name,
+        mime_type: attachment.type,
+        size_bytes: attachment.size,
+        uploaded_at: now,
+        uploaded_by: currentUser?.name || currentUser?.email || "Agency User",
+      };
+    }
+
+    const nextStatus = isFinalDecision ? "Agency Objection Submitted" : "Justification Submitted";
+    const existingNotes = String(item.decision_notes || "").trim();
+    const objectionNote = isFinalDecision
+      ? `${existingNotes ? `${existingNotes}\n` : ""}Agency submitted an objection after final decision on ${new Date().toLocaleString()}.`
+      : existingNotes;
+    const evidence = uploadedEvidence ? [...getPenaltyEvidence(item), uploadedEvidence] : getPenaltyEvidence(item);
+
+    const { error } = await supabase
+      .from("agency_penalties")
+      .update({
+        status: nextStatus,
+        agency_justification: justification,
+        agency_justification_by: currentUser?.name || currentUser?.email || "Agency User",
+        agency_justification_email: currentUser?.email || "",
+        agency_justification_at: now,
+        agency_evidence: evidence,
+        decision_notes: objectionNote,
+        updated_at: now,
+      })
+      .eq("id", item.id)
+      .eq("company_id", currentCompanyId);
+    if (error) throw error;
+
+    try {
+      await sendPenaltyJustificationEmail(item, justification);
+    } catch (emailError) {
+      console.warn("Penalty justification email failed", emailError?.message || emailError);
+    }
+    await loadAgencyPenalties();
+    closePenaltyAgencyForm();
+  } catch (error) {
+    if (uploadedEvidence?.storage_path) {
+      try {
+        await supabase.storage.from("penalty-evidence").remove([uploadedEvidence.storage_path]);
+      } catch {
+        // Best-effort cleanup after a failed database update.
+      }
+    }
+    setPenaltyAgencyForm((current) => ({ ...current, busy: false, message: "", error: error?.message || "Unable to submit the justification." }));
+  }
 }
 
 async function approveFinalPenalty(item, defaultNote = "") {
@@ -19189,8 +20606,13 @@ async function generateSlaEscalationNotifications() {
     };
   });
 
-  const { error } = await supabase.from("notification_events").insert(payload);
-  if (error) return alert(error.message);
+  try {
+    for (const event of payload) {
+      await triggerExternalNotification(event.type, event);
+    }
+  } catch (error) {
+    return alert(error.message);
+  }
 
   alert(`Update compliance alerts generated: ${payload.length}`);
 }
@@ -19499,7 +20921,7 @@ function candidateMatchesRequestLine(candidate, line) {
   // Backward-compatible fallback for old records before request_line_id existed.
   return (
     isCompatibleText(candidate.profession, line.profession) &&
-    normalize(candidate.nationality) === normalize(line.nationality) &&
+    nationalitiesMatch(candidate.nationality, line.nationality, countries) &&
     (!line.gender || !candidate.gender || normalize(candidate.gender) === normalize(line.gender))
   );
 }
@@ -19523,7 +20945,7 @@ function authorizationMatchesRequestLine(authorization, line, relatedAllocations
 
   return (
     isCompatibleText(authorization.profession, line.profession) &&
-    normalize(authorization.nationality) === normalize(line.nationality) &&
+    nationalitiesMatch(authorization.nationality, line.nationality, countries) &&
     (!line.gender || !authorization.gender || normalize(authorization.gender) === normalize(line.gender))
   );
 }
@@ -19552,7 +20974,7 @@ function buildOperationalRequestLineRows() {
 
       const matchingVisaLines = isSaudiLine
         ? []
-        : visaInventoryLines.filter((visaLine) => isCompatibleVisaLineForRequestLine(line, visaLine));
+        : visaInventoryLines.filter((visaLine) => isCompatibleVisaLineForRequestLine(line, visaLine, countries));
 
       const availableVisaQty = matchingVisaLines.reduce(
         (sum, visaLine) => sum + Math.max(getVisaLineRemainingQty(visaLine), 0),
@@ -19565,7 +20987,7 @@ function buildOperationalRequestLineRows() {
           (visaLine) => String(visaLine.id || "") === String(allocation.visa_batch_line_id || "")
         );
 
-        if (allocationVisaLine) return isCompatibleVisaLineForRequestLine(line, allocationVisaLine);
+        if (allocationVisaLine) return isCompatibleVisaLineForRequestLine(line, allocationVisaLine, countries);
 
         return matchingVisaLines.some((visaLine) => String(visaLine.visa_no || "") === String(allocation.visa_no || ""));
       });
@@ -21499,7 +22921,7 @@ function getAIAgentAgencyFitScore(request, agencyRow) {
   const policy = getAgencyAgreementPolicy(agencyName);
   const agencyCandidates = candidates.filter((candidate) => normalize(candidate.agency) === normalize(agencyName));
   const professionExperience = agencyCandidates.filter((candidate) => isCompatibleText(candidate.profession, requestProfession)).length;
-  const nationalityExperience = agencyCandidates.filter((candidate) => normalize(candidate.nationality) === normalize(requestNationality)).length;
+  const nationalityExperience = agencyCandidates.filter((candidate) => nationalitiesMatch(candidate.nationality, requestNationality, countries)).length;
   const activeAuthorizations = visaAuthorizations.filter((authorization) => normalize(authorization.agency) === normalize(agencyName) && authorization.status !== "Cancelled");
   const openLoad = activeAuthorizations.reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
 
@@ -21621,6 +23043,7 @@ async function createAIAgentManagerBriefNotification() {
 
   await triggerExternalNotification("AI_AGENT_DAILY_BRIEF", {
     company_id: currentCompanyId,
+    dedupe_key: `ai-daily-brief:${new Date().toISOString().slice(0, 10)}`,
     user_id: currentUser?.id || null,
     title,
     message,
@@ -23035,7 +24458,7 @@ function getMarketplaceMatches(item) {
     .filter((employee) => ["Available", "Suggested"].includes(employee.status || "Available"))
     .filter((employee) =>
       normalize(employee.profession) === normalize(item.profession) &&
-      (!item.nationality || !employee.nationality || normalize(item.nationality) === normalize(employee.nationality)) &&
+      (!item.nationality || !employee.nationality || nationalitiesMatch(item.nationality, employee.nationality, countries)) &&
       (!item.gender || !employee.gender || normalize(item.gender) === normalize(employee.gender))
     );
 
@@ -23043,7 +24466,7 @@ function getMarketplaceMatches(item) {
     .filter((employee) => ["Active", "Demobilized"].includes(employee.status || "Active"))
     .filter((employee) =>
       normalize(employee.profession) === normalize(item.profession) &&
-      (!item.nationality || !employee.nationality || normalize(item.nationality) === normalize(employee.nationality)) &&
+      (!item.nationality || !employee.nationality || nationalitiesMatch(item.nationality, employee.nationality, countries)) &&
       (!item.gender || !employee.gender || normalize(item.gender) === normalize(employee.gender))
     );
 
@@ -23477,97 +24900,6 @@ function getPlatformClientLoginUrl() {
   return "https://visaflowksa.com";
 }
 
-function buildPlatformLoginDetailsText({ client, admin, password, loginUrl }) {
-  const adminName = admin?.name || "Company Admin";
-  const companyName = client?.company_name || client?.name || "Your Company";
-
-  return `Dear ${adminName},
-
-Your VisaFlow KSA company account has been created successfully.
-
-Company:
-${companyName}
-
-Login URL:
-${loginUrl}
-
-Username:
-${admin?.email || "-"}
-
-Temporary Password:
-${password || "-"}
-
-For security reasons, please change your password after your first login.
-
-تم إنشاء حساب شركتكم في منصة VisaFlow KSA بنجاح.
-
-رابط الدخول:
-${loginUrl}
-
-اسم المستخدم:
-${admin?.email || "-"}
-
-كلمة المرور المؤقتة:
-${password || "-"}
-
-لأسباب أمنية، نأمل تغيير كلمة المرور بعد أول دخول.
-
-Best regards,
-VisaFlow KSA Platform Team`.trim();
-}
-
-function buildPlatformLoginDetailsHtml({ client, admin, password, loginUrl }) {
-  const companyName = client?.company_name || client?.name || "Your Company";
-  const adminName = admin?.name || "Company Admin";
-
-  return buildEmailCardHtml(
-    "VisaFlow KSA Login Details",
-    [
-      `Dear ${adminName},`,
-      `Your VisaFlow KSA company account has been created successfully.`,
-      `Company: ${companyName}`,
-      `Login URL: ${loginUrl}`,
-      `Username: ${admin?.email || "-"}`,
-      `Temporary Password: ${password || "-"}`,
-      `تم إنشاء حساب شركتكم في منصة VisaFlow KSA بنجاح.`,
-      `رابط الدخول: ${loginUrl}`,
-      `اسم المستخدم: ${admin?.email || "-"}`,
-      `كلمة المرور المؤقتة: ${password || "-"}`,
-      `لأسباب أمنية، نأمل تغيير كلمة المرور بعد أول دخول.`,
-    ],
-    "Security note: Please change the temporary password after the first login. / تنبيه أمني: يرجى تغيير كلمة المرور المؤقتة بعد أول دخول."
-  );
-}
-
-async function recordPlatformLoginDetailsEmailLog({ client, admin, subject, status, messageId = "", errorMessage = "" }) {
-  const logCompanyId = client?.operational_company_id || client?.company_id || null;
-  if (!logCompanyId) return;
-
-  try {
-    await supabase.from("email_logs").insert([{
-      company_id: logCompanyId,
-      type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
-      status,
-      to_email: admin?.email || "",
-      subject,
-      provider: "VisaFlow Platform Dispatcher",
-      message_id: messageId || "",
-      error_message: errorMessage || "",
-      payload: {
-        source: "Platform Owner / Companies Management",
-        client_id: client?.id || "",
-        company_name: client?.company_name || "",
-        admin_user_id: admin?.id || "",
-        admin_email: admin?.email || "",
-        password_in_payload: false,
-      },
-      created_at: new Date().toISOString(),
-    }]);
-  } catch (error) {
-    console.warn("platform login email log failed", error?.message || error);
-  }
-}
-
 async function sendPlatformClientLoginDetails(client) {
   if (!isPlatformOwner) return alert("Only Platform Owner can send company account setup links.");
   if (!client?.id) return alert("Company record is required.");
@@ -23578,8 +24910,6 @@ async function sendPlatformClientLoginDetails(client) {
   }
 
   const loginUrl = getPlatformClientLoginUrl(client);
-  const subject = "VisaFlow Company Account Setup";
-
   const confirmed = window.confirm(
     `Send the secure account setup link to ${primaryAdmin.email}?\n\nCompany: ${client.company_name || "-"}\nLogin URL: ${loginUrl}`
   );
@@ -23591,24 +24921,9 @@ async function sendPlatformClientLoginDetails(client) {
       identifiers: { target_user_id: primaryAdmin.id },
     });
 
-    await recordPlatformLoginDetailsEmailLog({
-      client,
-      admin: primaryAdmin,
-      subject,
-      status: "Sent",
-      messageId: "",
-    });
-
     if (canViewEmailAdministration) await loadEmailLogs();
     alert(`Account setup link sent to ${primaryAdmin.email}`);
   } catch (error) {
-    await recordPlatformLoginDetailsEmailLog({
-      client,
-      admin: primaryAdmin,
-      subject,
-      status: "Failed",
-      errorMessage: error.message || "Email dispatcher failed",
-    });
     alert(`Login details email failed: ${error.message}`);
   }
 }
@@ -23793,7 +25108,7 @@ async function openCompanyRequestsReport(client) {
 
     const [requestsResult, candidatesResult, mobilizationsResult] = await Promise.all([
       supabase.from("requests").select("*").eq("company_id", operationalCompanyId).range(0, 5000),
-      supabase.from("candidates").select("*").eq("company_id", operationalCompanyId).range(0, 5000),
+      supabase.from("candidates").select("*").eq("company_id", operationalCompanyId).is("deleted_at", null).range(0, 5000),
       supabase.from("mobilizations").select("*").eq("company_id", operationalCompanyId).range(0, 5000),
     ]);
 
@@ -24263,9 +25578,10 @@ async function savePlatformClient() {
     if (clientUpdateError) throw clientUpdateError;
 
     if (operationalCompanyId) {
-      const { error: companyUpdateError } = await supabase
-        .from("companies")
-        .update({
+      await invokeAgencyAdministration(supabase, {
+        action: "update_company_settings",
+        company_id: operationalCompanyId,
+        settings: buildCompanySettingsUpdate({
           name: companyName,
           domain: companyPayload.domain,
           status: "Active",
@@ -24274,11 +25590,8 @@ async function savePlatformClient() {
           subscription_start: companyPayload.start_date,
           subscription_end: companyPayload.end_date,
           max_users: companyPayload.users_count || 5,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", operationalCompanyId);
-
-      if (companyUpdateError) throw companyUpdateError;
+        }, { platform: true }),
+      });
     }
 
     // Repair path for an existing company that was previously saved without
@@ -24328,16 +25641,18 @@ async function extendPlatformClient(client, months = 1) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
-        subscription_status: "Active",
-        subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
-
-    if (companyError) return alert(companyError.message);
+    try {
+      await invokeAgencyAdministration(supabase, {
+        action: "update_company_settings",
+        company_id: client.operational_company_id,
+        settings: buildCompanySettingsUpdate({
+          subscription_status: "Active",
+          subscription_end: newEndDate,
+        }, { platform: true }),
+      });
+    } catch (companyError) {
+      return alert(getAgencyAdministrationErrorMessage(companyError));
+    }
   }
 
   await loadPlatformClients();
@@ -24374,16 +25689,18 @@ async function extendPlatformClient(client, days = 30) {
   if (error) return alert(error.message);
 
   if (client.operational_company_id) {
-    const { error: companyError } = await supabase
-      .from("companies")
-      .update({
-        subscription_status: "Active",
-        subscription_end: newEndDate,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", client.operational_company_id);
-
-    if (companyError) return alert(companyError.message);
+    try {
+      await invokeAgencyAdministration(supabase, {
+        action: "update_company_settings",
+        company_id: client.operational_company_id,
+        settings: buildCompanySettingsUpdate({
+          subscription_status: "Active",
+          subscription_end: newEndDate,
+        }, { platform: true }),
+      });
+    } catch (companyError) {
+      return alert(getAgencyAdministrationErrorMessage(companyError));
+    }
   }
 
   await loadPlatformClients();
@@ -26191,7 +27508,7 @@ function getReportStudioVisualModel() {
   }
 
   function resetAIInterviewCampaignForm() {
-    setAIInterviewCampaignForm({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
+    setAIInterviewCampaignForm(createEmptyAIInterviewCampaignForm());
   }
 
   function selectAIInterviewCampaign(campaignId, tab = "Candidates") {
@@ -26223,10 +27540,16 @@ function getReportStudioVisualModel() {
   }
 
   async function createAIInterviewCampaign() {
+    const failCampaignCreation = (message) => {
+      setAIInterviewCampaignMessage(`Campaign creation failed: ${message}`);
+      alert(message);
+      return null;
+    };
+
     if (!canManageAIInterviewCampaigns) {
-      return alert("You do not have permission to create AI interview campaigns.");
+      return failCampaignCreation("You do not have permission to create AI interview campaigns.");
     }
-    if (!currentCompanyId) return alert("Company ID is missing.");
+    if (!currentCompanyId) return failCampaignCreation("Company ID is missing.");
 
     const form = aiInterviewCampaignForm;
     const campaignName = String(form.campaign_name || "").trim();
@@ -26234,19 +27557,20 @@ function getReportStudioVisualModel() {
       (item) => String(item.id || "") === String(form.template_id || "")
     );
 
-    if (!campaignName) return alert("Campaign name is required.");
-    if (!template?.id) return alert("Select an approved active AI interview template.");
-    if (!form.interview_deadline) return alert("Interview deadline is required.");
+    if (!campaignName) return failCampaignCreation("Campaign name is required.");
+    if (!template?.id) return failCampaignCreation("Select an approved active AI interview template.");
+    if (!form.interview_deadline) return failCampaignCreation("Interview deadline is required.");
 
     const deadline = new Date(form.interview_deadline);
     if (Number.isNaN(deadline.getTime()) || deadline <= new Date()) {
-      return alert("Interview deadline must be a valid future date and time.");
+      return failCampaignCreation("Interview deadline must be a valid future date and time.");
     }
 
     setAIInterviewCampaignBusy(true);
     setAIInterviewCampaignMessage("Creating AI interview campaign...");
 
     try {
+      const numericCreatedByUserId = Number(currentUser?.id);
       const payload = {
         company_id: currentCompanyId,
         campaign_name: campaignName,
@@ -26262,7 +27586,11 @@ function getReportStudioVisualModel() {
         first_reminder_after_hours: Math.max(0, Number(form.first_reminder_after_hours || 24)),
         second_reminder_after_hours: Math.max(0, Number(form.second_reminder_after_hours || 48)),
         final_reminder_before_hours: Math.max(0, Number(form.final_reminder_before_hours || 24)),
-        created_by_user_id: currentUser?.id || null,
+        // Staging and legacy schemas store the application user key as bigint.
+        // Never send an Auth UUID (or any other text identifier) into this FK.
+        created_by_user_id: Number.isSafeInteger(numericCreatedByUserId) && numericCreatedByUserId > 0
+          ? numericCreatedByUserId
+          : null,
         created_by_name: currentUser?.name || currentUser?.email || "VisaFlow User",
         notes: String(form.notes || "").trim(),
         interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(form.interaction_mode)
@@ -26740,6 +28068,13 @@ function getReportStudioVisualModel() {
       if (error) throw error;
 
       const result = Array.isArray(data) ? data[0] : data;
+      const { error: workerTriggerError } = await supabase.rpc(
+        "trigger_ai_interview_invitation_worker",
+        { p_campaign_id: campaign.id }
+      );
+      if (workerTriggerError) {
+        console.warn("AI interview worker immediate trigger failed; scheduled delivery remains active.", workerTriggerError.message);
+      }
       await Promise.all([
         loadCandidates(),
         loadAIInterviewCampaigns(),
@@ -26947,7 +28282,7 @@ function getReportStudioVisualModel() {
         `Campaign launched. Sessions created: ${result?.sessions_created ?? 0}. ` +
         `Existing sessions: ${result?.existing_sessions ?? 0}. ` +
         `Invitations queued: ${result?.invitation_jobs_queued ?? 0}. ` +
-        `The automatic worker sends up to 20 invitations every minute.`
+        `Delivery starts immediately, with an automatic retry sweep every five minutes.`
       );
     } catch (error) {
       console.warn("launch campaign failed", error?.message || error);
@@ -28069,11 +29404,11 @@ function exportCurrentPage() {
   );
   if (activePage === "Mobilization") return exportRowsToExcel(mobilizationRequestRows, "VisaFlow_Mobilization_Overview", "Mobilization");
   if (activePage === "Onboarding & Validation") return exportRowsToExcel(filteredOnboardingValidations, "VisaFlow_Onboarding_Validation", "Onboarding Validation");
-  if (activePage === "Employees") return exportRowsToExcel(employees, "VisaFlow_Employees", "Employees");
-  if (activePage === "Demobilization") return exportRowsToExcel(demobilizations, "VisaFlow_Demobilization", "Demobilization");
+  if (activePage === "Employees") return exportRowsToExcel(filteredEmployeeRows, "VisaFlow_Employees", "Employees");
+  if (activePage === "Demobilization") return exportRowsToExcel(filteredDemobilizationRows, "VisaFlow_Demobilization", "Demobilization");
   if (activePage === "Workforce Marketplace") return exportRowsToExcel(marketplaceDeals, "VisaFlow_Workforce_Marketplace", "Marketplace Deals");
   if (activePage === "Local Content") return downloadLocalContentExcel();
-  if (activePage === "Notifications") return exportRowsToExcel(notifications, "VisaFlow_Notifications", "Notifications");
+  if (activePage === "Notifications") return exportRowsToExcel(filteredNotificationRows, "VisaFlow_Notifications", "Notifications");
   if (activePage === "Reports") {
     if (activeReport === "activityLog") {
       return exportRowsToExcel(
@@ -28104,7 +29439,87 @@ function exportCurrentPage() {
   return alert("Export is available for lists and reports pages");
 }
 
+async function completeAcceptedAgencyInvitation({ request, session }) {
+  const authUser = session?.user;
+  if (
+    request?.status !== "Active" ||
+    !request?.agency_id ||
+    !authUser?.id ||
+    authUser.user_metadata?.account_type !== "agency" ||
+    authUser.user_metadata?.provisioning_request_id !== request.id
+  ) {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_LINK_INVALID"
+    );
+  }
+
+  let workspaceContext;
+  try {
+    workspaceContext = await loadAuthenticatedWorkspaceContext(
+      supabase,
+      authUser.id
+    );
+  } catch {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+    );
+  }
+  const linkedUser = workspaceContext.actor;
+  if (
+    !linkedUser?.id ||
+    linkedUser.auth_user_id !== authUser.id ||
+    normalizeUserRole(linkedUser.role) !== "Agency" ||
+    linkedUser.status !== "Active" ||
+    linkedUser.is_active === false ||
+    !linkedUser.agency_id ||
+    linkedUser.agency_id !== request.agency_id
+  ) {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  const workspaces = await loadAgencyClientAccess(linkedUser, false);
+  const selectedWorkspace =
+    workspaces.find(
+      (workspace) =>
+        workspace.status === "Active" &&
+        workspace.agency_id === linkedUser.agency_id
+    ) || null;
+  if (!selectedWorkspace) {
+    throw createAgencyInvitationAcceptanceError(
+      "AGENCY_INVITATION_ACCOUNT_NOT_LINKED"
+    );
+  }
+
+  const cleanUrl = getCleanAgencyInvitationUrl(window.location);
+  window.history.replaceState(
+    {},
+    "",
+    `${cleanUrl.pathname}${cleanUrl.search}`
+  );
+  setWorkspaceRecoveryLoginGuard(false);
+  activateWorkspaceUser(linkedUser, { persist: true, legacy: false });
+  setAgencyClientAccess(workspaces);
+  switchAgencyWorkspace(selectedWorkspace, {
+    silent: true,
+    user: linkedUser,
+  });
+  setSearch("");
+  setFilterStatus("All");
+  setActivePage("Office Portal");
+  setAgencyInvitationRequested(false);
+}
+
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+if (agencyInvitationRequested) {
+  return (
+    <AgencyInvitationPasswordScreen
+      onAccepted={completeAcceptedAgencyInvitation}
+    />
+  );
+}
+
 if (workspaceRecoveryRequested) {
   return <WorkspacePasswordRecoveryScreen language={loginLanguage} />;
 }
@@ -28698,7 +30113,7 @@ if (!currentUser) {
         </div>
         <div className="user-box">
           <strong>{currentUser.name}</strong>
-          <span>{currentUser.role}</span>
+          <span>{currentUser.role_label || currentUser.role}</span>
           {currentRole === "Agency" && (
             <span style={{ marginTop: "6px", color: "#bfdbfe", fontSize: "12px" }}>
               Client: {getActiveAgencyWorkspaceName()}
@@ -28917,6 +30332,56 @@ if (!currentUser) {
           </div>
         )}
 
+        {activePage === "Email Logs" && canViewEmailAdministration && (
+          <>
+            <div className="dashboard-grid">
+              <Stat title="Total Email Events" value={emailLogs.length} />
+              <Stat title="Sent" value={emailLogStats.sent} className="passed" />
+              <Stat title="Failed" value={emailLogStats.failed} className={emailLogStats.failed ? "danger" : "passed"} />
+              <Stat title="Queued" value={emailLogs.filter((item) => item.status === "Queued").length} className="warning" />
+            </div>
+            <TableCard title="Email Logs">
+              <div className="actions-line" style={{ marginBottom: "14px" }}>
+                <button className="light-btn" onClick={loadEmailLogs}>Reload Email Logs</button>
+              </div>
+              <div className="form-grid" style={{ marginBottom: "14px" }}>
+                <Select value={emailLogFilters.eventType} placeholder="Event Type" options={["All", ...Array.from(new Set(emailLogs.map((item) => item.event_type || item.type).filter(Boolean)))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, eventType: value }))} />
+                <Select value={emailLogFilters.status} placeholder="Status" options={["All", "Queued", "Sent", "Failed"]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, status: value }))} />
+                <Select value={emailLogFilters.agency} placeholder="Agency" options={[{ value: "All", label: "All agencies" }, ...agencies.map((agency) => ({ value: String(agency.id), label: agency.name }))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, agency: value }))} />
+                <Input placeholder="Recipient" value={emailLogFilters.recipient} onChange={(value) => setEmailLogFilters((current) => ({ ...current, recipient: value }))} />
+                <Input type="date" placeholder="From date" value={emailLogFilters.dateFrom} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateFrom: value }))} />
+                <Input type="date" placeholder="To date" value={emailLogFilters.dateTo} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateTo: value }))} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr>
+                    <th>Event Type</th><th>Recipient</th><th>Agency</th><th>Status</th><th>Provider</th>
+                    <th>Provider Message ID</th><th>Error Code</th><th>Safe Error Message</th><th>Retry Count</th>
+                    <th>Created At</th><th>Sent At</th><th>Failed At</th>
+                  </tr></thead>
+                  <tbody>
+                    {filteredEmailLogs.length === 0 ? <tr><td colSpan="12">No email logs match the selected filters.</td></tr> : filteredEmailLogs.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.event_type || item.type || "-"}</td>
+                        <td>{displayEmailRecipient(item.recipient || item.to_email)}</td>
+                        <td>{agencies.find((agency) => String(agency.id) === String(item.agency_id))?.name || "-"}</td>
+                        <td><Badge value={item.status || "-"} /></td><td>{item.provider || "-"}</td>
+                        <td>{item.provider_message_id || item.message_id || "-"}</td><td>{item.error_code || "-"}</td>
+                        <td>{item.error_message || "-"}</td><td>{item.retry_count || 0}</td>
+                        <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                        <td>{item.sent_at ? new Date(item.sent_at).toLocaleString() : "-"}</td>
+                        <td>{item.failed_at ? new Date(item.failed_at).toLocaleString() : "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TableCard>
+          </>
+        )}
+
+        {activePage === "User Guide" && <UserGuide currentRole={currentRole} />}
+
         {activePage === "Notifications" && (
           <>
             <div className="dashboard-grid">
@@ -28929,78 +30394,120 @@ if (!currentUser) {
             </div>
 
             <TableCard title="Notification Center">
-              <div className="actions-line" style={{ marginBottom: "14px" }}>
+              <div className="notification-center-toolbar">
+                <div className="notification-folders" aria-label="Notification folders">
+                  <button
+                    type="button"
+                    className={notificationFolder === "Unread" ? "notification-folder active" : "notification-folder"}
+                    onClick={() => { setNotificationFolder("Unread"); setSelectedNotificationId(""); }}
+                  >
+                    <span>Unread</span>
+                    <b>{notificationFolderCounts.unread}</b>
+                  </button>
+                  <button
+                    type="button"
+                    className={notificationFolder === "Read" ? "notification-folder active" : "notification-folder"}
+                    onClick={() => { setNotificationFolder("Read"); setSelectedNotificationId(""); }}
+                  >
+                    <span>Read</span>
+                    <b>{notificationFolderCounts.read}</b>
+                  </button>
+                </div>
+                <div className="actions-line">
                 <button className="new-btn" onClick={async () => {
                   const rows = await loadNotifications();
                   if (canViewEmailAdministration) {
                     await loadEmailLogs();
                     await loadEmailTemplates();
                   }
-                  alert(`Notification Center refreshed. Notifications loaded: ${rows?.length || 0}`);
+                  setSelectedNotificationId("");
+                  alert(`Notification Center refreshed successfully. ${rows?.length || 0} notification(s) loaded.`);
                 }}>Refresh Center</button>
                 <button className="new-btn" onClick={markAllNotificationsRead}>Mark All as Read</button>
                 {canViewEmailAdministration && <button className="light-btn" onClick={() => setActivePage("Email Settings")}>Open Email Settings</button>}
+                </div>
               </div>
 
-              <div className="form-grid" style={{ marginBottom: "14px" }}>
+              <div className="notification-search-grid">
                 <Input placeholder="Search notifications" value={notificationSearch} onChange={setNotificationSearch} />
                 <Select placeholder="Notification Type" value={notificationFilter} options={notificationTypes} onChange={setNotificationFilter} />
               </div>
 
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Priority</th>
-                      <th>Type</th>
-                      <th>Title</th>
-                      <th>Message</th>
-                      <th>Decision / SLA</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredNotificationRows.length === 0 ? (
-                      <tr>
-                        <td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>
-                          No notifications found.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredNotificationRows.map((item) => (
-                        <tr key={item.id}>
-                          <td>
-                            <span className={getNotificationStatus(item) === "Read" ? "badge passed" : "badge warning"}>
-                              {getNotificationStatus(item)}
-                            </span>
-                          </td>
-                          <td>{item.priority || item.data?.priority || "Medium"}</td>
-                          <td>{item.type || item.status || "Notification"}</td>
-                          <td>{getNotificationTitle(item)}</td>
-                          <td style={{ maxWidth: "520px", whiteSpace: "normal" }}>{getNotificationMessage(item)}</td>
-                          <td>{renderAgencyRequestDecisionCell(item)}</td>
-                          <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
-                          <td>
-                            <div className="row-actions">
-                              {currentRole === "Agency" && isAgencyRequestNotification(item) && getAgencyRequestDecision(item) === "Pending" && (
-                                <>
-                                  <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Accepted")} disabled={agencyLegacyActionsRestricted} style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}>Accept</button>
-                                  <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(item, "Rejected")} disabled={agencyLegacyActionsRestricted} style={agencyLegacyActionsRestricted ? { opacity: 0.45, cursor: "not-allowed" } : undefined}>Reject</button>
-                                </>
-                              )}
-                              {getNotificationStatus(item) !== "Read" && (
-                                <button className="light-btn" onClick={() => markNotificationRead(item.id)}>Read</button>
-                              )}
-                              <button className="danger-btn" onClick={() => deleteNotification(item.id)}>Delete</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+              <div className="notification-split-view">
+                <aside className="notification-list" aria-label={`${notificationFolder} notifications`}>
+                  <div className="notification-list-heading">
+                    <strong>{notificationFolder}</strong>
+                    <span>{filteredNotificationRows.length} shown</span>
+                  </div>
+                  {filteredNotificationRows.length === 0 ? (
+                    <div className="notification-empty-list">
+                      {loading ? "Loading notifications..." : `No ${notificationFolder.toLowerCase()} notifications match the selected filters.`}
+                    </div>
+                  ) : filteredNotificationRows.map((item) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      className={`notification-list-item ${String(selectedNotification?.id) === String(item.id) ? "active" : ""} ${getNotificationStatus(item) === "Unread" ? "unread" : ""}`}
+                      onClick={() => openNotification(item)}
+                    >
+                      <span className="notification-list-topline">
+                        <b>{getNotificationType(item)}</b>
+                        <time>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</time>
+                      </span>
+                      <strong>{getNotificationTitle(item)}</strong>
+                      <span className="notification-list-preview">{getNotificationMessage(item)}</span>
+                      <span className="notification-list-meta">
+                        <em>{item.priority || item.data?.priority || "Medium"}</em>
+                        <em>{item.recipient_role || item.data?.recipient_role || "Company"}</em>
+                      </span>
+                    </button>
+                  ))}
+                </aside>
+
+                <section className="notification-detail" aria-live="polite">
+                  {!selectedNotification ? (
+                    <div className="notification-detail-empty">
+                      <span>✉</span>
+                      <h3>Select a notification</h3>
+                      <p>Choose a message from the list to view its complete details without leaving this page.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <header className="notification-detail-header">
+                        <div>
+                          <span className={getNotificationStatus(selectedNotification) === "Read" ? "badge passed" : "badge warning"}>
+                            {getNotificationStatus(selectedNotification)}
+                          </span>
+                          <h3>{getNotificationTitle(selectedNotification)}</h3>
+                          <p>{getNotificationType(selectedNotification)} · {selectedNotification.created_at ? new Date(selectedNotification.created_at).toLocaleString() : "Unknown time"}</p>
+                        </div>
+                        <div className="row-actions">
+                          {getNotificationStatus(selectedNotification) !== "Read" && (
+                            <button className="light-btn" onClick={() => openNotification(selectedNotification)}>Mark as Read</button>
+                          )}
+                          <button className="danger-btn" onClick={() => deleteNotification(selectedNotification.id)}>Delete</button>
+                        </div>
+                      </header>
+
+                      <div className="notification-message-body">{getNotificationMessage(selectedNotification)}</div>
+
+                      <div className="notification-detail-grid">
+                        <div><span>Priority</span><strong>{selectedNotification.priority || selectedNotification.data?.priority || "Medium"}</strong></div>
+                        <div><span>Recipient</span><strong>{selectedNotification.recipient_role || selectedNotification.data?.recipient_role || "Company"}</strong></div>
+                        <div><span>Type</span><strong>{getNotificationType(selectedNotification)}</strong></div>
+                        <div><span>Created</span><strong>{selectedNotification.created_at ? new Date(selectedNotification.created_at).toLocaleString() : "-"}</strong></div>
+                        <div className="notification-detail-wide"><span>Decision / SLA</span><strong>{renderAgencyRequestDecisionCell(selectedNotification)}</strong></div>
+                      </div>
+
+                      {currentRole === "Agency" && isAgencyRequestNotification(selectedNotification) && getAgencyRequestDecision(selectedNotification) === "Pending" && (
+                        <div className="notification-decision-actions">
+                          <button className="save-btn" onClick={() => handleAgencyRequestNotificationResponse(selectedNotification, "Accepted")} disabled={agencyLegacyActionsRestricted}>Accept</button>
+                          <button className="danger-btn" onClick={() => handleAgencyRequestNotificationResponse(selectedNotification, "Rejected")} disabled={agencyLegacyActionsRestricted}>Reject</button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </section>
               </div>
             </TableCard>
 
@@ -29008,33 +30515,47 @@ if (!currentUser) {
               <div className="actions-line" style={{ marginBottom: "14px" }}>
                 <button className="light-btn" onClick={loadEmailLogs}>Reload Email Logs</button>
               </div>
+              <div className="form-grid" style={{ marginBottom: "14px" }}>
+                <Select value={emailLogFilters.eventType} placeholder="Event type" options={["All", ...Array.from(new Set(emailLogs.map((item) => item.event_type || item.type).filter(Boolean)))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, eventType: value }))} />
+                <Select value={emailLogFilters.status} placeholder="Status" options={["All", "Queued", "Sent", "Failed"]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, status: value }))} />
+                <Select value={emailLogFilters.agency} placeholder="Agency" options={[{ value: "All", label: "All agencies" }, ...agencies.map((agency) => ({ value: String(agency.id), label: agency.name }))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, agency: value }))} />
+                <Input type="date" placeholder="From date" value={emailLogFilters.dateFrom} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateFrom: value }))} />
+                <Input type="date" placeholder="To date" value={emailLogFilters.dateTo} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateTo: value }))} />
+                <Input placeholder="Recipient" value={emailLogFilters.recipient} onChange={(value) => setEmailLogFilters((current) => ({ ...current, recipient: value }))} />
+              </div>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
                       <th>Status</th>
-                      <th>Type</th>
+                      <th>Event</th>
+                      <th>Agency</th>
                       <th>To</th>
                       <th>Subject</th>
                       <th>Provider</th>
                       <th>Message ID</th>
-                      <th>Error</th>
+                      <th>Error code / message</th>
+                      <th>Retries</th>
                       <th>Created</th>
+                      <th>Sent / Failed</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {emailLogs.length === 0 ? (
-                      <tr><td colSpan="8" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No email logs found yet.</td></tr>
-                    ) : emailLogs.map((item) => (
+                    {filteredEmailLogs.length === 0 ? (
+                      <tr><td colSpan="11" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No email logs match the selected filters.</td></tr>
+                    ) : filteredEmailLogs.map((item) => (
                       <tr key={item.id}>
                         <td><Badge value={item.status || "-"} /></td>
-                        <td>{item.type || "-"}</td>
-                        <td>{item.to_email || item.to || "-"}</td>
+                        <td>{item.event_type || item.type || "-"}</td>
+                        <td>{agencies.find((agency) => String(agency.id) === String(item.agency_id))?.name || "-"}</td>
+                        <td>{displayEmailRecipient(item.recipient || item.to_email || item.to)}</td>
                         <td>{item.subject || "-"}</td>
                         <td>{item.provider || "-"}</td>
-                        <td>{item.message_id || "-"}</td>
-                        <td style={{ maxWidth: "320px", whiteSpace: "normal" }}>{item.error_message || "-"}</td>
+                        <td>{item.provider_message_id || item.message_id || "-"}</td>
+                        <td style={{ maxWidth: "320px", whiteSpace: "normal" }}>{[item.error_code, item.error_message].filter(Boolean).join(" — ") || "-"}</td>
+                        <td>{item.retry_count || 0}</td>
                         <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                        <td>{item.sent_at ? `Sent ${new Date(item.sent_at).toLocaleString()}` : item.failed_at ? `Failed ${new Date(item.failed_at).toLocaleString()}` : "-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -30583,23 +32104,13 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                 </p>
 
                 <div className="form-grid">
-                  <Select
-                    value={requestLineForm.profession}
-                    onChange={(v) => updateForm(setRequestLineForm, "profession", v)}
-                    placeholder="Profession"
-                    searchable
-                    options={professions.map((p) =>
-                      p.name_en ? `${p.name_ar} - ${p.name_en}` : p.name_ar
-                    )}
-                  />
-                  <Select
-                    value={requestLineForm.nationality}
-                    onChange={(v) => updateForm(setRequestLineForm, "nationality", v)}
-                    placeholder="Nationality"
-                    searchable
-                    options={countries.map((c) =>
-                      c.nationality ? `${c.nationality} (${c.name})` : c.name
-                    )}
+                  <RequestLineCustomFields
+                    value={requestLineForm}
+                    onFieldChange={(field, value) => updateForm(setRequestLineForm, field, value)}
+                    professionOptions={buildProfessionOptions(professions)}
+                    nationalityOptions={buildNationalityOptions(countries)}
+                    loading={requestMasterDataLoading}
+                    error={requestMasterDataError}
                   />
                   <Select
                     value={requestLineForm.gender}
@@ -30646,8 +32157,8 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                 </div>
 
                 <div className="actions-line">
-                  <button type="button" className="btn" onClick={addRequestLineToDraft}>
-                    Add Line
+                  <button type="button" className="btn" onClick={addRequestLineToDraft} disabled={requestMasterDataLoading || Boolean(requestMasterDataError)}>
+                    {requestLineEditingIndex === null ? "Add Line" : "Update Line"}
                   </button>
                 </div>
 
@@ -30680,6 +32191,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                           <td>{line.salary || "-"}</td>
                           <td>{line.interview_required === "No Interview" ? "No Interview" : line.interview_type || "Online"}</td>
                           <td>
+                            <button type="button" className="light-btn" onClick={() => editRequestLineDraft(index)}>
+                              Edit
+                            </button>{" "}
                             <button type="button" className="danger" onClick={() => removeRequestLineFromDraft(index)}>
                               Remove
                             </button>
@@ -30864,7 +32378,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <tr>
 <th>Request No</th>
 <th>Type</th>
-<th>Project</th>
+<th><TableColumnFilter label="Project" value={requestTableFilters.project} options={["All", ...getUniqueTableOptions(requests, (item) => item.project_name || item.project)]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, project: value }))} /></th>
 <th>Project No</th>
 <th>City</th>
 <th>Location</th>
@@ -30878,9 +32392,9 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
 <th>Request Date</th>
 <th>Project Start</th>
 <th>Created</th>
-<th>Priority</th>
-<th>Status</th>
-<th>Approval</th>
+<th><TableColumnFilter label="Priority" value={requestTableFilters.priority} options={["All", ...getUniqueTableOptions(requests, "priority")]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, priority: value }))} /></th>
+<th><TableColumnFilter label="Status" value={requestTableFilters.status} options={["All", ...getUniqueTableOptions(requests, "status")]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, status: value }))} /></th>
+<th><TableColumnFilter label="Approval" value={requestTableFilters.approval} options={["All", ...getUniqueTableOptions(requests, "approval_status")]} onChange={(value) => setRequestTableFilters((current) => ({ ...current, approval: value }))} /></th>
 <th>Actions</th>
 </tr>
 </thead>
@@ -31135,6 +32649,20 @@ selectedVisa
 {canManageVisas && <button onClick={() => setShowAuthForm(true)}>
 + Add Authorization
 </button>}
+{authorizationWorkflowFeedback && (
+  <div
+    role="status"
+    style={{
+      padding: "10px 14px",
+      borderRadius: "10px",
+      background: authorizationWorkflowFeedback.type === "success" ? "#ecfdf5" : "#fef2f2",
+      color: authorizationWorkflowFeedback.type === "success" ? "#047857" : "#b91c1c",
+      fontWeight: 800,
+    }}
+  >
+    {authorizationWorkflowFeedback.message}
+  </div>
+)}
 {showAuthForm && (
 
 <FormCard title="Add Authorization">
@@ -31190,18 +32718,26 @@ selectedVisa
 
   
 
-<input
-placeholder="Office / Agency"
-onChange={(e)=>
-setAuthForm({
-...authForm,
-agency:e.target.value
-})
-}
-/>
+<select
+  value={authForm.agency_id}
+  onChange={(e) => {
+    const agency = agencies.find((item) => String(item.id) === String(e.target.value));
+    setAuthForm((current) => ({
+      ...current,
+      agency_id: e.target.value,
+      agency: agency?.name || "",
+    }));
+  }}
+>
+  <option value="">Select Agency / Office</option>
+  {agencies.map((agency) => (
+    <option key={agency.id} value={agency.id}>{agency.name}</option>
+  ))}
+</select>
 
 <input
 placeholder="Authorization No"
+value={authForm.authorization_no}
 onChange={(e)=>
 setAuthForm({
 ...authForm,
@@ -31213,6 +32749,7 @@ authorization_no:e.target.value
 <input
 type="number"
 placeholder="Allocated Qty"
+value={authForm.allocated_qty}
 onChange={(e)=>
 setAuthForm({
 ...authForm,
@@ -31224,8 +32761,9 @@ allocated_qty:e.target.value
 <button
 className="save-btn"
 onClick={saveAuthorization}
+disabled={authorizationWorkflowBusy === "create"}
 >
-Save Authorization
+{authorizationWorkflowBusy === "create" ? "Saving..." : "Save Authorization"}
 </button>
 
 </div>
@@ -31265,6 +32803,8 @@ Save Authorization
 <th>Interview Passed</th>
 <th>Mobilized</th>
 <th>Status</th>
+<th>Agency Status</th>
+<th>Sent</th>
 <th>Cancellation No</th>
 <th>Cancelled Date</th>
 <th>Actions</th>
@@ -31274,8 +32814,8 @@ Save Authorization
 
 {filteredAuthorizationTableRows.length === 0 ? (
   <tr>
-    <td colSpan="14" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
-      No authorizations match the current search and filters.
+    <td colSpan="17" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>
+      {loading ? "Loading authorizations..." : "No authorizations match the current search and filters."}
     </td>
   </tr>
 ) : pagedAuthorizationTableRows.map((item) => (
@@ -31291,23 +32831,50 @@ Save Authorization
     <td>{item.interview_passed || 0}</td>
     <td>{item.mobilized || 0}</td>
     <td><Badge value={item.status || "Open"} /></td>
+    <td><Badge value={getAuthorizationAgencyStatus(item)} /></td>
+    <td>
+      {item.sent_at ? (
+        <div>
+          <div>{new Date(item.sent_at).toLocaleString()}</div>
+          <small>{item.sent_by ? `By ${item.updated_by_name || item.sent_by}` : "-"}</small>
+        </div>
+      ) : "Not sent"}
+    </td>
     <td>{item.cancellation_no || "-"}</td>
     <td>{item.cancelled_at || "-"}</td>
     <td>
-      {canManageVisas && item.status !== "Cancelled" ? (
-        <button
-          className="btn btn-sm"
-          onClick={() => {
-            if (window.confirm("Cancel this authorization?")) {
-              cancelAuthorization(item.id);
-            }
-          }}
-        >
-          Cancel
-        </button>
-      ) : (
-        "-"
-      )}
+      <div className="row-actions">
+        <button className="light-btn" onClick={() => openAuthorizationWorkflow(item)}>Timeline</button>
+        {canManageAuthorizationWorkflow && getAuthorizationActions(item, currentRole).canSend && (
+          <button
+            className="save-btn"
+            onClick={() => sendAuthorizationToAgency(item)}
+            disabled={Boolean(authorizationWorkflowBusy)}
+          >
+            {authorizationWorkflowBusy === `send:${item.id}` ? "Sending..." : "Send to Agency"}
+          </button>
+        )}
+        {canManageAuthorizationWorkflow && getAuthorizationActions(item, currentRole).canResend && (
+          <button
+            className="new-btn"
+            onClick={() => sendAuthorizationToAgency(item)}
+            disabled={Boolean(authorizationWorkflowBusy)}
+          >
+            {authorizationWorkflowBusy === `send:${item.id}` ? "Resending..." : "Resend to Agency"}
+          </button>
+        )}
+        {canManageVisas && item.status !== "Cancelled" && (
+          <button
+            className="danger-btn"
+            onClick={() => {
+              if (window.confirm("Cancel this authorization?")) cancelAuthorization(item.id);
+            }}
+            disabled={Boolean(authorizationWorkflowBusy)}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
     </td>
   </tr>
 ))}
@@ -31319,6 +32886,52 @@ Save Authorization
   totalPages={authorizationTableTotalPages}
   onPageChange={setAuthorizationTablePage}
 />
+
+{selectedAuthorization && (
+  <div style={{ marginTop: "18px", padding: "18px", border: "1px solid #dbeafe", borderRadius: "14px", background: "#f8fafc" }}>
+    <div className="actions-line" style={{ justifyContent: "space-between" }}>
+      <div>
+        <h3 style={{ margin: 0 }}>Authorization Timeline</h3>
+        <p style={{ margin: "4px 0 0", color: "#64748b" }}>
+          {selectedAuthorization.authorization_no || selectedAuthorization.visa_no || selectedAuthorization.id}
+        </p>
+      </div>
+      <button className="light-btn" onClick={() => setSelectedAuthorization(null)}>Close</button>
+    </div>
+    <div style={{ display: "grid", gap: "10px", marginTop: "16px" }}>
+      {buildAuthorizationTimeline(authorizationTimelineEvents).map((event, index) => (
+        <div key={`${event.stage}-${index}`} style={{ display: "grid", gridTemplateColumns: "34px minmax(140px, 1fr) 2fr", gap: "10px", alignItems: "start" }}>
+          <span
+            aria-hidden="true"
+            style={{
+              width: "28px",
+              height: "28px",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "50%",
+              background: event.complete ? "#059669" : "#e2e8f0",
+              color: event.complete ? "#fff" : "#64748b",
+              fontWeight: 900,
+            }}
+          >
+            {event.complete ? "✓" : index + 1}
+          </span>
+          <strong>{event.stage}</strong>
+          <div style={{ color: "#475569" }}>
+            {event.complete ? (
+              <>
+                <div>{event.at ? new Date(event.at).toLocaleString() : "-"}</div>
+                <div>{event.by || "-"}</div>
+                {event.reason && <div style={{ color: "#b91c1c" }}>Reason: {event.reason}</div>}
+              </>
+            ) : "Pending"}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
 </TableCard>
 )}
@@ -31397,7 +33010,7 @@ Save Authorization
       if (remaining <= 0) return false;
 
       const matchesRequest = requestLinesForAllocation.length === 0 || requestLinesForAllocation.some(
-        (reqLine) => isCompatibleVisaLineForRequestLine(reqLine, line)
+        (reqLine) => isCompatibleVisaLineForRequestLine(reqLine, line, countries)
       );
 
       const keyword = allocationSearch.trim().toLowerCase();
@@ -31671,7 +33284,7 @@ Save Authorization
               onChange={(v) => updateForm(setVisaLineForm, "nationality", v)}
               placeholder="Nationality"
               searchable
-              options={countries.length ? countries.map((c) => `${c.nationality} (${c.name})`) : COUNTRIES}
+              options={countries.length ? buildNationalityOptions(countries) : COUNTRIES}
             />
             <Select value={visaLineForm.gender} onChange={(v) => updateForm(setVisaLineForm, "gender", v)} placeholder="Gender" options={GENDERS} />
             <Input type="number" placeholder="Line Quantity" value={visaLineForm.quantity} onChange={(v) => updateForm(setVisaLineForm, "quantity", v)} />
@@ -31853,6 +33466,11 @@ Save Authorization
             </div>
             {canManageCandidates && (
             <FormCard title={candidateEditingId ? "Edit Candidate" : "Add Candidate"}>
+              {candidateSaveFeedback && (
+                <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "error" ? "#fef2f2" : candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "error" ? "#991b1b" : candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
+                  {candidateSaveFeedback.message}
+                </div>
+              )}
               <div className="form-grid">
                 <Input placeholder="Candidate Name" value={candidateForm.candidate_name} onChange={(v) => updateForm(setCandidateForm, "candidate_name", v)} />
               <Select
@@ -32076,7 +33694,24 @@ Save Authorization
               <div className="actions-line"><button className="save-btn" onClick={saveCandidate}>{candidateEditingId ? "Update Candidate" : "Save Candidate"}</button><button className="light-btn" onClick={resetCandidateForm}>Clear</button></div>
             </FormCard>
             )}
-            <TableCard title="Candidates List">
+<TableCard title="Candidates List">
+  <div className="bulk-action-bar" style={{ marginBottom: 12 }}>
+    <strong>{candidateSelectedIds.length} selected</strong>
+    <button className="light-btn" onClick={() => setCandidateSelectedIds(filteredCandidateTableRows.map((item) => String(item.id)))}>Select All Matching</button>
+    <button className="save-btn" disabled={bulkAssignmentBusy || !candidateSelectedIds.length} onClick={() => openBulkAssignment(candidateSelectedIds, "selected")}>Assign Selected to Request ({candidateSelectedIds.length})</button>
+    <button className="new-btn" disabled={bulkAssignmentBusy} onClick={() => openBulkAssignment([], "matching")}>Select All Matching & Assign</button>
+    <button className="light-btn" disabled={bulkAssignmentBusy || !candidateSelectedIds.length} onClick={() => bulkUnassign(candidateSelectedIds)}>Bulk Unassign</button>
+    <button className="new-btn" disabled={!candidateSelectedIds.length} onClick={() => exportRowsToExcel(selectRowsForBulkExport(filteredCandidateTableRows, candidateSelectedIds), "VisaFlow_Selected_Candidates", "Selected Candidates")}>Export Selected</button>
+    <button className="danger" disabled={!candidateSelectedIds.length} onClick={() => softDeleteCandidates(candidateSelectedIds)}>Delete Selected ({candidateSelectedIds.length})</button>
+    <button className="light-btn" disabled={!candidateSelectedIds.length} onClick={() => setCandidateSelectedIds([])}>Clear Selection</button>
+  </div>
+  {renderBulkAssignmentPanel()}
+  <div className="stats-grid" style={{ marginBottom: 12 }}>
+    {candidateUploadBatches.map((batch) => {
+      const activeCount = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch.id)).length;
+      return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><div className="actions-line"><button className="save-btn" disabled={!activeCount || bulkAssignmentBusy} onClick={() => openBulkAssignment(getBatchCandidateIds(candidates, batch.id), "batch")}>Assign Entire Upload Batch to Request</button><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div></div>;
+    })}
+  </div>
   <SmartTableToolbar
     searchValue={candidateTableFilters.query}
     onSearchChange={(value) => setCandidateTableFilters((current) => ({ ...current, query: value }))}
@@ -32097,13 +33732,14 @@ Save Authorization
   <table>
     <thead>
       <tr>
+        <th><input type="checkbox" checked={filteredCandidateTableRows.length > 0 && filteredCandidateTableRows.every((item) => candidateSelectedIds.includes(String(item.id)))} onChange={(event) => setCandidateSelectedIds(event.target.checked ? filteredCandidateTableRows.map((item) => String(item.id)) : [])} /></th>
         <th>Request No</th>
         <th>Name</th>
-        <th>Profession</th>
-        <th>Nationality</th>
+        <th><TableColumnFilter label="Profession" value={candidateTableFilters.profession} options={["All", ...getUniqueTableOptions(candidates, "profession")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, profession: value }))} /></th>
+        <th><TableColumnFilter label="Nationality" value={candidateTableFilters.nationality} options={["All", ...getUniqueTableOptions(candidates, "nationality")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, nationality: value }))} /></th>
         <th>Gender</th>
-        <th>Agency</th>
-        <th>Project</th>
+        <th><TableColumnFilter label="Agency" value={candidateTableFilters.agency} options={["All", ...getUniqueTableOptions(candidates, "agency")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, agency: value }))} /></th>
+        <th><TableColumnFilter label="Project" value={candidateTableFilters.project} options={["All", ...getUniqueTableOptions(candidates, (item) => item.project || requests.find((request) => String(request.request_no || "") === String(item.request_no || ""))?.project_name)]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, project: value }))} /></th>
         <th>Passport / Civil ID</th>
         <th>ID Expiry</th>
         <th>Email</th>
@@ -32120,7 +33756,7 @@ Save Authorization
 <th>Source</th>
 <th>Offer</th>
 <th>Joining Date</th>
-        <th>Status</th>
+        <th><TableColumnFilter label="Status" value={candidateTableFilters.status} options={["All", ...getUniqueTableOptions(candidates, "status")]} onChange={(value) => setCandidateTableFilters((current) => ({ ...current, status: value }))} /></th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -32128,6 +33764,7 @@ Save Authorization
     <tbody>
       {pagedCandidateTableRows.map((item) => (
         <tr key={item.id}>
+          <td><input type="checkbox" checked={candidateSelectedIds.includes(String(item.id))} onChange={() => setCandidateSelectedIds((current) => current.includes(String(item.id)) ? current.filter((id) => id !== String(item.id)) : [...current, String(item.id)])} /></td>
           <td>{item.request_no}</td>
           <td>{item.candidate_name}</td>
           <td>{item.profession}</td>
@@ -32205,6 +33842,13 @@ Save Authorization
     onPageChange={setCandidateTablePage}
   />
 </TableCard>
+{["Admin", "Company Admin"].includes(currentRole) && (
+  <TableCard title={`Deleted Candidates (${deletedCandidates.length})`}>
+    <table><thead><tr><th>Name</th><th>Office</th><th>Batch</th><th>Deleted</th><th>Reason</th><th>Action</th></tr></thead>
+      <tbody>{deletedCandidates.map((item) => <tr key={item.id}><td>{item.candidate_name}</td><td>{item.agency || "-"}</td><td>{item.deleted_from_batch_id || "-"}</td><td>{item.deleted_at ? new Date(item.deleted_at).toLocaleString() : "-"}</td><td>{item.deletion_reason || "-"}</td><td><button className="save-btn" onClick={() => restoreCandidates([item.id])}>Restore</button></td></tr>)}</tbody>
+    </table>
+  </TableCard>
+)}
           </>
         )}
 
@@ -33028,6 +34672,42 @@ Save Authorization
       />
     </div>
 
+    {mobilizationSaveFeedback && (
+      <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: mobilizationSaveFeedback.type === "error" ? "#fef2f2" : mobilizationSaveFeedback.type === "info" ? "#eff6ff" : "#ecfdf5", color: mobilizationSaveFeedback.type === "error" ? "#991b1b" : mobilizationSaveFeedback.type === "info" ? "#1d4ed8" : "#166534" }}>
+        {mobilizationSaveFeedback.message}
+      </div>
+    )}
+
+    {mobilizationForm.candidate_id && canManageMobilization && (
+      <FormCard title={mobilizationEditingId ? "Update Mobilization" : "Create Mobilization"}>
+        <div style={{ marginBottom: 12, color: "#475569" }}>
+          <strong>{mobilizationForm.candidate_name || "Candidate"}</strong>
+          {` · ${mobilizationForm.request_no || "No Request"}`}
+        </div>
+        <div className="form-grid">
+          <Select value={mobilizationForm.medical_status} onChange={(v) => updateForm(setMobilizationForm, "medical_status", v)} placeholder="Medical Status" options={["Pending", "Fit", "Unfit"]} />
+          <Input type="date" placeholder="Medical Date" value={mobilizationForm.medical_date || ""} onChange={(v) => updateForm(setMobilizationForm, "medical_date", v)} />
+          <Select value={mobilizationForm.visa_status} onChange={(v) => updateForm(setMobilizationForm, "visa_status", v)} placeholder="Visa Status" options={["Pending", "Ready", "Stamped"]} />
+          <Input type="date" placeholder="Visa Date" value={mobilizationForm.visa_date || ""} onChange={(v) => updateForm(setMobilizationForm, "visa_date", v)} />
+          <Input placeholder="Ticket No" value={mobilizationForm.ticket_no || ""} onChange={(v) => updateForm(setMobilizationForm, "ticket_no", v)} />
+          <Input type="date" placeholder="Flight Date" value={mobilizationForm.flight_date || ""} onChange={(v) => updateForm(setMobilizationForm, "flight_date", v)} />
+          <Input type="date" placeholder="Arrival Date" value={mobilizationForm.arrival_date || ""} onChange={(v) => updateForm(setMobilizationForm, "arrival_date", v)} />
+          <Input type="date" placeholder="Joining Date" value={mobilizationForm.joining_date || ""} onChange={(v) => updateForm(setMobilizationForm, "joining_date", v)} />
+          <Select
+            value={mobilizationForm.mobilization_status}
+            onChange={(v) => updateForm(setMobilizationForm, "mobilization_status", v)}
+            placeholder="Mobilization Status"
+            options={["New", "Medical Fit", "Visa Ready", "Ticket Issued", "Departure", "Arrived KSA", "Joined"]}
+          />
+        </div>
+        <textarea rows="3" placeholder="Mobilization Remarks" value={mobilizationForm.remarks || ""} onChange={(event) => updateForm(setMobilizationForm, "remarks", event.target.value)} />
+        <div className="actions-line" style={{ marginTop: 12 }}>
+          <button className="light-btn" onClick={resetMobilizationForm}>Cancel</button>
+          <button className="save-btn" disabled={mobilizationSaving} onClick={saveMobilization}>{mobilizationSaving ? "Saving..." : mobilizationEditingId ? "Update Mobilization" : "Save Mobilization"}</button>
+        </div>
+      </FormCard>
+    )}
+
     {selectedMobilizationRow && (
       <>
         <TableCard title={`Mobilization Dashboard - ${selectedMobilizationRow.request_no}`}>
@@ -33369,6 +35049,157 @@ Save Authorization
       />
     </div>
 
+    {currentRole === "Agency" && (
+      <TableCard title="Assigned Authorizations">
+        {authorizationWorkflowFeedback && (
+          <div
+            role="status"
+            style={{
+              marginBottom: "14px",
+              padding: "10px 14px",
+              borderRadius: "10px",
+              background: authorizationWorkflowFeedback.type === "success" ? "#ecfdf5" : "#fef2f2",
+              color: authorizationWorkflowFeedback.type === "success" ? "#047857" : "#b91c1c",
+              fontWeight: 800,
+            }}
+          >
+            {authorizationWorkflowFeedback.message}
+          </div>
+        )}
+        {agencyAuthorizationAction && (
+          <div style={{ marginBottom: "14px", padding: "16px", borderRadius: "12px", border: "1px solid #bfdbfe", background: "#f8fbff" }}>
+            <strong style={{ display: "block", marginBottom: "8px" }}>
+              {agencyAuthorizationAction.action === "reject"
+                ? "Reject authorization"
+                : agencyAuthorizationAction.action === "accept"
+                  ? "Accept authorization"
+                  : "Acknowledge authorization"}
+              {` — ${agencyAuthorizationAction.item.authorization_no || agencyAuthorizationAction.item.visa_no || "-"}`}
+            </strong>
+            <textarea
+              rows="3"
+              placeholder={agencyAuthorizationAction.action === "reject" ? "Rejection reason (required)" : "Optional note"}
+              value={agencyAuthorizationAction.reason}
+              onChange={(event) => setAgencyAuthorizationAction((current) => ({ ...current, reason: event.target.value }))}
+              style={{ width: "100%", marginBottom: "10px" }}
+            />
+            <div className="actions-line">
+              <button
+                className={agencyAuthorizationAction.action === "reject" ? "danger-btn" : "save-btn"}
+                onClick={submitAgencyAuthorizationAction}
+                disabled={Boolean(authorizationWorkflowBusy)}
+              >
+                {authorizationWorkflowBusy ? "Saving..." : "Confirm Action"}
+              </button>
+              <button
+                className="light-btn"
+                onClick={() => setAgencyAuthorizationAction(null)}
+                disabled={Boolean(authorizationWorkflowBusy)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "520px" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Authorization</th>
+                <th>Request</th>
+                <th>Profession</th>
+                <th>Nationality</th>
+                <th>Quantity</th>
+                <th>Status</th>
+                <th>Updated</th>
+                <th>Reason</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="9" style={{ textAlign: "center", padding: "24px" }}>Loading assigned authorizations...</td></tr>
+              ) : visaAuthorizations.length === 0 ? (
+                <tr><td colSpan="9" style={{ textAlign: "center", padding: "24px", color: "#64748b" }}>No authorizations have been assigned to this agency.</td></tr>
+              ) : visaAuthorizations.map((item) => {
+                const actions = getAuthorizationActions(item, currentRole);
+                return (
+                  <tr key={item.id}>
+                    <td>{item.authorization_no || item.visa_no || "-"}</td>
+                    <td>{item.request_no || "-"}</td>
+                    <td>{item.profession || "-"}</td>
+                    <td>{item.nationality || "-"}</td>
+                    <td>{item.allocated_qty || 0}</td>
+                    <td><Badge value={getAuthorizationAgencyStatus(item)} /></td>
+                    <td>{item.updated_at ? new Date(item.updated_at).toLocaleString() : "-"}</td>
+                    <td>{item.response_reason || "-"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="light-btn"
+                          onClick={() => openAuthorizationWorkflow(item, { markViewed: true })}
+                          disabled={Boolean(authorizationWorkflowBusy)}
+                        >
+                          {authorizationWorkflowBusy === `view:${item.id}` ? "Opening..." : "View"}
+                        </button>
+                        {actions.canAcknowledge && (
+                          <button
+                            className="new-btn"
+                            onClick={() => handleAgencyAuthorizationAction("acknowledge", item)}
+                            disabled={Boolean(authorizationWorkflowBusy)}
+                          >
+                            {authorizationWorkflowBusy === `acknowledge:${item.id}` ? "Saving..." : "Acknowledge"}
+                          </button>
+                        )}
+                        {actions.canAccept && (
+                          <button
+                            className="save-btn"
+                            onClick={() => handleAgencyAuthorizationAction("accept", item)}
+                            disabled={Boolean(authorizationWorkflowBusy)}
+                          >
+                            {authorizationWorkflowBusy === `accept:${item.id}` ? "Accepting..." : "Accept"}
+                          </button>
+                        )}
+                        {actions.canReject && (
+                          <button
+                            className="danger-btn"
+                            onClick={() => handleAgencyAuthorizationAction("reject", item)}
+                            disabled={Boolean(authorizationWorkflowBusy)}
+                          >
+                            {authorizationWorkflowBusy === `reject:${item.id}` ? "Rejecting..." : "Reject"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {selectedAuthorization && (
+          <div style={{ marginTop: "16px", padding: "16px", borderRadius: "12px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+            <div className="actions-line" style={{ justifyContent: "space-between" }}>
+              <strong>Timeline — {selectedAuthorization.authorization_no || selectedAuthorization.visa_no || "-"}</strong>
+              <button className="light-btn" onClick={() => setSelectedAuthorization(null)}>Close</button>
+            </div>
+            <div style={{ display: "grid", gap: "8px", marginTop: "12px" }}>
+              {buildAuthorizationTimeline(authorizationTimelineEvents).map((event, index) => (
+                <div key={`${event.stage}-${index}`} style={{ display: "grid", gridTemplateColumns: "28px 1fr 2fr", gap: "8px" }}>
+                  <span style={{ color: event.complete ? "#059669" : "#94a3b8", fontWeight: 900 }}>{event.complete ? "✓" : "○"}</span>
+                  <strong>{event.stage}</strong>
+                  <span>
+                    {event.complete ? `${event.at ? new Date(event.at).toLocaleString() : "-"} · ${event.by || "-"}` : "Pending"}
+                    {event.reason ? ` · Reason: ${event.reason}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </TableCard>
+    )}
+
 
     {currentRole === "Agency" && (
       <TableCard title="Labor SLA Delay Penalties / الغرامات المطلوبة لتأخير العمالة">
@@ -33401,21 +35232,79 @@ Save Authorization
                     <td>{Number(item.calculated_amount || 0).toLocaleString()} SAR</td>
                     <td><b>{Number(item.approved_amount ?? item.calculated_amount ?? 0).toLocaleString()} SAR</b></td>
                     <td><Badge value={item.status || "-"} /></td>
-                    <td>{item.agency_justification || item.decision_notes || "-"}</td>
+                    <td>
+                      <div>{item.agency_justification || item.decision_notes || "-"}</div>
+                      {getPenaltyEvidence(item).length > 0 && (
+                        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                          {getPenaltyEvidence(item).map((evidence, evidenceIndex) => (
+                            <button
+                              key={`${evidence.storage_path || evidence.file_name}-${evidenceIndex}`}
+                              type="button"
+                              className="light-btn"
+                              onClick={() => openPenaltyEvidence(evidence)}
+                            >
+                              Attachment: {evidence.file_name || `Evidence ${evidenceIndex + 1}`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td className="table-actions">
                       {item.status === "Sent to Agency" ? (
-                        <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Justification</button>
+                        <button className="save-btn" onClick={() => openPenaltyAgencyForm(item)}>Submit Justification</button>
                       ) : item.status === "Justification Submitted" ? (
                         <span>Under company review</span>
                       ) : item.status === "Agency Objection Submitted" ? (
                         <span>Objection under company review</span>
                       ) : canAgencySubmitPenaltyObjection(item) ? (
-                        <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Objection</button>
+                        <button className="save-btn" onClick={() => openPenaltyAgencyForm(item)}>Submit Objection</button>
                       ) : ["Approved", "Reduced"].includes(item.status) ? (
                         <span>Finalized</span>
-                      ) : item.status === "Waived" ? (
-                        <span>Waived</span>
+                      ) : ["Cancelled", "Waived"].includes(item.status) ? (
+                        <span>Cancelled</span>
                       ) : "-"}
+                      {String(penaltyAgencyForm.penaltyId) === String(item.id) && (
+                        <div style={{ minWidth: 320, marginTop: 10, padding: 14, border: "1px solid #cbd5e1", borderRadius: 12, background: "#f8fafc", display: "grid", gap: 10 }}>
+                          <strong>
+                            {penaltyAgencyForm.mode === "objection"
+                              ? "Agency Objection / اعتراض المكتب"
+                              : "Agency Justification / مبررات المكتب"}
+                          </strong>
+                          <div style={{ fontSize: 12, color: "#475569" }}>
+                            Explain the delay and what decision you request. The company will review this before the final decision.
+                          </div>
+                          <textarea
+                            rows="5"
+                            value={penaltyAgencyForm.reason}
+                            onChange={(event) => setPenaltyAgencyForm((current) => ({ ...current, reason: event.target.value, error: "", message: "" }))}
+                            placeholder="Write the justification or objection / اكتب المبررات أو الاعتراض"
+                            disabled={penaltyAgencyForm.busy}
+                          />
+                          <label style={{ display: "grid", gap: 6, fontSize: 12, fontWeight: 700 }}>
+                            Supporting attachment (optional) / مرفق داعم (اختياري)
+                            <input
+                              type="file"
+                              accept="application/pdf,image/jpeg,image/png"
+                              onChange={(event) => setPenaltyAgencyForm((current) => ({ ...current, file: event.target.files?.[0] || null, error: "", message: "" }))}
+                              disabled={penaltyAgencyForm.busy}
+                            />
+                          </label>
+                          <div style={{ fontSize: 11, color: "#64748b" }}>PDF, JPG, or PNG up to 10 MB.</div>
+                          {penaltyAgencyForm.error && <div style={{ color: "#b91c1c", fontWeight: 700 }}>{penaltyAgencyForm.error}</div>}
+                          {penaltyAgencyForm.message && <div style={{ color: "#047857", fontWeight: 700 }}>{penaltyAgencyForm.message}</div>}
+                          <div className="actions-line">
+                            <button
+                              type="button"
+                              className="save-btn"
+                              onClick={() => submitPenaltyJustification(item)}
+                              disabled={penaltyAgencyForm.busy}
+                            >
+                              {penaltyAgencyForm.busy ? "Submitting..." : "Confirm & Submit"}
+                            </button>
+                            <button type="button" className="light-btn" onClick={closePenaltyAgencyForm} disabled={penaltyAgencyForm.busy}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -33425,8 +35314,11 @@ Save Authorization
       </TableCard>
     )}
 
-    {currentRole === "Agency" && agencyAgreements.length > 0 && (
+    {shouldShowAgencyAgreements({ role: currentRole, loading: agencyAgreementsLoading, agreements: agencyAgreements }) && (
       <TableCard title="Agency Agreements / Electronic Signature">
+        {agencyAgreementsLoading && agencyAgreements.length === 0 ? (
+          <div className="empty-state">Loading agreements...</div>
+        ) : (
         <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
           <table>
             <thead>
@@ -33472,6 +35364,7 @@ Save Authorization
             </tbody>
           </table>
         </div>
+        )}
       </TableCard>
     )}
 
@@ -33493,6 +35386,11 @@ Save Authorization
 
     {canManageOfficePortal && (
     <FormCard title={candidateEditingId ? "Edit Office Candidate" : "Add Office Candidate"}>
+      {candidateSaveFeedback && (
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "error" ? "#fef2f2" : candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "error" ? "#991b1b" : candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
+          {candidateSaveFeedback.message}
+        </div>
+      )}
       <div className="form-grid">
         <Input placeholder="Candidate Name" value={candidateForm.candidate_name} onChange={(v) => updateForm(setCandidateForm, "candidate_name", v)} />
 <Select
@@ -33694,6 +35592,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         />
 
         <div className="actions-line">
+          <button className="save-btn" disabled={bulkAssignmentBusy || !officeSelectedCandidateIds.length} onClick={() => openBulkAssignment(officeSelectedCandidateIds, "selected")}>Assign Selected to Request ({officeSelectedCandidateIds.length})</button>
+          <button className="new-btn" disabled={bulkAssignmentBusy} onClick={() => openBulkAssignment([], "matching")}>Select All Matching</button>
+          <button className="light-btn" disabled={bulkAssignmentBusy || !officeSelectedCandidateIds.length} onClick={() => bulkUnassign(officeSelectedCandidateIds)}>Bulk Unassign</button>
           <button
             className="save-btn"
             onClick={bulkUpdateOfficeCandidates}
@@ -33703,11 +35604,30 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </button>
           <button className="light-btn" onClick={resetOfficeBulkForm}>Clear Bulk Fields</button>
           <button className="light-btn" onClick={() => setOfficeSelectedCandidateIds([])}>Clear Selection</button>
+          <button className="danger" disabled={!officeSelectedCandidateIds.length} onClick={() => softDeleteCandidates(officeSelectedCandidateIds)}>Delete Selected ({officeSelectedCandidateIds.length})</button>
         </div>
       </FormCard>
     )}
+    {renderBulkAssignmentPanel()}
+
+    <div className="stats-grid" style={{ marginBottom: 12 }}>
+      {candidateUploadBatches.map((batch) => {
+        const activeCount = candidates.filter((item) => String(item.upload_batch_id || "") === String(batch.id)).length;
+        return <div className="stat-card" key={batch.id}><h3>{batch.file_name}</h3><strong>{activeCount} / {batch.row_count}</strong><p>{new Date(batch.created_at).toLocaleString()}</p><div className="actions-line"><button className="save-btn" disabled={!activeCount || bulkAssignmentBusy} onClick={() => openBulkAssignment(getBatchCandidateIds(candidates, batch.id), "batch")}>Assign Entire Upload Batch to Request</button><button className="danger" disabled={!activeCount} onClick={() => deleteCandidateUploadBatch(batch)}>Delete Upload Batch</button></div></div>;
+      })}
+    </div>
 
     <TableCard title="Office Candidates Tracking - Candidate Updates & Interview Scheduling">
+      <div className="form-grid" style={{ marginBottom: 12 }}>
+        <Input
+          placeholder="Search candidates by name, passport, request, profession or stage..."
+          value={officeCandidateSearch}
+          onChange={setOfficeCandidateSearch}
+        />
+        <div style={{ alignSelf: "center", color: "#64748b", fontSize: 13 }}>
+          Showing {getOfficeRenderedCandidates().length} of {getOfficeFilteredCandidates().length} matching candidates
+        </div>
+      </div>
       <table>
         <thead>
           <tr>
@@ -33715,7 +35635,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <th>
                 <input
                   type="checkbox"
-                  checked={getOfficeVisibleCandidates().length > 0 && getOfficeVisibleCandidates().every((item) => officeSelectedCandidateIds.includes(String(item.id)))}
+                  checked={getOfficeRenderedCandidates().length > 0 && getOfficeRenderedCandidates().every((item) => officeSelectedCandidateIds.includes(String(item.id)))}
                   onChange={toggleAllOfficeCandidates}
                   title="Select all visible candidates"
                 />
@@ -33736,7 +35656,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </tr>
         </thead>
         <tbody>
-          {getOfficeVisibleCandidates()
+          {getOfficeRenderedCandidates()
   .map((item) => (
             <tr key={item.id}>
               {canManageOfficePortal && (
@@ -33809,6 +35729,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           {getCandidateInterview(item) ? "Update Interview Date" : "Schedule Interview"}
         </button>
       )}
+      <button className="danger" onClick={() => deleteCandidate(item.id)}>Delete</button>
     </>
   ) : (
     "-"
@@ -34498,13 +36419,14 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Labor SLA Penalty</th>
             <th>Guarantee</th>
             <th>Status</th>
+            <th>Delivery Status</th>
             <th>Agency Accepted</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {agencyAgreements.length === 0 ? (
-            <tr><td colSpan="9">No agency agreements yet</td></tr>
+            <tr><td colSpan="10">No agency agreements yet</td></tr>
           ) : (
             agencyAgreements.map((item) => (
               <tr key={item.id}>
@@ -34515,10 +36437,17 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{item.delay_penalty_type || "-"} / {item.delay_penalty_amount || 0}</td>
                 <td>{item.financial_guarantee_required || "No"}{item.financial_guarantee_amount ? ` / ${Number(item.financial_guarantee_amount).toLocaleString()} SAR` : ""}</td>
                 <td><Badge value={item.status || "Draft"} /></td>
+                <td>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <Badge value={item.email_delivery_status || "Not Sent"} />
+                    {item.email_delivery_status === "Failed" && <small style={{ color: "#b91c1c" }}>{item.email_error_code || "EMAIL_PROVIDER_ERROR"} — {item.email_error_message || "Email delivery failed at the provider."}</small>}
+                  </div>
+                </td>
                 <td>{item.agency_accepted_at ? new Date(item.agency_accepted_at).toLocaleDateString("en-GB") : item.agency_signature || "-"}</td>
                 <td className="table-actions">
                   {canManageAgencyAgreements && <button onClick={() => editAgreement(item)}>Edit</button>}
                   {canManageAgencyAgreements && item.status !== "Pending Signature" && item.status !== "Active" && <button onClick={() => sendExistingAgreementToAgency(item)}>Send</button>}
+                  {canManageAgencyAgreements && canRetryAgreementEmail(item) && <button onClick={() => sendExistingAgreementToAgency(item)}>Retry Email</button>}
                   {canManageAgencyAgreements && <button className="danger" onClick={() => deleteAgreement(item.id)}>Delete</button>}
                 </td>
               </tr>
@@ -34538,7 +36467,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Sent to Agency" value={agencyPenalties.filter((x) => x.status === "Sent to Agency").length} />
       <Stat title="Justifications" value={agencyPenalties.filter((x) => ["Justification Submitted", "Agency Objection Submitted"].includes(x.status)).length} className="warning" />
       <Stat title="Approved" value={`${Number(agencyPenalties.filter((x) => ["Approved", "Reduced"].includes(x.status)).reduce((sum, x) => sum + Number(x.approved_amount || 0), 0)).toLocaleString()} SAR`} className="danger" />
-      <Stat title="Waived" value={`${Number(agencyPenalties.filter((x) => x.status === "Waived").reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
+      <Stat title="Cancelled" value={`${Number(agencyPenalties.filter((x) => ["Cancelled", "Waived"].includes(x.status)).reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
     </div>
 
     <TableCard title="Labor SLA Delay Penalties / Approval Workflow">
@@ -34588,7 +36517,23 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <td>{Number(item.calculated_amount || 0).toLocaleString()} SAR</td>
                 <td><b>{Number(item.approved_amount ?? item.calculated_amount ?? 0).toLocaleString()} SAR</b></td>
                 <td><Badge value={item.status || "Pending Review"} /></td>
-                <td>{item.agency_justification || "-"}</td>
+                <td>
+                  <div>{item.agency_justification || "-"}</div>
+                  {getPenaltyEvidence(item).length > 0 && (
+                    <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                      {getPenaltyEvidence(item).map((evidence, evidenceIndex) => (
+                        <button
+                          key={`${evidence.storage_path || evidence.file_name}-${evidenceIndex}`}
+                          type="button"
+                          className="light-btn"
+                          onClick={() => openPenaltyEvidence(evidence)}
+                        >
+                          Open: {evidence.file_name || `Evidence ${evidenceIndex + 1}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </td>
                 <td>{item.decision_notes || "-"}</td>
                 <td className="table-actions">
                   {item.source === "live" ? (
@@ -34597,21 +36542,21 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     <>
                       <button className="save-btn" onClick={() => sendPenaltyToAgency(item)}>Send to Agency</button>
                       <button onClick={() => reduceAndSendPenalty(item)}>Reduce & Send</button>
-                      <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
+                      <button className="danger" onClick={() => waivePenalty(item)}>Cancel</button>
                     </>
                   ) : item.status === "Sent to Agency" ? (
                     <>
                       <button className="save-btn" onClick={() => approveFinalPenalty(item, "No accepted justification received. Final penalty approved.")}>Approve Final</button>
                       <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
-                      <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
+                      <button className="danger" onClick={() => waivePenalty(item)}>Cancel</button>
                     </>
                   ) : ["Justification Submitted", "Agency Objection Submitted"].includes(item.status) ? (
                     <>
-                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification/objection accepted by company.")}>Accept Justification</button>
+                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification/objection accepted by company.")}>Accept Objection & Cancel</button>
                       <button className="danger" onClick={() => approveFinalPenalty(item, "Agency justification/objection rejected by company. Penalty approved.")}>Reject & Approve</button>
                       <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
                     </>
-                  ) : ["Approved", "Reduced", "Waived"].includes(item.status) ? (
+                  ) : ["Approved", "Reduced", "Cancelled", "Waived"].includes(item.status) ? (
                     <span>Final</span>
                   ) : "-"}
                   {item.source !== "live" && <button className="danger" onClick={() => deletePenaltyRecord(item)}>Delete</button>}
@@ -34790,13 +36735,26 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     <button
                       className={(company.subscription_status || "Active") === "Active" ? "danger" : "save-btn"}
                       onClick={async () => {
+                        if (!isPlatformOwner) {
+                          return alert(
+                            "Only Platform Owner can change subscription status."
+                          );
+                        }
                         const nextStatus = (company.subscription_status || "Active") === "Active" ? "Suspended" : "Active";
-                        const { error } = await supabase
-                          .from("companies")
-                          .update({ subscription_status: nextStatus })
-                          .eq("id", company.id)
-                          .eq("id", currentCompanyId);
-                        if (error) return alert(error.message);
+                        try {
+                          await invokeAgencyAdministration(supabase, {
+                            action: "update_company_settings",
+                            company_id: company.id,
+                            settings: buildCompanySettingsUpdate(
+                              { subscription_status: nextStatus },
+                              { platform: true }
+                            ),
+                          });
+                        } catch (error) {
+                          return alert(
+                            getAgencyAdministrationErrorMessage(error)
+                          );
+                        }
                         await loadCompanies();
                       }}
                     >
@@ -35103,7 +37061,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         {activePage === "Agencies" && (
           <>
             {canManageAgencies && (
-            <FormCard title={agencyEditingId ? "Edit Agency" : "Add Agency"}>
+            <FormCard title="Add Agency">
               <div className="form-grid">
                 <Input placeholder="Agency Name" value={agencyForm.name} onChange={(v) => updateForm(setAgencyForm, "name", v)} />
                 <Input placeholder="Country" value={agencyForm.country} onChange={(v) => updateForm(setAgencyForm, "country", v)} />
@@ -35112,10 +37070,227 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                 <Input placeholder="Phone" value={agencyForm.phone} onChange={(v) => updateForm(setAgencyForm, "phone", v)} />
                 <Select value={agencyForm.status} onChange={(v) => updateForm(setAgencyForm, "status", v)} placeholder="Status" options={["Active", "Inactive", "Suspended"]} />
               </div>
-              <div className="actions-line"><button className="save-btn" onClick={saveAgency}>{agencyEditingId ? "Update Agency" : "Save Agency"}</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
+              <div className="actions-line"><button className="save-btn" onClick={saveAgency}>Save Agency</button><button className="light-btn" onClick={resetAgencyForm}>Clear</button></div>
             </FormCard>
             )}
-            <TableCard title="Agencies List"><table><thead><tr><th>Name</th><th>Country</th><th>Contact</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead><tbody>{agencies.map((item) => <tr key={item.id}><td>{item.name}</td><td>{item.country}</td><td>{item.contact_person}</td><td>{item.email}</td><td>{item.phone}</td><td><Badge value={item.status} /></td><td className="table-actions">{canManageAgencies ? <><button onClick={() => editAgency(item)}>Edit</button><button className="danger" onClick={() => deleteAgency(item.id)}>Delete</button></> : "-"}</td></tr>)}</tbody></table></TableCard>
+            {agencyMaintenanceId && canAdministerAgencies && (
+              <FormCard title="Edit Agency">
+                <div className="form-grid">
+                  <Input
+                    placeholder="Agency Name"
+                    value={agencyMaintenanceForm.name}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        name: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Country"
+                    value={agencyMaintenanceForm.country}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        country: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Contact Person"
+                    value={agencyMaintenanceForm.contact_person}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        contact_person: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Email"
+                    value={agencyMaintenanceForm.email}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        email: value,
+                      }))
+                    }
+                  />
+                  <Input
+                    placeholder="Phone"
+                    value={agencyMaintenanceForm.phone}
+                    onChange={(value) =>
+                      setAgencyMaintenanceForm((current) => ({
+                        ...current,
+                        phone: value,
+                      }))
+                    }
+                  />
+                </div>
+                {agencyMaintenanceMessage && (
+                  <p>{agencyMaintenanceMessage}</p>
+                )}
+                <div className="actions-line">
+                  <button
+                    className="save-btn"
+                    disabled={agencyMaintenanceLoading}
+                    onClick={saveAgencyMaintenance}
+                  >
+                    {agencyMaintenanceLoading ? "Saving..." : "Update Agency"}
+                  </button>
+                  <button
+                    className="light-btn"
+                    disabled={agencyMaintenanceLoading}
+                    onClick={cancelAgencyMaintenance}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </FormCard>
+            )}
+            {!agencyMaintenanceId && agencyMaintenanceMessage && (
+              <p>{agencyMaintenanceMessage}</p>
+            )}
+            <TableCard title="Agencies List">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Country</th>
+                    <th>Invitation User</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Phone</th>
+                    <th>Status</th>
+                    <th>Portal Permissions</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agencies.map((item) => {
+                    const invitationStatus = getAgencyInvitationStatus(
+                      agencyInvitationStates[String(item.id)] || null
+                    );
+                    const invitationRequest = agencyInvitationStates[String(item.id)] || null;
+                    const isSending =
+                      agencyInvitationSendingId === String(item.id);
+                    const canSend = canSendAgencyInvitation(invitationStatus);
+                    const canResend = canResendAgencyInvitation(invitationRequest);
+                    const canRevoke = canRevokeAgencyInvitation(invitationStatus);
+                    const isNewAfterRevoke = invitationStatus === "Revoked";
+                    const invitationFailureMessage = invitationStatus === "Failed"
+                      ? (invitationRequest?.failure_code === "AGENCY_INVITATION_EMAIL_DELIVERY_FAILED"
+                          ? "Email delivery failed. Retry is available after the cooldown."
+                          : "Invitation delivery failed. Review the activity log before retrying.")
+                      : "";
+                    return (
+                      <tr key={item.id}>
+                        <td>{item.name}</td>
+                        <td>{item.country}</td>
+                        <td>{item.contact_person}</td>
+                        <td>{item.email}</td>
+                        <td><Badge value="Agency User" /></td>
+                        <td>{item.phone}</td>
+                        <td><Badge value={item.status} /></td>
+                        <td>
+                          <div style={{ display: "grid", gap: "4px", minWidth: 190 }}>
+                            {AGENCY_PERMISSION_KEYS.map((permissionKey) => {
+                              const selected =
+                                agencyInvitationPermissions[String(item.id)] ||
+                                DEFAULT_AGENCY_PERMISSIONS;
+                              return (
+                                <label key={permissionKey} className="check-row">
+                                  <input
+                                    type="checkbox"
+                                    disabled={!canInviteAgencyUsers || (!canSend && !canResend)}
+                                    checked={selected[permissionKey] === true}
+                                    onChange={(event) =>
+                                      setAgencyInvitationPermissions((current) => ({
+                                        ...current,
+                                        [String(item.id)]: {
+                                          ...(current[String(item.id)] ||
+                                            DEFAULT_AGENCY_PERMISSIONS),
+                                          [permissionKey]: event.target.checked,
+                                        },
+                                      }))
+                                    }
+                                  />
+                                  {permissionKey.replaceAll("_", " ")}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td className="table-actions">
+                          <div style={{ display: "grid", gap: 4, minWidth: 190 }}>
+                            <span><strong>Status:</strong> {isSending ? "Queued" : invitationStatus}</span>
+                            {invitationFailureMessage && <small style={{ color: "#b91c1c", maxWidth: 240 }}><strong>Delivery:</strong> {invitationFailureMessage}</small>}
+                          </div>
+                          {canInviteAgencyUsers && (
+                            <button
+                              disabled={(!canSend && !canResend) || isSending}
+                              onClick={() => inviteAgency(item, isNewAfterRevoke ? "invite_existing" : canResend ? "resend_invitation" : "invite_existing")}
+                              title={
+                                canSend || canResend
+                                  ? "Send a secure agency invitation"
+                                  : "Invitation cannot be resent in this state"
+                              }
+                            >
+                              {isSending ? "Queued" : invitationStatus === "Accepted" ? "Invite Another User" : isNewAfterRevoke ? "Send New Invitation" : canResend ? "Resend Invitation" : "Send Invitation"}
+                            </button>
+                          )}
+                          {canInviteAgencyUsers && canRevoke && (
+                            <button className="danger-btn" disabled={isSending} onClick={() => revokeAgencyInvitation(item)}>
+                              Revoke Invitation
+                            </button>
+                          )}
+                          {canAdministerAgencies && (
+                            <>
+                              <button
+                                disabled={agencyMaintenanceLoading}
+                                onClick={() => beginAgencyMaintenance(item)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                className="danger-btn"
+                                disabled={agencyMaintenanceLoading}
+                                onClick={() => unlinkExistingAgency(item)}
+                              >
+                                Unlink
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </TableCard>
+            {canInviteAgencyUsers && (
+              <TableCard title="Agency Users">
+                <table>
+                  <thead><tr><th>Agency</th><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    {agencyUsers.length === 0 ? <tr><td colSpan="6">No agency users are linked to this company.</td></tr> : agencyUsers.map((item) => {
+                      const key = `${item.agency_id}:${item.user_id}`;
+                      const busy = agencyUserLifecycleLoadingId === key;
+                      return <tr key={key}>
+                        <td>{agencies.find((agency) => String(agency.id) === String(item.agency_id))?.name || item.agency_id}</td>
+                        <td>{item.user_name || "-"}</td><td>{item.user_email || "-"}</td>
+                        <td><Select disabled={busy || item.access_status === "Inactive"} value={item.access_role || "Agency User"} options={["Agency User", "Agency Manager"]} onChange={(role) => mutateAgencyUserLifecycle(item, "change_role", role)} /></td>
+                        <td><Badge value={item.access_status || "-"} /></td>
+                        <td className="table-actions">
+                          {item.access_status === "Active" ? <button disabled={busy} onClick={() => mutateAgencyUserLifecycle(item, "disable")}>Disable</button> : item.access_status !== "Inactive" && <button disabled={busy} onClick={() => mutateAgencyUserLifecycle(item, "reactivate")}>Reactivate</button>}
+                          {item.access_status !== "Inactive" && <button className="danger-btn" disabled={busy} onClick={() => mutateAgencyUserLifecycle(item, "unlink")}>Unlink Access</button>}
+                        </td>
+                      </tr>;
+                    })}
+                  </tbody>
+                </table>
+              </TableCard>
+            )}
           </>
         )}
 
@@ -35769,12 +37944,43 @@ onClick={() => setActiveReport("activityLog")}>
                 <Stat title="Active Employees" value={employeeIntelligence.activeEmployees} className="passed" />
                 <Stat title="Contracts Expiring 60 Days" value={employeeIntelligence.expiringSoon} className={employeeIntelligence.expiringSoon > 0 ? "warning" : "passed"} />
                 <Stat title="Redeployment Matches" value={employeeIntelligence.redeploymentMatches} className={employeeIntelligence.redeploymentMatches > 0 ? "passed" : "warning"} />
-                <Stat title="Potential Saving" value={`${Number(employeeIntelligence.potentialSaving || 0).toLocaleString()} SAR`} className="passed" />
               </div>
               {employeeIntelligence.projectRisk && (
                 <div style={{ marginTop: "14px", padding: "16px", borderRadius: "16px", background: "#f8fafc", border: "1px solid #e2e8f0", lineHeight: 1.7 }}>
                   <b>AI Risk Alert:</b> Project <b>{employeeIntelligence.projectRisk.project}</b> has <b>{employeeIntelligence.projectRisk.count}</b> employee(s) with contracts ending soon.
                   {employeeIntelligence.projectRisk.professions ? ` Professions: ${employeeIntelligence.projectRisk.professions}.` : ""}
+                </div>
+              )}
+              {employeeIntelligence.expiringEmployees.length > 0 && (
+                <div className="table-wrap" style={{ marginTop: "14px" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Project</th>
+                        <th>Profession</th>
+                        <th>Contract End</th>
+                        <th>Days Remaining</th>
+                        <th>Next Step</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {employeeIntelligence.expiringEmployees.map((employee) => (
+                        <tr key={employee.id}>
+                          <td>{employee.employee_name || employee.employee_no || "-"}</td>
+                          <td>{employee.project_name || "Unassigned"}</td>
+                          <td>{employee.profession || "-"}</td>
+                          <td>{employee.contract_end_date}</td>
+                          <td><b style={{ color: employee.daysRemaining <= 30 ? "#dc2626" : "#d97706" }}>{employee.daysRemaining} day(s)</b></td>
+                          <td>
+                            {canManageDemobilization
+                              ? <button className="new-btn" onClick={() => createDemobilizationFromEmployee(employee)}>Start Demobilization</button>
+                              : "Operations review required"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </TableCard>
@@ -35814,17 +38020,24 @@ onClick={() => setActiveReport("activityLog")}>
             )}
 
             <TableCard title="Employees Master List">
-              <div className="toolbar">
-                <input placeholder="Search employee, iqama, profession, project" value={search} onChange={(e) => setSearch(e.target.value)} />
-                {canManageMarketplace && (
-                  <>
+              <SmartTableToolbar
+                searchValue={employeeTableFilters.query}
+                onSearchChange={(value) => setEmployeeTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search employee, iqama, profession, nationality, or project..."
+                resultCount={filteredEmployeeRows.length}
+                hasExternalFilter={Object.entries(employeeTableFilters).some(([key, value]) => key !== "query" && value !== "All")}
+                onClear={() => setEmployeeTableFilters({ query: "", status: "All", profession: "All", nationality: "All", project: "All" })}
+              />
+              {canManageMarketplace && (
+                <div className="bulk-action-bar">
+                    <strong>{selectedEmployeeIds.length} selected</strong>
                     <button className="new-btn" onClick={sendSelectedEmployeesToMarketplace} disabled={selectedEmployeeIds.length === 0}>
                       Send Selected to Workforce Marketplace ({selectedEmployeeIds.length})
                     </button>
+                    <button className="new-btn" onClick={() => exportRowsToExcel(selectRowsForBulkExport(filteredEmployeeRows, selectedEmployeeIds), "VisaFlow_Selected_Employees", "Selected Employees")} disabled={selectedEmployeeIds.length === 0}>Export Selected</button>
                     <button className="light-btn" onClick={() => setSelectedEmployeeIds([])} disabled={selectedEmployeeIds.length === 0}>Clear Selection</button>
-                  </>
-                )}
-              </div>
+                </div>
+              )}
               <table>
                 <thead>
                   <tr>
@@ -35833,10 +38046,10 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Name</th>
                     <th>Iqama</th>
                     <th>Iqama Expiry</th>
-                    <th>Profession</th>
-                    <th>Nationality</th>
+                    <th><TableColumnFilter label="Profession" value={employeeTableFilters.profession} options={["All", ...getUniqueTableOptions(employees, "profession")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, profession: value }))} /></th>
+                    <th><TableColumnFilter label="Nationality" value={employeeTableFilters.nationality} options={["All", ...getUniqueTableOptions(employees, "nationality")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, nationality: value }))} /></th>
                     <th>Gender</th>
-                    <th>Project</th>
+                    <th><TableColumnFilter label="Project" value={employeeTableFilters.project} options={["All", ...getUniqueTableOptions(employees, "project_name")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, project: value }))} /></th>
                     <th>City</th>
                     <th>Location</th>
                     <th>Salary</th>
@@ -35844,7 +38057,7 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Contract End</th>
                     <th>Days Remaining</th>
                     <th>Marketplace</th>
-                    <th>Status</th>
+                    <th><TableColumnFilter label="Status" value={employeeTableFilters.status} options={["All", ...getUniqueTableOptions(employees, "status")]} onChange={(value) => setEmployeeTableFilters((current) => ({ ...current, status: value }))} /></th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -35900,7 +38113,6 @@ onClick={() => setActiveReport("activityLog")}>
             <div className="dashboard-grid">
               <Stat title="Available Employees" value={demobilizationIntelligence.availableEmployees} className="warning" />
               <Stat title="Matched Employees" value={demobilizationIntelligence.suggestedEmployees + demobilizationIntelligence.reassignedEmployees} className="passed" />
-              <Stat title="Potential Saving" value={`${Number(demobilizationIntelligence.potentialSaving || 0).toLocaleString()} SAR`} className="passed" />
               <Stat title="Recruitment Avoided" value={demobilizationIntelligence.recruitmentAvoided} className="passed" />
               <Stat title="Open Recruitment Gaps" value={demobilizationIntelligence.openRecruitmentGaps.length} className="warning" />
               <Stat title="Invoices Required" value={demobilizationIntelligence.invoicesRequired} className="warning" />
@@ -35916,13 +38128,12 @@ onClick={() => setActiveReport("activityLog")}>
                     <th>Remaining</th>
                     <th>Available Matches</th>
                     <th>Days Open</th>
-                    <th>Estimated Saving</th>
                     <th>AI Alert</th>
                   </tr>
                 </thead>
                 <tbody>
                   {demobilizationIntelligence.smartAlerts.length === 0 ? (
-                    <tr><td colSpan="8">No automatic redeployment alerts now</td></tr>
+                    <tr><td colSpan="7">No automatic redeployment alerts now</td></tr>
                   ) : demobilizationIntelligence.smartAlerts.map((alert) => (
                     <tr key={alert.request_no}>
                       <td>{alert.request_no}</td>
@@ -35931,7 +38142,6 @@ onClick={() => setActiveReport("activityLog")}>
                       <td>{alert.remaining}</td>
                       <td>{alert.available_matches}</td>
                       <td>{alert.days_open}</td>
-                      <td>{Number(alert.estimated_saving || 0).toLocaleString()} SAR</td>
                       <td>{alert.message}</td>
                     </tr>
                   ))}
@@ -35941,6 +38151,11 @@ onClick={() => setActiveReport("activityLog")}>
 
             {canManageDemobilization && (
               <FormCard title={demobilizationEditingId ? "Edit Demobilization Record" : "Add Demobilization Record"}>
+                {demobilizationSaveFeedback && (
+                  <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: demobilizationSaveFeedback.type === "error" ? "#fef2f2" : demobilizationSaveFeedback.type === "warning" ? "#fffbeb" : demobilizationSaveFeedback.type === "info" ? "#eff6ff" : "#ecfdf5", color: demobilizationSaveFeedback.type === "error" ? "#991b1b" : demobilizationSaveFeedback.type === "warning" ? "#92400e" : demobilizationSaveFeedback.type === "info" ? "#1d4ed8" : "#166534" }}>
+                    {demobilizationSaveFeedback.message}
+                  </div>
+                )}
                 <div className="form-grid">
                   <Input placeholder="Employee Name" value={demobilizationForm.employee_name} onChange={(v) => updateForm(setDemobilizationForm, "employee_name", v)} />
                   <Input placeholder="Employee ID" value={demobilizationForm.employee_id} onChange={(v) => updateForm(setDemobilizationForm, "employee_id", v)} />
@@ -35970,23 +38185,14 @@ onClick={() => setActiveReport("activityLog")}>
                   <Select value={demobilizationForm.invoice_required || "No"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_required", v)} placeholder="Invoice Required" options={["No", "Yes"]} />
                   <Input placeholder="Invoice Type" value={demobilizationForm.invoice_type || "Redeployment Service"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_type", v)} />
                   <Input type="number" placeholder="Invoice Amount" value={demobilizationForm.invoice_amount} onChange={(v) => updateForm(setDemobilizationForm, "invoice_amount", v)} />
-                  <Input type="number" placeholder="Redeployment Cost" value={demobilizationForm.redeployment_cost} onChange={(v) => {
-                    const cost = estimateRedeploymentCost({ ...demobilizationForm, redeployment_cost: v });
-                    setDemobilizationForm((prev) => ({ ...prev, redeployment_cost: v, estimated_saving: String(cost.estimatedSaving) }));
-                  }} />
-                  <Input type="number" placeholder="New Recruitment Cost" value={demobilizationForm.estimated_new_recruitment_cost} onChange={(v) => {
-                    const cost = estimateRedeploymentCost({ ...demobilizationForm, estimated_new_recruitment_cost: v });
-                    setDemobilizationForm((prev) => ({ ...prev, estimated_new_recruitment_cost: v, estimated_saving: String(cost.estimatedSaving) }));
-                  }} />
-                  <Input type="number" placeholder="Estimated Saving" value={demobilizationForm.estimated_saving} onChange={(v) => updateForm(setDemobilizationForm, "estimated_saving", v)} />
-                  <Select value={demobilizationForm.recruitment_avoided || "Yes"} onChange={(v) => updateForm(setDemobilizationForm, "recruitment_avoided", v)} placeholder="Recruitment Avoided" options={["Yes", "No"]} />
+                  <Select value={demobilizationForm.recruitment_avoided || "No"} onChange={(v) => updateForm(setDemobilizationForm, "recruitment_avoided", v)} placeholder="Recruitment Avoided" options={["Yes", "No"]} />
                 </div>
 
                 <textarea rows="3" placeholder="AI Recommendation" value={demobilizationForm.ai_recommendation} onChange={(e) => updateForm(setDemobilizationForm, "ai_recommendation", e.target.value)} />
                 <textarea rows="3" placeholder="Notes" value={demobilizationForm.notes} onChange={(e) => updateForm(setDemobilizationForm, "notes", e.target.value)} />
 
                 <div className="actions-line">
-                  <button className="save-btn" onClick={saveDemobilization}>{demobilizationEditingId ? "Update Demobilization" : "Save Demobilization"}</button>
+                  <button className="save-btn" disabled={demobilizationSaving} onClick={saveDemobilization}>{demobilizationSaving ? "Saving..." : demobilizationEditingId ? "Update Demobilization" : "Save Demobilization"}</button>
                   <button className="new-btn" onClick={runDemobAI}>AI Suggest Match</button>
                   <button className="light-btn" onClick={resetDemobilizationForm}>Clear</button>
                 </div>
@@ -36008,15 +38214,15 @@ onClick={() => setActiveReport("activityLog")}>
                       <th>Remaining</th>
                       <th>Days Open</th>
                       <th>Score</th>
-                      <th>Saving</th>
+                      <th>Confidence</th>
                       <th>AI Recommendation</th>
-                      <th>Reason</th>
+                      <th>Match Evidence</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {demobAiSuggestion.suggestions.length === 0 ? (
-                      <tr><td colSpan="11">No suggestions found</td></tr>
+                      <tr><td colSpan="11">No eligible open request matches the required profession, nationality, and gender criteria.</td></tr>
                     ) : demobAiSuggestion.suggestions.map((item) => (
                       <tr key={item.request_no}>
                         <td>{item.request_no}</td>
@@ -36026,10 +38232,18 @@ onClick={() => setActiveReport("activityLog")}>
                         <td>{item.remaining}</td>
                         <td>{item.days_open}</td>
                         <td><Badge value={`${item.score}%`} /></td>
-                        <td>{Number(item.estimated_saving || 0).toLocaleString()} SAR</td>
+                        <td><Badge value={item.confidence} /></td>
                         <td>{item.recommendation}</td>
                         <td>{item.reason}</td>
-                        <td><button className="light-btn" onClick={() => applyDemobSuggestion(item)}>Use</button></td>
+                        <td>
+                          <button
+                            className={demobilizationForm.suggested_request_no === item.request_no ? "save-btn" : "light-btn"}
+                            onClick={() => applyDemobSuggestion(item)}
+                            disabled={demobilizationForm.suggested_request_no === item.request_no}
+                          >
+                            {demobilizationForm.suggested_request_no === item.request_no ? "Selected" : "Use Match"}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -36038,28 +38252,35 @@ onClick={() => setActiveReport("activityLog")}>
             )}
 
             <TableCard title="Demobilization List">
+              <SmartTableToolbar
+                searchValue={demobilizationTableFilters.query}
+                onSearchChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, query: value }))}
+                searchPlaceholder="Search employee, ID, profession, project, or suggested request..."
+                resultCount={filteredDemobilizationRows.length}
+                hasExternalFilter={Object.entries(demobilizationTableFilters).some(([key, value]) => key !== "query" && value !== "All")}
+                onClear={() => setDemobilizationTableFilters({ query: "", status: "All", profession: "All", nationality: "All", project: "All" })}
+              />
               <table>
                 <thead>
                   <tr>
                     <th>Employee</th>
                     <th>Iqama / ID</th>
-                    <th>Profession</th>
-                    <th>Nationality</th>
-                    <th>Current Project</th>
+                    <th><TableColumnFilter label="Profession" value={demobilizationTableFilters.profession} options={["All", ...getUniqueTableOptions(demobilizations, "profession")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, profession: value }))} /></th>
+                    <th><TableColumnFilter label="Nationality" value={demobilizationTableFilters.nationality} options={["All", ...getUniqueTableOptions(demobilizations, "nationality")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, nationality: value }))} /></th>
+                    <th><TableColumnFilter label="Current Project" value={demobilizationTableFilters.project} options={["All", ...getUniqueTableOptions(demobilizations, "current_project")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, project: value }))} /></th>
                     <th>Demob Date</th>
-                    <th>Status</th>
+                    <th><TableColumnFilter label="Status" value={demobilizationTableFilters.status} options={["All", ...getUniqueTableOptions(demobilizations, "status")]} onChange={(value) => setDemobilizationTableFilters((current) => ({ ...current, status: value }))} /></th>
                     <th>Suggested Request</th>
                     <th>Match</th>
                     <th>Invoice</th>
-                    <th>Saving</th>
                     <th>Recruitment Avoided</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {demobilizations.length === 0 ? (
-                    <tr><td colSpan="13">No demobilization records yet</td></tr>
-                  ) : demobilizations.map((item) => (
+                  {filteredDemobilizationRows.length === 0 ? (
+                    <tr><td colSpan="12">No demobilization records yet</td></tr>
+                  ) : filteredDemobilizationRows.map((item) => (
                     <tr key={item.id}>
                       <td>{item.employee_name || "-"}</td>
                       <td>{item.iqama_no || item.employee_id || "-"}</td>
@@ -36071,12 +38292,14 @@ onClick={() => setActiveReport("activityLog")}>
                       <td>{item.suggested_request_no || "-"}</td>
                       <td>{item.match_score ? `${item.match_score}%` : "-"}</td>
                       <td>{item.invoice_required === "Yes" ? `${Number(item.invoice_amount || 0).toLocaleString()} SAR` : "No"}</td>
-                      <td>{Number(item.estimated_saving || 0).toLocaleString()} SAR</td>
                       <td><Badge value={item.recruitment_avoided || "-"} /></td>
                       <td className="table-actions">
                         {canManageDemobilization ? (
                           <>
                             <button onClick={() => editDemobilization(item)}>Edit</button>
+                            {item.status === "Suggested" && item.suggested_request_no && (
+                              <button className="save-btn" onClick={() => confirmRedeployment(item)}>Confirm Redeployment</button>
+                            )}
                             <button className="danger" onClick={() => deleteDemobilization(item.id)}>Delete</button>
                           </>
                         ) : "-"}
@@ -37586,8 +39809,9 @@ function SmartTableToolbar({
   pageSize = 25,
   onPageSizeChange,
   onClear,
+  hasExternalFilter = false,
 }) {
-  const hasActiveFilter = Boolean(String(searchValue || "").trim()) || filters.some((filter) => !["", "All"].includes(String(filter.value || "")));
+  const hasActiveFilter = hasExternalFilter || Boolean(String(searchValue || "").trim()) || filters.some((filter) => !["", "All"].includes(String(filter.value || "")));
 
   return (
     <div style={{ marginBottom: 14, display: "grid", gap: 10 }}>
@@ -37633,6 +39857,22 @@ function SmartTableToolbar({
   );
 }
 
+function TableColumnFilter({ label, value = "All", options = [], onChange }) {
+  return (
+    <div className="table-column-filter">
+      <span>{label}</span>
+      <select
+        aria-label={`Filter ${label}`}
+        value={value || "All"}
+        onChange={(event) => onChange?.(event.target.value)}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {options.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}
+      </select>
+    </div>
+  );
+}
+
 function SmartTablePagination({ page = 1, totalPages = 1, onPageChange }) {
   const safeTotal = Math.max(1, Number(totalPages || 1));
   const safePage = Math.min(Math.max(1, Number(page || 1)), safeTotal);
@@ -37648,81 +39888,6 @@ function SmartTablePagination({ page = 1, totalPages = 1, onPageChange }) {
   );
 }
 
-
-function Select({ value, onChange, placeholder, options = [], searchable = false, disabled = false }) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const getOptionValue = (option) => typeof option === "object" ? String(option.value ?? "") : String(option ?? "");
-  const getOptionLabel = (option) => typeof option === "object" ? String(option.label ?? option.value ?? "") : String(option ?? "");
-  const selectedOption = options.find((option) => getOptionValue(option) === String(value || ""));
-  const selectedLabel = selectedOption ? getOptionLabel(selectedOption) : value || "";
-
-  if (!searchable) {
-    return (
-      <select value={value || ""} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={getOptionValue(option)} value={getOptionValue(option)}>{getOptionLabel(option)}</option>
-        ))}
-      </select>
-    );
-  }
-
-  const filtered = options.filter((option) =>
-    getOptionLabel(option).toLowerCase().includes(query.toLowerCase())
-  );
-
-  return (
-    <div style={{ position: "relative" }}>
-      <input
-  value={open ? query : selectedLabel}
-  placeholder={placeholder}
-  disabled={disabled}
-  onFocus={() => {
-    if (disabled) return;
-    setOpen(true);
-    setQuery("");
-  }}
-  onBlur={() => {
-    setTimeout(() => {
-      setOpen(false);
-      setQuery("");
-    }, 150);
-  }}
-  onKeyDown={(e) => {
-    if (e.key === "Escape") {
-      setOpen(false);
-      setQuery("");
-      e.target.blur();
-    }
-  }}
-  onChange={(e) => {
-    if (disabled) return;
-    setQuery(e.target.value);
-    setOpen(true);
-  }}
-/>
-
-      {open && !disabled && (
-        <div style={{ position: "absolute", background: "#fff", border: "1px solid #ddd", maxHeight: "250px", overflowY: "auto", width: "100%", zIndex: 9999 }}>
-          {filtered.slice(0, 80).map((option) => (
-            <div
-              key={getOptionValue(option)}
-              style={{ padding: "8px", cursor: "pointer" }}
-              onMouseDown={() => {
-                onChange(getOptionValue(option));
-                setOpen(false);
-                setQuery("");
-              }}
-            >
-              {getOptionLabel(option)}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function Badge({ value }) {
   const text = value || "-";

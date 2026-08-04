@@ -1,5 +1,9 @@
 import nodemailer from "npm:nodemailer@6.9.10";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, sanitizeProviderError } from "../_shared/emailDeliveryCore.mjs";
+import { cleanContractInputVariables } from "../_shared/emailVariableValidation.mjs";
+import { acquireEmailDispatch } from "../_shared/emailDispatchState.mjs";
+import { renderAgencyInvitationEmail } from "../_shared/agencyInvitationEmail.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,7 +36,7 @@ type MessageContract = {
   allowedInputVariables: string[];
   allowedPath: string;
 };
-type ResolvedMessage = { recipients: string[]; variables: Record<string, string> };
+type ResolvedMessage = { recipients: string[]; variables: Record<string, string>; companyId?: string; agencyId?: string; userId?: string; deliveryKey?: string };
 
 const MAX_BODY_BYTES = 24 * 1024;
 const MAX_RECIPIENTS = 3;
@@ -78,6 +82,11 @@ const messageContracts: Record<string, MessageContract> = {
     requiredId: "agreement_id", recipientSource: "agency_agreements.agency_name -> unique active agencies.email", ownershipRule: "agreement.company_id = actor.company_id + active agency access",
     subject: "VisaFlow Agreement Requires Acceptance", fields: [["agency_name", "Agency"], ["agreement_no", "Agreement"], ["sla_days", "SLA days"], ["action_url", "Portal"]], allowedInputVariables: [], allowedPath: "/",
   },
+  AGENCY_USER_INVITATION: {
+    roles: [], browserEnabled: false, internalEnabled: true,
+    requiredId: "request_id", recipientSource: "agency_provisioning_requests.admin_email", ownershipRule: "internal request company + active agency link",
+    subject: "VisaFlow Agency Account Invitation", fields: [["agency_name", "Agency"], ["action_url", "Secure invitation link"]], allowedInputVariables: ["action_url"], allowedPath: "supabase-auth-link",
+  },
   AGENCY_AGREEMENT_ACCEPTED: {
     roles: ["Agency"], browserEnabled: true, internalEnabled: false,
     requiredId: "agreement_id", recipientSource: "company_email_settings.agreements_email", ownershipRule: "agreement agency matches actor agency + active agency access",
@@ -99,7 +108,7 @@ const messageContracts: Record<string, MessageContract> = {
     subject: "Penalty Decision", fields: [["penalty_no", "Penalty"], ["decision", "Decision"], ["amount", "Amount (SAR)"], ["note", "Notes"], ["action_url", "Portal"]], allowedInputVariables: [], allowedPath: "/",
   },
   AI_INTERVIEW_INVITATION: {
-    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: false,
+    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: true,
     requiredId: "interview_session_id", recipientSource: "ai_interview_sessions -> candidates.email", ownershipRule: "session and candidate belong to actor.company_id",
     subject: "VisaFlow AI Interview Invitation", fields: [["candidate_name", "Candidate"], ["profession", "Profession"], ["request_no", "Request"], ["scheduled_at", "Scheduled"], ["expires_at", "Expires"], ["action_url", "Interview link"]], allowedInputVariables: [], allowedPath: "/?ai_interview=<record access_token>",
   },
@@ -133,6 +142,7 @@ const messageContracts: Record<string, MessageContract> = {
 const allowedTopLevelFields = new Set([
   "message_type", "variables", "request_id", "agency_id", "notification_event_id", "candidate_id",
   "interview_session_id", "agreement_id", "penalty_id", "offer_id", "target_user_id", "company_id",
+  "email_log_id", "idempotency_key", "recipient",
 ]);
 const forbiddenEnvelopeFields = new Set(["to", "cc", "bcc", "from", "replyTo", "reply_to", "subject", "text", "html", "actionUrl", "action_url"]);
 
@@ -190,23 +200,12 @@ function approvedUrl(query?: Record<string, string>) {
   return url.toString();
 }
 
-function cleanInputVariables(value: unknown, allowedKeys: string[]) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, string>;
-  const result: Record<string, string> = {};
-  let total = 0;
-  for (const [key, raw] of Object.entries(value as Json)) {
-    if (!allowedKeys.includes(key)) throw new RequestFailure(400, "unsupported_template_variable");
-    const text = Array.isArray(raw) ? raw.slice(0, 20).join(", ") : String(raw ?? "");
-    if (/(?:https?:\/\/|javascript\s*:|data\s*:)/i.test(text)) throw new RequestFailure(400, "external_url_not_allowed");
-    const cleaned = text.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, MAX_VARIABLE_LENGTH);
-    total += cleaned.length;
-    if (total > MAX_VARIABLES_TOTAL) throw new RequestFailure(400, "invalid_variables");
-    result[key] = cleaned;
-  }
-  return result;
-}
-
-function renderTemplate(contract: MessageContract, variables: Record<string, string>) {
+function renderTemplate(messageType: string, contract: MessageContract, variables: Record<string, string>) {
+  if (messageType === "AGENCY_USER_INVITATION") return renderAgencyInvitationEmail({
+    agencyName: variables.agency_name,
+    actionUrl: variables.action_url,
+    expiresHours: 24,
+  });
   const populated = contract.fields.map(([key, label]) => [label, variables[key] || "-"] as const);
   const text = [contract.subject, "", ...populated.map(([label, value]) => `${label}: ${value}`), "", "VisaFlow KSA"].join("\n").slice(0, 6_000);
   const rows = populated.map(([label, value]) => `<div style="margin:7px 0;"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</div>`).join("");
@@ -272,12 +271,65 @@ async function agencyByUniqueName(admin: any, agencyName: string) {
 }
 
 async function assertAgencyAccess(admin: any, companyId: string, agencyId: string, actorId = "") {
-  let query = admin.from("agency_company_user_access").select("company_id, agency_id, user_id, status")
-    .eq("company_id", companyId).eq("agency_id", agencyId).eq("status", "Active");
-  if (actorId) query = query.eq("user_id", actorId);
+  const query = actorId
+    ? admin.from("agency_company_user_access").select("company_id, agency_id, user_id, status")
+      .eq("company_id", companyId).eq("agency_id", agencyId).eq("user_id", actorId).eq("status", "Active")
+    : admin.from("company_agency_access").select("company_id, agency_id, status")
+      .eq("company_id", companyId).eq("agency_id", agencyId).eq("status", "Active");
   const { data, error } = await query.limit(actorId ? 2 : 1);
   if (error) throw error;
   if (!(data || []).length || (actorId && data.length !== 1)) throw new RequestFailure(403, "forbidden");
+}
+
+async function recordAgreementDelivery(admin: any, messageType: string, agreementId: string, companyId: string | null, values: Json) {
+  if (messageType !== "AGENCY_AGREEMENT_SENT" || !agreementId || !companyId) return;
+  const { error } = await admin.from("agency_agreements").update({ ...values, updated_at: new Date().toISOString() })
+    .eq("id", agreementId).eq("company_id", companyId);
+  if (error) throw error;
+}
+
+async function prepareAgreementAttempt(admin: any, caller: Caller, messageType: string, body: Json) {
+  if (messageType !== "AGENCY_AGREEMENT_SENT" || caller.kind !== "authenticated"
+    || !caller.actor.company_id || !messageContracts[messageType].roles.includes(caller.actor.role)) return null;
+  const agreementId = safeId(body.agreement_id, "agreement_id");
+  const agreement = await exactlyOne(admin.from("agency_agreements")
+    .select("id,company_id,agency_id,agency_name,agreement_no")
+    .eq("id", agreementId).eq("company_id", caller.actor.company_id), "agreement_not_found");
+  const agency = agreement.agency_id
+    ? await activeAgency(admin, String(agreement.agency_id))
+    : await agencyByUniqueName(admin, String(agreement.agency_name || ""));
+  const recipients = agencyRecipients(agency);
+  const idempotencyKey = buildEmailIdempotencyKey(messageType, agreementId, recipients);
+  const { data: prior, error: lookupError } = await admin.from("email_logs")
+    .select("id,status,retry_count,failed_at").eq("company_id", caller.actor.company_id)
+    .eq("idempotency_key", idempotencyKey).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (prior?.status === "Sent" || prior?.status === "Queued") return {
+    id: String(prior.id), owned: false, companyId: caller.actor.company_id, agreementId,
+  };
+  if (prior?.id) {
+    if (!canRetryEmailDelivery(prior.status, prior.failed_at)) throw new RequestFailure(429, "email_retry_cooldown");
+    const { data: claimed, error: claimError } = await admin.from("email_logs").update({
+      status: "Queued", retry_count: Number(prior.retry_count || 0) + 1,
+      error_code: null, error_message: null, failed_at: null, dispatch_claimed_at: new Date().toISOString(),
+    }).eq("id", prior.id).eq("status", "Failed").select("id").maybeSingle();
+    if (claimError) throw claimError;
+    return { id: String(claimed?.id || prior.id), owned: Boolean(claimed?.id), companyId: caller.actor.company_id, agreementId };
+  }
+  const recipient = recipients[0];
+  const { data: inserted, error: insertError } = await admin.from("email_logs").insert({
+    company_id: caller.actor.company_id, agency_id: agency.id, user_id: caller.actor.id,
+    event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
+    recipient, to_email: recipient, to_emails: recipient,
+    subject: messageContracts[messageType].subject, related_id: agreementId,
+    idempotency_key: idempotencyKey, retry_count: 0, dispatch_claimed_at: new Date().toISOString(),
+  }).select("id").single();
+  if (insertError) throw insertError;
+  await recordAgreementDelivery(admin, messageType, agreementId, caller.actor.company_id, {
+    email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
+    email_last_attempt_at: new Date().toISOString(),
+  });
+  return { id: String(inserted.id), owned: true, companyId: caller.actor.company_id, agreementId };
 }
 
 async function companyMailbox(admin: any, companyId: string, kind: "notifications" | "agreements" | "support" = "notifications") {
@@ -344,6 +396,25 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
     } };
   }
 
+  if (type === "AGENCY_USER_INVITATION") {
+    if (caller.kind !== "internal") throw new RequestFailure(403, "forbidden");
+    const requestId = safeId(body.request_id, "request_id");
+    const invitation = await exactlyOne(admin.from("agency_provisioning_requests")
+      .select("id, company_id, agency_id, agency_name, admin_email, status, attempt_count")
+      .eq("id", requestId).eq("status", "Provisioning"), "agency_invitation_not_found");
+    await assertAgencyAccess(admin, String(invitation.company_id), String(invitation.agency_id));
+    const actionUrl = new URL(String(input.action_url || ""));
+    const supabaseOrigin = new URL(requireSecret("SUPABASE_URL")).origin;
+    if (actionUrl.origin !== supabaseOrigin || actionUrl.pathname !== "/auth/v1/verify") {
+      throw new RequestFailure(400, "invalid_invitation_link");
+    }
+    const recipients = normalizeEmails([invitation.admin_email]);
+    if (recipients.length !== 1) throw new RequestFailure(404, "agency_recipient_not_found");
+    return { recipients, variables: { agency_name: String(invitation.agency_name), action_url: actionUrl.toString() },
+      companyId: String(invitation.company_id), agencyId: String(invitation.agency_id),
+      deliveryKey: String(invitation.id) };
+  }
+
   if (type === "NEW_REQUEST_AGENCY_ALERT_EMAIL") {
     if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
     const requestId = safeId(body.request_id, "request_id");
@@ -360,19 +431,23 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
 
   if (type === "AGENCY_AGREEMENT_SENT" || type === "AGENCY_AGREEMENT_ACCEPTED") {
     const agreementId = safeId(body.agreement_id, "agreement_id");
-    let query = admin.from("agency_agreements").select("id, company_id, agency_name, agreement_no, sla_days, status").eq("id", agreementId);
+    let query = admin.from("agency_agreements").select("id, company_id, agency_id, agency_name, agreement_no, sla_days, status").eq("id", agreementId);
     if (caller.kind === "authenticated" && caller.actor.company_id) query = query.eq("company_id", caller.actor.company_id);
     const agreement = await exactlyOne(query, "agreement_not_found");
     const agency = caller.kind === "authenticated" && caller.actor.role === "Agency"
       ? await activeAgency(admin, String(caller.actor.agency_id))
-      : await agencyByUniqueName(admin, String(agreement.agency_name || ""));
-    if (String(agency.name || "").trim().toLowerCase() !== String(agreement.agency_name || "").trim().toLowerCase()) throw new RequestFailure(403, "forbidden");
+      : agreement.agency_id
+        ? await activeAgency(admin, String(agreement.agency_id))
+        : await agencyByUniqueName(admin, String(agreement.agency_name || ""));
+    // agency_id is the immutable ownership key. Compare names only for legacy
+    // agreements that predate the agency_id column and require name fallback.
+    if (!agreement.agency_id && String(agency.name || "").trim().toLowerCase() !== String(agreement.agency_name || "").trim().toLowerCase()) throw new RequestFailure(403, "forbidden");
     await assertAgencyAccess(admin, String(agreement.company_id), String(agency.id), caller.kind === "authenticated" && caller.actor.role === "Agency" ? caller.actor.id : "");
-    if (type === "AGENCY_AGREEMENT_SENT") return { recipients: agencyRecipients(agency), variables: {
+    if (type === "AGENCY_AGREEMENT_SENT") return { recipients: agencyRecipients(agency), companyId: String(agreement.company_id), agencyId: String(agency.id), variables: {
       agency_name: String(agency.name), agreement_no: String(agreement.agreement_no || agreement.id), sla_days: String(agreement.sla_days || "-"), action_url: approvedUrl(),
     } };
     if (caller.kind !== "authenticated" || caller.actor.role !== "Agency") throw new RequestFailure(403, "forbidden");
-    return { recipients: await companyMailbox(admin, String(agreement.company_id), "agreements"), variables: {
+    return { recipients: await companyMailbox(admin, String(agreement.company_id), "agreements"), companyId: String(agreement.company_id), agencyId: String(agency.id), userId: caller.actor.id, variables: {
       agency_name: String(agency.name), agreement_no: String(agreement.agreement_no || agreement.id), signer: caller.actor.email,
     } };
   }
@@ -406,14 +481,17 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
   }
 
   if (type === "AI_INTERVIEW_INVITATION") {
-    if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
+    const companyId = caller.kind === "authenticated"
+      ? caller.actor.company_id
+      : safeId(body.company_id, "company_id");
+    if (!companyId) throw new RequestFailure(403, "forbidden");
     const sessionId = safeId(body.interview_session_id, "interview_session_id");
     const session = await exactlyOne(admin.from("ai_interview_sessions")
       .select("id, company_id, candidate_id, candidate_name, candidate_email, profession, request_no, scheduled_at, expires_at, access_token, status")
-      .eq("id", sessionId).eq("company_id", caller.actor.company_id), "interview_session_not_found");
+      .eq("id", sessionId).eq("company_id", companyId), "interview_session_not_found");
     if (!session.candidate_id || !session.access_token) throw new RequestFailure(404, "interview_invitation_not_ready");
     const candidate = await exactlyOne(admin.from("candidates").select("id, company_id, candidate_name, email, profession, request_no")
-      .eq("id", session.candidate_id).eq("company_id", caller.actor.company_id), "candidate_not_found");
+      .eq("id", session.candidate_id).eq("company_id", companyId), "candidate_not_found");
     const recipients = normalizeEmails([session.candidate_email, candidate.email]);
     if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
     return { recipients: [recipients[0]], variables: {
@@ -493,10 +571,16 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
 
+  let adminForLog: any = null;
+  let emailLogId = "";
+  let deliveryMessageType = "";
+  let deliveryRelatedId = "";
+  let deliveryCompanyId: string | null = null;
   try {
     const supabaseUrl = requireSecret("SUPABASE_URL");
     const serviceRoleKey = requireSecret("SUPABASE_SERVICE_ROLE_KEY");
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+    adminForLog = admin;
     const caller = await authenticateCaller(req, admin);
     if ("error" in caller) return jsonResponse({ ok: false, error: caller.error }, caller.status);
 
@@ -514,32 +598,133 @@ Deno.serve(async (req) => {
       if (forbiddenEnvelopeFields.has(key)) return jsonResponse({ ok: false, error: "smtp_envelope_not_allowed" }, 400);
       if (!allowedTopLevelFields.has(key)) return jsonResponse({ ok: false, error: "unsupported_request_field" }, 400);
     }
+    const hasHandoffFields = ["email_log_id", "idempotency_key", "recipient"].some((key) => body[key] !== undefined);
+    if (hasHandoffFields && caller.kind !== "internal") throw new RequestFailure(403, "forbidden");
 
     const messageType = String(body.message_type || "").trim();
+    deliveryMessageType = messageType;
     const contract = messageContracts[messageType];
     if (!contract) return jsonResponse({ ok: false, error: "message_type_not_allowed" }, 400);
-    const inputVariables = cleanInputVariables(body.variables, contract.allowedInputVariables);
+    const preparedAgreement = await prepareAgreementAttempt(admin, caller, messageType, body);
+    if (preparedAgreement?.owned) emailLogId = preparedAgreement.id;
+    if (preparedAgreement) {
+      deliveryRelatedId = preparedAgreement.agreementId;
+      deliveryCompanyId = preparedAgreement.companyId;
+    }
+    const validation = cleanContractInputVariables({
+      messageType,
+      value: body.variables,
+      allowedKeys: contract.allowedInputVariables,
+      supabaseUrl,
+      maxVariableLength: MAX_VARIABLE_LENGTH,
+      maxTotal: MAX_VARIABLES_TOTAL,
+    });
+    if (!validation.ok) throw new RequestFailure(400, validation.error);
+    const inputVariables = validation.variables;
     const resolved = await resolveMessage(admin, caller, messageType, contract, body, inputVariables);
     const recipients = normalizeEmails(resolved.recipients).slice(0, MAX_RECIPIENTS);
     if (!recipients.length || recipients.length > MAX_RECIPIENTS) throw new RequestFailure(404, "recipient_not_found");
-    const rendered = renderTemplate(contract, resolved.variables);
+    const rendered = renderTemplate(messageType, contract, resolved.variables);
 
     const smtpHost = Deno.env.get("SMTP_HOSTNAME") || "mail.privateemail.com";
     const smtpPort = Number(Deno.env.get("SMTP_PORT") || "465");
     const smtpSecure = parseBoolean(Deno.env.get("SMTP_SECURE"), smtpPort === 465);
+    const smtpFrom = Deno.env.get("SMTP_FROM") || "VisaFlow KSA";
+    const approvedReplyTo = Deno.env.get("SMTP_REPLY_TO") || "support@visaflowksa.com";
+    const relatedIdentifier = contract.requiredId ? String(body[contract.requiredId] || "") : caller.key;
+    const identifier = resolved.deliveryKey || relatedIdentifier;
+    const idempotencyKey = buildEmailIdempotencyKey(messageType, identifier, recipients);
+    const companyId = resolved.companyId || (caller.kind === "authenticated" ? caller.actor.company_id : String(body.company_id || "")) || null;
+    deliveryRelatedId = relatedIdentifier;
+    deliveryCompanyId = companyId;
+    let priorQuery = admin.from("email_logs")
+      .select("id, status, retry_count, provider_message_id, message_id, failed_at")
+      .eq("idempotency_key", idempotencyKey);
+    priorQuery = companyId ? priorQuery.eq("company_id", companyId) : priorQuery.is("company_id", null);
+    const { data: priorLogs, error: priorError } = await priorQuery.limit(1);
+    if (priorError) throw priorError;
+    const prior = priorLogs?.[0];
+    const handoff = hasHandoffFields ? {
+      emailLogId: String(body.email_log_id || ""), idempotencyKey: String(body.idempotency_key || ""),
+      companyId: String(body.company_id || ""), agencyId: String(body.agency_id || ""),
+      recipient: String(body.recipient || "").trim().toLowerCase(),
+    } : null;
+    const expectedHandoff = {
+      emailLogId: prior?.id ? String(prior.id) : "", idempotencyKey, companyId: companyId || "",
+      agencyId: resolved.agencyId || "", recipient: recipients[0],
+    };
+    const insertQueued = async () => {
+      const { data, error } = await admin.from("email_logs").insert({
+        company_id: companyId, agency_id: resolved.agencyId || null, user_id: resolved.userId || (caller.kind === "authenticated" ? caller.actor.id : null),
+        event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
+        from_email: smtpFrom, recipient: recipients[0], to_email: recipients[0], to_emails: recipients.join(","),
+        subject: rendered.subject, related_id: relatedIdentifier || null, idempotency_key: idempotencyKey, retry_count: 0,
+        dispatch_claimed_at: new Date().toISOString(),
+      }).select("id").single();
+      if (error) throw error;
+      return data;
+    };
+    const dispatch = await acquireEmailDispatch({
+      prior, callerKind: caller.kind, handoff, expected: expectedHandoff,
+      preclaimedId: preparedAgreement?.owned ? preparedAgreement.id : null,
+      canRetry: (row: Json) => canRetryEmailDelivery(row.status, row.failed_at),
+      claimQueued: async (row: Json) => {
+        const { data, error } = await admin.from("email_logs").update({ dispatch_claimed_at: new Date().toISOString() })
+          .eq("id", row.id).eq("company_id", companyId).eq("idempotency_key", idempotencyKey)
+          .eq("status", "Queued").is("dispatch_claimed_at", null).select("id").maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+      claimFailed: async (row: Json) => {
+        const { data, error } = await admin.from("email_logs").update({
+          status: "Queued", retry_count: Number(row.retry_count || 0) + 1,
+          error_code: null, error_message: null, failed_at: null, dispatch_claimed_at: new Date().toISOString(),
+        }).eq("id", row.id).eq("status", "Failed").select("id").maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+      insertQueued,
+      reloadAfterConflict: async () => {
+        const { data, error } = await admin.from("email_logs").select("id,status,retry_count,failed_at")
+          .eq("company_id", companyId).eq("idempotency_key", idempotencyKey).maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+    });
+    if (dispatch.action === "sent") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, provider_message_id: prior?.provider_message_id || prior?.message_id || null });
+    if (dispatch.action === "cooldown") throw new RequestFailure(429, "email_retry_cooldown");
+    if (dispatch.action === "invalid_handoff") throw new RequestFailure(409, "EMAIL_DELIVERY_ALREADY_IN_PROGRESS");
+    if (dispatch.action === "in_progress") return jsonResponse({ ok: true, message_type: messageType, idempotent: true, in_progress: true }, 202);
+    emailLogId = dispatch.id;
+    await recordAgreementDelivery(admin, messageType, relatedIdentifier, companyId, {
+      email_delivery_status: "Queued", email_error_code: null, email_error_message: null,
+      email_last_attempt_at: new Date().toISOString(),
+    });
     const smtpUser = requireSecret("SMTP_USERNAME");
     const smtpPass = requireSecret("SMTP_PASSWORD");
-    const smtpFrom = Deno.env.get("SMTP_FROM") || `VisaFlow KSA <${smtpUser}>`;
-    const approvedReplyTo = Deno.env.get("SMTP_REPLY_TO") || "support@visaflowksa.com";
     const transport = nodemailer.createTransport({ host: smtpHost, port: smtpPort, secure: smtpSecure, auth: { user: smtpUser, pass: smtpPass } });
-    await new Promise<void>((resolve, reject) => {
-      transport.sendMail({ from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html },
-        (error) => error ? reject(error) : resolve());
+    const providerResult = await deliverWithTransport(transport, { from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html });
+    const { error: sentLogError } = await admin.from("email_logs").update({ status: "Sent", provider_message_id: providerResult.providerMessageId,
+      message_id: providerResult.providerMessageId, sent_at: new Date().toISOString(), failed_at: null, error_code: null, error_message: null }).eq("id", emailLogId);
+    if (sentLogError) throw sentLogError;
+    await recordAgreementDelivery(admin, messageType, relatedIdentifier, companyId, {
+      email_delivery_status: "Sent", email_provider_message_id: providerResult.providerMessageId,
+      email_sent_at: new Date().toISOString(), email_failed_at: null,
+      email_error_code: null, email_error_message: null,
     });
-    return jsonResponse({ ok: true, message_type: messageType });
+    return jsonResponse({ ok: true, message_type: messageType, provider_message_id: providerResult.providerMessageId });
   } catch (error) {
+    let safeError = sanitizeProviderError(error);
+    if (adminForLog && emailLogId) {
+      await adminForLog.from("email_logs").update({ status: "Failed", error_code: safeError.code,
+        error_message: safeError.message, failed_at: new Date().toISOString() }).eq("id", emailLogId);
+      await recordAgreementDelivery(adminForLog, deliveryMessageType, deliveryRelatedId, deliveryCompanyId, {
+        email_delivery_status: "Failed", email_error_code: safeError.code,
+        email_error_message: safeError.message, email_failed_at: new Date().toISOString(),
+      }).catch(() => undefined);
+    }
     if (error instanceof RequestFailure) return jsonResponse({ ok: false, error: error.publicCode }, error.status);
     console.error("Email dispatcher internal failure", error instanceof Error ? error.name : "UnknownError");
-    return jsonResponse({ ok: false, error: "email_dispatch_failed" }, 500);
+    return jsonResponse({ ok: false, error: safeError.code }, 500);
   }
 });
