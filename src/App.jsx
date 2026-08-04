@@ -17525,7 +17525,7 @@ async function saveEmployee() {
     joining_date: employeeForm.joining_date || null,
     contract_end_date: employeeForm.contract_end_date || null,
     status: employeeForm.status || "Active",
-    source_candidate_id: employeeForm.source_candidate_id ? Number(employeeForm.source_candidate_id) : null,
+    source_candidate_id: employeeForm.source_candidate_id ? String(employeeForm.source_candidate_id) : null,
     notes: employeeForm.notes || "",
     updated_at: new Date().toISOString(),
   };
@@ -17609,7 +17609,7 @@ async function convertCandidateToEmployee(candidate) {
     joining_date: candidate.joining_date || candidate.arrival_date || new Date().toISOString().slice(0, 10),
     contract_end_date: null,
     status: "Active",
-    source_candidate_id: Number(candidate.id || 0) || null,
+    source_candidate_id: candidate.id ? String(candidate.id) : null,
     notes: `Converted from candidate ${candidate.candidate_name || ""} / Request ${candidate.request_no || "-"}`,
     updated_at: new Date().toISOString(),
   };
