@@ -1339,7 +1339,6 @@ body:has(.vf-login-shell) {
   align-items: center !important;
   background:
     linear-gradient(rgba(6, 24, 61, 0.82), rgba(6, 24, 61, 0.88)),
-    url("/login-hero.jpg"),
     linear-gradient(145deg, #06183d 0%, #071d49 50%, #0b3b7a 100%) !important;
   background-size: cover !important;
   background-position: center !important;
