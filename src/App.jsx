@@ -14448,8 +14448,13 @@ arrival_date: item.arrival_date || "",
 
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+  function showCandidateSaveError(message) {
+    setCandidateSaveFeedback({ type: "error", message: String(message || "Candidate could not be saved.") });
+    return null;
+  }
+
   async function saveCandidate() {
-    if (!canManageCandidates && !canManageOfficePortal) return alert("You do not have permission to manage candidates.");
+    if (!canManageCandidates && !canManageOfficePortal) return showCandidateSaveError("You do not have permission to manage candidates.");
     setCandidateSaveFeedback(null);
     const { data: requestData } = await supabase
   .from("requests")
@@ -14463,7 +14468,7 @@ if (
   requestData.approval_status !== "Approved by Recruitment" &&
   requestData.approval_status !== "Approved"
 ) {
-  return alert("Candidates cannot be added until the request is approved.");
+  return showCandidateSaveError("Candidates cannot be added until the request is approved.");
 }
 
     let matchedCandidateLine = null;
@@ -14484,12 +14489,12 @@ if (
         });
 
         if (!matchedCandidateLine) {
-          return alert("Please select or enter a candidate profession, nationality, and gender matching one request line exactly.");
+          return showCandidateSaveError("Please select a profession, nationality, and gender matching one approved request line exactly.");
         }
       }
     }
 
-    if (!candidateForm.candidate_name) return alert("Candidate name is required.");
+    if (!candidateForm.candidate_name) return showCandidateSaveError("Candidate name is required.");
     const oldCandidate = candidateEditingId
   ? candidates.find((c) => String(c.id) === String(candidateEditingId))
   : null;
@@ -14516,7 +14521,7 @@ const saudiCandidateFlow = isSaudiRequest(selectedCandidateRequest) || isSaudiNa
 
 if (saudiCandidateFlow) {
   if (!String(candidateForm.civil_id_no || "").trim() || !candidateForm.civil_id_expiry_date) {
-    return alert("Saudi candidate requires Civil ID No and Civil ID Expiry Date. Please enter them in the Candidates form.");
+    return showCandidateSaveError("Saudi candidate requires Civil ID No and Civil ID Expiry Date. Please enter them in the Candidates form.");
   }
 }
 
@@ -14594,7 +14599,7 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
           .select("id")
           .single();
 
-    if (result.error) return alert(result.error.message);
+    if (result.error) return showCandidateSaveError(result.error.message);
 
     const savedCandidateId = candidateEditingId || result.data?.id;
 
@@ -32876,7 +32881,7 @@ disabled={authorizationWorkflowBusy === "create"}
             {canManageCandidates && (
             <FormCard title={candidateEditingId ? "Edit Candidate" : "Add Candidate"}>
               {candidateSaveFeedback && (
-                <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
+                <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "error" ? "#fef2f2" : candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "error" ? "#991b1b" : candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
                   {candidateSaveFeedback.message}
                 </div>
               )}
@@ -34702,7 +34707,7 @@ disabled={authorizationWorkflowBusy === "create"}
     {canManageOfficePortal && (
     <FormCard title={candidateEditingId ? "Edit Office Candidate" : "Add Office Candidate"}>
       {candidateSaveFeedback && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "error" ? "#fef2f2" : candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "error" ? "#991b1b" : candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
           {candidateSaveFeedback.message}
         </div>
       )}
