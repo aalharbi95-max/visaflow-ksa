@@ -16311,22 +16311,29 @@ ${errors.slice(0, 10).join("\n")}` : "")
         }
       );
 
-      let generationData = data;
       if (error || !data?.ok) {
-        console.warn(
-          "Dedicated AI interview template generator unavailable; using guarded fallback",
-          error?.message || data?.error || "unknown generator error",
-        );
-        generationData = await saveGuardedAIInterviewTemplateFallback({
-          targetCompanyId,
-          templateName,
-          profession,
-          professionCategory,
-          jobDescription,
-          questionCount,
-          passingScore,
-        });
+        let errorCode = data?.error || "";
+        if (!errorCode && error?.context?.clone) {
+          try {
+            const errorBody = await error.context.clone().json();
+            errorCode = errorBody?.error || "";
+          } catch {
+            // Keep the safe generic error below when the Edge response is not JSON.
+          }
+        }
+        errorCode = errorCode || error?.message || "ai_interview_generation_failed";
+        const errorMessages = {
+          ai_service_not_configured: "The AI interview service is not configured. Add OPENAI_API_KEY to the Staging Edge Function secrets.",
+          ai_generation_failed: "The AI service could not generate the interview. Please retry after checking the generation log.",
+          ai_output_invalid: "The AI response did not match the required interview structure. Please retry.",
+          ai_output_incomplete: "The AI response was incomplete and was not saved. Please retry.",
+          rate_limit_exceeded: "Too many interview generation requests. Wait one minute and retry.",
+          interview_generation_denied: "Your role does not have permission to generate interview templates.",
+          cross_tenant_company_denied: "The selected company does not match your active workspace.",
+        };
+        throw new Error(errorMessages[errorCode] || `AI interview generation failed (${errorCode}).`);
       }
+      const generationData = data;
 
       // Delivery is intentionally not saved on the template.
       // The campaign copies its own delivery settings into each candidate session at launch.
@@ -16361,7 +16368,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
       setSelectedAIInterviewTemplateId(generationData.template_id || "");
       setEditingAIInterviewQuestionId("");
       setAIInterviewMessage(
-        `${generationData.template_name || templateName} generated with ${generationData.generated_question_count || questionCount} questions and saved as Pending Review${generationData.used_guarded_fallback ? " using the guarded fallback because the dedicated AI service was unavailable" : ""}.`
+        `${generationData.template_name || templateName} generated with ${generationData.generated_question_count || questionCount} AI questions and saved as Pending Review. Human approval is required before publishing.`
       );
     } catch (error) {
       console.warn("AI interview job-description generation failed", error?.message || error);
