@@ -10,7 +10,7 @@ Test prefix: `QA-20260804`
 
 The application builds successfully, the automated suite passes, all company-side navigation screens are reachable, the core request-to-authorization path works, and the agency account is UI-isolated to its authorized workspace pages.
 
-The release is suitable for continued Staging verification, but not yet for Production approval because the AI Interview tables still report database permission errors and the complete candidate-to-joining-to-demobilization lifecycle could not be proven end to end in the isolated Staging database during this run.
+The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. The release remains unsuitable for Production approval until the AI Interview permission errors and the remaining notification-delivery findings are resolved.
 
 ## Verified successfully
 
@@ -30,6 +30,13 @@ The release is suitable for continued Staging verification, but not yet for Prod
 - The authorization action no longer depends on `window.prompt`; the agency now confirms acknowledge/accept/reject in an inline form.
 - Supabase Edge Function CORS was corrected for the stable Staging origin and the preflight changed from HTTP 403 `origin_not_allowed` to HTTP 200.
 - Agency candidate `QA-20260804 Staging Candidate` / passport `QA20260804STG01` was created in isolated Staging; the active candidate count changed from 198 to 199.
+- The candidate was mobilized through `Arrived KSA` and `Joined`; the live request counters changed to 1 arrived and 1 joined.
+- Joining now creates one idempotent `onboarding_validations` record automatically. The QA worker completed the 90-day validation with a 90% score, `Passed Validation`, and positive agency impact.
+- The candidate was converted to employee `EMP-2026-000001`. Candidate UUID linkage was migrated to text and backfilled, and the UI no longer offers duplicate conversion for the same candidate.
+- Demobilization was saved as `Available` with `Recruitment Avoided = No`. The same worker appeared in Workforce Marketplace with the AI no-match explanation.
+- Live redeployment matching correctly rejected the two open requests because one had a different profession/nationality and the other required a different gender. The `Use` action remains covered by automated matching tests but was not presented in this live no-match case.
+- Workspace horizontal overflow was contained and wide operational tables now scroll within their cards; primary form actions remain visible.
+- Mobilization and Demobilization saves now show inline progress, success, warning, and database error feedback instead of opaque alerts.
 
 ## Findings requiring follow-up
 
@@ -51,15 +58,11 @@ The release is suitable for continued Staging verification, but not yet for Prod
    - The UI now treats candidate persistence as the primary result, catches notification queue failure, reloads the data, and shows a non-blocking success/warning message.
    - The underlying notification policy/recipient design still requires review so an agency-originated candidate event reaches the intended company recipients.
 
-4. Agency candidate update permission
-   - The test agency can create and view candidates, but the attempted stage update from `Medical Passed` to `Ticket Booked` did not persist during this run.
-   - Verify `agency_company_user_access.can_update_candidates` for the test membership and align Office Portal Edit visibility with that permission.
-
-5. Agency notification proof
+4. Agency notification proof
    - On the older preview dataset, the selected agency notification did not appear in Notification Center after sending.
    - Re-run this on the stable isolated Staging URL and verify three outputs: notification row, agency visibility, and email log status.
 
-6. Searchable select usability
+5. Searchable select usability
    - Typing a profession or nationality is not enough; the user must click a matching suggestion.
    - This is documented in the guide, but the control should also show an inline validation message when text has not been selected.
 
@@ -73,6 +76,13 @@ Reviewed: Executive Dashboard, AI Commander, AI Agent, AI Report Studio, Dashboa
 - Tests: 184 passed, 0 failed, 1 skipped.
 - The skipped browser component test explicitly requires Chrome or Edge.
 - Existing non-blocking build observations: unresolved `/login-hero.jpg` at build time and a large application chunk warning.
+
+## Database corrections applied to isolated Staging
+
+- `mobilizations.candidate_id` changed from bigint to text so candidate UUIDs are accepted.
+- `mobilizations.updated_at` added with a non-null timestamp default.
+- `employees.source_candidate_id` changed from bigint to text and the QA employee was backfilled to the originating candidate UUID.
+- Demobilization persistence now sends only columns supported by the operational table and does not claim recruitment was avoided when no eligible match exists.
 
 ## Evidence
 
