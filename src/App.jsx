@@ -34141,8 +34141,8 @@ disabled={authorizationWorkflowBusy === "create"}
         </div>
         <textarea rows="3" placeholder="Mobilization Remarks" value={mobilizationForm.remarks || ""} onChange={(event) => updateForm(setMobilizationForm, "remarks", event.target.value)} />
         <div className="actions-line" style={{ marginTop: 12 }}>
-          <button className="save-btn" disabled={mobilizationSaving} onClick={saveMobilization}>{mobilizationSaving ? "Saving..." : mobilizationEditingId ? "Update Mobilization" : "Save Mobilization"}</button>
           <button className="light-btn" onClick={resetMobilizationForm}>Cancel</button>
+          <button className="save-btn" disabled={mobilizationSaving} onClick={saveMobilization}>{mobilizationSaving ? "Saving..." : mobilizationEditingId ? "Update Mobilization" : "Save Mobilization"}</button>
         </div>
       </FormCard>
     )}
