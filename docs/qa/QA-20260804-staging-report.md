@@ -12,6 +12,8 @@ The application builds successfully, the automated suite passes, all company-sid
 
 The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. AI Interview template, campaign, candidate-validation, and queue-read permissions are now proven on stable Staging. Agency-originated candidate notifications and the automatic penalty-to-agency-to-manager decision lifecycle are also proven. The release remains unsuitable for Production approval until the remaining outbound AI invitation launch is verified and the remaining usability findings are resolved.
 
+A second live redeployment cycle now proves the full project-end path after the notification allowlist correction: employee creation, demobilization, an explainable 83% AI match, save, confirmation, employee-project reassignment, and a durable `REDEPLOYMENT_CONFIRMED` Notification Center event. Both Staging aliases resolve to the same deployment. Production data and configuration were not changed during this correction.
+
 ## Verified successfully
 
 - Company authentication works on the isolated Staging project.
@@ -37,7 +39,7 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 - Live redeployment matching correctly rejected the two open requests because one had a different profession/nationality and the other required a different gender. The `Use` action remains covered by automated matching tests but was not presented in this live no-match case.
 - Workspace horizontal overflow was contained and wide operational tables now scroll within their cards; primary form actions remain visible.
 - Mobilization and Demobilization saves now show inline progress, success, warning, and database error feedback instead of opaque alerts.
-- AI Interview template creation no longer stops when the undeployed dedicated generator is unavailable. A guarded bilingual fallback creates a transparent `Pending Review` template and never activates it automatically.
+- AI Interview template generation now calls the dedicated secure Edge Function. With the Staging AI secret absent, the UI fails safely with a configuration message and does not save an incomplete template.
 - QA template `QA-20260804 AI Interview Template` was created with 10 bilingual questions, a verified 100% total weight, published by the Company Admin, and locked after approval.
 - QA campaign `QA-20260804 AI Interview Campaign` was created with a default seven-day deadline. One QA candidate was added and revalidated as `Valid`, moving the campaign to `Ready`.
 - `ai_interview_campaigns` insert, `ai_interview_campaign_candidates` insert/revalidation, and `ai_interview_invitation_jobs` read access were verified without the previous `permission denied for table users` diagnostics.
@@ -48,6 +50,13 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 - The Recruitment Manager sent the penalty to the agency. It appeared in Office Portal with status `Sent to Agency`, the required amount, and a justification action.
 - An authenticated agency objection changed the record to `Justification Submitted` and Office Portal showed `Under company review`. The manager then saw all three final actions: approve, reduce, and accept objection/cancel.
 - The manager decision was tested with `Reduced`: approved amount 125 SAR, final role `Recruitment Manager`, and the register showed `Final`. The temporary QA role and agreement settings were restored afterward to Company Admin, 60-day SLA, zero default penalty, and seven-day grace period.
+- Request `REQ-2026-0004` was created with the canonical bilingual Software Engineer profession and nationality `Filipino`, approved by Recruitment, delivered to the agency Notification Center, accepted by the agency, and started a 60-day SLA.
+- Composite employee nationality `Filipino (Philippines)` is now safely matched to the canonical request nationality without arbitrary partial-string matches. Duplicate country master-data rows are canonicalized before matching.
+- Employee `EMP-2026-000002` completed a live redeployment from `QA Ending Project` to `QA Master Data Validation` at 83%. The record became `Reassigned`, Recruitment Avoided became `Yes`, and no fabricated invoice or default financial saving was created.
+- The missing `REDEPLOYMENT_CONFIRMED` database allowlist entry was identified as the reason the first confirmation did not appear in Notification Center. Migration `20260804000500_allow_redeployment_confirmed_notification.sql` was applied to isolated Staging and verified with `pg_get_functiondef`; the allowlist check returned `true`.
+- Employee `EMP-2026-000003` then completed an independent post-migration live cycle from `QA Ending Project Notification` to `QA Master Data Validation`, again at 83%. The employee remained `Active`, the project was updated, and the confirmation created the ninth unread notification.
+- Notification Center displayed the durable event type `REDEPLOYMENT_CONFIRMED`, title `Employee redeployment confirmed`, the employee name, old project, new project, request `REQ-2026-0004`, High priority, and Company audience.
+- The stable default alias `visaflow-ksa-staging.vercel.app` and custom alias `staging.visaflowksa.com` were both unified on the deployment containing commit `115ac84`.
 
 ## Findings requiring follow-up
 
@@ -63,7 +72,7 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 2. AI Interview outbound launch
    - Template approval, campaign creation, candidate insert/revalidation, and queue reads are verified.
    - Campaign launch and invitation delivery remain intentionally untested to avoid sending an external QA email without a dedicated controlled recipient.
-   - The dedicated `generate-ai-interview-template` Edge Function is not present in the repository/deployment. The guarded fallback keeps the workflow usable, but the real AI generator should still be implemented and deployed before Production.
+   - The secure `generate-ai-interview-template` Edge Function is implemented and deployed to Staging, but Staging does not yet have the required `OPENAI_API_KEY` Edge Function secret. The UI fails safely, explains the missing configuration, and does not save an incomplete template. Configure the secret before Production approval.
 
 3. Searchable select usability
    - Typing a profession or nationality is not enough; the user must click a matching suggestion.
@@ -80,7 +89,7 @@ Reviewed: Executive Dashboard, AI Commander, AI Agent, AI Report Studio, Dashboa
 ## Automated verification
 
 - Build: passed (`vite build`).
-- Tests: 184 passed, 0 failed, 1 skipped.
+- Tests: 190 passed, 0 failed, 1 skipped (191 total).
 - The skipped browser component test explicitly requires Chrome or Edge.
 - Existing non-blocking build observations: unresolved `/login-hero.jpg` at build time and a large application chunk warning.
 
@@ -90,6 +99,8 @@ Reviewed: Executive Dashboard, AI Commander, AI Agent, AI Report Studio, Dashboa
 - `mobilizations.updated_at` added with a non-null timestamp default.
 - `employees.source_candidate_id` changed from bigint to text and the QA employee was backfilled to the originating candidate UUID.
 - Demobilization persistence now sends only columns supported by the operational table and does not claim recruitment was avoided when no eligible match exists.
+- Notification mutation allowlist now accepts `REDEPLOYMENT_CONFIRMED`; the migration uses an exact guarded replacement and is idempotent.
+- The application surfaces a partial-success warning if employee/demobilization updates succeed but confirmation-notification persistence fails.
 
 ## Evidence
 
