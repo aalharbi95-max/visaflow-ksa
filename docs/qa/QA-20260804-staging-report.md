@@ -58,7 +58,7 @@ A second live redeployment cycle now proves the full project-end path after the 
 - Notification Center displayed the durable event type `REDEPLOYMENT_CONFIRMED`, title `Employee redeployment confirmed`, the employee name, old project, new project, request `REQ-2026-0004`, High priority, and Company audience.
 - Searchable selects now accept an exact or unique approved option with Enter. Ambiguous searches show the number of matching choices, and uncommitted free text receives an inline bilingual validation message. Exact profession selection with Enter was verified on live Staging.
 - Penalty justification and objection use an inline bilingual form with a required 15-character reason, optional PDF/JPG/PNG evidence up to 10 MB, progress state, durable validation/errors, and explicit confirm/cancel actions; the legacy prompt is no longer wired to the Office Portal actions.
-- The stable default alias `visaflow-ksa-staging.vercel.app` and custom alias `staging.visaflowksa.com` were both unified on the deployment containing commit `0502538`.
+- The stable default alias `visaflow-ksa-staging.vercel.app` and custom alias `staging.visaflowksa.com` were both unified on the deployment containing commit `4a296ea`.
 
 ## Findings requiring follow-up
 
@@ -85,7 +85,8 @@ Reviewed: Executive Dashboard, AI Commander, AI Agent, AI Report Studio, Dashboa
 - Build: passed (`vite build`).
 - Tests: 190 passed, 0 failed, 1 skipped (191 total).
 - The skipped browser component test explicitly requires Chrome or Edge.
-- Existing non-blocking build observations: unresolved `/login-hero.jpg` at build time and a large application chunk warning.
+- The missing login-hero.jpg CSS reference was removed; the build no longer reports an unresolved login asset.
+- Remaining non-blocking build observation: the main application chunk is large and should be split in a dedicated performance pass.
 
 ## Database corrections applied to isolated Staging
 
