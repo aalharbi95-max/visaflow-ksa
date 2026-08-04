@@ -27310,10 +27310,16 @@ function getReportStudioVisualModel() {
   }
 
   async function createAIInterviewCampaign() {
+    const failCampaignCreation = (message) => {
+      setAIInterviewCampaignMessage(`Campaign creation failed: ${message}`);
+      alert(message);
+      return null;
+    };
+
     if (!canManageAIInterviewCampaigns) {
-      return alert("You do not have permission to create AI interview campaigns.");
+      return failCampaignCreation("You do not have permission to create AI interview campaigns.");
     }
-    if (!currentCompanyId) return alert("Company ID is missing.");
+    if (!currentCompanyId) return failCampaignCreation("Company ID is missing.");
 
     const form = aiInterviewCampaignForm;
     const campaignName = String(form.campaign_name || "").trim();
@@ -27321,19 +27327,20 @@ function getReportStudioVisualModel() {
       (item) => String(item.id || "") === String(form.template_id || "")
     );
 
-    if (!campaignName) return alert("Campaign name is required.");
-    if (!template?.id) return alert("Select an approved active AI interview template.");
-    if (!form.interview_deadline) return alert("Interview deadline is required.");
+    if (!campaignName) return failCampaignCreation("Campaign name is required.");
+    if (!template?.id) return failCampaignCreation("Select an approved active AI interview template.");
+    if (!form.interview_deadline) return failCampaignCreation("Interview deadline is required.");
 
     const deadline = new Date(form.interview_deadline);
     if (Number.isNaN(deadline.getTime()) || deadline <= new Date()) {
-      return alert("Interview deadline must be a valid future date and time.");
+      return failCampaignCreation("Interview deadline must be a valid future date and time.");
     }
 
     setAIInterviewCampaignBusy(true);
     setAIInterviewCampaignMessage("Creating AI interview campaign...");
 
     try {
+      const numericCreatedByUserId = Number(currentUser?.id);
       const payload = {
         company_id: currentCompanyId,
         campaign_name: campaignName,
@@ -27349,7 +27356,11 @@ function getReportStudioVisualModel() {
         first_reminder_after_hours: Math.max(0, Number(form.first_reminder_after_hours || 24)),
         second_reminder_after_hours: Math.max(0, Number(form.second_reminder_after_hours || 48)),
         final_reminder_before_hours: Math.max(0, Number(form.final_reminder_before_hours || 24)),
-        created_by_user_id: currentUser?.id || null,
+        // Staging and legacy schemas store the application user key as bigint.
+        // Never send an Auth UUID (or any other text identifier) into this FK.
+        created_by_user_id: Number.isSafeInteger(numericCreatedByUserId) && numericCreatedByUserId > 0
+          ? numericCreatedByUserId
+          : null,
         created_by_name: currentUser?.name || currentUser?.email || "VisaFlow User",
         notes: String(form.notes || "").trim(),
         interaction_mode: AI_INTERVIEW_INTERACTION_MODES.includes(form.interaction_mode)
