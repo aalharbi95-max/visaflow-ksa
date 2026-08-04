@@ -6209,6 +6209,8 @@ const [employeeForm, setEmployeeForm] = useState(emptyEmployee);
 const [demobilizationEditingId, setDemobilizationEditingId] = useState(null);
 const [demobilizationForm, setDemobilizationForm] = useState(emptyDemobilization);
 const [demobAiSuggestion, setDemobAiSuggestion] = useState(null);
+const [demobilizationSaveFeedback, setDemobilizationSaveFeedback] = useState(null);
+const [demobilizationSaving, setDemobilizationSaving] = useState(false);
 const [mobilizationEditingId, setMobilizationEditingId] = useState(null);
 const [mobilizationSaveFeedback, setMobilizationSaveFeedback] = useState(null);
 const [mobilizationSaving, setMobilizationSaving] = useState(false);
@@ -18328,10 +18330,17 @@ function editDemobilization(item) {
 }
 
 async function saveDemobilization() {
-  if (!canManageDemobilization) return alert("You do not have permission to manage demobilization.");
+  const showDemobilizationError = (message) => {
+    setDemobilizationSaveFeedback({ type: "error", message: String(message || "Demobilization could not be saved.") });
+    return null;
+  };
+
+  if (!canManageDemobilization) return showDemobilizationError("You do not have permission to manage demobilization.");
   if (!demobilizationForm.employee_name || !demobilizationForm.profession) {
-    return alert("Employee name and profession are required.");
+    return showDemobilizationError("Employee name and profession are required.");
   }
+  setDemobilizationSaving(true);
+  setDemobilizationSaveFeedback({ type: "info", message: "Saving demobilization data..." });
 
   const payload = {
     ...demobilizationForm,
@@ -18351,8 +18360,12 @@ async function saveDemobilization() {
         .eq("company_id", currentCompanyId)
     : await supabase.from("demobilizations").insert([withCompany(payload)]);
 
-  if (result.error) return alert(result.error.message);
+  if (result.error) {
+    setDemobilizationSaving(false);
+    return showDemobilizationError(result.error.message);
+  }
 
+  let demobilizationWarning = "";
   const linkedEmployee = employees.find((employee) =>
     String(employee.employee_no || "") === String(demobilizationForm.employee_id || "") ||
     (demobilizationForm.iqama_no && String(employee.iqama_no || "") === String(demobilizationForm.iqama_no))
@@ -18364,11 +18377,15 @@ async function saveDemobilization() {
       .eq("id", linkedEmployee.id)
       .eq("company_id", currentCompanyId);
     if (employeeUpdate.error) {
-      alert(`The demobilization record was saved, but the employee status could not be synchronized: ${employeeUpdate.error.message}`);
+      demobilizationWarning = ` The record was saved, but the employee status could not be synchronized: ${employeeUpdate.error.message}`;
     }
   }
 
-  alert(demobilizationEditingId ? "Demobilization updated successfully" : "Demobilization saved successfully");
+  setDemobilizationSaveFeedback({
+    type: demobilizationWarning ? "warning" : "success",
+    message: `${demobilizationEditingId ? "Demobilization updated successfully." : "Demobilization saved successfully."}${demobilizationWarning}`,
+  });
+  setDemobilizationSaving(false);
   resetDemobilizationForm();
   await Promise.all([loadDemobilizations(), loadEmployees()]);
 }
@@ -37561,6 +37578,11 @@ onClick={() => setActiveReport("activityLog")}>
 
             {canManageDemobilization && (
               <FormCard title={demobilizationEditingId ? "Edit Demobilization Record" : "Add Demobilization Record"}>
+                {demobilizationSaveFeedback && (
+                  <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: demobilizationSaveFeedback.type === "error" ? "#fef2f2" : demobilizationSaveFeedback.type === "warning" ? "#fffbeb" : demobilizationSaveFeedback.type === "info" ? "#eff6ff" : "#ecfdf5", color: demobilizationSaveFeedback.type === "error" ? "#991b1b" : demobilizationSaveFeedback.type === "warning" ? "#92400e" : demobilizationSaveFeedback.type === "info" ? "#1d4ed8" : "#166534" }}>
+                    {demobilizationSaveFeedback.message}
+                  </div>
+                )}
                 <div className="form-grid">
                   <Input placeholder="Employee Name" value={demobilizationForm.employee_name} onChange={(v) => updateForm(setDemobilizationForm, "employee_name", v)} />
                   <Input placeholder="Employee ID" value={demobilizationForm.employee_id} onChange={(v) => updateForm(setDemobilizationForm, "employee_id", v)} />
@@ -37597,7 +37619,7 @@ onClick={() => setActiveReport("activityLog")}>
                 <textarea rows="3" placeholder="Notes" value={demobilizationForm.notes} onChange={(e) => updateForm(setDemobilizationForm, "notes", e.target.value)} />
 
                 <div className="actions-line">
-                  <button className="save-btn" onClick={saveDemobilization}>{demobilizationEditingId ? "Update Demobilization" : "Save Demobilization"}</button>
+                  <button className="save-btn" disabled={demobilizationSaving} onClick={saveDemobilization}>{demobilizationSaving ? "Saving..." : demobilizationEditingId ? "Update Demobilization" : "Save Demobilization"}</button>
                   <button className="new-btn" onClick={runDemobAI}>AI Suggest Match</button>
                   <button className="light-btn" onClick={resetDemobilizationForm}>Clear</button>
                 </div>
