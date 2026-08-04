@@ -1131,7 +1131,7 @@ const emptyDemobilization = {
   invoice_required: "No",
   invoice_amount: "",
   invoice_type: "Redeployment Service",
-  recruitment_avoided: "Yes",
+  recruitment_avoided: "No",
   notes: "",
 };
 
@@ -18208,6 +18208,7 @@ function runDemobAI() {
       suggested_project: "",
       match_score: "0",
       ai_recommendation: "No suitable request found. Keep employee available or proceed with exit/hold decision.",
+      recruitment_avoided: "No",
     }));
     return;
   }
@@ -18322,7 +18323,7 @@ function editDemobilization(item) {
     invoice_required: item.invoice_required || "No",
     invoice_amount: item.invoice_amount || "",
     invoice_type: item.invoice_type || "Redeployment Service",
-    recruitment_avoided: item.recruitment_avoided || "Yes",
+    recruitment_avoided: item.recruitment_avoided || "No",
     notes: item.notes || "",
   });
   setActivePage("Demobilization");
@@ -18343,7 +18344,20 @@ async function saveDemobilization() {
   setDemobilizationSaveFeedback({ type: "info", message: "Saving demobilization data..." });
 
   const payload = {
-    ...demobilizationForm,
+    employee_name: demobilizationForm.employee_name || "",
+    employee_id: demobilizationForm.employee_id || "",
+    iqama_no: demobilizationForm.iqama_no || "",
+    profession: demobilizationForm.profession || "",
+    nationality: demobilizationForm.nationality || "",
+    gender: demobilizationForm.gender || "",
+    current_project: demobilizationForm.current_project || "",
+    reason: demobilizationForm.reason || "Project End",
+    status: demobilizationForm.status || "Available",
+    suggested_request_no: demobilizationForm.suggested_request_no || "",
+    suggested_project: demobilizationForm.suggested_project || "",
+    invoice_required: demobilizationForm.invoice_required || "No",
+    invoice_type: demobilizationForm.invoice_type || "Redeployment Service",
+    recruitment_avoided: demobilizationForm.recruitment_avoided || "No",
     notes: demobilizationForm.notes || "",
     ai_recommendation: demobilizationForm.ai_recommendation || "",
     demob_date: demobilizationForm.demob_date || null,
@@ -37612,7 +37626,7 @@ onClick={() => setActiveReport("activityLog")}>
                   <Select value={demobilizationForm.invoice_required || "No"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_required", v)} placeholder="Invoice Required" options={["No", "Yes"]} />
                   <Input placeholder="Invoice Type" value={demobilizationForm.invoice_type || "Redeployment Service"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_type", v)} />
                   <Input type="number" placeholder="Invoice Amount" value={demobilizationForm.invoice_amount} onChange={(v) => updateForm(setDemobilizationForm, "invoice_amount", v)} />
-                  <Select value={demobilizationForm.recruitment_avoided || "Yes"} onChange={(v) => updateForm(setDemobilizationForm, "recruitment_avoided", v)} placeholder="Recruitment Avoided" options={["Yes", "No"]} />
+                  <Select value={demobilizationForm.recruitment_avoided || "No"} onChange={(v) => updateForm(setDemobilizationForm, "recruitment_avoided", v)} placeholder="Recruitment Avoided" options={["Yes", "No"]} />
                 </div>
 
                 <textarea rows="3" placeholder="AI Recommendation" value={demobilizationForm.ai_recommendation} onChange={(e) => updateForm(setDemobilizationForm, "ai_recommendation", e.target.value)} />
