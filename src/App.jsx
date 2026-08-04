@@ -7651,6 +7651,7 @@ async function saveSelectedAllocations() {
   const [candidateEditingId, setCandidateEditingId] = useState(null);
   const [candidateSaveFeedback, setCandidateSaveFeedback] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
+  const [officeCandidateSearch, setOfficeCandidateSearch] = useState("");
   const [officeBulkForm, setOfficeBulkForm] = useState(emptyOfficeBulkUpdate);
   const [officeBulkLoading, setOfficeBulkLoading] = useState(false);
   const [interviewForm, setInterviewForm] = useState(emptyInterview);
@@ -13997,6 +13998,27 @@ async function deleteAgreement(id) {
     return operationalCandidates.filter((item) => item.status !== "Rejected" && item.status !== "Interview Failed");
   }
 
+  function getOfficeFilteredCandidates() {
+    const query = normalize(officeCandidateSearch);
+    const rows = getOfficeVisibleCandidates();
+    if (!query) return rows;
+    return rows.filter((item) => normalize([
+      item.request_no,
+      item.candidate_name,
+      item.passport_no,
+      item.profession,
+      item.nationality,
+      item.agency,
+      item.status,
+      item.mobile,
+      item.notes,
+    ].filter(Boolean).join(" ")).includes(query));
+  }
+
+  function getOfficeRenderedCandidates() {
+    return getOfficeFilteredCandidates().slice(0, 50);
+  }
+
   function isCurrentAgencyPenaltyRecord(item = {}) {
     if (currentRole !== "Agency") return true;
 
@@ -14219,7 +14241,7 @@ async function deleteAgreement(id) {
   }
 
   function toggleAllOfficeCandidates() {
-    const visibleIds = getOfficeVisibleCandidates().map((item) => String(item.id));
+    const visibleIds = getOfficeRenderedCandidates().map((item) => String(item.id));
     if (visibleIds.length === 0) return;
     const allSelected = visibleIds.every((id) => officeSelectedCandidateIds.includes(id));
     setOfficeSelectedCandidateIds(allSelected ? [] : visibleIds);
@@ -34911,6 +34933,16 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
     </div>
 
     <TableCard title="Office Candidates Tracking - Candidate Updates & Interview Scheduling">
+      <div className="form-grid" style={{ marginBottom: 12 }}>
+        <Input
+          placeholder="Search candidates by name, passport, request, profession or stage..."
+          value={officeCandidateSearch}
+          onChange={setOfficeCandidateSearch}
+        />
+        <div style={{ alignSelf: "center", color: "#64748b", fontSize: 13 }}>
+          Showing {getOfficeRenderedCandidates().length} of {getOfficeFilteredCandidates().length} matching candidates
+        </div>
+      </div>
       <table>
         <thead>
           <tr>
@@ -34918,7 +34950,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <th>
                 <input
                   type="checkbox"
-                  checked={getOfficeVisibleCandidates().length > 0 && getOfficeVisibleCandidates().every((item) => officeSelectedCandidateIds.includes(String(item.id)))}
+                  checked={getOfficeRenderedCandidates().length > 0 && getOfficeRenderedCandidates().every((item) => officeSelectedCandidateIds.includes(String(item.id)))}
                   onChange={toggleAllOfficeCandidates}
                   title="Select all visible candidates"
                 />
@@ -34939,7 +34971,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           </tr>
         </thead>
         <tbody>
-          {getOfficeVisibleCandidates()
+          {getOfficeRenderedCandidates()
   .map((item) => (
             <tr key={item.id}>
               {canManageOfficePortal && (
