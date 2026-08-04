@@ -15959,6 +15959,231 @@ ${errors.slice(0, 10).join("\n")}` : "")
     );
   }
 
+  function buildGuardedAIInterviewQuestionFallback({ profession = "", difficulty = "Medium", questionCount = 10 } = {}) {
+    const role = String(profession || "the role").trim();
+    const safeDifficulty = AI_INTERVIEW_DIFFICULTY_LEVELS.includes(difficulty) ? difficulty : "Medium";
+    const bank = [
+      {
+        question_type: "Experience",
+        competency: "Relevant Experience",
+        question_text_en: `Summarize your most relevant experience for the ${role} position and explain your personal responsibilities.`,
+        question_text_ar: `لخّص خبرتك الأكثر ارتباطًا بوظيفة ${role} واشرح مسؤولياتك الشخصية فيها.`,
+        key_points: ["relevant experience", "personal responsibility", "measurable result"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Technical Judgment",
+        question_text_en: `Describe a difficult technical problem you solved in a ${role} assignment. How did you diagnose it and verify the result?`,
+        question_text_ar: `اشرح مشكلة فنية صعبة عالجتها في عمل مرتبط بوظيفة ${role}. كيف شخصتها وتحققت من النتيجة؟`,
+        key_points: ["diagnosis", "evidence", "verification", "result"],
+      },
+      {
+        question_type: "Safety",
+        competency: "Safety and Risk Control",
+        question_text_en: `What are the most important safety risks in this role, and what controls must be confirmed before work starts?`,
+        question_text_ar: "ما أهم مخاطر السلامة في هذه الوظيفة، وما الضوابط التي يجب التأكد منها قبل بدء العمل؟",
+        key_points: ["hazard identification", "permit to work", "controls", "stop work"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Accountability",
+        question_text_en: "Give an example of an error or missed assumption you discovered in your work. What did you do next?",
+        question_text_ar: "اذكر مثالًا على خطأ أو افتراض غير صحيح اكتشفته في عملك. ماذا فعلت بعد ذلك؟",
+        key_points: ["ownership", "correction", "communication", "prevention"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Quality Control",
+        question_text_en: `How do you verify that ${role} work complies with drawings, specifications, quality requirements, and applicable standards?`,
+        question_text_ar: `كيف تتحقق من أن أعمال ${role} مطابقة للرسومات والمواصفات ومتطلبات الجودة والمعايير المعمول بها؟`,
+        key_points: ["inspection", "specification", "documentation", "nonconformance"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Communication",
+        question_text_en: "Describe a situation where you had to explain a technical risk to a non-technical stakeholder. What was the outcome?",
+        question_text_ar: "اشرح موقفًا اضطررت فيه إلى توضيح خطر فني لشخص غير متخصص. ما النتيجة؟",
+        key_points: ["clear communication", "risk", "decision", "outcome"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Planning and Prioritization",
+        question_text_en: "When several urgent issues compete for attention, how do you prioritize the work and protect project commitments?",
+        question_text_ar: "عند وجود عدة مشكلات عاجلة في الوقت نفسه، كيف ترتب الأولويات وتحافظ على التزامات المشروع؟",
+        key_points: ["risk based priority", "dependencies", "resources", "communication"],
+      },
+      {
+        question_type: "Experience",
+        competency: "Root Cause Analysis",
+        question_text_en: "Walk through a root-cause investigation you performed. Which evidence changed or confirmed your conclusion?",
+        question_text_ar: "اشرح تحقيقًا أجريته لتحديد السبب الجذري. ما الأدلة التي غيّرت استنتاجك أو أكدته؟",
+        key_points: ["evidence", "root cause", "corrective action", "effectiveness"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Team Coordination",
+        question_text_en: `How do you coordinate ${role} activities with other disciplines, contractors, and site teams to avoid delays or rework?`,
+        question_text_ar: `كيف تنسق أعمال ${role} مع التخصصات الأخرى والمقاولين وفرق الموقع لتجنب التأخير أو إعادة العمل؟`,
+        key_points: ["interfaces", "coordination", "documentation", "follow up"],
+      },
+      {
+        question_type: "Closing",
+        competency: "Professional Readiness",
+        question_text_en: `What information would you request during your first week to perform effectively and safely in the ${role} position?`,
+        question_text_ar: `ما المعلومات التي ستطلبها خلال أسبوعك الأول للعمل بكفاءة وأمان في وظيفة ${role}؟`,
+        key_points: ["scope", "standards", "risks", "stakeholders"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Change Control",
+        question_text_en: "How do you assess and document the technical, schedule, cost, and safety impact of a proposed change?",
+        question_text_ar: "كيف تقيّم وتوثق أثر التغيير المقترح فنيًا وعلى الجدول والتكلفة والسلامة؟",
+        key_points: ["impact assessment", "approval", "traceability", "risk"],
+      },
+      {
+        question_type: "Safety",
+        competency: "Incident Response",
+        question_text_en: "What are your immediate and follow-up actions when you identify an unsafe condition or a serious near miss?",
+        question_text_ar: "ما إجراءاتك الفورية واللاحقة عند اكتشاف حالة غير آمنة أو حادث وشيك خطير؟",
+        key_points: ["stop work", "secure area", "report", "corrective action"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Document Control",
+        question_text_en: "How do you ensure the team is working from the latest approved technical information and records?",
+        question_text_ar: "كيف تضمن أن الفريق يعمل باستخدام أحدث المعلومات والسجلات الفنية المعتمدة؟",
+        key_points: ["revision control", "approval", "distribution", "records"],
+      },
+      {
+        question_type: "Behavioral",
+        competency: "Decision Making",
+        question_text_en: "Describe a time you had to make a decision with incomplete information. How did you control the risk?",
+        question_text_ar: "اشرح موقفًا اتخذت فيه قرارًا بمعلومات غير مكتملة. كيف سيطرت على المخاطر؟",
+        key_points: ["assumptions", "risk", "consultation", "review"],
+      },
+      {
+        question_type: "Technical",
+        competency: "Continuous Improvement",
+        question_text_en: "Give an example of an improvement you introduced. How did you measure whether it worked?",
+        question_text_ar: "اذكر مثالًا على تحسين طبقته. كيف قست نجاحه؟",
+        key_points: ["baseline", "improvement", "measurement", "sustainability"],
+      },
+    ];
+
+    const selected = bank.slice(0, Math.min(bank.length, Math.max(3, Number(questionCount || 10))));
+    const baseWeight = Math.floor((10000 / selected.length)) / 100;
+    return selected.map((question, index) => ({
+      ...question,
+      difficulty_level: safeDifficulty,
+      weight: index === selected.length - 1
+        ? Number((100 - (baseWeight * (selected.length - 1))).toFixed(2))
+        : baseWeight,
+      maximum_answer_seconds: 120,
+    }));
+  }
+
+  async function saveGuardedAIInterviewTemplateFallback({
+    targetCompanyId,
+    templateName,
+    profession,
+    professionCategory,
+    jobDescription,
+    questionCount,
+    passingScore,
+  }) {
+    const actor = getAIInterviewActorName();
+    const now = new Date().toISOString();
+    const difficulty = AI_INTERVIEW_DIFFICULTY_LEVELS.includes(aiInterviewGenerationForm.difficulty)
+      ? aiInterviewGenerationForm.difficulty
+      : "Medium";
+    const questions = buildGuardedAIInterviewQuestionFallback({ profession, difficulty, questionCount });
+
+    const { data: template, error: templateError } = await supabase
+      .from("ai_interview_templates")
+      .insert([{
+        company_id: targetCompanyId,
+        template_name: templateName,
+        profession,
+        profession_category: professionCategory,
+        language: aiInterviewGenerationForm.language || "Bilingual",
+        interview_mode: "Voice",
+        description: `Structured interview generated from the approved job description for ${profession}.`,
+        candidate_instructions: "Answer with specific examples. The company will review the AI-assisted assessment before making any decision.",
+        duration_minutes: Math.max(10, Math.ceil(questions.length * 2)),
+        maximum_questions: questions.length,
+        passing_score: passingScore,
+        status: "Draft",
+        is_active: false,
+        source_type: "Job Description",
+        job_description: jobDescription,
+        job_description_language: "Auto",
+        request_no: String(aiInterviewGenerationForm.request_no || "").trim(),
+        request_line_id: String(aiInterviewGenerationForm.request_line_id || "").trim(),
+        requested_question_count: questions.length,
+        interview_difficulty: difficulty,
+        generation_status: "Generated",
+        approval_status: "Pending Review",
+        ai_model: "VisaFlow Guarded Fallback",
+        prompt_version: "JD-INTERVIEW-FALLBACK-V1",
+        generated_at: now,
+        last_generated_by: actor,
+        created_by: actor,
+        updated_by: actor,
+      }])
+      .select("*")
+      .single();
+
+    if (templateError) throw templateError;
+
+    const questionRows = questions.map((question, index) => ({
+      company_id: targetCompanyId,
+      template_id: template.id,
+      question_order: index + 1,
+      question_text: question.question_text_ar || question.question_text_en,
+      question_text_ar: question.question_text_ar,
+      question_text_en: question.question_text_en,
+      question_type: question.question_type,
+      competency: question.competency,
+      difficulty_level: question.difficulty_level,
+      weight: question.weight,
+      maximum_answer_seconds: question.maximum_answer_seconds,
+      expected_keywords: question.key_points,
+      key_points: question.key_points,
+      scoring_guide: {
+        scale: "0-100",
+        rule: "Score only job-relevant evidence stated in the answer. Do not infer protected or sensitive traits.",
+      },
+      ideal_answer: question.key_points.join(" • "),
+      recruiter_notes: "Fallback question set requires company review before publishing.",
+      source_type: "AI Guarded Fallback",
+      is_ai_generated: false,
+      ai_generation_notes: "Created because the dedicated generation service was unavailable.",
+      allow_follow_up: true,
+      maximum_follow_ups: 1,
+      is_required: true,
+      is_active: true,
+      created_by: actor,
+      updated_by: actor,
+    }));
+
+    const { error: questionsError } = await supabase
+      .from("ai_interview_questions")
+      .insert(questionRows);
+
+    if (questionsError) {
+      await supabase.from("ai_interview_templates").delete().eq("id", template.id).eq("company_id", targetCompanyId);
+      throw questionsError;
+    }
+
+    return {
+      ok: true,
+      template_id: template.id,
+      template_name: template.template_name,
+      generated_question_count: questionRows.length,
+      used_guarded_fallback: true,
+    };
+  }
+
   async function generateAIInterviewTemplateFromJobDescription() {
     if (!canManageInterviewResults && !isPlatformOwner) {
       return alert("You do not have permission to generate AI interview templates.");
@@ -16013,9 +16238,21 @@ ${errors.slice(0, 10).join("\n")}` : "")
         }
       );
 
-      if (error) throw error;
-      if (!data?.ok) {
-        throw new Error(data?.error || `Template generation failed at ${data?.stage || "unknown stage"}.`);
+      let generationData = data;
+      if (error || !data?.ok) {
+        console.warn(
+          "Dedicated AI interview template generator unavailable; using guarded fallback",
+          error?.message || data?.error || "unknown generator error",
+        );
+        generationData = await saveGuardedAIInterviewTemplateFallback({
+          targetCompanyId,
+          templateName,
+          profession,
+          professionCategory,
+          jobDescription,
+          questionCount,
+          passingScore,
+        });
       }
 
       // Delivery is intentionally not saved on the template.
@@ -16030,7 +16267,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         normalizeMatchText(jobDescription) === normalizeMatchText(preparedCatalogItem.job_description)
       );
 
-      if (isPreparedEngineeringMaster && data.template_id) {
+      if (isPreparedEngineeringMaster && generationData.template_id && !generationData.used_guarded_fallback) {
         const { error: markerError } = await supabase
           .from("ai_interview_templates")
           .update({
@@ -16038,7 +16275,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
             updated_by: getAIInterviewActorName(),
             updated_at: new Date().toISOString(),
           })
-          .eq("id", data.template_id)
+          .eq("id", generationData.template_id)
           .eq("company_id", targetCompanyId);
 
         if (markerError) {
@@ -16047,11 +16284,11 @@ ${errors.slice(0, 10).join("\n")}` : "")
       }
 
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
-      setAIInterviewGenerationResult(data);
-      setSelectedAIInterviewTemplateId(data.template_id || "");
+      setAIInterviewGenerationResult(generationData);
+      setSelectedAIInterviewTemplateId(generationData.template_id || "");
       setEditingAIInterviewQuestionId("");
       setAIInterviewMessage(
-        `${data.template_name || templateName} generated with ${data.generated_question_count || questionCount} questions and saved as Pending Review.`
+        `${generationData.template_name || templateName} generated with ${generationData.generated_question_count || questionCount} questions and saved as Pending Review${generationData.used_guarded_fallback ? " using the guarded fallback because the dedicated AI service was unavailable" : ""}.`
       );
     } catch (error) {
       console.warn("AI interview job-description generation failed", error?.message || error);
