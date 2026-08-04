@@ -775,6 +775,18 @@ const EMPTY_AI_INTERVIEW_CAMPAIGN_FORM = {
   notes: "",
 };
 
+function createEmptyAIInterviewCampaignForm() {
+  const defaultDeadline = new Date(Date.now() + (7 * 24 * 60 * 60 * 1000));
+  const localDeadline = new Date(defaultDeadline.getTime() - (defaultDeadline.getTimezoneOffset() * 60 * 1000))
+    .toISOString()
+    .slice(0, 16);
+
+  return {
+    ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM,
+    interview_deadline: localDeadline,
+  };
+}
+
 const AI_INTERVIEW_CAMPAIGN_TABS = [
   "Campaigns",
   "Candidates",
@@ -6018,7 +6030,7 @@ const [aiInterviewCampaignCandidates, setAIInterviewCampaignCandidates] = useSta
 const [aiInterviewInvitationJobs, setAIInterviewInvitationJobs] = useState([]);
 const [selectedAIInterviewCampaignId, setSelectedAIInterviewCampaignId] = useState("");
 const [aiInterviewCampaignTab, setAIInterviewCampaignTab] = useState("Campaigns");
-const [aiInterviewCampaignForm, setAIInterviewCampaignForm] = useState({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
+const [aiInterviewCampaignForm, setAIInterviewCampaignForm] = useState(() => createEmptyAIInterviewCampaignForm());
 const [selectedCampaignCandidateIds, setSelectedCampaignCandidateIds] = useState([]);
 const [aiInterviewCandidateSearch, setAIInterviewCandidateSearch] = useState("");
 const [aiInterviewCandidateRequestFilter, setAIInterviewCandidateRequestFilter] = useState("");
@@ -27278,7 +27290,7 @@ function getReportStudioVisualModel() {
   }
 
   function resetAIInterviewCampaignForm() {
-    setAIInterviewCampaignForm({ ...EMPTY_AI_INTERVIEW_CAMPAIGN_FORM });
+    setAIInterviewCampaignForm(createEmptyAIInterviewCampaignForm());
   }
 
   function selectAIInterviewCampaign(campaignId, tab = "Candidates") {
