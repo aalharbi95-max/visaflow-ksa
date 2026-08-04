@@ -65,5 +65,12 @@ export function nationalitiesMatch(left, right, countries = []) {
   const leftKeys = new Set(getNationalityMatchKeys(left, countries));
   const rightKeys = getNationalityMatchKeys(right, countries);
   if (!leftKeys.size || !rightKeys.length) return false;
-  return rightKeys.some((key) => leftKeys.has(key));
+  if (rightKeys.some((key) => leftKeys.has(key))) return true;
+  const hasCompositeLabel = /[()\[\]]/.test(String(left || "")) || /[()\[\]]/.test(String(right || ""));
+  if (!hasCompositeLabel) return false;
+  return Array.from(leftKeys).some((leftKey) => rightKeys.some((rightKey) => {
+    const paddedLeft = ` ${leftKey} `;
+    const paddedRight = ` ${rightKey} `;
+    return paddedLeft.includes(paddedRight) || paddedRight.includes(paddedLeft);
+  }));
 }

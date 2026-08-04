@@ -22,6 +22,8 @@ test("duplicate country rows still resolve composite nationality labels", () => 
 
   assert.equal(resolveCanonicalNationality("Filipino (Philippines)", duplicatedPhilippines), "Filipino");
   assert.equal(nationalitiesMatch("Filipino (Philippines)", "Filipino", duplicatedPhilippines), true);
+  assert.equal(nationalitiesMatch("Filipino (Philippines)", "Filipino"), true);
+  assert.equal(nationalitiesMatch("Guinean", "Equatorial Guinean"), false);
 });
 
 test("nationality options expose bilingual labels but canonical values", () => {
