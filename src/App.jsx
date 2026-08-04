@@ -5839,6 +5839,7 @@ function App() {
   const [authorizationTimelineEvents, setAuthorizationTimelineEvents] = useState([]);
   const [authorizationWorkflowBusy, setAuthorizationWorkflowBusy] = useState("");
   const [authorizationWorkflowFeedback, setAuthorizationWorkflowFeedback] = useState(null);
+  const [agencyAuthorizationAction, setAgencyAuthorizationAction] = useState(null);
   const [visaAllocations, setVisaAllocations] = useState([]);
 const [agencies, setAgencies] = useState([]);
 const [agencyAgreements, setAgencyAgreements] = useState([]);
@@ -7188,20 +7189,24 @@ async function sendAuthorizationToAgency(item) {
   });
 }
 
-async function handleAgencyAuthorizationAction(action, item) {
-  let reason = "";
-  if (action === "reject") {
-    reason = window.prompt("Enter the rejection reason:") || "";
-    if (!reason.trim()) {
-      setAuthorizationWorkflowFeedback({ type: "error", message: "A rejection reason is required." });
-      return;
-    }
-  } else if (action === "accept") {
-    reason = window.prompt("Optional acceptance note:") || "";
-  } else if (action === "acknowledge") {
-    reason = window.prompt("Optional acknowledgement note:") || "";
+function handleAgencyAuthorizationAction(action, item) {
+  setAuthorizationWorkflowFeedback(null);
+  setAgencyAuthorizationAction({ action, item, reason: "" });
+}
+
+async function submitAgencyAuthorizationAction() {
+  if (!agencyAuthorizationAction?.item) return;
+  const reason = String(agencyAuthorizationAction.reason || "").trim();
+  if (agencyAuthorizationAction.action === "reject" && !reason) {
+    setAuthorizationWorkflowFeedback({ type: "error", message: "A rejection reason is required." });
+    return;
   }
-  await runAuthorizationWorkflowAction(action, item, { reason });
+  const result = await runAuthorizationWorkflowAction(
+    agencyAuthorizationAction.action,
+    agencyAuthorizationAction.item,
+    { reason }
+  );
+  if (result) setAgencyAuthorizationAction(null);
 }
 
 async function cancelAuthorization(id) {
@@ -34392,6 +34397,41 @@ disabled={authorizationWorkflowBusy === "create"}
             }}
           >
             {authorizationWorkflowFeedback.message}
+          </div>
+        )}
+        {agencyAuthorizationAction && (
+          <div style={{ marginBottom: "14px", padding: "16px", borderRadius: "12px", border: "1px solid #bfdbfe", background: "#f8fbff" }}>
+            <strong style={{ display: "block", marginBottom: "8px" }}>
+              {agencyAuthorizationAction.action === "reject"
+                ? "Reject authorization"
+                : agencyAuthorizationAction.action === "accept"
+                  ? "Accept authorization"
+                  : "Acknowledge authorization"}
+              {` — ${agencyAuthorizationAction.item.authorization_no || agencyAuthorizationAction.item.visa_no || "-"}`}
+            </strong>
+            <textarea
+              rows="3"
+              placeholder={agencyAuthorizationAction.action === "reject" ? "Rejection reason (required)" : "Optional note"}
+              value={agencyAuthorizationAction.reason}
+              onChange={(event) => setAgencyAuthorizationAction((current) => ({ ...current, reason: event.target.value }))}
+              style={{ width: "100%", marginBottom: "10px" }}
+            />
+            <div className="actions-line">
+              <button
+                className={agencyAuthorizationAction.action === "reject" ? "danger-btn" : "save-btn"}
+                onClick={submitAgencyAuthorizationAction}
+                disabled={Boolean(authorizationWorkflowBusy)}
+              >
+                {authorizationWorkflowBusy ? "Saving..." : "Confirm Action"}
+              </button>
+              <button
+                className="light-btn"
+                onClick={() => setAgencyAuthorizationAction(null)}
+                disabled={Boolean(authorizationWorkflowBusy)}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
         <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "520px" }}>
