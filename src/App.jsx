@@ -18573,6 +18573,51 @@ async function saveMobilization() {
     return showMobilizationError(`Mobilization saved, but candidate status could not be updated: ${candidateUpdateResult.error.message}`);
   }
 
+  if (payload.mobilization_status === "Joined") {
+    const { data: existingOnboarding, error: onboardingLookupError } = await supabase
+      .from("onboarding_validations")
+      .select("id")
+      .eq("company_id", currentCompanyId)
+      .eq("candidate_id", payload.candidate_id)
+      .limit(1);
+
+    if (onboardingLookupError) {
+      setMobilizationSaving(false);
+      return showMobilizationError(`Mobilization saved, but onboarding monitoring could not be checked: ${onboardingLookupError.message}`);
+    }
+
+    if (!existingOnboarding?.length) {
+      const agencyImpactEligible = Boolean(candidate?.agency_id || candidate?.agency_name);
+      const { error: onboardingInsertError } = await supabase
+        .from("onboarding_validations")
+        .insert([withCompany({
+          candidate_id: payload.candidate_id,
+          request_no: payload.request_no,
+          candidate_name: payload.candidate_name,
+          passport_no: candidate?.passport_no || candidate?.passport_number || "",
+          agency_name: candidate?.agency_name || "",
+          agency_id: candidate?.agency_id || null,
+          profession: payload.profession,
+          nationality: payload.nationality,
+          project: candidate?.project || candidate?.project_name || "",
+          arrival_date: payload.arrival_date,
+          joining_date: payload.joining_date,
+          worker_validation_required: true,
+          agency_impact_eligible: agencyImpactEligible,
+          validation_scope: agencyImpactEligible ? "Worker + Agency Impact" : "Worker Only",
+          status: "Active Monitoring",
+          final_result: "Under Monitoring",
+          notes: "Created automatically when mobilization status changed to Joined.",
+          updated_at: new Date().toISOString(),
+        })]);
+
+      if (onboardingInsertError) {
+        setMobilizationSaving(false);
+        return showMobilizationError(`Mobilization saved, but onboarding monitoring could not be started: ${onboardingInsertError.message}`);
+      }
+    }
+  }
+
   setMobilizationSaveFeedback({
     type: "success",
     message: mobilizationEditingId ? "Mobilization updated successfully." : "Mobilization saved successfully.",
