@@ -72,4 +72,3 @@ $$;
 
 revoke all on function public.trigger_ai_interview_invitation_worker(uuid) from public, anon;
 grant execute on function public.trigger_ai_interview_invitation_worker(uuid) to authenticated;
-
