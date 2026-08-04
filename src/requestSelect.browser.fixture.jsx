@@ -95,6 +95,12 @@ async function runScenario() {
     await delay(0);
     const optionSelectionWorked = profession.value.includes("Engineer") && nationality.value.includes("Indian");
 
+    profession.focus();
+    setInputValue(profession, "Engineer");
+    profession.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await delay(0);
+    const keyboardSelectionWorked = profession.value.includes("Engineer");
+
     document.querySelector("#add-line").click();
     await delay(0);
     document.querySelector("#save-request").click();
@@ -107,6 +113,7 @@ async function runScenario() {
       nationalityAfterBlur,
       otherFieldsPreserved,
       optionSelectionWorked,
+      keyboardSelectionWorked,
       payload,
     });
   } catch (error) {

@@ -103,6 +103,7 @@ test("request Profession and Nationality persist through focus changes and reach
     assert.match(result.nationalityAfterBlur, /Indian/);
     assert.equal(result.otherFieldsPreserved, true);
     assert.equal(result.optionSelectionWorked, true);
+    assert.equal(result.keyboardSelectionWorked, true);
     assert.deepEqual(result.payload.request_lines, [{
       profession: "مهندس - Engineer",
       nationality: "Indian",
