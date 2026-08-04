@@ -7649,6 +7649,7 @@ async function saveSelectedAllocations() {
   const [agencyMaintenanceMessage, setAgencyMaintenanceMessage] = useState("");
   const [candidateForm, setCandidateForm] = useState(emptyCandidate);
   const [candidateEditingId, setCandidateEditingId] = useState(null);
+  const [candidateSaveFeedback, setCandidateSaveFeedback] = useState(null);
   const [officeSelectedCandidateIds, setOfficeSelectedCandidateIds] = useState([]);
   const [officeBulkForm, setOfficeBulkForm] = useState(emptyOfficeBulkUpdate);
   const [officeBulkLoading, setOfficeBulkLoading] = useState(false);
@@ -14427,6 +14428,7 @@ arrival_date: item.arrival_date || "",
 }
   async function saveCandidate() {
     if (!canManageCandidates && !canManageOfficePortal) return alert("You do not have permission to manage candidates.");
+    setCandidateSaveFeedback(null);
     const { data: requestData } = await supabase
   .from("requests")
   .select("approval_status, quantity, remaining_qty, recruitment_type, nationality")
@@ -14644,24 +14646,32 @@ arrival_date: saudiCandidateFlow ? null : candidateForm.arrival_date || null,
       }
     }
 
-    if (secureLogFeaturesAvailable) await triggerExternalNotification(
-      candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
-      {
-      agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
-      title: candidateEditingId ? "Candidate Updated" : "New Candidate Added",
-      message: `${candidateForm.candidate_name || "Candidate"} / ${candidateForm.request_no || "No Request"} / ${autoStatus}`,
-      priority: "Medium",
-      status: "Unread",
-      related_table: "candidates",
-      related_id: String(savedCandidateId || ""),
-      data: {
-        candidate_name: candidateForm.candidate_name,
-        request_no: candidateForm.request_no,
-        agency: currentRole === "Agency" ? currentUser?.agency_name : candidateForm.agency,
-        status: autoStatus,
-      },
+    let notificationWarning = "";
+    if (secureLogFeaturesAvailable) {
+      try {
+        await triggerExternalNotification(
+          candidateEditingId ? "CANDIDATE_UPDATED" : "CANDIDATE_CREATED",
+          {
+            agency_id: currentRole === "Agency" ? currentUser?.agency_id || null : null,
+            title: candidateEditingId ? "Candidate Updated" : "New Candidate Added",
+            message: `${candidateForm.candidate_name || "Candidate"} / ${candidateForm.request_no || "No Request"} / ${autoStatus}`,
+            priority: "Medium",
+            status: "Unread",
+            related_table: "candidates",
+            related_id: String(savedCandidateId || ""),
+            data: {
+              candidate_name: candidateForm.candidate_name,
+              request_no: candidateForm.request_no,
+              agency: currentRole === "Agency" ? currentUser?.agency_name : candidateForm.agency,
+              status: autoStatus,
+            },
+          }
+        );
+      } catch (error) {
+        notificationWarning = " Candidate data was saved, but its notification could not be queued.";
+        console.error("Candidate notification failed after save", error);
       }
-    );
+    }
 
 const { count: completedCandidateCount } = await supabase
   .from("candidates")
@@ -14700,7 +14710,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
   await loadRequests();
   resetCandidateForm();
   await Promise.all([loadCandidates(), loadCandidateTechnicalProfiles()]);
-  alert(candidateEditingId ? "Candidate updated successfully" : "Candidate saved successfully");
+  setCandidateSaveFeedback({
+    type: notificationWarning ? "warning" : "success",
+    message: `${candidateEditingId ? "Candidate updated successfully." : "Candidate saved successfully."}${notificationWarning}`,
+  });
   }
 
   async function deleteCandidate(id) {
@@ -32840,6 +32853,11 @@ disabled={authorizationWorkflowBusy === "create"}
             </div>
             {canManageCandidates && (
             <FormCard title={candidateEditingId ? "Edit Candidate" : "Add Candidate"}>
+              {candidateSaveFeedback && (
+                <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
+                  {candidateSaveFeedback.message}
+                </div>
+              )}
               <div className="form-grid">
                 <Input placeholder="Candidate Name" value={candidateForm.candidate_name} onChange={(v) => updateForm(setCandidateForm, "candidate_name", v)} />
               <Select
@@ -34661,6 +34679,11 @@ disabled={authorizationWorkflowBusy === "create"}
 
     {canManageOfficePortal && (
     <FormCard title={candidateEditingId ? "Edit Office Candidate" : "Add Office Candidate"}>
+      {candidateSaveFeedback && (
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: candidateSaveFeedback.type === "warning" ? "#fffbeb" : "#ecfdf5", color: candidateSaveFeedback.type === "warning" ? "#92400e" : "#166534" }}>
+          {candidateSaveFeedback.message}
+        </div>
+      )}
       <div className="form-grid">
         <Input placeholder="Candidate Name" value={candidateForm.candidate_name} onChange={(v) => updateForm(setCandidateForm, "candidate_name", v)} />
 <Select
