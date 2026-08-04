@@ -12433,6 +12433,7 @@ function isDuplicateRequestNoError(error) {
         sla_started_at: nextData.sla_started_at,
         sla_days: nextData.sla_days,
         sla_due_at: nextData.sla_due_at,
+        lines: Array.isArray(nextData.lines) ? nextData.lines : [],
       });
     } catch (notifyError) {
       console.warn("Company response notification failed", notifyError?.message || notifyError);
@@ -19882,6 +19883,7 @@ function getAcceptedAgencyRequestPenaltyAlerts() {
   const penaltyNotificationTypes = new Set([
     "NEW_REQUEST_AGENCY_ALERT",
     "AGENCY_REQUEST_NOTIFICATION",
+    "AGENCY_REQUEST_RESPONSE",
   ]);
 
   return (notifications || []).filter((item) => {
