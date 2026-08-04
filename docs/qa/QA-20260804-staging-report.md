@@ -56,7 +56,9 @@ A second live redeployment cycle now proves the full project-end path after the 
 - The missing `REDEPLOYMENT_CONFIRMED` database allowlist entry was identified as the reason the first confirmation did not appear in Notification Center. Migration `20260804000500_allow_redeployment_confirmed_notification.sql` was applied to isolated Staging and verified with `pg_get_functiondef`; the allowlist check returned `true`.
 - Employee `EMP-2026-000003` then completed an independent post-migration live cycle from `QA Ending Project Notification` to `QA Master Data Validation`, again at 83%. The employee remained `Active`, the project was updated, and the confirmation created the ninth unread notification.
 - Notification Center displayed the durable event type `REDEPLOYMENT_CONFIRMED`, title `Employee redeployment confirmed`, the employee name, old project, new project, request `REQ-2026-0004`, High priority, and Company audience.
-- The stable default alias `visaflow-ksa-staging.vercel.app` and custom alias `staging.visaflowksa.com` were both unified on the deployment containing commit `115ac84`.
+- Searchable selects now accept an exact or unique approved option with Enter. Ambiguous searches show the number of matching choices, and uncommitted free text receives an inline bilingual validation message. Exact profession selection with Enter was verified on live Staging.
+- Penalty justification and objection use an inline bilingual form with a required 15-character reason, optional PDF/JPG/PNG evidence up to 10 MB, progress state, durable validation/errors, and explicit confirm/cancel actions; the legacy prompt is no longer wired to the Office Portal actions.
+- The stable default alias `visaflow-ksa-staging.vercel.app` and custom alias `staging.visaflowksa.com` were both unified on the deployment containing commit `0502538`.
 
 ## Findings requiring follow-up
 
@@ -73,14 +75,6 @@ A second live redeployment cycle now proves the full project-end path after the 
    - Template approval, campaign creation, candidate insert/revalidation, and queue reads are verified.
    - Campaign launch and invitation delivery remain intentionally untested to avoid sending an external QA email without a dedicated controlled recipient.
    - The secure `generate-ai-interview-template` Edge Function is implemented and deployed to Staging, but Staging does not yet have the required `OPENAI_API_KEY` Edge Function secret. The UI fails safely, explains the missing configuration, and does not save an incomplete template. Configure the secret before Production approval.
-
-3. Searchable select usability
-   - Typing a profession or nationality is not enough; the user must click a matching suggestion.
-   - This is documented in the guide, but the control should also show an inline validation message when text has not been selected.
-
-4. Penalty objection input
-   - The lifecycle and tenant permissions are verified, but the agency objection action still uses `window.prompt`.
-   - Replace it with an inline bilingual form with required reason, attachment support, confirmation text, progress state, and durable success/error feedback.
 
 ## Screen coverage
 
