@@ -55,6 +55,7 @@ import {
 import { buildBulkAssignmentPreview, getBatchCandidateIds, getMatchingCandidateIds } from "./bulkAssignment.mjs";
 import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
+import UserGuide from "./UserGuide";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
 import {
   createAgencyAgreement,
@@ -166,6 +167,7 @@ const PAGES = [
   "Office Portal",
   "Notifications",
   "Reports",
+  "User Guide",
  "Platform Dashboard",
 "Platform Intelligence",
 "Client Usage Monitor",
@@ -214,6 +216,11 @@ const SIDEBAR_GROUPS = [
     title: "Performance & Reports",
     icon: "📊",
     pages: ["Recruitment Performance", "Reports"],
+  },
+  {
+    title: "Help & Guidance",
+    icon: "📘",
+    pages: ["User Guide"],
   },
   {
     title: "Platform Administration",
@@ -6722,11 +6729,12 @@ const ROLE_PAGES = {
 const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
+const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePages, "User Guide"]));
 const visiblePages = secureLogFeaturesAvailable
   ? (currentUser?.company_id && currentRole !== "Agency"
-      ? Array.from(new Set([...roleVisiblePages, "Email Logs"]))
-      : roleVisiblePages)
-  : roleVisiblePages.filter((page) => page !== "Notifications");
+      ? Array.from(new Set([...roleVisiblePagesWithGuide, "Email Logs"]))
+      : roleVisiblePagesWithGuide)
+  : roleVisiblePagesWithGuide.filter((page) => page !== "Notifications");
 const roleActions = ACTION_PERMISSIONS[currentRole] || ACTION_PERMISSIONS.Viewer;
 const hasAction = (action) => roleActions.includes(action);
 
@@ -14685,11 +14693,9 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
    
 
   await loadRequests();
-
-    alert(candidateEditingId ? "Candidate updated successfully" : "Candidate saved successfully");
-    resetCandidateForm();
-    loadCandidates();
-    loadCandidateTechnicalProfiles();
+  resetCandidateForm();
+  await Promise.all([loadCandidates(), loadCandidateTechnicalProfiles()]);
+  alert(candidateEditingId ? "Candidate updated successfully" : "Candidate saved successfully");
   }
 
   async function deleteCandidate(id) {
@@ -29742,6 +29748,8 @@ if (!currentUser) {
             </TableCard>
           </>
         )}
+
+        {activePage === "User Guide" && <UserGuide currentRole={currentRole} />}
 
         {activePage === "Notifications" && (
           <>
