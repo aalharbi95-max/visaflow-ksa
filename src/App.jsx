@@ -10201,7 +10201,7 @@ useEffect(() => {
   const calculatedRows = calculatePenaltyRegisterRows();
   const actionableRows = calculatedRows.filter((row) => {
     const existing = agencyPenalties.find((item) => getPenaltyRowUniqueKey(item) === getPenaltyRowUniqueKey(row));
-    return !existing || !["Approved", "Reduced", "Waived"].includes(existing.status);
+    return !existing || !["Approved", "Reduced", "Cancelled", "Waived"].includes(existing.status);
   });
   if (!actionableRows.length) {
     penaltyAutoSyncRef.current = "";
@@ -20031,7 +20031,7 @@ function getPenaltyRegisterDisplayRows() {
     .filter((item) => !savedKeys.has(getPenaltyRowUniqueKey(item)))
     .map((item) => ({ ...item, status: "Calculated - Not Saved", source: "live" }));
   return [...savedRows, ...liveRows].sort((a, b) => {
-    const statusWeight = { "Agency Objection Submitted": 0, "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Waived: 6 };
+    const statusWeight = { "Agency Objection Submitted": 0, "Justification Submitted": 0, "Pending Review": 1, "Calculated - Not Saved": 2, "Sent to Agency": 3, Approved: 4, Reduced: 5, Cancelled: 6, Waived: 6 };
     return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) || Number(b.calculated_amount || 0) - Number(a.calculated_amount || 0);
   });
 }
@@ -20066,7 +20066,7 @@ async function syncCalculatedPenaltyRegister({ silent = false } = {}) {
     delete payload.penalty_key;
 
     if (existing?.id) {
-      if (["Approved", "Reduced", "Waived"].includes(existing.status)) continue;
+      if (["Approved", "Reduced", "Cancelled", "Waived"].includes(existing.status)) continue;
       const { error } = await supabase
         .from("agency_penalties")
         .update(payload)
@@ -20199,17 +20199,17 @@ async function reduceAndSendPenalty(item) {
 }
 
 async function waivePenalty(item, defaultNote = "") {
-  if (!canApprovePenalties) return alert("You do not have permission to waive penalties.");
+  if (!canApprovePenalties) return alert("You do not have permission to cancel penalties.");
   if (!item?.id) return alert("Please generate the penalty register first.");
-  const note = window.prompt("Reason for waiving this penalty", defaultNote || item.decision_notes || "") || defaultNote || "Waived by management.";
+  const note = window.prompt("Reason for cancelling this penalty", defaultNote || item.decision_notes || "") || defaultNote || "Cancelled by Recruitment Manager.";
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("agency_penalties")
     .update({
-      status: "Waived",
+      status: "Cancelled",
       approved_amount: 0,
       decision_notes: note,
-      final_decision: "Waived",
+      final_decision: "Cancelled",
       final_decision_by: currentUser?.name || currentUser?.email || "Company User",
       final_decision_role: currentRole,
       final_decision_at: now,
@@ -20219,7 +20219,7 @@ async function waivePenalty(item, defaultNote = "") {
     .eq("company_id", currentCompanyId);
   if (error) return alert(error.message);
   try {
-    await sendPenaltyDecisionEmail(item, "Waived", 0, note);
+    await sendPenaltyDecisionEmail(item, "Cancelled", 0, note);
   } catch (emailError) {
     console.warn("Penalty decision email failed", emailError?.message || emailError);
   }
@@ -35087,8 +35087,8 @@ disabled={authorizationWorkflowBusy === "create"}
                         <button className="save-btn" onClick={() => submitPenaltyJustification(item)}>Submit Objection</button>
                       ) : ["Approved", "Reduced"].includes(item.status) ? (
                         <span>Finalized</span>
-                      ) : item.status === "Waived" ? (
-                        <span>Waived</span>
+                      ) : ["Cancelled", "Waived"].includes(item.status) ? (
+                        <span>Cancelled</span>
                       ) : "-"}
                     </td>
                   </tr>
@@ -36252,7 +36252,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <Stat title="Sent to Agency" value={agencyPenalties.filter((x) => x.status === "Sent to Agency").length} />
       <Stat title="Justifications" value={agencyPenalties.filter((x) => ["Justification Submitted", "Agency Objection Submitted"].includes(x.status)).length} className="warning" />
       <Stat title="Approved" value={`${Number(agencyPenalties.filter((x) => ["Approved", "Reduced"].includes(x.status)).reduce((sum, x) => sum + Number(x.approved_amount || 0), 0)).toLocaleString()} SAR`} className="danger" />
-      <Stat title="Waived" value={`${Number(agencyPenalties.filter((x) => x.status === "Waived").reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
+      <Stat title="Cancelled" value={`${Number(agencyPenalties.filter((x) => ["Cancelled", "Waived"].includes(x.status)).reduce((sum, x) => sum + Number(x.calculated_amount || 0), 0)).toLocaleString()} SAR`} className="passed" />
     </div>
 
     <TableCard title="Labor SLA Delay Penalties / Approval Workflow">
@@ -36311,21 +36311,21 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                     <>
                       <button className="save-btn" onClick={() => sendPenaltyToAgency(item)}>Send to Agency</button>
                       <button onClick={() => reduceAndSendPenalty(item)}>Reduce & Send</button>
-                      <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
+                      <button className="danger" onClick={() => waivePenalty(item)}>Cancel</button>
                     </>
                   ) : item.status === "Sent to Agency" ? (
                     <>
                       <button className="save-btn" onClick={() => approveFinalPenalty(item, "No accepted justification received. Final penalty approved.")}>Approve Final</button>
                       <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
-                      <button className="danger" onClick={() => waivePenalty(item)}>Waive</button>
+                      <button className="danger" onClick={() => waivePenalty(item)}>Cancel</button>
                     </>
                   ) : ["Justification Submitted", "Agency Objection Submitted"].includes(item.status) ? (
                     <>
-                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification/objection accepted by company.")}>Accept Justification</button>
+                      <button className="save-btn" onClick={() => waivePenalty(item, "Agency justification/objection accepted by company.")}>Accept Objection & Cancel</button>
                       <button className="danger" onClick={() => approveFinalPenalty(item, "Agency justification/objection rejected by company. Penalty approved.")}>Reject & Approve</button>
                       <button onClick={() => reduceFinalPenalty(item)}>Reduce Final</button>
                     </>
-                  ) : ["Approved", "Reduced", "Waived"].includes(item.status) ? (
+                  ) : ["Approved", "Reduced", "Cancelled", "Waived"].includes(item.status) ? (
                     <span>Final</span>
                   ) : "-"}
                   {item.source !== "live" && <button className="danger" onClick={() => deletePenaltyRecord(item)}>Delete</button>}
