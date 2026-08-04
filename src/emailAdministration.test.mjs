@@ -26,3 +26,14 @@ test("Email Logs is a sidebar page with required columns and no browser mutation
   assert.match(app, /currentRole !== "Agency"[\s\S]{0,120}"Email Logs"/);
   assert.doesNotMatch(app, /from\("email_logs"\)[\s\S]{0,160}\.(?:insert|update|upsert|delete)\(/);
 });
+
+test("email log consistency migration clears stale failures from sent rows", async () => {
+  const migration = await readFile(
+    new URL("../supabase/migrations/20260805000100_fix_email_log_status_consistency.sql", import.meta.url),
+    "utf8"
+  );
+  assert.match(migration, /where lower\(coalesce\(status, ''\)\) = 'sent'/);
+  assert.match(migration, /error_message = null/);
+  assert.match(migration, /sent_at = coalesce\(sent_at, created_at\)/);
+  assert.match(migration, /lower\(coalesce\(log\.status, ''\)\) = 'failed'/);
+});
