@@ -11,6 +11,7 @@ const portalBehaviorTestUrl = new URL("../supabase/tests/visaflow_interview_port
 const commanderFunctionUrl = new URL("../supabase/functions/visaflow-ai-commander/index.ts", import.meta.url);
 const aiAgentFunctionUrl = new URL("../supabase/functions/visaflow-ai-agent-action/index.ts", import.meta.url);
 const invitationWorkerUrl = new URL("../supabase/functions/ai-interview-invitation-worker/index.ts", import.meta.url);
+const invitationSchedulerUrl = new URL("../supabase/migrations/20260805000100_schedule_ai_interview_invitations.sql", import.meta.url);
 const finalizationMigrationUrl = new URL("../supabase/migrations/20260722000100_visaflow_security_finalization.sql", import.meta.url);
 const sharedEdgeSecurityUrl = new URL("../supabase/functions/_shared/visaflow-security.ts", import.meta.url);
 const mediaFinalizeUrl = new URL("../supabase/functions/interview-media-finalize/index.ts", import.meta.url);
@@ -159,6 +160,18 @@ test("campaign invitation worker is secret-gated and uses service-only queue con
   assert.doesNotMatch(worker, /console\.(?:log|warn|error)/);
   assert.match(sql, /revoke execute on function public\.claim_ai_interview_invitation_jobs[\s\S]*from public, anon, authenticated/);
   assert.match(sql, /grant execute on function public\.claim_ai_interview_invitation_jobs[\s\S]*to service_role/);
+});
+
+test("campaign launch triggers the invitation worker without exposing its secret to the browser", async () => {
+  const [app, scheduler] = await Promise.all([readFile(appUrl, "utf8"), readFile(invitationSchedulerUrl, "utf8")]);
+  assert.match(app, /trigger_ai_interview_invitation_worker/);
+  assert.doesNotMatch(app, /x-visaflow-worker-secret/);
+  assert.match(scheduler, /security definer/);
+  assert.match(scheduler, /u\.auth_user_id = auth\.uid\(\)/);
+  assert.match(scheduler, /c\.company_id = v_company_id/);
+  assert.match(scheduler, /vault\.decrypted_secrets/);
+  assert.match(scheduler, /revoke all on function public\.trigger_ai_interview_invitation_worker\(uuid\) from public, anon/);
+  assert.match(scheduler, /grant execute on function public\.trigger_ai_interview_invitation_worker\(uuid\) to authenticated/);
 });
 
 test("the final migration cannot be superseded by historical compatibility grants", async () => {
