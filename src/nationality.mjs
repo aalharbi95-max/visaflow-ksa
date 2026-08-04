@@ -30,11 +30,14 @@ export function resolveCanonicalNationality(value, countries = []) {
   const exact = countries.find((country) => countryValues(country)
     .some((candidate) => normalizeNationalityKey(candidate) === key));
   if (exact) return getCanonicalNationality(exact);
-  const matches = countries.filter((country) => countryValues(country).some((candidate) => {
-    const candidateKey = normalizeNationalityKey(candidate);
-    return candidateKey && key.includes(candidateKey);
-  }));
-  return matches.length === 1 ? getCanonicalNationality(matches[0]) : "";
+  const canonicalMatches = new Set(countries.flatMap((country) => {
+    const containsKnownValue = countryValues(country).some((candidate) => {
+      const candidateKey = normalizeNationalityKey(candidate);
+      return candidateKey && key.includes(candidateKey);
+    });
+    return containsKnownValue ? [getCanonicalNationality(country)] : [];
+  }).filter(Boolean));
+  return canonicalMatches.size === 1 ? Array.from(canonicalMatches)[0] : "";
 }
 
 export function buildNationalityOptions(countries = []) {

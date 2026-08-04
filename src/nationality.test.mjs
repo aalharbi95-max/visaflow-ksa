@@ -14,6 +14,16 @@ test("nationality aliases resolve to one stable stored value", () => {
   }
 });
 
+test("duplicate country rows still resolve composite nationality labels", () => {
+  const duplicatedPhilippines = [
+    { id: 10, iso_code: "PH", name: "Philippines", nationality: "Filipino", active: true },
+    { id: 11, iso_code: "PH", name: "Philippines", nationality: "Filipino", active: true },
+  ];
+
+  assert.equal(resolveCanonicalNationality("Filipino (Philippines)", duplicatedPhilippines), "Filipino");
+  assert.equal(nationalitiesMatch("Filipino (Philippines)", "Filipino", duplicatedPhilippines), true);
+});
+
 test("nationality options expose bilingual labels but canonical values", () => {
   assert.deepEqual(buildNationalityOptions(countries)[0], {
     value: "Indian", label: "هندي — Indian — الهند — India",
