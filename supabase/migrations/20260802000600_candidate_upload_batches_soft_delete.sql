@@ -61,7 +61,17 @@ from public.candidate_upload_batches b
 where c.upload_batch_id is null
   and c.company_id = b.company_id
   and c.created_at = b.created_at
-  and coalesce(c.agency, '') = coalesce(b.agency_name, '');
+  and coalesce(c.agency, '') = coalesce(b.agency_name, '')
+  and (
+    not (
+      lower(coalesce(c.nationality, '')) like '%saudi%'
+      or coalesce(c.nationality, '') like '%سعود%'
+    )
+    or (
+      nullif(btrim(coalesce(c.civil_id_no, '')), '') is not null
+      and c.civil_id_expiry_date is not null
+    )
+  );
 
 alter table public.candidate_upload_batches enable row level security;
 revoke all on public.candidate_upload_batches from public, anon, authenticated;
