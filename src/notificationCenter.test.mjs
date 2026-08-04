@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   filterNotificationCenterRows,
@@ -49,4 +50,15 @@ test("selection stays on the requested message and falls back to the first visib
   assert.equal(selectNotification(rows, "old").id, "old");
   assert.equal(selectNotification(rows, "missing").id, "new");
   assert.equal(selectNotification([], "missing"), null);
+});
+
+test("redeployment confirmation is an allowed notification and partial success stays visible", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260804000500_allow_redeployment_confirmed_notification.sql", import.meta.url), "utf8");
+  const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+
+  assert.match(migration, /notification_event_mutate_legacy_20260802/);
+  assert.match(migration, /REDEPLOYMENT_CONFIRMED/);
+  assert.match(migration, /pg_get_functiondef/);
+  assert.match(app, /let redeploymentNotificationWarning = ""/);
+  assert.match(app, /Notification Center could not record the confirmation/);
 });

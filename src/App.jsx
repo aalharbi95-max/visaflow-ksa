@@ -18596,6 +18596,8 @@ async function confirmRedeployment(item) {
     return alert(`Redeployment was not confirmed and the employee change was rolled back: ${demobilizationResult.error.message}`);
   }
 
+  let redeploymentNotificationWarning = "";
+
   if (secureLogFeaturesAvailable) {
     try {
       await triggerExternalNotification("REDEPLOYMENT_CONFIRMED", {
@@ -18612,11 +18614,12 @@ async function confirmRedeployment(item) {
       });
     } catch (notificationError) {
       console.error("Redeployment notification failed", notificationError);
+      redeploymentNotificationWarning = " The employee and demobilization records were updated, but Notification Center could not record the confirmation.";
     }
   }
 
   await Promise.all([loadEmployees(), loadDemobilizations(), loadNotifications()]);
-  alert(`Redeployment confirmed. ${item.employee_name} is now assigned to ${item.suggested_project}.`);
+  alert(`Redeployment confirmed. ${item.employee_name} is now assigned to ${item.suggested_project}.${redeploymentNotificationWarning}`);
 }
 
 
