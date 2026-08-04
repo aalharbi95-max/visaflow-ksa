@@ -10,7 +10,7 @@ Test prefix: `QA-20260804`
 
 The application builds successfully, the automated suite passes, all company-side navigation screens are reachable, the core request-to-authorization path works, and the agency account is UI-isolated to its authorized workspace pages.
 
-The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. The release remains unsuitable for Production approval until the AI Interview permission errors and the remaining notification-delivery findings are resolved.
+The isolated Staging lifecycle is now proven from agency candidate creation through mobilization, arrival, joining, 90-day validation, employee conversion, demobilization, and Workforce Marketplace availability. AI Interview template, campaign, candidate-validation, and queue-read permissions are now proven on stable Staging. The release remains unsuitable for Production approval until the remaining notification-delivery findings and untested outbound AI invitation launch are resolved.
 
 ## Verified successfully
 
@@ -37,30 +37,36 @@ The isolated Staging lifecycle is now proven from agency candidate creation thro
 - Live redeployment matching correctly rejected the two open requests because one had a different profession/nationality and the other required a different gender. The `Use` action remains covered by automated matching tests but was not presented in this live no-match case.
 - Workspace horizontal overflow was contained and wide operational tables now scroll within their cards; primary form actions remain visible.
 - Mobilization and Demobilization saves now show inline progress, success, warning, and database error feedback instead of opaque alerts.
+- AI Interview template creation no longer stops when the undeployed dedicated generator is unavailable. A guarded bilingual fallback creates a transparent `Pending Review` template and never activates it automatically.
+- QA template `QA-20260804 AI Interview Template` was created with 10 bilingual questions, a verified 100% total weight, published by the Company Admin, and locked after approval.
+- QA campaign `QA-20260804 AI Interview Campaign` was created with a default seven-day deadline. One QA candidate was added and revalidated as `Valid`, moving the campaign to `Ready`.
+- `ai_interview_campaigns` insert, `ai_interview_campaign_candidates` insert/revalidation, and `ai_interview_invitation_jobs` read access were verified without the previous `permission denied for table users` diagnostics.
+- The campaign was intentionally not launched, so no invitation job or external email was created during this test.
 
 ## Findings requiring follow-up
 
 ### High
 
-1. AI Interview permissions
-   - Browser diagnostics repeatedly report `permission denied for table users` for `ai_interview_campaigns`, `ai_interview_campaign_candidates`, and `ai_interview_invitation_jobs`.
-   - Impact: AI Interview Center data may be incomplete or unusable for otherwise authorized company users.
-
-2. Environment/link confusion
+1. Environment/link confusion
    - `visaflow-ksa-gc5t.vercel.app` was serving an older deployment and a different dataset from the isolated Staging project.
    - The supported QA URL is now `visaflow-ksa-staging.vercel.app`.
    - The old link should be clearly labelled Preview or retired to prevent tests being performed against the wrong data source.
 
 ### Medium
 
-3. Candidate save feedback and notification isolation
+2. Candidate save feedback and notification isolation
    - Agency candidate persistence succeeded, but the secondary `notification_events` insert returned `agency_company_access_denied`, leaving the form uncleared and making the successful save look failed.
    - The UI now treats candidate persistence as the primary result, catches notification queue failure, reloads the data, and shows a non-blocking success/warning message.
    - The underlying notification policy/recipient design still requires review so an agency-originated candidate event reaches the intended company recipients.
 
-4. Agency notification proof
+3. Agency notification proof
    - On the older preview dataset, the selected agency notification did not appear in Notification Center after sending.
    - Re-run this on the stable isolated Staging URL and verify three outputs: notification row, agency visibility, and email log status.
+
+4. AI Interview outbound launch
+   - Template approval, campaign creation, candidate insert/revalidation, and queue reads are verified.
+   - Campaign launch and invitation delivery remain intentionally untested to avoid sending an external QA email without a dedicated controlled recipient.
+   - The dedicated `generate-ai-interview-template` Edge Function is not present in the repository/deployment. The guarded fallback keeps the workflow usable, but the real AI generator should still be implemented and deployed before Production.
 
 5. Searchable select usability
    - Typing a profession or nationality is not enough; the user must click a matching suggestion.
