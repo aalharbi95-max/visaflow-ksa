@@ -33765,12 +33765,6 @@ disabled={authorizationWorkflowBusy === "create"}
 <Input type="number" placeholder="KSA Medical Cost" value={candidateForm.medical_ksa_cost} onChange={(v) => updateForm(setCandidateForm, "medical_ksa_cost", v)} />
 <Select value={candidateForm.contract_status || "Pending"} onChange={(v) => updateForm(setCandidateForm, "contract_status", v)} placeholder="Contract Status" options={["Pending", "Sent", "Signed"]} />
 <Input placeholder="Contract URL" value={candidateForm.contract_url} onChange={(v) => updateForm(setCandidateForm, "contract_url", v)} />
-<Input type="number" placeholder="Visa Fees" value={candidateForm.visa_fees} onChange={(v) => updateForm(setCandidateForm, "visa_fees", v)} />
-<Input type="number" placeholder="Agency Commission" value={candidateForm.agency_commission} onChange={(v) => updateForm(setCandidateForm, "agency_commission", v)} />
-<Input type="number" placeholder="Ticket Cost" value={candidateForm.ticket_cost} onChange={(v) => updateForm(setCandidateForm, "ticket_cost", v)} />
-<Input type="number" placeholder="KSA Medical Cost" value={candidateForm.medical_ksa_cost} onChange={(v) => updateForm(setCandidateForm, "medical_ksa_cost", v)} />
-<Select value={candidateForm.contract_status || "Pending"} onChange={(v) => updateForm(setCandidateForm, "contract_status", v)} placeholder="Contract Status" options={["Pending", "Sent", "Signed"]} />
-<Input placeholder="Contract URL" value={candidateForm.contract_url} onChange={(v) => updateForm(setCandidateForm, "contract_url", v)} />
 </>
 )}
                 <Select value={candidateForm.status} onChange={(v) => updateForm(setCandidateForm, "status", v)} placeholder="Status" options={CANDIDATE_STATUSES} />
