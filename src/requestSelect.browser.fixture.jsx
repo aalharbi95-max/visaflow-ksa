@@ -4,7 +4,11 @@ import { createRoot } from "react-dom/client";
 import RequestLineCustomFields from "./RequestLineCustomFields";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const toBase64 = (value) => btoa(unescape(encodeURIComponent(value)));
+const toBase64 = (value) => btoa(String(value).replace(/[^\x00-\x7F]/g, (character) =>
+  `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`
+));
+const engineerProfession = `${[0x645, 0x647, 0x646, 0x62f, 0x633].map((code) => String.fromCharCode(code)).join("")} - Engineer`;
+const accountantProfession = `${[0x645, 0x62d, 0x627, 0x633, 0x628].map((code) => String.fromCharCode(code)).join("")} - Accountant`;
 
 function setInputValue(input, value) {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -27,8 +31,8 @@ function RequestLineHarness() {
         value={line}
         onFieldChange={(field, value) => setLine((previous) => ({ ...previous, [field]: value }))}
         professionOptions={[
-          { value: "مهندس - Engineer", label: "مهندس - Engineer" },
-          { value: "محاسب - Accountant", label: "محاسب - Accountant" },
+          { value: engineerProfession, label: engineerProfession },
+          { value: accountantProfession, label: accountantProfession },
         ]}
         nationalityOptions={[
           { value: "Saudi", label: "سعودي — Saudi" },
@@ -90,7 +94,7 @@ async function runScenario() {
     const otherFieldsPreserved = gender.value === "Female" && quantity.value === "3";
 
     setInputValue(profession, "Eng");
-    const engineerOption = document.querySelector('[data-select-option="مهندس - Engineer"]');
+    const engineerOption = document.querySelector(`[data-select-option="${engineerProfession}"]`);
     engineerOption.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await delay(0);
     const optionSelectionWorked = profession.value.includes("Engineer") && nationality.value.includes("Indian");
