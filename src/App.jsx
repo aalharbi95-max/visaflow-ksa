@@ -6292,6 +6292,7 @@ const [workspaceAuthReady, setWorkspaceAuthReady] = useState(
 const [validatedWorkspaceKey, setValidatedWorkspaceKey] = useState("");
 const workspaceAuthSequenceRef = useRef(0);
 const workspaceDataGenerationRef = useRef(0);
+const requestMasterDataLoadRef = useRef({ key: "", promise: null });
 const legacyWorkspaceActiveRef = useRef(false);
 const currentWorkspaceUserRef = useRef(null);
 const workspaceAuthReadyRef = useRef(false);
@@ -8204,6 +8205,7 @@ Cancel = إضافتها كوظيفة مستقلة`
 
   function clearTenantSensitiveState() {
     workspaceDataGenerationRef.current += 1;
+    requestMasterDataLoadRef.current = { key: "", promise: null };
     setRequests([]);
     setRequestLines([]);
     setVisaRecords([]);
@@ -8228,6 +8230,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     setPenaltyAgencyForm({ penaltyId: "", mode: "justification", reason: "", file: null, busy: false, message: "", error: "" });
     setCountries([]);
     setProfessions([]);
+    setRequestMasterDataLoading(false);
     setRequestMasterDataError("");
     setMarketplaceRequests([]);
     setMarketplaceDeals([]);
@@ -8345,8 +8348,6 @@ Cancel = إضافتها كوظيفة مستقلة`
     }
     setLoading(true);
     setWorkspaceDataReady(false);
-    setRequestMasterDataLoading(true);
-    setRequestMasterDataError("");
     try {
       const results = await Promise.allSettled([
       loadRequests(),
@@ -8408,7 +8409,6 @@ Cancel = إضافتها كوظيفة مستقلة`
       }
     } finally {
       setWorkspaceDataReady(true);
-      setRequestMasterDataLoading(false);
       setLoading(false);
     }
   }
@@ -8870,49 +8870,72 @@ console.log("professions total", allProfessions.length);
 setProfessions(allProfessions);
 };
 
-async function loadRequestMasterData() {
+async function loadRequestMasterData({ force = false } = {}) {
   const requestGeneration = workspaceDataGenerationRef.current;
   const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
-  let countriesResult;
-  let professionsResult;
   const isCurrentWorkspace = () => (
     requestGeneration === workspaceDataGenerationRef.current
     && requestWorkspaceKey === validatedWorkspaceKey
   );
-  try {
-    [countriesResult, professionsResult] = await Promise.all([
-      supabase.from("countries").select("*").range(0, 5000),
-      loadAllProfessionPages(supabase, { isCurrentWorkspace }),
-    ]);
-  } catch (error) {
-    if (isCurrentWorkspace()) {
+
+  if (!requestWorkspaceKey || !isCurrentWorkspace()) return [];
+
+  const currentLoad = requestMasterDataLoadRef.current;
+  if (!force && currentLoad.key === requestWorkspaceKey && currentLoad.promise) {
+    return currentLoad.promise;
+  }
+
+  const loadPromise = (async () => {
+    setRequestMasterDataLoading(true);
+    setRequestMasterDataError("");
+
+    let countriesResult;
+    let professionsResult;
+    try {
+      [countriesResult, professionsResult] = await Promise.all([
+        supabase.from("countries").select("*").range(0, 5000),
+        loadAllProfessionPages(supabase, { isCurrentWorkspace }),
+      ]);
+    } catch (error) {
+      if (isCurrentWorkspace()) {
+        setCountries([]);
+        setProfessions([]);
+        setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error?.message || error}`);
+      }
+      return [];
+    }
+
+    if (!isCurrentWorkspace() || professionsResult.cancelled) return [];
+
+    const error = countriesResult.error || professionsResult.error;
+    if (error) {
       setCountries([]);
       setProfessions([]);
-      setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error?.message || error}`);
+      setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error.message}`);
+      return [];
     }
-    return [];
-  }
 
-  if (!isCurrentWorkspace() || professionsResult.cancelled) return [];
+    const nextCountries = countriesResult.data || [];
+    const nextProfessions = professionsResult.data || [];
+    setCountries(nextCountries);
+    setProfessions(nextProfessions);
+    if (!buildProfessionOptions(nextProfessions).length || !buildNationalityOptions(nextCountries).length) {
+      setRequestMasterDataError("Approved professions or nationalities are unavailable for this workspace. Please contact support.");
+      return [];
+    }
+    setRequestMasterDataError("");
+    return [nextCountries, nextProfessions];
+  })();
 
-  const error = countriesResult.error || professionsResult.error;
-  if (error) {
-    setCountries([]);
-    setProfessions([]);
-    setRequestMasterDataError(`Unable to load approved professions and nationalities: ${error.message}`);
-    return [];
+  requestMasterDataLoadRef.current = { key: requestWorkspaceKey, promise: loadPromise };
+  try {
+    return await loadPromise;
+  } finally {
+    if (requestMasterDataLoadRef.current.promise === loadPromise) {
+      requestMasterDataLoadRef.current = { key: requestWorkspaceKey, promise: null };
+      if (isCurrentWorkspace()) setRequestMasterDataLoading(false);
+    }
   }
-
-  const nextCountries = countriesResult.data || [];
-  const nextProfessions = professionsResult.data || [];
-  setCountries(nextCountries);
-  setProfessions(nextProfessions);
-  if (!buildProfessionOptions(nextProfessions).length || !buildNationalityOptions(nextCountries).length) {
-    setRequestMasterDataError("Approved professions or nationalities are unavailable for this workspace. Please contact support.");
-    return [];
-  }
-  setRequestMasterDataError("");
-  return [nextCountries, nextProfessions];
 }
 
 async function loadProfessionAliases() {
@@ -10565,6 +10588,31 @@ useEffect(() => {
   currentCompanyId,
   workspaceAuthReady,
   validatedWorkspaceKey,
+]);
+
+useEffect(() => {
+  if (
+    activePage !== "Requests" ||
+    !currentUser ||
+    !workspaceAuthReady ||
+    validatedWorkspaceKey !== getWorkspaceIdentityKey(currentUser) ||
+    requestMasterDataLoading ||
+    requestMasterDataError ||
+    (buildProfessionOptions(professions).length && buildNationalityOptions(countries).length)
+  ) return;
+
+  loadRequestMasterData({ force: true });
+}, [
+  activePage,
+  currentUser?.id,
+  currentUser?.auth_user_id,
+  currentCompanyId,
+  workspaceAuthReady,
+  validatedWorkspaceKey,
+  requestMasterDataLoading,
+  requestMasterDataError,
+  countries.length,
+  professions.length,
 ]);
 
 useEffect(() => {

@@ -74,8 +74,8 @@ function recordResult(result) {
 
 async function runScenario() {
   try {
-    const profession = document.querySelector('input[placeholder="Profession"]');
-    const nationality = document.querySelector('input[placeholder="Nationality / الجنسية"]');
+    const profession = document.querySelector("#request-line-profession");
+    const nationality = document.querySelector("#request-line-nationality");
     const gender = document.querySelector('input[aria-label="Gender"]');
     const quantity = document.querySelector('input[aria-label="Quantity"]');
 
@@ -118,6 +118,10 @@ async function runScenario() {
       otherFieldsPreserved,
       optionSelectionWorked,
       keyboardSelectionWorked,
+      accessibleComboboxes: profession.getAttribute("role") === "combobox"
+        && nationality.getAttribute("role") === "combobox"
+        && Boolean(document.querySelector('label[for="request-line-profession"]'))
+        && Boolean(document.querySelector('label[for="request-line-nationality"]')),
       payload,
     });
   } catch (error) {
