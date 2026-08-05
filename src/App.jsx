@@ -21,6 +21,13 @@ import {
   loadAuthenticatedWorkspaceContext,
 } from "./workspaceContext.mjs";
 import {
+  buildCompanyUserMutation,
+  COMPANY_USER_ROLES,
+  getCompanyUserManagerError,
+  invokeCompanyUserManager,
+  sendCompanyUserSetupEmail,
+} from "./companyUserManagement.mjs";
+import {
   getCompanyAdminPages,
   getWorkspaceRoleLabel,
   normalizeWorkspaceRole,
@@ -6010,6 +6017,7 @@ const [emailSettingsForm, setEmailSettingsForm] = useState(emptyCompanyEmailSett
 const [emailSettingsLoading, setEmailSettingsLoading] = useState(false);
 const [emailSettingsMessage, setEmailSettingsMessage] = useState("");
 const [userEditingId, setUserEditingId] = useState(null);
+const [userManagementLoading, setUserManagementLoading] = useState(false);
 const [userForm, setUserForm] = useState({
   name: "",
   email: "",
@@ -6804,7 +6812,7 @@ const canManagePlatformSupport = [
 ].includes(currentRole);
 
 const canManageUsers =
-  currentRole === "Admin" || canManagePlatformAccounts;
+  ["Admin", "Company Admin"].includes(currentRole) || canManagePlatformAccounts;
 const canAdministerCompanySettings =
   ["Admin", "Company Admin"].includes(currentRole) || isPlatformOwner;
 const canManagePermissions = currentRole === "Admin";
@@ -13571,7 +13579,44 @@ function cancelCompanyEdit() {
   });
 }
 async function saveUser() {
-  alert("User management is temporarily restricted during the security migration.");
+  if (activePage === "Platform Users") {
+    return alert("Platform user management remains restricted. Company invitations are available from Users Management.");
+  }
+  if (!["Admin", "Company Admin"].includes(currentRole)) {
+    return alert("You do not have permission to manage company users.");
+  }
+  if (userManagementLoading) return;
+
+  let payload;
+  try {
+    payload = buildCompanyUserMutation(userForm, userEditingId);
+  } catch (error) {
+    return alert(error.message);
+  }
+
+  setUserManagementLoading(true);
+  try {
+    const result = await invokeCompanyUserManager(supabase, payload);
+    const invitedEmail = result?.user?.email || payload.email;
+    const wasInvitation = payload.action === "invite_user";
+    resetUserEditingState();
+    await loadUsers();
+
+    if (wasInvitation) {
+      try {
+        await sendCompanyUserSetupEmail(supabase, invitedEmail);
+        alert(`User created and a secure password setup invitation was sent to ${invitedEmail}.`);
+      } catch (emailError) {
+        alert(getCompanyUserManagerError(emailError));
+      }
+    } else {
+      alert("User updated successfully.");
+    }
+  } catch (error) {
+    alert(getCompanyUserManagerError(error));
+  } finally {
+    setUserManagementLoading(false);
+  }
 }
 
 async function saveAgency() {
@@ -13833,7 +13878,34 @@ async function unlinkExistingAgency(item) {
 }
 
 async function deleteUser(id) {
-  alert("User management is temporarily restricted during the security migration.");
+  if (userManagementLoading) return;
+  const target = users.find((user) => String(user.id) === String(id));
+  if (!target || isPlatformRole(target.role) || target.role === "Agency") return;
+  if (!window.confirm(`Deactivate ${target.name || target.email}?\n\nThe account will no longer be able to sign in.`)) return;
+  setUserManagementLoading(true);
+  try {
+    await invokeCompanyUserManager(supabase, { action: "deactivate_user", user_id: String(id) });
+    resetUserEditingState();
+    await loadUsers();
+    alert("User account deactivated successfully.");
+  } catch (error) {
+    alert(getCompanyUserManagerError(error));
+  } finally {
+    setUserManagementLoading(false);
+  }
+}
+
+async function resendCompanyUserInvitation(user) {
+  if (!user?.email || userManagementLoading || isPlatformRole(user.role) || user.role === "Agency") return;
+  setUserManagementLoading(true);
+  try {
+    await sendCompanyUserSetupEmail(supabase, user.email);
+    alert(`A new secure password setup link was sent to ${user.email}.`);
+  } catch (error) {
+    alert(getCompanyUserManagerError(error));
+  } finally {
+    setUserManagementLoading(false);
+  }
 }
 
 function getAgreementTemplateDefaults(templateType) {
@@ -37147,12 +37219,11 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
 {activePage === "Users Management" && canManageUsers && (
   <>
-    <FormCard title={userEditingId ? "Edit User" : "Add User"}>
-      <p style={{ padding: "12px", borderRadius: "10px", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>
-        User management is temporarily restricted during the security migration.<br />
-        إدارة المستخدمين مقيدة مؤقتًا أثناء الترحيل الأمني.
+    <FormCard title={userEditingId ? "Edit Company User" : "Invite Company User"}>
+      <p style={{ padding: "12px", borderRadius: "10px", background: "#ecfdf5", color: "#166534", fontWeight: 700 }}>
+        New users receive a secure email link to create their own password. Passwords are never stored in the application database.<br />
+        يتلقى المستخدم الجديد رابطًا آمنًا عبر البريد لإنشاء كلمة المرور بنفسه، ولا تُحفظ كلمات المرور داخل قاعدة بيانات التطبيق.
       </p>
-      <fieldset disabled style={{ border: 0, padding: 0, margin: 0, opacity: 0.55, cursor: "not-allowed" }}>
       <div className="form-grid">
         <Input
           placeholder="Full Name"
@@ -37165,17 +37236,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         <Input
           placeholder="Email"
           value={userForm?.email || ""}
+          disabled={Boolean(userEditingId)}
           onChange={(v) =>
             setUserForm((p) => ({ ...p, email: v }))
-          }
-        />
-
-        <Input
-          type="password"
-          placeholder={userEditingId ? "New Password (leave blank to keep current)" : "Password"}
-          value={userForm?.password || ""}
-          onChange={(v) =>
-            setUserForm((p) => ({ ...p, password: v }))
           }
         />
 
@@ -37189,25 +37252,9 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               agency_name: v === "Agency" ? p.agency_name : "",
             }))
           }
-          options={CLIENT_ROLE_OPTIONS}
+          options={COMPANY_USER_ROLES}
           placeholder="Role"
         />
-
-        {userForm?.role === "Agency" && (
-          <Select
-            value={userForm?.agency_name || ""}
-            onChange={(v) => {
-              const selectedAgency = agencies.find((agency) => agency.name === v);
-              setUserForm((p) => ({
-                ...p,
-                agency_id: selectedAgency?.id || "",
-                agency_name: selectedAgency?.name || v || "",
-              }));
-            }}
-            options={(agencies || []).map((agency) => agency.name).filter(Boolean)}
-            placeholder="Select Agency"
-          />
-        )}
 
         <Select
           value={userForm?.status || "Active"}
@@ -37222,9 +37269,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       <div className="actions-line">
    <button
   className="save-btn"
+  disabled={userManagementLoading}
   onClick={saveUser}
 >
-  {userForm.role === "Agency" ? (userEditingId ? "Update Agency Access" : "Grant Agency Access") : (userEditingId ? "Update User" : "Save User")}
+  {userManagementLoading ? "Processing securely..." : userEditingId ? "Update User" : "Send Invitation"}
 </button>
 {userEditingId && (
   <button
@@ -37235,7 +37283,6 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
   </button>
 )}
       </div>
-      </fieldset>
     </FormCard>
 
     <TableCard title="Users List">
@@ -37252,7 +37299,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         </thead>
 
         <tbody>
-          {(users || []).filter((user) => !isPlatformRole(user.role)).map((user) => (
+          {(users || []).filter((user) => !isPlatformRole(user.role) && user.role !== "Agency").map((user) => (
             <tr key={user.id}>
               <td>{user.name}</td>
               <td>{user.email}</td>
@@ -37260,11 +37307,14 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
               <td>{user.role === "Agency" ? (user.agency_name || "Not Linked") : "-"}</td>
               <td>{user.status}</td>
               <td>
-  <button className="small-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
+  <button className="small-btn" disabled={userManagementLoading} onClick={() => editUser(user)}>
     Edit
   </button>
-  <button className="danger-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
-    Delete
+  <button className="small-btn" disabled={userManagementLoading || !user.auth_user_id} onClick={() => resendCompanyUserInvitation(user)}>
+    Resend Invitation
+  </button>
+  <button className="danger-btn" disabled={userManagementLoading || String(user.status).toLowerCase() !== "active"} onClick={() => deleteUser(user.id)}>
+    Deactivate
   </button>
 </td>
             </tr>
