@@ -297,6 +297,12 @@ begin
     'profile_completed', count(*) filter (where candidate.submitted_at is not null),
     'ai_analyzed', count(*) filter (where candidate.ai_cv_status = 'Completed'),
     'approved', count(*) filter (where candidate.marketplace_status = 'Approved' and candidate.employer_sharing_consent is true),
+    'published', count(*) filter (
+      where candidate.marketplace_status = 'Approved'
+        and candidate.is_verified is true
+        and candidate.published_at is not null
+        and candidate.employer_sharing_consent is true
+    ),
     'latest_profiles', v_latest_profiles,
     'distributions', jsonb_build_object(
       'country_of_residence', v_country_distribution,
