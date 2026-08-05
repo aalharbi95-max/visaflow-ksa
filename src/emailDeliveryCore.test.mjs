@@ -6,6 +6,7 @@ import { ensureQueuedEmailAttempt, markEmailAttemptFailed } from "../supabase/fu
 import { cleanContractInputVariables, validateSupabaseInvitationUrl } from "../supabase/functions/_shared/emailVariableValidation.mjs";
 import { acquireEmailDispatch, isValidInternalHandoff } from "../supabase/functions/_shared/emailDispatchState.mjs";
 import { renderAgencyInvitationEmail } from "../supabase/functions/_shared/agencyInvitationEmail.mjs";
+import { renderPlatformCompanyInvitationEmail } from "../supabase/functions/_shared/platformCompanyInvitationEmail.mjs";
 
 test("transport test double receives the final provider payload", async () => {
   let received;
@@ -77,6 +78,33 @@ test("agency invitation email uses a bilingual CTA and never displays the raw to
   assert.doesNotMatch(rendered.text, /raw-secret-token|auth\/v1\/verify/);
   const visibleHtml = rendered.html.replace(/<[^>]+>/g, " ");
   assert.doesNotMatch(visibleHtml, /raw-secret-token|auth\/v1\/verify/);
+});
+
+test("company onboarding is one bilingual email with details and a secure activation CTA", () => {
+  const actionUrl = "https://production-ref.supabase.co/auth/v1/verify?token=company-secret&type=recovery";
+  const rendered = renderPlatformCompanyInvitationEmail({
+    companyName: "Example Company",
+    adminEmail: "admin@example.com",
+    actionUrl,
+    loginUrl: "https://visaflowksa.com/",
+  });
+  assert.match(rendered.subject, /Activate Your VisaFlow Company Account/);
+  assert.match(rendered.html, /Example Company/);
+  assert.match(rendered.html, /admin@example\.com/);
+  assert.match(rendered.html, /Activate Account &amp; Create Password/);
+  assert.match(rendered.html, /تفعيل الحساب وإنشاء كلمة المرور/);
+  assert.doesNotMatch(rendered.text, /company-secret|auth\/v1\/verify/);
+  const visibleHtml = rendered.html.replace(/<[^>]+>/g, " ");
+  assert.doesNotMatch(visibleHtml, /company-secret|auth\/v1\/verify/);
+});
+
+test("company invitation dispatcher generates the recovery link on the server", async () => {
+  const dispatcher = await readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8");
+  assert.match(dispatcher, /PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL[\s\S]*renderPlatformCompanyInvitationEmail/);
+  assert.match(dispatcher, /type:\s*"recovery"/);
+  assert.match(dispatcher, /workspace_recovery:\s*"1"/);
+  assert.match(dispatcher, /actionUrl\.pathname !== "\/auth\/v1\/verify"/);
+  assert.doesNotMatch(dispatcher, /password[^\n]*variables/i);
 });
 
 test("email idempotency ignores recipient order", () => {

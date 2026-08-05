@@ -25133,10 +25133,14 @@ async function sendPlatformClientLoginDetails(client) {
   if (!confirmed) return;
 
   try {
-    await sendCompanyUserSetupEmail(supabase, primaryAdmin.email);
-    alert(`A secure password setup link was sent to ${primaryAdmin.email}.`);
+    await dispatchVisaFlowEmail({
+      type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+      identifiers: { target_user_id: primaryAdmin.id },
+    });
+    if (canViewEmailAdministration) await loadEmailLogs();
+    alert(`One company invitation with account details and a secure activation link was sent to ${primaryAdmin.email}.`);
   } catch (error) {
-    alert(`Password setup email failed: ${getCompanyUserManagerError(error)}`);
+    alert(`Company invitation email failed: ${error.message}`);
   }
 }
 
@@ -25741,8 +25745,8 @@ async function savePlatformClient() {
   if (isNewCompany || adminFieldsStarted) {
     if (!adminName) return alert("Primary Admin Name is required.");
     if (!adminEmail) return alert("Primary Admin Email is required.");
-    if (!adminPassword) return alert("Temporary Password is required.");
-    if (adminPassword.length < 8) return alert("Temporary Password must be at least 8 characters.");
+    if (!adminPassword) return alert("Initial Provisioning Password is required.");
+    if (adminPassword.length < 8) return alert("Initial Provisioning Password must be at least 8 characters.");
   }
 
   const companyPayload = {
@@ -25767,7 +25771,7 @@ async function savePlatformClient() {
       // public.users link as one protected provisioning workflow. If any step
       // fails, it removes the records already created instead of leaving an
       // incomplete company in the portfolio.
-      await invokePlatformCompanyProvisioner({
+      const provisionedCompany = await invokePlatformCompanyProvisioner({
         action: "create_company",
         ...companyPayload,
         admin_name: adminName,
@@ -25776,12 +25780,17 @@ async function savePlatformClient() {
         admin_role: adminRole,
       });
 
-      // Never disclose the provisioning password by email. Send the new
-      // administrator a one-time recovery link so they can choose their own
-      // password before using the workspace.
+      // Send one branded message that contains the company details and a
+      // server-generated, time-limited activation link. The password is never
+      // exposed to the browser email payload or included in the message.
       let setupEmailSent = true;
       try {
-        await sendCompanyUserSetupEmail(supabase, adminEmail);
+        const targetUserId = provisionedCompany?.user?.id;
+        if (!targetUserId) throw new Error("The created Primary Admin could not be resolved.");
+        await dispatchVisaFlowEmail({
+          type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+          identifiers: { target_user_id: targetUserId },
+        });
       } catch (emailError) {
         setupEmailSent = false;
         console.error("Primary Admin password setup email failed", emailError);
@@ -25790,7 +25799,7 @@ async function savePlatformClient() {
       resetPlatformClientForm();
       await Promise.all([loadPlatformClients(), loadUsers(), loadCompanies()]);
       alert(setupEmailSent
-        ? `Company and Primary Admin created. A secure password setup link was sent to ${adminEmail}.`
+        ? `Company and Primary Admin created. One invitation with account details and a secure activation link was sent to ${adminEmail}.`
         : `Company and Primary Admin created, but the setup email could not be sent. Use Send Setup Link to retry.`);
       return;
     }
@@ -25830,7 +25839,7 @@ async function savePlatformClient() {
     // Repair path for an existing company that was previously saved without
     // a user. Open Edit, enter only the Primary Admin fields, then Update.
     if (adminFieldsStarted) {
-      await invokePlatformCompanyProvisioner({
+      const provisionedAdmin = await invokePlatformCompanyProvisioner({
         action: "ensure_primary_admin",
         platform_client_id: platformClientEditingId,
         operational_company_id: operationalCompanyId,
@@ -25840,7 +25849,12 @@ async function savePlatformClient() {
         admin_role: adminRole,
       });
       try {
-        await sendCompanyUserSetupEmail(supabase, adminEmail);
+        const targetUserId = provisionedAdmin?.user?.id;
+        if (!targetUserId) throw new Error("The repaired Primary Admin could not be resolved.");
+        await dispatchVisaFlowEmail({
+          type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
+          identifiers: { target_user_id: targetUserId },
+        });
       } catch (emailError) {
         adminSetupEmailFailed = true;
         console.error("Repaired Primary Admin password setup email failed", emailError);

@@ -4,6 +4,7 @@ import { buildEmailIdempotencyKey, canRetryEmailDelivery, deliverWithTransport, 
 import { cleanContractInputVariables } from "../_shared/emailVariableValidation.mjs";
 import { acquireEmailDispatch } from "../_shared/emailDispatchState.mjs";
 import { renderAgencyInvitationEmail } from "../_shared/agencyInvitationEmail.mjs";
+import { renderPlatformCompanyInvitationEmail } from "../_shared/platformCompanyInvitationEmail.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -45,7 +46,6 @@ const MAX_VARIABLES_TOTAL = 3_000;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT_AUTHENTICATED = 12;
 const RATE_LIMIT_INTERNAL = 60;
-const VISAFLOW_ORIGIN = "https://visaflowksa.com";
 const rateBuckets = new Map<string, number[]>();
 
 const PLATFORM_OWNER = "Platform Owner";
@@ -135,7 +135,7 @@ const messageContracts: Record<string, MessageContract> = {
   PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL: {
     roles: [PLATFORM_OWNER], browserEnabled: true, internalEnabled: false,
     requiredId: "target_user_id", recipientSource: "target public.users.email", ownershipRule: "Platform Owner with company_id IS NULL; target belongs to an active company",
-    subject: "VisaFlow Company Account Setup", fields: [["company_name", "Company"], ["admin_email", "Username"], ["action_url", "Login URL"]], allowedInputVariables: [], allowedPath: "/",
+    subject: "Activate Your VisaFlow Company Account", fields: [["company_name", "Company"], ["admin_email", "Username"], ["action_url", "Secure activation link"], ["login_url", "Login page"]], allowedInputVariables: [], allowedPath: "supabase-auth-link",
   },
 };
 
@@ -193,10 +193,24 @@ function safeId(value: unknown, field: string) {
   return id;
 }
 
+function getVisaFlowOrigin() {
+  const configured = String(Deno.env.get("VISAFLOW_PUBLIC_ORIGIN") || "").trim();
+  if (configured) {
+    const url = new URL(configured);
+    if (url.protocol !== "https:") throw new Error("VISAFLOW_PUBLIC_ORIGIN must use HTTPS.");
+    return url.origin;
+  }
+  const projectRef = new URL(requireSecret("SUPABASE_URL")).hostname.split(".")[0];
+  return projectRef === "iijhdilfzndqlguefipn"
+    ? "https://visaflow-ksa-staging.vercel.app"
+    : "https://visaflowksa.com";
+}
+
 function approvedUrl(query?: Record<string, string>) {
-  const url = new URL("/", VISAFLOW_ORIGIN);
+  const approvedOrigin = getVisaFlowOrigin();
+  const url = new URL("/", approvedOrigin);
   for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
-  if (url.protocol !== "https:" || url.origin !== VISAFLOW_ORIGIN) throw new RequestFailure(400, "invalid_action_url");
+  if (url.protocol !== "https:" || url.origin !== approvedOrigin) throw new RequestFailure(400, "invalid_action_url");
   return url.toString();
 }
 
@@ -205,6 +219,12 @@ function renderTemplate(messageType: string, contract: MessageContract, variable
     agencyName: variables.agency_name,
     actionUrl: variables.action_url,
     expiresHours: 24,
+  });
+  if (messageType === "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL") return renderPlatformCompanyInvitationEmail({
+    companyName: variables.company_name,
+    adminEmail: variables.admin_email,
+    actionUrl: variables.action_url,
+    loginUrl: variables.login_url,
   });
   const populated = contract.fields.map(([key, label]) => [label, variables[key] || "-"] as const);
   const text = [contract.subject, "", ...populated.map(([label, value]) => `${label}: ${value}`), "", "VisaFlow KSA"].join("\n").slice(0, 6_000);
@@ -547,7 +567,36 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
     const company = await exactlyOne(admin.from("companies").select("id, name, status").eq("id", target.company_id).eq("status", "Active"), "company_not_found");
     const recipients = normalizeEmails([target.email]);
     if (!recipients.length) throw new RequestFailure(404, "target_recipient_not_found");
-    return { recipients: [recipients[0]], variables: { company_name: String(company.name || "Company"), admin_email: recipients[0], action_url: approvedUrl() } };
+    const redirectTo = approvedUrl({ workspace_recovery: "1" });
+    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+      type: "recovery",
+      email: recipients[0],
+      options: { redirectTo },
+    });
+    const actionLink = String(linkData?.properties?.action_link || "");
+    if (linkError || !actionLink) throw new RequestFailure(500, "activation_link_generation_failed");
+    let actionUrl: URL;
+    try {
+      actionUrl = new URL(actionLink);
+    } catch {
+      throw new RequestFailure(500, "activation_link_generation_failed");
+    }
+    const supabaseOrigin = new URL(requireSecret("SUPABASE_URL")).origin;
+    if (actionUrl.origin !== supabaseOrigin || actionUrl.pathname !== "/auth/v1/verify") {
+      throw new RequestFailure(500, "activation_link_generation_failed");
+    }
+    return {
+      recipients: [recipients[0]],
+      variables: {
+        company_name: String(company.name || "Company"),
+        admin_email: recipients[0],
+        action_url: actionUrl.toString(),
+        login_url: approvedUrl(),
+      },
+      companyId: String(company.id),
+      userId: String(target.id),
+      deliveryKey: `${targetUserId}:${Math.floor(Date.now() / 60_000)}`,
+    };
   }
 
   throw new RequestFailure(400, "message_type_not_allowed");
