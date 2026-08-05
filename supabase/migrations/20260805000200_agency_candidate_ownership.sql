@@ -45,7 +45,7 @@ create index if not exists interviews_company_agency_candidate_idx
 update public.candidates as candidate
 set agency_id = matched.id
 from (
-  select lower(trim(name)) as normalized_name, min(id) as id
+  select lower(trim(name)) as normalized_name, min(id::text)::uuid as id
   from public.agencies
   where nullif(trim(name), '') is not null
   group by lower(trim(name))
@@ -66,7 +66,7 @@ where interview.agency_id is null
 update public.interviews as interview
 set agency_id = matched.id
 from (
-  select lower(trim(name)) as normalized_name, min(id) as id
+  select lower(trim(name)) as normalized_name, min(id::text)::uuid as id
   from public.agencies
   where nullif(trim(name), '') is not null
   group by lower(trim(name))
