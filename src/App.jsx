@@ -25133,15 +25133,10 @@ async function sendPlatformClientLoginDetails(client) {
   if (!confirmed) return;
 
   try {
-    await dispatchVisaFlowEmail({
-      type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
-      identifiers: { target_user_id: primaryAdmin.id },
-    });
-
-    if (canViewEmailAdministration) await loadEmailLogs();
-    alert(`Account setup link sent to ${primaryAdmin.email}`);
+    await sendCompanyUserSetupEmail(supabase, primaryAdmin.email);
+    alert(`A secure password setup link was sent to ${primaryAdmin.email}.`);
   } catch (error) {
-    alert(`Login details email failed: ${error.message}`);
+    alert(`Password setup email failed: ${getCompanyUserManagerError(error)}`);
   }
 }
 
@@ -25781,9 +25776,22 @@ async function savePlatformClient() {
         admin_role: adminRole,
       });
 
+      // Never disclose the provisioning password by email. Send the new
+      // administrator a one-time recovery link so they can choose their own
+      // password before using the workspace.
+      let setupEmailSent = true;
+      try {
+        await sendCompanyUserSetupEmail(supabase, adminEmail);
+      } catch (emailError) {
+        setupEmailSent = false;
+        console.error("Primary Admin password setup email failed", emailError);
+      }
+
       resetPlatformClientForm();
       await Promise.all([loadPlatformClients(), loadUsers(), loadCompanies()]);
-      alert("Company and secure Primary Admin created successfully.");
+      alert(setupEmailSent
+        ? `Company and Primary Admin created. A secure password setup link was sent to ${adminEmail}.`
+        : `Company and Primary Admin created, but the setup email could not be sent. Use Send Setup Link to retry.`);
       return;
     }
 
@@ -25817,6 +25825,8 @@ async function savePlatformClient() {
       });
     }
 
+    let adminSetupEmailFailed = false;
+
     // Repair path for an existing company that was previously saved without
     // a user. Open Edit, enter only the Primary Admin fields, then Update.
     if (adminFieldsStarted) {
@@ -25829,12 +25839,20 @@ async function savePlatformClient() {
         admin_password: adminPassword,
         admin_role: adminRole,
       });
+      try {
+        await sendCompanyUserSetupEmail(supabase, adminEmail);
+      } catch (emailError) {
+        adminSetupEmailFailed = true;
+        console.error("Repaired Primary Admin password setup email failed", emailError);
+      }
     }
 
     resetPlatformClientForm();
     await Promise.all([loadPlatformClients(), loadUsers(), loadCompanies()]);
     alert(adminFieldsStarted
-      ? "Company updated and secure Primary Admin created successfully."
+      ? (adminSetupEmailFailed
+          ? "Company and Primary Admin updated, but the setup email could not be sent. Use Send Setup Link to retry."
+          : `Company updated and a secure password setup link was sent to ${adminEmail}.`)
       : "Company updated successfully.");
   } catch (error) {
     console.error("Platform company save failed", error);
@@ -39037,7 +39055,7 @@ onClick={() => setActiveReport("activityLog")}>
           </div>
 
           <div>
-            <label>Temporary Password {platformClientEditingId ? "(repair only)" : "*"}</label>
+            <label>Initial Provisioning Password {platformClientEditingId ? "(repair only)" : "*"}</label>
             <input
               type="password"
               placeholder="Minimum 8 characters"
@@ -39045,6 +39063,7 @@ onClick={() => setActiveReport("activityLog")}>
               onChange={(e) => updateForm(setPlatformClientForm, "admin_password", e.target.value)}
               autoComplete="new-password"
             />
+            <p className="muted">Never emailed. The administrator receives a secure link to create their own password.</p>
           </div>
 
           <div>
