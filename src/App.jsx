@@ -143,6 +143,7 @@ const PAGES = [
   "Visa Inventory",
   "Visa Allocation",
   "Candidates",
+  "Talent Marketplace",
   "Interviews",
   "AI Interview Center",
   "Mobilization",
@@ -190,7 +191,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Recruitment",
     icon: "📋",
-    pages: ["Requests", "Saudi Hiring", "Candidates", "Interviews", "AI Interview Center", "Rejected Candidates"],
+    pages: ["Requests", "Saudi Hiring", "Candidates", "Talent Marketplace", "Interviews", "AI Interview Center", "Rejected Candidates"],
   },
   {
     title: "Visa & Authorization",
@@ -1142,7 +1143,7 @@ const emptyDemobilization = {
   ai_recommendation: "",
   invoice_required: "No",
   invoice_amount: "",
-  invoice_type: "Redeployment Service",
+  invoice_type: "",
   recruitment_avoided: "No",
   notes: "",
 };
@@ -6274,6 +6275,7 @@ const [selectedMobilizationRequestNo, setSelectedMobilizationRequestNo] = useSta
 // Stored workspace metadata is never trusted as an authenticated identity.
 // The active user is restored only after Supabase Auth and the server RPC agree.
 const [currentUser, setCurrentUser] = useState(null);
+const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 const [workspaceAuthReady, setWorkspaceAuthReady] = useState(
   workspaceRecoveryLoginGuard
 );
@@ -6466,6 +6468,7 @@ const [ownerTalentStats, setOwnerTalentStats] = useState({
   published: null,
 });
 const [ownerTalentRecent, setOwnerTalentRecent] = useState([]);
+const [ownerTalentActionId, setOwnerTalentActionId] = useState("");
 const [ownerTalentDistributions, setOwnerTalentDistributions] = useState({
   country_of_residence: [],
   profession: [],
@@ -6474,6 +6477,10 @@ const [ownerTalentDistributions, setOwnerTalentDistributions] = useState({
 const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
 const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
+const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
+const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
+const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
+const [companyTalentMessage, setCompanyTalentMessage] = useState("");
 const [localContentSettings, setLocalContentSettings] = useState({
   saudi_labor_weight: 100,
   non_saudi_labor_weight: 54,
@@ -6528,6 +6535,9 @@ const emptyPlatformClient = {
   start_date: "",
   end_date: "",
   monthly_amount: 0,
+  talent_access_enabled: false,
+  talent_access_tier: "None",
+  talent_profile_limit: 0,
   operational_company_id: "",
   admin_name: "",
   admin_email: "",
@@ -6619,6 +6629,7 @@ const ROLE_PAGES = {
     "AI Agent",
     "AI Report Studio",
     "Dashboard",
+    "Talent Marketplace",
     "AI Interview Center",
     "Recruitment Performance",
     "Onboarding & Validation",
@@ -6676,6 +6687,7 @@ const ROLE_PAGES = {
     "Saudi Hiring",
     "RequestDetails",
     "Candidates",
+    "Talent Marketplace",
     "Interviews",
     "AI Interview Center",
     "Rejected Candidates",
@@ -6720,6 +6732,7 @@ const ROLE_PAGES = {
     "Saudi Hiring",
     "RequestDetails",
     "Candidates",
+    "Talent Marketplace",
     "Interviews",
     "AI Interview Center",
     "Rejected Candidates",
@@ -6757,11 +6770,14 @@ const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
 const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePages, "User Guide"]));
-const visiblePages = secureLogFeaturesAvailable
+const authenticatedVisiblePages = secureLogFeaturesAvailable
   ? (currentUser?.company_id && currentRole !== "Agency"
       ? Array.from(new Set([...roleVisiblePagesWithGuide, "Email Logs"]))
       : roleVisiblePagesWithGuide)
   : roleVisiblePagesWithGuide.filter((page) => page !== "Notifications");
+const visiblePages = authenticatedVisiblePages.filter(
+  (page) => page !== "Talent Marketplace" || talentEntitlement.enabled === true
+);
 const roleActions = ACTION_PERMISSIONS[currentRole] || ACTION_PERMISSIONS.Viewer;
 const hasAction = (action) => roleActions.includes(action);
 
@@ -8262,6 +8278,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       default_monthly_penalty_percent: 5,
     });
     setOwnerTalentRecent([]);
+    setTalentEntitlement({ enabled: false, tier: "None", profile_limit: 0 });
+    setCompanyTalentProfiles([]);
+    setCompanyTalentMessage("");
     setOwnerTalentDistributions({
       country_of_residence: [],
       profession: [],
@@ -8368,6 +8387,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadPlatformUsageSummary(),
       loadLocalContentSettings(),
       loadLocalContentProjectTargets(),
+      loadCompanyTalentMarketplace(),
     ]);
     setRequestMasterDataLoading(false);
     setLoading(false);
@@ -8436,6 +8456,9 @@ Cancel = إضافتها كوظيفة مستقلة`
     query = query.eq("company_id", currentCompanyId);
   }
   if (table === "candidates") query = query.is("deleted_at", null);
+  if (["candidates", "interviews"].includes(table)) {
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (currentRole === "Agency") {
     if (table === "agencies") {
@@ -8446,6 +8469,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       // Agency users should see penalties sent to their agency even if the agency display name changed.
       // Fetch all non-internal penalties for the active company, then filter safely in the browser by agency_id / agency_name / email.
       query = query.neq("status", "Pending Review");
+    } else if (["candidates", "interviews"].includes(table)) {
+      if (!currentUser?.agency_id) { setter([]); return; }
+      query = query.eq("agency_id", currentUser.agency_id);
     } else if (table === "visa_authorizations") {
       if (!currentUser?.agency_id) { setter([]); return; }
       query = query.eq("agency_id", currentUser.agency_id);
@@ -9506,6 +9532,43 @@ async function loadProfessionAliases() {
     return rows;
   }
 
+  async function loadCompanyTalentMarketplace() {
+    if (!currentCompanyId || isCurrentPlatformUser || currentRole === "Agency") {
+      setTalentEntitlement({ enabled: false, tier: "None", profile_limit: 0 });
+      setCompanyTalentProfiles([]);
+      return [];
+    }
+
+    setCompanyTalentLoading(true);
+    setCompanyTalentMessage("");
+    try {
+      const { data: entitlementData, error: entitlementError } = await supabase.rpc("get_current_company_talent_entitlement");
+      if (entitlementError) throw entitlementError;
+
+      const entitlement = entitlementData || { enabled: false, tier: "None", profile_limit: 0 };
+      setTalentEntitlement(entitlement);
+      if (!entitlement.enabled) {
+        setCompanyTalentProfiles([]);
+        setCompanyTalentMessage("VisaFlow Talent is not included in this company subscription.");
+        return [];
+      }
+
+      const { data, error } = await supabase.rpc("list_company_talent_marketplace");
+      if (error) throw error;
+      setCompanyTalentProfiles(Array.isArray(data) ? data : []);
+      setCompanyTalentMessage(`Loaded ${Array.isArray(data) ? data.length : 0} approved anonymized talent profile(s).`);
+      return Array.isArray(data) ? data : [];
+    } catch (error) {
+      console.warn("Talent marketplace:", error?.message || error);
+      setTalentEntitlement({ enabled: false, tier: "None", profile_limit: 0 });
+      setCompanyTalentProfiles([]);
+      setCompanyTalentMessage("Unable to load the Talent Marketplace entitlement.");
+      return [];
+    } finally {
+      setCompanyTalentLoading(false);
+    }
+  }
+
   async function loadOwnerTalentDashboard() {
     if (!isCurrentPlatformUser) {
       setOwnerTalentRecent([]);
@@ -9589,6 +9652,34 @@ async function loadProfessionAliases() {
       setOwnerTalentMessage("Unable to load data / تعذر تحميل البيانات.");
     } finally {
       setOwnerTalentLoading(false);
+    }
+  }
+
+  async function reviewOwnerTalentCandidate(candidate, action) {
+    if (currentRole !== "Platform Owner") {
+      return alert("Only the Platform Owner can approve, publish, reject, or suspend talent profiles.");
+    }
+    if (!candidate?.id || ownerTalentActionId) return;
+
+    const actionLabel = String(action || "").toLowerCase();
+    if (["reject", "suspend"].includes(actionLabel)) {
+      const confirmed = window.confirm(`${action} talent profile ${candidate.public_reference || candidate.full_name || ""}?`);
+      if (!confirmed) return;
+    }
+
+    setOwnerTalentActionId(candidate.id);
+    try {
+      const { error } = await supabase.rpc("review_talent_candidate", {
+        p_candidate_id: candidate.id,
+        p_action: action,
+      });
+      if (error) throw error;
+      await loadOwnerTalentDashboard();
+      alert(`Talent profile ${actionLabel} completed successfully.`);
+    } catch (error) {
+      alert(`Talent review failed: ${error?.message || "Unknown error"}`);
+    } finally {
+      setOwnerTalentActionId("");
     }
   }
 
@@ -12029,8 +12120,8 @@ const executiveDashboard = useMemo(() => {
       active: project.active,
       arrived: project.arrived,
       joined: project.joined,
-      progress: project.required ? Math.round((project.active / project.required) * 100) : 0,
-      arrivalProgress: project.required ? Math.round((project.arrived / project.required) * 100) : 0,
+      progress: project.required ? Math.min(100, Math.round((project.active / project.required) * 100)) : 0,
+      arrivalProgress: project.required ? Math.min(100, Math.round((project.arrived / project.required) * 100)) : 0,
     }))
     .sort((a, b) => b.required - a.required)
     .slice(0, 8);
@@ -14532,6 +14623,34 @@ arrival_date: item.arrival_date || "",
   async function saveCandidate() {
     if (!canManageCandidates && !canManageOfficePortal) return showCandidateSaveError("You do not have permission to manage candidates.");
     setCandidateSaveFeedback({ type: "info", message: "Saving candidate data..." });
+    const selectedProfession = String(candidateForm.profession || "").trim();
+    const selectedNationality = String(candidateForm.nationality || "").trim();
+    const approvedProfession = professions.some((profession) => {
+      const values = [
+        profession.name_ar,
+        profession.name_en,
+        profession.name_en ? `${profession.name_ar} - ${profession.name_en}` : profession.name_ar,
+      ];
+      return values.some((value) => value && normalize(value) === normalize(selectedProfession));
+    });
+    const approvedNationality = countries.some((country) => {
+      const values = [
+        country.nationality,
+        country.name,
+        country.nationality && country.name ? `${country.nationality} (${country.name})` : "",
+      ];
+      return values.some((value) => value && normalize(value) === normalize(selectedNationality));
+    });
+
+    if (!selectedProfession || !approvedProfession) {
+      return showCandidateSaveError("Select an approved profession from the list before saving the candidate.");
+    }
+    if (!selectedNationality || !approvedNationality) {
+      return showCandidateSaveError("Select an approved nationality from the list before saving the candidate.");
+    }
+    if (!String(candidateForm.gender || "").trim()) {
+      return showCandidateSaveError("Candidate gender is required.");
+    }
     const { data: requestData } = await supabase
   .from("requests")
   .select("approval_status, quantity, remaining_qty, recruitment_type, nationality")
@@ -14812,6 +14931,8 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
    
 
   resetCandidateForm();
+  setCandidateTableFilters({ query: "", status: "All", profession: "All", nationality: "All", project: "All", agency: "All" });
+  setCandidateTablePage(1);
   await Promise.all([
     currentRole === "Agency" ? Promise.resolve() : loadRequests(),
     loadCandidates(),
@@ -18432,7 +18553,6 @@ const filteredDemobilizationRows = useMemo(
   () => filterDemobilizationRows(demobilizations, demobilizationTableFilters),
   [demobilizations, demobilizationTableFilters]
 );
-
 const demobilizationIntelligence = useMemo(() => {
   const availableEmployees = demobilizations.filter((item) => item.status === "Available").length;
   const suggestedEmployees = demobilizations.filter((item) => item.status === "Suggested").length;
@@ -18642,7 +18762,7 @@ function editDemobilization(item) {
     ai_recommendation: item.ai_recommendation || "",
     invoice_required: item.invoice_required || "No",
     invoice_amount: item.invoice_amount || "",
-    invoice_type: item.invoice_type || "Redeployment Service",
+    invoice_type: item.invoice_type || "",
     recruitment_avoided: item.recruitment_avoided || "No",
     notes: item.notes || "",
   });
@@ -18676,7 +18796,7 @@ async function saveDemobilization() {
     suggested_request_no: demobilizationForm.suggested_request_no || "",
     suggested_project: demobilizationForm.suggested_project || "",
     invoice_required: demobilizationForm.invoice_required || "No",
-    invoice_type: demobilizationForm.invoice_type || "Redeployment Service",
+    invoice_type: demobilizationForm.invoice_type || "",
     recruitment_avoided: demobilizationForm.recruitment_avoided || "No",
     notes: demobilizationForm.notes || "",
     ai_recommendation: demobilizationForm.ai_recommendation || "",
@@ -25470,6 +25590,9 @@ function editPlatformClient(item) {
     start_date: item.start_date || "",
     end_date: item.end_date || "",
     monthly_amount: item.monthly_amount || 0,
+    talent_access_enabled: Boolean(item.talent_access_enabled),
+    talent_access_tier: item.talent_access_tier || "None",
+    talent_profile_limit: Number(item.talent_profile_limit || 0),
     operational_company_id: item.operational_company_id || "",
     admin_name: "",
     admin_email: "",
@@ -25542,6 +25665,9 @@ async function savePlatformClient() {
     start_date: platformClientForm.start_date || null,
     end_date: platformClientForm.end_date || null,
     monthly_amount: Number(platformClientForm.monthly_amount || 0),
+    talent_access_enabled: Boolean(platformClientForm.talent_access_enabled),
+    talent_access_tier: platformClientForm.talent_access_enabled ? (platformClientForm.talent_access_tier || "Standard") : "None",
+    talent_profile_limit: platformClientForm.talent_access_enabled ? Number(platformClientForm.talent_profile_limit || 0) : 0,
   };
 
   setPlatformClientSaving(true);
@@ -30103,11 +30229,26 @@ if (!currentUser) {
 
   return (
     <div className="layout" dir={UI_DIRECTION} lang="en">
+      <button
+        type="button"
+        className="mobile-nav-toggle"
+        aria-label={mobileSidebarOpen ? "Close navigation" : "Open navigation"}
+        aria-expanded={mobileSidebarOpen}
+        onClick={() => setMobileSidebarOpen((open) => !open)}
+      >
+        {mobileSidebarOpen ? "Close" : "Menu"}
+      </button>
+      <button
+        type="button"
+        aria-label="Close navigation"
+        className={`mobile-sidebar-backdrop ${mobileSidebarOpen ? "visible" : ""}`}
+        onClick={() => setMobileSidebarOpen(false)}
+      />
       <input ref={candidateExcelInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleExcelUpload} />
       <input ref={requestExcelInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleExcelUpload} />
       <input ref={employeeExcelInputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleEmployeesExcelUpload} />
 
-      <aside className="sidebar" style={{ maxHeight: "100vh", overflowY: "auto", overflowX: "hidden" }}>
+      <aside className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`} style={{ maxHeight: "100vh", overflowY: "auto", overflowX: "hidden" }}>
         <div className="logo">
           <div className="logo-icon">VF</div>
           <div>
@@ -30187,7 +30328,10 @@ if (!currentUser) {
                 <button
                   key={page}
                   className={activePage === page ? "active" : ""}
-                  onClick={() => setActivePage(page)}
+                  onClick={() => {
+                    setActivePage(page);
+                    setMobileSidebarOpen(false);
+                  }}
                   style={{ paddingLeft: "24px" }}
                 >
                   {page}
@@ -33460,6 +33604,54 @@ disabled={authorizationWorkflowBusy === "create"}
     </TableCard>
   </div>
 )}
+
+            {activePage === "Talent Marketplace" && talentEntitlement.enabled && (
+              <div className="page-section">
+                <div className="executive-hero" style={{ marginBottom: 18 }}>
+                  <div>
+                    <p className="eyebrow">VisaFlow Talent</p>
+                    <h1>Talent Marketplace</h1>
+                    <p>Approved anonymized profiles only. Candidate contact details remain private and introductions are managed by VisaFlow.</p>
+                  </div>
+                  <div className="hero-actions">
+                    <button onClick={loadCompanyTalentMarketplace} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
+                  </div>
+                </div>
+
+                <div className="stats-grid">
+                  <div className="stat-card"><h3>Package</h3><strong>{talentEntitlement.tier || "Standard"}</strong><span>Controlled by Platform Owner</span></div>
+                  <div className="stat-card"><h3>Profile Limit</h3><strong>{Number(talentEntitlement.profile_limit || 0).toLocaleString()}</strong><span>Maximum available profiles</span></div>
+                  <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentProfiles.length}</strong><span>Approved and consented</span></div>
+                </div>
+
+                {companyTalentMessage && <div className="form-card"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
+
+                <TableCard title="Approved Talent Profiles">
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr><th>Reference</th><th>Headline</th><th>Profession</th><th>Nationality</th><th>Location</th><th>Experience</th><th>Languages</th><th>Availability</th><th>Profile</th></tr></thead>
+                      <tbody>
+                        {companyTalentProfiles.length === 0 ? (
+                          <tr><td colSpan="9">No published profiles are available in this package.</td></tr>
+                        ) : companyTalentProfiles.map((candidate) => (
+                          <tr key={candidate.candidate_id}>
+                            <td>{candidate.public_reference || "-"}</td>
+                            <td>{candidate.headline || "-"}</td>
+                            <td>{candidate.profession || "-"}</td>
+                            <td>{candidate.nationality || "-"}</td>
+                            <td>{[candidate.city, candidate.country_of_residence].filter(Boolean).join(", ") || "-"}</td>
+                            <td>{candidate.years_experience == null ? "-" : `${candidate.years_experience} years`}</td>
+                            <td>{Array.isArray(candidate.languages) ? candidate.languages.join(", ") : "-"}</td>
+                            <td><Badge value={candidate.availability_status || "Open to Opportunities"} /></td>
+                            <td>{Number(candidate.profile_completeness || 0)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </TableCard>
+              </div>
+            )}
 
             {activePage === "Candidates" && (
 <>
@@ -38187,7 +38379,7 @@ onClick={() => setActiveReport("activityLog")}>
                   <Input placeholder="Suggested Project" value={demobilizationForm.suggested_project} onChange={(v) => updateForm(setDemobilizationForm, "suggested_project", v)} />
                   <Input type="number" placeholder="Match Score" value={demobilizationForm.match_score} onChange={(v) => updateForm(setDemobilizationForm, "match_score", v)} />
                   <Select value={demobilizationForm.invoice_required || "No"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_required", v)} placeholder="Invoice Required" options={["No", "Yes"]} />
-                  <Input placeholder="Invoice Type" value={demobilizationForm.invoice_type || "Redeployment Service"} onChange={(v) => updateForm(setDemobilizationForm, "invoice_type", v)} />
+                  <Input placeholder="Invoice Type (optional)" value={demobilizationForm.invoice_type || ""} onChange={(v) => updateForm(setDemobilizationForm, "invoice_type", v)} />
                   <Input type="number" placeholder="Invoice Amount" value={demobilizationForm.invoice_amount} onChange={(v) => updateForm(setDemobilizationForm, "invoice_amount", v)} />
                   <Select value={demobilizationForm.recruitment_avoided || "No"} onChange={(v) => updateForm(setDemobilizationForm, "recruitment_avoided", v)} placeholder="Recruitment Avoided" options={["Yes", "No"]} />
                 </div>
@@ -38245,7 +38437,7 @@ onClick={() => setActiveReport("activityLog")}>
                             onClick={() => applyDemobSuggestion(item)}
                             disabled={demobilizationForm.suggested_request_no === item.request_no}
                           >
-                            {demobilizationForm.suggested_request_no === item.request_no ? "Selected" : "Use Match"}
+                            {demobilizationForm.suggested_request_no === item.request_no ? "Selected" : "Apply Match"}
                           </button>
                         </td>
                       </tr>
@@ -38375,19 +38567,39 @@ onClick={() => setActiveReport("activityLog")}>
       </div>
       <table>
         <thead>
-          <tr><th>Name</th><th>Email</th><th>Country</th><th>Target Profession</th><th>Profile Status</th><th>Registered</th></tr>
+          <tr><th>Reference</th><th>Name</th><th>Email</th><th>Country</th><th>Target Profession</th><th>Profile Status</th><th>Publication</th><th>Registered</th><th>Actions</th></tr>
         </thead>
         <tbody>
           {ownerTalentRecent.length === 0 ? (
             <tr><td colSpan="6">{ownerTalentLoading ? "Loading..." : ownerTalentError ? "Unable to load data / تعذر تحميل البيانات" : "No candidate profiles are available."}</td></tr>
           ) : ownerTalentRecent.map((candidate, index) => (
-            <tr key={`${candidate.email || "candidate"}-${candidate.created_at || index}`}>
+            <tr key={candidate.id || `${candidate.email || "candidate"}-${candidate.created_at || index}`}>
+              <td>{candidate.public_reference || "-"}</td>
               <td>{candidate.full_name || "-"}</td>
               <td>{candidate.email || "-"}</td>
               <td>{candidate.country_of_residence || "-"}</td>
               <td>{candidate.profession || "-"}</td>
               <td><Badge value={candidate.marketplace_status || "Draft"} /></td>
+              <td><Badge value={candidate.published_at ? "Published" : candidate.is_verified ? "Approved - Not Published" : "Not Published"} /></td>
               <td>{candidate.created_at ? new Date(candidate.created_at).toLocaleString() : "-"}</td>
+              <td className="table-actions">
+                {currentRole === "Platform Owner" ? (
+                  <>
+                    {["Submitted", "Under Review"].includes(candidate.marketplace_status) && (
+                      <button disabled={ownerTalentActionId === candidate.id} onClick={() => reviewOwnerTalentCandidate(candidate, "Approve")}>Approve</button>
+                    )}
+                    {candidate.marketplace_status === "Approved" && !candidate.published_at && (
+                      <button disabled={ownerTalentActionId === candidate.id} onClick={() => reviewOwnerTalentCandidate(candidate, "Publish")}>Publish</button>
+                    )}
+                    {!["Draft", "Rejected"].includes(candidate.marketplace_status) && (
+                      <button className="danger" disabled={ownerTalentActionId === candidate.id} onClick={() => reviewOwnerTalentCandidate(candidate, "Reject")}>Reject</button>
+                    )}
+                    {candidate.published_at && (
+                      <button className="danger" disabled={ownerTalentActionId === candidate.id} onClick={() => reviewOwnerTalentCandidate(candidate, "Suspend")}>Suspend</button>
+                    )}
+                  </>
+                ) : "Read only"}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -38672,6 +38884,44 @@ onClick={() => setActiveReport("activityLog")}>
             placeholder="Monthly Amount"
             value={platformClientForm.monthly_amount}
             onChange={(e) => updateForm(setPlatformClientForm, "monthly_amount", e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label>VisaFlow Talent Access</label>
+          <select
+            value={platformClientForm.talent_access_enabled ? "Enabled" : "Disabled"}
+            onChange={(e) => setPlatformClientForm((current) => ({
+              ...current,
+              talent_access_enabled: e.target.value === "Enabled",
+              talent_access_tier: e.target.value === "Enabled" && current.talent_access_tier === "None" ? "Standard" : current.talent_access_tier,
+            }))}
+          >
+            <option>Disabled</option>
+            <option>Enabled</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Talent Package</label>
+          <select
+            value={platformClientForm.talent_access_tier}
+            disabled={!platformClientForm.talent_access_enabled}
+            onChange={(e) => updateForm(setPlatformClientForm, "talent_access_tier", e.target.value)}
+          >
+            {["None", "Standard", "Professional", "Enterprise"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label>Visible Talent Profiles Limit</label>
+          <input
+            type="number"
+            min="0"
+            max="100000"
+            disabled={!platformClientForm.talent_access_enabled}
+            value={platformClientForm.talent_profile_limit}
+            onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_limit", e.target.value)}
           />
         </div>
 
