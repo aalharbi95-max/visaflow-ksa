@@ -23,6 +23,15 @@ export function getNotificationType(item) {
   return item?.type || item?.data?.type || "Notification";
 }
 
+export function isNotificationSchemaCacheMiss(error) {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+  return code === "PGRST202" || (
+    message.includes("schema cache") &&
+    message.includes("notification_center_list_v1")
+  );
+}
+
 export function getNotificationFolderCounts(notifications = []) {
   return notifications.reduce((counts, item) => {
     counts[getNotificationStatus(item).toLowerCase()] += 1;

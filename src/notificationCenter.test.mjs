@@ -5,6 +5,7 @@ import {
   filterNotificationCenterRows,
   getNotificationFolderCounts,
   getNotificationMessage,
+  isNotificationSchemaCacheMiss,
   selectNotification,
 } from "./notificationCenter.mjs";
 
@@ -50,6 +51,19 @@ test("selection stays on the requested message and falls back to the first visib
   assert.equal(selectNotification(rows, "old").id, "old");
   assert.equal(selectNotification(rows, "missing").id, "new");
   assert.equal(selectNotification([], "missing"), null);
+});
+
+test("temporary PostgREST notification schema-cache misses are recoverable", () => {
+  assert.equal(isNotificationSchemaCacheMiss({ code: "PGRST202", message: "missing" }), true);
+  assert.equal(isNotificationSchemaCacheMiss({ message: "Could not find notification_center_list_v1 in the schema cache" }), true);
+  assert.equal(isNotificationSchemaCacheMiss({ code: "42501", message: "access denied" }), false);
+});
+
+test("workspace boot keeps dashboard totals behind a loading state", async () => {
+  const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+  assert.match(app, /const \[workspaceDataReady, setWorkspaceDataReady\] = useState\(false\)/);
+  assert.match(app, /Loading workspace data/);
+  assert.doesNotMatch(app, /alert\(`Notifications error:/);
 });
 
 test("redeployment confirmation is an allowed notification and partial success stays visible", async () => {

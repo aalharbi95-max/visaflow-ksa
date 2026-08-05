@@ -87,6 +87,7 @@ import {
   getNotificationStatus,
   getNotificationTitle,
   getNotificationType,
+  isNotificationSchemaCacheMiss,
   selectNotification,
 } from "./notificationCenter.mjs";
 import { filterNotificationsForWorkspace } from "./notificationVisibility.mjs";
@@ -5841,6 +5842,7 @@ function App() {
     return getPublicViewFromLocation(window.location) === PUBLIC_VIEW.TALENT;
   });
   const [loading, setLoading] = useState(false);
+  const [workspaceDataReady, setWorkspaceDataReady] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [requests, setRequests] = useState([]);
@@ -8299,6 +8301,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAiConversation([]);
     setAiAgentLog("");
     setReportStudioResult("");
+    setWorkspaceDataReady(false);
     setLoading(false);
   }
 
@@ -8333,9 +8336,11 @@ Cancel = إضافتها كوظيفة مستقلة`
       return;
     }
     setLoading(true);
+    setWorkspaceDataReady(false);
     setRequestMasterDataLoading(true);
     setRequestMasterDataError("");
-    await Promise.all([
+    try {
+      const results = await Promise.allSettled([
       loadRequests(),
       loadRequestLines(),
       loadVisaRecords(),
@@ -8388,9 +8393,16 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadLocalContentSettings(),
       loadLocalContentProjectTargets(),
       loadCompanyTalentMarketplace(),
-    ]);
-    setRequestMasterDataLoading(false);
-    setLoading(false);
+      ]);
+      const failedLoads = results.filter((result) => result.status === "rejected");
+      if (failedLoads.length) {
+        console.warn(`Workspace loaded with ${failedLoads.length} recoverable data error(s).`);
+      }
+    } finally {
+      setWorkspaceDataReady(true);
+      setRequestMasterDataLoading(false);
+      setLoading(false);
+    }
   }
 
   async function loadTable(table, setter) {
@@ -9903,9 +9915,18 @@ async function loadNotifications() {
     return [];
   }
 
-  const { data, error } = await supabase.rpc("notification_center_list_v1", {
+  let { data, error } = await supabase.rpc("notification_center_list_v1", {
     p_company_id: currentCompanyId,
   });
+
+  if (isNotificationSchemaCacheMiss(error)) {
+    await new Promise((resolve) => window.setTimeout(resolve, 650));
+    const retry = await supabase.rpc("notification_center_list_v1", {
+      p_company_id: currentCompanyId,
+    });
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (
     requestGeneration !== workspaceDataGenerationRef.current ||
@@ -9915,7 +9936,7 @@ async function loadNotifications() {
   }
 
   if (error) {
-    alert(`Notifications error: ${error.message}`);
+    console.warn("Notifications could not be loaded:", error.message);
     setNotifications([]);
     return [];
   }
@@ -30368,7 +30389,7 @@ if (!currentUser) {
           <div>
             <h1>{activePage}</h1>
             {activePage === "Executive Dashboard" ? (
-              <p>Last Updated: {new Date().toLocaleString()}</p>
+              <p>{!workspaceDataReady || loading ? "Loading workspace data..." : `Last Updated: ${new Date().toLocaleString()}`}</p>
             ) : (
               <p>{loading ? "Loading data..." : activePage === "AI Interview Center" ? "All AI interviews: campaigns, candidates, templates, invitations, results and final company decisions in one center." : "Saudi company recruitment, visa authorization and manpower tracking system."}</p>
             )}
@@ -30789,7 +30810,13 @@ if (!currentUser) {
           </>
         )}
 
-        {activePage === "Executive Dashboard" && (
+        {activePage === "Executive Dashboard" && (!workspaceDataReady ? (
+          <div className="workspace-loading-panel" role="status" aria-live="polite">
+            <div className="workspace-loading-spinner" aria-hidden="true" />
+            <h2>Loading workspace data...</h2>
+            <p>VisaFlow is securely retrieving recruitment, candidate, visa, and mobilization information.</p>
+          </div>
+        ) : (
           <>
             <div
               style={{
@@ -30982,7 +31009,7 @@ if (!currentUser) {
               </TableCard>
             </div>
           </>
-        )}
+        ))}
 
         {activePage === "AI Agent" && (
           <>
