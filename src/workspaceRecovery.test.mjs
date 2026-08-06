@@ -26,6 +26,18 @@ function memoryStorage(initial = {}) {
 test("recognizes workspace recovery and rejects candidate recovery", () => {
   assert.equal(
     getWorkspaceRecoveryUrlState(
+      "http://localhost:5173/?workspace_recovery=1"
+    ).requested,
+    true
+  );
+  assert.equal(
+    getWorkspaceRecoveryUrlState(
+      "https://visaflowksa.com/#access_token=secret&type=recovery"
+    ).requested,
+    true
+  );
+  assert.equal(
+    getWorkspaceRecoveryUrlState(
       "http://localhost:5173/?login=1&auth_flow=workspace&recovery=1"
     ).requested,
     true
@@ -220,9 +232,10 @@ test("failed sign-out clears only workspace storage and still redirects", async 
 
 test("callback cleanup removes tokens and keeps login", () => {
   const url = getCleanWorkspaceRecoveryUrl(
-    "https://visaflowksa.com/?auth_flow=workspace&recovery=1&code=secret#access_token=secret"
+    "https://visaflowksa.com/?workspace_recovery=1&auth_flow=workspace&recovery=1&code=secret#access_token=secret"
   );
   assert.equal(url.searchParams.get("login"), "1");
+  assert.equal(url.searchParams.get("workspace_recovery"), null);
   assert.equal(url.searchParams.get("code"), null);
   assert.equal(url.hash, "");
 });

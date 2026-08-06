@@ -22,6 +22,7 @@ const CALLBACK_KEYS = [
   "error_description",
   "auth_flow",
   "recovery",
+  "workspace_recovery",
 ];
 
 function toUrl(locationLike) {
@@ -37,9 +38,13 @@ export function getWorkspaceRecoveryUrlState(locationLike) {
   try {
     const url = toUrl(locationLike);
     const hash = new URLSearchParams(url.hash.replace(/^#/, ""));
+    const callbackType =
+      url.searchParams.get("type") || hash.get("type") || "";
     const requested =
-      url.searchParams.get("auth_flow") === "workspace" &&
-      url.searchParams.get("recovery") === "1";
+      (url.searchParams.get("auth_flow") === "workspace" &&
+        url.searchParams.get("recovery") === "1") ||
+      url.searchParams.get("workspace_recovery") === "1" ||
+      callbackType === "recovery";
     const errorType = url.searchParams.get("error") || hash.get("error") || "";
     const errorCode =
       url.searchParams.get("error_code") || hash.get("error_code") || "";

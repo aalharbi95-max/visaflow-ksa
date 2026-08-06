@@ -102,7 +102,7 @@ test("company invitation dispatcher generates the recovery link on the server", 
   const dispatcher = await readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8");
   assert.match(dispatcher, /PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL[\s\S]*renderPlatformCompanyInvitationEmail/);
   assert.match(dispatcher, /type:\s*"recovery"/);
-  assert.match(dispatcher, /workspace_recovery:\s*"1"/);
+  assert.match(dispatcher, /login:\s*"1",\s*auth_flow:\s*"workspace",\s*recovery:\s*"1"/);
   assert.match(dispatcher, /actionUrl\.pathname !== "\/auth\/v1\/verify"/);
   assert.doesNotMatch(dispatcher, /password[^\n]*variables/i);
 });

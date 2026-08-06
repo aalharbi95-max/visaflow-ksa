@@ -567,7 +567,7 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
     const company = await exactlyOne(admin.from("companies").select("id, name, status").eq("id", target.company_id).eq("status", "Active"), "company_not_found");
     const recipients = normalizeEmails([target.email]);
     if (!recipients.length) throw new RequestFailure(404, "target_recipient_not_found");
-    const redirectTo = approvedUrl({ workspace_recovery: "1" });
+    const redirectTo = approvedUrl({ login: "1", auth_flow: "workspace", recovery: "1" });
     const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
       type: "recovery",
       email: recipients[0],
