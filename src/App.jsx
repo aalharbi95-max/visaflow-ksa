@@ -13693,14 +13693,19 @@ async function saveAgency() {
     await loadAgencies();
     alert(data?.idempotent
       ? "This agency is already linked to your company."
-      : "Agency saved and linked to your company.");
+      : data?.linked_existing
+        ? "The existing agency account is now linked to your company."
+        : "Agency saved and linked to your company.");
   } catch (error) {
     const message = String(error?.message || "");
     if (message.includes("COMPANY_AGENCY_CREATE_UNAUTHORIZED")) {
       return alert("You are not authorized to create agencies.");
     }
     if (message.includes("COMPANY_AGENCY_CREATE_ALREADY_EXISTS")) {
-      return alert("An agency with the same email or identity already exists.");
+      return alert("This agency already exists. Please link its existing account to your company.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_AGENCY_INACTIVE")) {
+      return alert("This agency account is inactive or suspended. Contact the platform owner before linking it.");
     }
     if (message.includes("COMPANY_AGENCY_CREATE_USER_INACTIVE")) {
       return alert("Your user account is inactive.");

@@ -174,6 +174,14 @@ describe("company_agency_create on temporary PostgreSQL", () => {
         ('${COMPANY_B_ADMIN}', '${COMPANY_B}', 'Company B Admin', 'admin-b@example.test', 'Admin', 'Active', true);
     `);
     await db.exec(migration);
+    const multiCompanyMigration = await readFile(
+      new URL(
+        "../supabase/migrations/20260805000400_link_existing_agency_to_multiple_companies.sql",
+        import.meta.url
+      ),
+      "utf8"
+    );
+    await db.exec(multiCompanyMigration);
   });
 
   after(async () => {
@@ -250,22 +258,23 @@ describe("company_agency_create on temporary PostgreSQL", () => {
     );
   });
 
-  test("Company A cannot create or link an agency for Company B", async () => {
+  test("the same agency identity links safely to more than one company", async () => {
     const companyBAgency = await createAgency(COMPANY_B_ADMIN, {
       name: "Company B Owned Agency",
       country: "Bangladesh",
       email: "company-b-owned@example.test",
     });
 
-    await expectCreateError(
-      RECRUITMENT_MANAGER,
-      {
-        name: "Company B Owned Agency",
-        country: "Bangladesh",
-        email: "company-b-owned@example.test",
-      },
-      "COMPANY_AGENCY_CREATE_ALREADY_EXISTS"
-    );
+    const companyALink = await createAgency(RECRUITMENT_MANAGER, {
+      name: "Company B Owned Agency",
+      country: "Bangladesh",
+      email: "company-b-owned@example.test",
+    });
+
+    assert.equal(companyALink.agency_id, companyBAgency.agency_id);
+    assert.equal(companyALink.company_id, COMPANY_A);
+    assert.equal(companyALink.linked_existing, true);
+    assert.equal(companyALink.idempotent, false);
 
     const links = await db.query(
       `select company_id
@@ -273,7 +282,18 @@ describe("company_agency_create on temporary PostgreSQL", () => {
        where agency_id = $1::uuid`,
       [companyBAgency.agency_id]
     );
-    assert.deepEqual(links.rows.map((row) => row.company_id), [COMPANY_B]);
+    assert.deepEqual(
+      links.rows.map((row) => row.company_id).sort(),
+      [COMPANY_A, COMPANY_B].sort()
+    );
+
+    const agencies = await db.query(
+      `select count(*)::integer as count
+       from public.agencies
+       where lower(email) = lower($1)`,
+      ["company-b-owned@example.test"]
+    );
+    assert.equal(agencies.rows[0].count, 1);
   });
 
   test("retrying the same logical agency is idempotent without another row", async () => {
