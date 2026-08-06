@@ -86,9 +86,12 @@ export function clearWorkspaceRecoveryLocalState({
   localStorage,
   sessionStorage,
   workspaceAuthStorageKey = "visaflow-workspace-auth",
+  preserveAuthSession = false,
 } = {}) {
   try {
-    localStorage?.removeItem(workspaceAuthStorageKey);
+    if (!preserveAuthSession) {
+      localStorage?.removeItem(workspaceAuthStorageKey);
+    }
     WORKSPACE_IDENTITY_KEYS.forEach((key) => localStorage?.removeItem(key));
   } catch {
     // Browser storage cleanup is best effort.

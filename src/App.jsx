@@ -10412,7 +10412,14 @@ useEffect(() => {
     setValidatedWorkspaceKey("");
     clearTenantSensitiveState();
     clearStoredWorkspaceIdentity();
-    clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage });
+    // Supabase has already consumed the callback by the time this effect runs.
+    // Clear stale workspace identity metadata without deleting the temporary
+    // recovery session that is required to render the password fields.
+    clearWorkspaceRecoveryLocalState({
+      localStorage,
+      sessionStorage,
+      preserveAuthSession: workspaceRecoveryRequested,
+    });
     setAgencyClientAccess([]);
     setActiveAgencyCompanyId("");
     setActiveAgencyCompanyName("");

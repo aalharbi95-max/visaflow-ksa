@@ -77,6 +77,31 @@ test("clears old workspace state without clearing candidate auth", () => {
   assert.equal(sessionStorage.getItem("visaflow_agency_company_id"), null);
 });
 
+test("preserves the temporary recovery session while clearing workspace identity", () => {
+  const localStorage = memoryStorage({
+    "visaflow-workspace-auth": "recovery-session",
+    "visaflow-talent-auth": "candidate-session",
+    visaflow_user: "stale-office",
+  });
+  const sessionStorage = memoryStorage({
+    visaflow_agency_company_id: "stale-company",
+  });
+
+  clearWorkspaceRecoveryLocalState({
+    localStorage,
+    sessionStorage,
+    preserveAuthSession: true,
+  });
+
+  assert.equal(
+    localStorage.getItem("visaflow-workspace-auth"),
+    "recovery-session"
+  );
+  assert.equal(localStorage.getItem("visaflow-talent-auth"), "candidate-session");
+  assert.equal(localStorage.getItem("visaflow_user"), null);
+  assert.equal(sessionStorage.getItem("visaflow_agency_company_id"), null);
+});
+
 test("a stale session cannot update the password without PASSWORD_RECOVERY proof", async () => {
   let updates = 0;
   await assert.rejects(
@@ -254,6 +279,7 @@ test("App blocks stale workspace reconciliation until a verified manual login", 
   assert.match(effect, /workspaceRecoveryRequested/);
   assert.match(effect, /workspaceRecoveryLoginGuard/);
   assert.match(effect, /clearWorkspaceRecoveryLocalState/);
+  assert.match(effect, /preserveAuthSession: workspaceRecoveryRequested/);
   assert.ok(
     app.indexOf("return <WorkspacePasswordRecoveryScreen") <
       app.indexOf('if (currentRole === "Agency" && !currentCompanyId)')
