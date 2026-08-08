@@ -138,6 +138,10 @@ import {
   getTalentEnabledPages,
   isTalentEmailNotConfirmed,
 } from "./talentAccess.mjs";
+import {
+  getRecoveryAccountType,
+  getRecoveryCompletionPath,
+} from "./recoveryAccount.mjs";
 import "./style.css";
 
 const UI_DIRECTION = getUiDirection();
@@ -5273,6 +5277,7 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
   const [checking, setChecking] = useState(true);
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState(null);
+  const [accountType, setAccountType] = useState(null);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [saving, setSaving] = useState(false);
@@ -5296,16 +5301,17 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
 
     const accept = (nextSession) => {
       const user = nextSession?.user;
-      if (
-        !user?.id ||
-        user.user_metadata?.account_type === "candidate" ||
-        !establishWorkspaceRecoveryProof("PASSWORD_RECOVERY", nextSession)
-      ) {
+      const nextAccountType = getRecoveryAccountType(nextSession);
+      const hasProof = nextAccountType === "candidate"
+        ? establishTalentRecoveryProof("PASSWORD_RECOVERY", nextSession)
+        : establishWorkspaceRecoveryProof("PASSWORD_RECOVERY", nextSession);
+      if (!user?.id || !nextAccountType || !hasProof) {
         reject({ code: "invalid_token" });
         return;
       }
       if (!mounted) return;
       setSession(nextSession);
+      setAccountType(nextAccountType);
       setReady(true);
       setChecking(false);
       setMessage("");
@@ -5328,11 +5334,13 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
       if (!mounted) return;
       if (error) return reject(error);
       const activeSession = data?.session;
-      if (
-        activeSession?.user?.id &&
-        hasWorkspaceRecoveryProof(activeSession.user.id)
-      ) {
+      const activeAccountType = getRecoveryAccountType(activeSession);
+      const hasActiveProof = activeAccountType === "candidate"
+        ? hasTalentRecoveryProof(activeSession?.user?.id)
+        : hasWorkspaceRecoveryProof(activeSession?.user?.id);
+      if (activeSession?.user?.id && hasActiveProof) {
         setSession(activeSession);
+        setAccountType(activeAccountType);
         setReady(true);
         setChecking(false);
         return;
@@ -5362,7 +5370,9 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
         userId: session?.user?.id || "",
         password,
         confirmation,
-        hasRecoveryProof: hasWorkspaceRecoveryProof,
+        hasRecoveryProof: accountType === "candidate"
+          ? hasTalentRecoveryProof
+          : hasWorkspaceRecoveryProof,
       });
     } catch (error) {
       if (error?.code === "password_too_short") {
@@ -5387,13 +5397,15 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
       auth: supabase.auth,
       localStorage,
       sessionStorage,
-      clearRecoveryProof: clearWorkspaceRecoveryProof,
+      clearRecoveryProof: accountType === "candidate"
+        ? clearTalentRecoveryProof
+        : clearWorkspaceRecoveryProof,
       cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
-      storeSuccessMessage: (value) =>
-        storeWorkspaceRecoverySuccess(sessionStorage, value),
+      storeSuccessMessage: accountType === "candidate"
+        ? undefined
+        : (value) => storeWorkspaceRecoverySuccess(sessionStorage, value),
       redirectToLogin: () => {
-        const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
-        window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
+        window.location.replace(getRecoveryCompletionPath(accountType));
       },
       logger: (...args) => console.warn(...args),
     });
@@ -5423,7 +5435,9 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
               : ready
                 ? isArabic
                   ? "أنشئ كلمة مرور قوية لحساب الشركة أو المكتب."
-                  : "Create a strong password for your company or agency account."
+                  : accountType === "candidate"
+                    ? "Create a strong password for your VisaFlow Talent account."
+                    : "Create a strong password for your company or agency account."
                 : isArabic
                   ? "لا يمكن استخدام رابط الاستعادة الحالي."
                   : "The current recovery link cannot be used."}
