@@ -112,6 +112,11 @@ const messageContracts: Record<string, MessageContract> = {
     requiredId: "interview_session_id", recipientSource: "ai_interview_sessions -> candidates.email", ownershipRule: "session and candidate belong to actor.company_id",
     subject: "VisaFlow AI Interview Invitation", fields: [["candidate_name", "Candidate"], ["profession", "Profession"], ["request_no", "Request"], ["scheduled_at", "Scheduled"], ["expires_at", "Expires"], ["action_url", "Interview link"]], allowedInputVariables: [], allowedPath: "/?ai_interview=<record access_token>",
   },
+  TALENT_INTERVIEW_INVITATION: {
+    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: false,
+    requiredId: "talent_interview_id", recipientSource: "talent_interview_invitations -> talent_candidates.email", ownershipRule: "invitation belongs to actor.company_id and candidate authorized contact sharing",
+    subject: "VisaFlow Talent Interview Invitation", fields: [["candidate_name", "Candidate"], ["company_name", "Company"], ["interview_type", "Interview type"], ["scheduled_at", "Scheduled"], ["destination", "Meeting link / location"], ["notes", "Notes"], ["action_url", "Candidate portal"]], allowedInputVariables: [], allowedPath: "/?talent=1",
+  },
   AI_AGENT_MANAGER_APPROVAL: {
     roles: [...COMPANY_ADMINS, "Recruitment Manager"], browserEnabled: true, internalEnabled: true,
     requiredId: "request_id", recipientSource: "active company manager users", ownershipRule: "request.company_id = authenticated/internal company",
@@ -142,7 +147,7 @@ const messageContracts: Record<string, MessageContract> = {
 const allowedTopLevelFields = new Set([
   "message_type", "variables", "request_id", "agency_id", "notification_event_id", "candidate_id",
   "interview_session_id", "agreement_id", "penalty_id", "offer_id", "target_user_id", "company_id",
-  "email_log_id", "idempotency_key", "recipient",
+  "talent_interview_id", "email_log_id", "idempotency_key", "recipient",
 ]);
 const forbiddenEnvelopeFields = new Set(["to", "cc", "bcc", "from", "replyTo", "reply_to", "subject", "text", "html", "actionUrl", "action_url"]);
 
@@ -518,6 +523,27 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
       candidate_name: String(session.candidate_name || candidate.candidate_name || "Candidate"), profession: String(session.profession || candidate.profession || "-"),
       request_no: String(session.request_no || candidate.request_no || "-"), scheduled_at: String(session.scheduled_at || "-"), expires_at: String(session.expires_at || "-"),
       action_url: approvedUrl({ ai_interview: String(session.access_token) }),
+    } };
+  }
+
+  if (type === "TALENT_INTERVIEW_INVITATION") {
+    if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
+    const invitationId = safeId(body.talent_interview_id, "talent_interview_id");
+    const invitation = await exactlyOne(admin.from("talent_interview_invitations")
+      .select("id, company_id, candidate_id, interview_type, scheduled_at, meeting_url, location, notes, status")
+      .eq("id", invitationId).eq("company_id", caller.actor.company_id), "talent_interview_not_found");
+    const candidate = await exactlyOne(admin.from("talent_candidates")
+      .select("id, full_name, email, employer_contact_sharing_consent")
+      .eq("id", invitation.candidate_id).eq("employer_contact_sharing_consent", true), "talent_candidate_not_authorized");
+    const company = await exactlyOne(admin.from("companies").select("id, name")
+      .eq("id", caller.actor.company_id), "company_not_found");
+    const recipients = normalizeEmails([candidate.email]);
+    if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
+    return { recipients: [recipients[0]], companyId: caller.actor.company_id, variables: {
+      candidate_name: String(candidate.full_name || "Candidate"), company_name: String(company.name || "Employer"),
+      interview_type: String(invitation.interview_type), scheduled_at: String(invitation.scheduled_at),
+      destination: String(invitation.meeting_url || invitation.location || "Details are available in VisaFlow Talent"),
+      notes: String(invitation.notes || "-"), action_url: approvedUrl({ talent: "1" }),
     } };
   }
 

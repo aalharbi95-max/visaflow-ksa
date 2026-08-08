@@ -3556,6 +3556,7 @@ const EMPTY_TALENT_CONSENTS = {
   "Platform Terms": false,
   "Privacy Policy": false,
   "Employer Sharing": false,
+  "Employer Contact Sharing": false,
   "AI CV Analysis": false,
   "AI Interview": false,
   "Evaluation Email": false,
@@ -3785,6 +3786,7 @@ function TalentCandidatePortal({ onBack }) {
   const [education, setEducation] = useState([]);
   const [certifications, setCertifications] = useState([]);
   const [resumeVersions, setResumeVersions] = useState([]);
+  const [talentInterviews, setTalentInterviews] = useState([]);
   const [resumeStudioBusy, setResumeStudioBusy] = useState(false);
 
   const isArabic = portalLanguage === "AR";
@@ -3892,7 +3894,7 @@ function TalentCandidatePortal({ onBack }) {
 
     try {
       const candidateRow = await ensureTalentProfile(user);
-      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult, resumeVersionsResult] = await Promise.all([
+      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult, resumeVersionsResult, interviewsResult] = await Promise.all([
         supabase
           .from("talent_candidate_documents")
           .select("id, candidate_id, document_type, file_name, storage_path, mime_type, size_bytes, is_primary, parse_status, uploaded_at")
@@ -3907,6 +3909,7 @@ function TalentCandidatePortal({ onBack }) {
         supabase.from("talent_candidate_education").select("*").eq("candidate_id", candidateRow.id).order("sort_order", { ascending: true }),
         supabase.from("talent_candidate_certifications").select("*").eq("candidate_id", candidateRow.id).order("issue_date", { ascending: false }),
         supabase.from("talent_resume_versions").select("*").eq("candidate_id", candidateRow.id).order("version_number", { ascending: false }),
+        supabase.rpc("list_candidate_talent_interviews"),
       ]);
 
       if (documentsResult.error) throw documentsResult.error;
@@ -3916,6 +3919,7 @@ function TalentCandidatePortal({ onBack }) {
       if (educationResult.error) throw educationResult.error;
       if (certificationsResult.error) throw certificationsResult.error;
       if (resumeVersionsResult.error && !String(resumeVersionsResult.error.message || "").includes("talent_resume_versions")) throw resumeVersionsResult.error;
+      if (interviewsResult.error) throw interviewsResult.error;
 
       const nextConsents = { ...EMPTY_TALENT_CONSENTS };
       (consentsResult.data || []).forEach((item) => {
@@ -3933,6 +3937,7 @@ function TalentCandidatePortal({ onBack }) {
       setEducation(educationResult.data || []);
       setCertifications(certificationsResult.data || []);
       setResumeVersions(resumeVersionsResult.data || []);
+      setTalentInterviews(interviewsResult.data || []);
       loadedTalentUserRef.current = user.id;
       profileDirtyRef.current = false;
       setWorkspaceHydrated(true);
@@ -4337,6 +4342,7 @@ function TalentCandidatePortal({ onBack }) {
       linkedin_url: String(profileForm.linkedin_url || "").trim() || null,
       portfolio_url: String(profileForm.portfolio_url || "").trim() || null,
       employer_sharing_consent: Boolean(consents["Employer Sharing"]),
+      employer_contact_sharing_consent: Boolean(consents["Employer Contact Sharing"]),
       profile_visibility: consents["Employer Sharing"] ? "Anonymized" : "Private",
       last_active_at: new Date().toISOString(),
     };
@@ -4581,10 +4587,10 @@ function TalentCandidatePortal({ onBack }) {
       setWorkspaceTab("CV");
       return;
     }
-    if (!consents["Platform Terms"] || !consents["Privacy Policy"] || !consents["AI CV Analysis"]) {
+    if (!consents["Platform Terms"] || !consents["Privacy Policy"] || !consents["AI CV Analysis"] || !consents["Employer Sharing"] || !consents["Employer Contact Sharing"]) {
       setWorkspaceMessage(isArabic
         ? "يلزم قبول شروط المنصة وسياسة الخصوصية وتحليل السيرة بالذكاء الاصطناعي."
-        : "Accept platform terms, privacy policy, and AI CV analysis consent.");
+        : "Accept the required terms and authorize profile and contact sharing with subscribed employers.");
       setWorkspaceTab("Consent");
       return;
     }
@@ -4785,6 +4791,26 @@ function TalentCandidatePortal({ onBack }) {
     );
   }
 
+  async function respondToTalentInterview(invitationId, response) {
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+    try {
+      const { error } = await supabase.rpc("respond_talent_interview", {
+        p_invitation_id: invitationId,
+        p_response: response,
+      });
+      if (error) throw error;
+      const { data, error: reloadError } = await supabase.rpc("list_candidate_talent_interviews");
+      if (reloadError) throw reloadError;
+      setTalentInterviews(data || []);
+      setWorkspaceMessage(isArabic ? `تم ${response === "Accepted" ? "قبول" : "رفض"} دعوة المقابلة.` : `Interview invitation ${response.toLowerCase()}.`);
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر تحديث دعوة المقابلة." : "Unable to update the interview invitation."));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
   const statusLabel = profile?.marketplace_status || "Draft";
   const tabItems = [
     ["Dashboard", isArabic ? "لوحة التحكم" : "Dashboard"],
@@ -4795,6 +4821,7 @@ function TalentCandidatePortal({ onBack }) {
     ["Consent", isArabic ? "الموافقات" : "Consents"],
     ["Review", isArabic ? "المراجعة والإرسال" : "Review & Submit"],
   ];
+  tabItems.splice(5, 0, ["Interviews", isArabic ? "دعوات المقابلات" : "Interview Invitations"]);
 
   return (
     <main dir={isArabic ? "rtl" : "ltr"} style={{ minHeight: "100vh", background: "#f4f8fb", color: palette.text, fontFamily: "inherit" }}>
@@ -4995,17 +5022,39 @@ function TalentCandidatePortal({ onBack }) {
               </>
             )}
 
+            {workspaceTab === "Interviews" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "دعوات المقابلات" : "Interview Invitations"}</h2>
+                <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "راجع المواعيد المرسلة من الشركات واقبل الدعوة أو ارفضها من هنا." : "Review interview invitations from employers and accept or decline them here."}</p>
+                <div style={{ display: "grid", gap: "12px" }}>
+                  {talentInterviews.length === 0 ? (
+                    <div style={{ padding: "22px", border: `1px dashed ${palette.border}`, borderRadius: "14px", color: palette.muted }}>{isArabic ? "لا توجد دعوات مقابلة حاليًا." : "No interview invitations yet."}</div>
+                  ) : talentInterviews.map((interview) => (
+                    <div key={interview.invitation_id} style={{ padding: "18px", border: `1px solid ${palette.border}`, borderRadius: "15px", background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                        <div><strong style={{ fontSize: "18px" }}>{interview.company_name}</strong><div style={{ color: palette.muted, marginTop: "5px" }}>{interview.interview_type}</div></div>
+                        <strong style={{ color: interview.status === "Accepted" ? palette.success : interview.status === "Declined" ? palette.danger : palette.blue }}>{interview.status}</strong>
+                      </div>
+                      <div style={{ marginTop: "12px", lineHeight: 1.8 }}><strong>{new Date(interview.scheduled_at).toLocaleString(isArabic ? "ar-SA" : "en-US")}</strong>{interview.location && <div>{isArabic ? "الموقع: " : "Location: "}{interview.location}</div>}{interview.meeting_url && <div><a href={interview.meeting_url} target="_blank" rel="noreferrer">{isArabic ? "فتح رابط المقابلة" : "Open meeting link"}</a></div>}{interview.notes && <div>{interview.notes}</div>}</div>
+                      {interview.status === "Scheduled" && <div style={{ display: "flex", gap: "9px", marginTop: "14px" }}><button type="button" disabled={workspaceBusy} onClick={() => respondToTalentInterview(interview.invitation_id, "Accepted")} style={{ border: 0, borderRadius: "10px", background: palette.success, color: "#fff", padding: "10px 16px", fontWeight: 900 }}>{isArabic ? "قبول" : "Accept"}</button><button type="button" disabled={workspaceBusy} onClick={() => respondToTalentInterview(interview.invitation_id, "Declined")} style={{ border: `1px solid ${palette.danger}`, borderRadius: "10px", background: "#fff", color: palette.danger, padding: "10px 16px", fontWeight: 900 }}>{isArabic ? "رفض" : "Decline"}</button></div>}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
             {workspaceTab === "Consent" && (
               <>
                 <h2 style={{ marginTop: 0 }}>{isArabic ? "الموافقات والخصوصية" : "Consent & Privacy"}</h2>
                 <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "يمكنك سحب الموافقات الاختيارية لاحقًا. مشاركة الملف مع الشركات مستقلة عن موافقة تحليل السيرة." : "Optional consents can be withdrawn later. Employer sharing is separate from AI CV analysis."}</p>
                 <div style={{ display: "grid", gap: "11px" }}>
                   {Object.keys(EMPTY_TALENT_CONSENTS).map((key) => {
-                    const required = ["Platform Terms", "Privacy Policy", "AI CV Analysis"].includes(key);
+                    const required = ["Platform Terms", "Privacy Policy", "AI CV Analysis", "Employer Sharing", "Employer Contact Sharing"].includes(key);
                     const labels = {
                       "Platform Terms": isArabic ? "أوافق على شروط استخدام المنصة" : "I accept the platform terms",
                       "Privacy Policy": isArabic ? "أوافق على سياسة الخصوصية ومعالجة البيانات" : "I accept the privacy policy and data processing",
                       "Employer Sharing": isArabic ? "أوافق على إظهار ملف مجهول الهوية للشركات المشتركة" : "I allow an anonymized profile to be shown to subscribed employers",
+                      "Employer Contact Sharing": isArabic ? "أوافق على مشاركة اسمي وبريدي الإلكتروني ورقم الجوال وملفي المهني مع الشركات المشتركة بعد اعتماد الملف" : "I agree to share my name, email, mobile number and professional profile with subscribed employers after approval",
                       "AI CV Analysis": isArabic ? "أوافق على تحليل سيرتي الذاتية بالذكاء الاصطناعي" : "I consent to AI analysis of my CV",
                       "AI Interview": isArabic ? "أوافق على دعوة مقابلة AI عند التأهل" : "I consent to AI interview invitations when qualified",
                       "Evaluation Email": isArabic ? "أوافق على استقبال ملخص التقييم عبر البريد" : "I consent to receiving evaluation summaries by email",
@@ -5039,19 +5088,19 @@ function TalentCandidatePortal({ onBack }) {
                     [isArabic ? "الراتب المتوقع" : "Expected Salary", profileForm.expected_salary === "" ? "—" : `${profileForm.expected_salary} ${profileForm.expected_salary_currency || "SAR"}`],
                     [isArabic ? "السيرة" : "CV", primaryCv?.file_name || "—"],
                     [isArabic ? "اكتمال الملف" : "Profile Completion", `${estimatedCompleteness}%`],
-                    [isArabic ? "المشاركة مع الشركات" : "Employer Sharing", consents["Employer Sharing"] ? (isArabic ? "موافق — مجهول الهوية" : "Allowed — anonymized") : (isArabic ? "غير موافق" : "Not allowed")],
+                    [isArabic ? "المشاركة مع الشركات" : "Employer Sharing", consents["Employer Contact Sharing"] ? (isArabic ? "موافق — البيانات ظاهرة" : "Allowed — identity and contact shared") : consents["Employer Sharing"] ? (isArabic ? "موافق — مجهول الهوية" : "Allowed — anonymized") : (isArabic ? "غير موافق" : "Not allowed")],
                     [isArabic ? "حالة الملف" : "Status", statusLabel],
                   ].map(([label, value]) => <div key={label} style={{ border: `1px solid ${palette.border}`, borderRadius: "13px", padding: "14px" }}><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{label}</span><strong style={{ display: "block", marginTop: "7px" }}>{value}</strong></div>)}
                 </div>
                 <div style={{ border: `1px solid ${palette.border}`, borderRadius: "14px", padding: "16px", marginBottom: "14px" }}>
                   <h3 style={{ margin: "0 0 12px" }}>{isArabic ? "ملخص الموافقات" : "Consent Summary"}</h3>
                   <div style={{ display: "grid", gap: "8px" }}>
-                    {[["Platform Terms", isArabic ? "شروط المنصة" : "Platform Terms"], ["Privacy Policy", isArabic ? "الخصوصية ومعالجة البيانات" : "Privacy & Data Processing"], ["AI CV Analysis", isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI CV Analysis"], ["Employer Sharing", isArabic ? "مشاركة الملف مع الشركات" : "Employer Sharing"], ["AI Interview", isArabic ? "دعوات مقابلات AI" : "AI Interview Invitations"]].map(([key, label]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}><span>{label}</span><strong style={{ color: consents[key] ? palette.success : palette.muted }}>{consents[key] ? (isArabic ? "موافق ✓" : "Accepted ✓") : (isArabic ? "غير موافق" : "Not accepted")}</strong></div>)}
+                    {[["Platform Terms", isArabic ? "شروط المنصة" : "Platform Terms"], ["Privacy Policy", isArabic ? "الخصوصية ومعالجة البيانات" : "Privacy & Data Processing"], ["AI CV Analysis", isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI CV Analysis"], ["Employer Sharing", isArabic ? "مشاركة الملف مع الشركات" : "Employer Sharing"], ["Employer Contact Sharing", isArabic ? "مشاركة الاسم وبيانات التواصل" : "Identity & Contact Sharing"], ["AI Interview", isArabic ? "دعوات مقابلات AI" : "AI Interview Invitations"]].map(([key, label]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}><span>{label}</span><strong style={{ color: consents[key] ? palette.success : palette.muted }}>{consents[key] ? (isArabic ? "موافق ✓" : "Accepted ✓") : (isArabic ? "غير موافق" : "Not accepted")}</strong></div>)}
                   </div>
                 </div>
                 <div style={{ padding: "16px", borderRadius: "14px", background: consents["Employer Sharing"] ? "#ecfdf5" : "#fff7ed", color: consents["Employer Sharing"] ? palette.success : "#9a3412", lineHeight: 1.7, fontWeight: 800 }}>
                   {consents["Employer Sharing"]
-                    ? (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات ملفًا مجهول الهوية. فتح الاسم وبيانات الاتصال سيكون وفق آلية الموافقة لاحقًا." : "After approval, employers will see an anonymized profile. Identity and contact details will require the controlled unlock workflow.")
+                    ? (consents["Employer Contact Sharing"] ? (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات المشتركة اسمك وبريدك ورقم جوالك وملفك المهني، ويمكنها إرسال دعوة مقابلة لك." : "After approval, subscribed employers can see your identity and contact details and send you interview invitations.") : (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات ملفًا مجهول الهوية فقط." : "After approval, employers will see an anonymized profile only."))
                     : (isArabic ? "ملفك سيبقى خاصًا ولن يظهر للشركات حتى تمنح موافقة المشاركة." : "Your profile remains private and will not appear to employers until sharing consent is granted.")}
                 </div>
                 <button type="button" disabled={workspaceBusy || statusLabel === "Under Review" || statusLabel === "Approved"} onClick={handleSubmitTalentProfile} style={{ width: "100%", border: 0, borderRadius: "13px", background: statusLabel === "Submitted" ? palette.success : `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: "pointer", fontWeight: 900, fontSize: "16px" }}>
@@ -6537,6 +6586,15 @@ const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tie
 const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
 const [companyTalentMessage, setCompanyTalentMessage] = useState("");
+const [companyTalentSearch, setCompanyTalentSearch] = useState("");
+const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
+const [talentInterviewForm, setTalentInterviewForm] = useState({
+  interview_type: "Online Video",
+  scheduled_at: "",
+  meeting_url: "",
+  location: "",
+  notes: "",
+});
 const [localContentSettings, setLocalContentSettings] = useState({
   saudi_labor_weight: 100,
   non_saudi_labor_weight: 54,
@@ -9652,7 +9710,7 @@ async function loadProfessionAliases() {
       const { data, error } = await supabase.rpc("list_company_talent_marketplace");
       if (error) throw error;
       setCompanyTalentProfiles(Array.isArray(data) ? data : []);
-      setCompanyTalentMessage(`Loaded ${Array.isArray(data) ? data.length : 0} approved anonymized talent profile(s).`);
+      setCompanyTalentMessage(`Loaded ${Array.isArray(data) ? data.length : 0} approved talent profile(s). Contact details appear only with candidate consent.`);
       return Array.isArray(data) ? data : [];
     } catch (error) {
       console.warn("Talent marketplace:", error?.message || error);
@@ -9660,6 +9718,56 @@ async function loadProfessionAliases() {
       setCompanyTalentProfiles([]);
       setCompanyTalentMessage("Unable to load the Talent Marketplace entitlement.");
       return [];
+    } finally {
+      setCompanyTalentLoading(false);
+    }
+  }
+
+  async function scheduleCompanyTalentInterview(candidateId) {
+    if (!talentInterviewForm.scheduled_at) {
+      setCompanyTalentMessage("Choose the interview date and time.");
+      return;
+    }
+    if (talentInterviewForm.interview_type === "Online Video" && !talentInterviewForm.meeting_url.trim()) {
+      setCompanyTalentMessage("Add the online meeting link.");
+      return;
+    }
+    if (talentInterviewForm.interview_type === "Online Video" && !talentInterviewForm.meeting_url.trim().toLowerCase().startsWith("https://")) {
+      setCompanyTalentMessage("The online meeting link must start with https://");
+      return;
+    }
+    if (talentInterviewForm.interview_type === "In Person" && !talentInterviewForm.location.trim()) {
+      setCompanyTalentMessage("Add the interview location.");
+      return;
+    }
+
+    setCompanyTalentLoading(true);
+    setCompanyTalentMessage("");
+    try {
+      const { data: invitationId, error } = await supabase.rpc("schedule_talent_interview", {
+        p_candidate_id: candidateId,
+        p_interview_type: talentInterviewForm.interview_type,
+        p_scheduled_at: new Date(talentInterviewForm.scheduled_at).toISOString(),
+        p_meeting_url: talentInterviewForm.meeting_url.trim() || null,
+        p_location: talentInterviewForm.location.trim() || null,
+        p_notes: talentInterviewForm.notes.trim() || null,
+      });
+      if (error) throw error;
+
+      let emailWarning = "";
+      try {
+        await dispatchVisaFlowEmail({ type: "TALENT_INTERVIEW_INVITATION", identifiers: { talent_interview_id: invitationId } });
+      } catch (emailError) {
+        console.warn("Talent interview email:", emailError?.message || emailError);
+        emailWarning = " The invitation is visible in the candidate portal, but the email could not be sent.";
+      }
+
+      setTalentInterviewForm({ interview_type: "Online Video", scheduled_at: "", meeting_url: "", location: "", notes: "" });
+      setSelectedTalentCandidateId("");
+      await loadCompanyTalentMarketplace();
+      setCompanyTalentMessage(`Interview invitation created successfully.${emailWarning}`);
+    } catch (error) {
+      setCompanyTalentMessage(error?.message || "Unable to schedule the interview.");
     } finally {
       setCompanyTalentLoading(false);
     }
@@ -33863,7 +33971,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div>
                     <p className="eyebrow">VisaFlow Talent</p>
                     <h1>Talent Marketplace</h1>
-                    <p>Approved anonymized profiles only. Candidate contact details remain private and introductions are managed by VisaFlow.</p>
+                    <p>Search approved profiles, view contact details shared by the candidate, and schedule interviews directly.</p>
                   </div>
                   <div className="hero-actions">
                     <button onClick={loadCompanyTalentMarketplace} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
@@ -33878,30 +33986,52 @@ disabled={authorizationWorkflowBusy === "create"}
 
                 {companyTalentMessage && <div className="form-card"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
 
+                <div className="toolbar"><input placeholder="Search name, profession, nationality, location or skills" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} /></div>
+
                 <TableCard title="Approved Talent Profiles">
                   <div className="table-wrap">
                     <table>
-                      <thead><tr><th>Reference</th><th>Headline</th><th>Profession</th><th>Nationality</th><th>Location</th><th>Experience</th><th>Languages</th><th>Availability</th><th>Profile</th></tr></thead>
+                      <thead><tr><th>Candidate</th><th>Profession</th><th>Nationality</th><th>Location</th><th>Experience</th><th>Skills</th><th>Contact</th><th>Interview</th></tr></thead>
                       <tbody>
                         {companyTalentProfiles.length === 0 ? (
-                          <tr><td colSpan="9">No published profiles are available in this package.</td></tr>
-                        ) : companyTalentProfiles.map((candidate) => (
+                          <tr><td colSpan="8">No published profiles are available in this package.</td></tr>
+                        ) : companyTalentProfiles.filter((candidate) => {
+                          const query = companyTalentSearch.trim().toLowerCase();
+                          if (!query) return true;
+                          return [candidate.full_name, candidate.public_reference, candidate.headline, candidate.profession, candidate.nationality, candidate.city, candidate.country_of_residence, ...(Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name) : [])].filter(Boolean).join(" ").toLowerCase().includes(query);
+                        }).map((candidate) => (
                           <tr key={candidate.candidate_id}>
-                            <td>{candidate.public_reference || "-"}</td>
-                            <td>{candidate.headline || "-"}</td>
+                            <td><strong>{candidate.full_name || candidate.public_reference || "-"}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{candidate.headline || candidate.public_reference || "-"}</div></td>
                             <td>{candidate.profession || "-"}</td>
                             <td>{candidate.nationality || "-"}</td>
                             <td>{[candidate.city, candidate.country_of_residence].filter(Boolean).join(", ") || "-"}</td>
                             <td>{candidate.years_experience == null ? "-" : `${candidate.years_experience} years`}</td>
-                            <td>{Array.isArray(candidate.languages) ? candidate.languages.join(", ") : "-"}</td>
-                            <td><Badge value={candidate.availability_status || "Open to Opportunities"} /></td>
-                            <td>{Number(candidate.profile_completeness || 0)}%</td>
+                            <td>{Array.isArray(candidate.skills) ? candidate.skills.slice(0, 4).map((skill) => skill?.name).filter(Boolean).join(", ") || "-" : "-"}</td>
+                            <td>{candidate.identity_shared ? <div><a href={`mailto:${candidate.email}`}>{candidate.email}</a><div>{candidate.phone || "-"}</div></div> : <span style={{ color: "#92400e" }}>Awaiting candidate consent</span>}</td>
+                            <td><button type="button" className="light-btn" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule"}</button>{candidate.latest_interview_status && <div style={{ marginTop: 7 }}><Badge value={candidate.latest_interview_status} /></div>}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 </TableCard>
+
+                {selectedTalentCandidateId && (() => {
+                  const candidate = companyTalentProfiles.find((item) => item.candidate_id === selectedTalentCandidateId);
+                  if (!candidate) return null;
+                  return <div className="form-card">
+                    <h2>Schedule Interview — {candidate.full_name || candidate.public_reference}</h2>
+                    {candidate.professional_summary && <p style={{ color: "#475569", lineHeight: 1.7 }}>{candidate.professional_summary}</p>}
+                    <div className="form-grid">
+                      <label><span>Interview Type</span><select value={talentInterviewForm.interview_type} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, interview_type: event.target.value }))}><option>Online Video</option><option>Phone</option><option>In Person</option></select></label>
+                      <label><span>Date & Time</span><input type="datetime-local" value={talentInterviewForm.scheduled_at} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, scheduled_at: event.target.value }))} /></label>
+                      {talentInterviewForm.interview_type === "Online Video" && <label><span>Meeting Link</span><input type="url" placeholder="https://..." value={talentInterviewForm.meeting_url} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, meeting_url: event.target.value }))} /></label>}
+                      {talentInterviewForm.interview_type === "In Person" && <label><span>Location</span><input value={talentInterviewForm.location} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, location: event.target.value }))} /></label>}
+                      <label><span>Notes</span><textarea rows="3" value={talentInterviewForm.notes} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, notes: event.target.value }))} /></label>
+                    </div>
+                    <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate.candidate_id)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
+                  </div>;
+                })()}
               </div>
             )}
 
