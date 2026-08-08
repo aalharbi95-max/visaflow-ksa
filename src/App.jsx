@@ -134,8 +134,11 @@ import {
   storeWorkspaceRecoverySuccess,
 } from "./workspaceRecovery.mjs";
 import {
+  formatTalentProfileLimit,
+  getTalentProfileLimitValue,
   getOwnerTalentProfiles,
   getTalentEnabledPages,
+  isTalentProfileUnlimited,
   isTalentEmailNotConfirmed,
 } from "./talentAccess.mjs";
 import {
@@ -6591,6 +6594,7 @@ const emptyPlatformClient = {
   talent_access_enabled: false,
   talent_access_tier: "None",
   talent_profile_limit: 0,
+  talent_profile_unlimited: false,
   operational_company_id: "",
   admin_name: "",
   admin_email: "",
@@ -25794,6 +25798,7 @@ function editPlatformClient(item) {
     talent_access_enabled: Boolean(item.talent_access_enabled),
     talent_access_tier: item.talent_access_tier || "None",
     talent_profile_limit: Number(item.talent_profile_limit || 0),
+    talent_profile_unlimited: isTalentProfileUnlimited(item.talent_profile_limit),
     operational_company_id: item.operational_company_id || "",
     admin_name: "",
     admin_email: "",
@@ -25842,7 +25847,7 @@ async function savePlatformClient() {
 
   const companyName = String(platformClientForm.company_name || "").trim();
   if (!companyName) return alert("Company name is required.");
-  if (platformClientForm.talent_access_enabled && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
+  if (platformClientForm.talent_access_enabled && !platformClientForm.talent_profile_unlimited && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
     return alert("Set a visible Talent Profiles Limit greater than zero when VisaFlow Talent Access is enabled.");
   }
 
@@ -25871,7 +25876,11 @@ async function savePlatformClient() {
     monthly_amount: Number(platformClientForm.monthly_amount || 0),
     talent_access_enabled: Boolean(platformClientForm.talent_access_enabled),
     talent_access_tier: platformClientForm.talent_access_enabled ? (platformClientForm.talent_access_tier || "Standard") : "None",
-    talent_profile_limit: platformClientForm.talent_access_enabled ? Number(platformClientForm.talent_profile_limit || 0) : 0,
+    talent_profile_limit: getTalentProfileLimitValue({
+      enabled: platformClientForm.talent_access_enabled,
+      unlimited: platformClientForm.talent_profile_unlimited,
+      limit: platformClientForm.talent_profile_limit,
+    }),
   };
 
   setPlatformClientSaving(true);
@@ -33863,7 +33872,7 @@ disabled={authorizationWorkflowBusy === "create"}
 
                 <div className="stats-grid">
                   <div className="stat-card"><h3>Package</h3><strong>{talentEntitlement.tier || "Standard"}</strong><span>Controlled by Platform Owner</span></div>
-                  <div className="stat-card"><h3>Profile Limit</h3><strong>{Number(talentEntitlement.profile_limit || 0).toLocaleString()}</strong><span>Maximum available profiles</span></div>
+                  <div className="stat-card"><h3>Profile Limit</h3><strong>{formatTalentProfileLimit(talentEntitlement.profile_limit)}</strong><span>{isTalentProfileUnlimited(talentEntitlement.profile_limit) ? "All published profiles" : "Maximum available profiles"}</span></div>
                   <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentProfiles.length}</strong><span>Approved and consented</span></div>
                 </div>
 
@@ -39097,16 +39106,30 @@ onClick={() => setActiveReport("activityLog")}>
         </div>
 
         <div>
-          <label>Visible Talent Profiles Limit</label>
-          <input
-            type="number"
-            min="0"
-            max="100000"
+          <label>Visible Talent Profiles</label>
+          <select
             disabled={!platformClientForm.talent_access_enabled}
-            value={platformClientForm.talent_profile_limit}
-            onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_limit", e.target.value)}
-          />
+            value={platformClientForm.talent_profile_unlimited ? "Unlimited" : "Limited"}
+            onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_unlimited", e.target.value === "Unlimited")}
+          >
+            <option>Limited</option>
+            <option>Unlimited</option>
+          </select>
         </div>
+
+        {!platformClientForm.talent_profile_unlimited && (
+          <div>
+            <label>Visible Talent Profiles Limit</label>
+            <input
+              type="number"
+              min="1"
+              max="99999"
+              disabled={!platformClientForm.talent_access_enabled}
+              value={platformClientForm.talent_profile_limit}
+              onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_limit", e.target.value)}
+            />
+          </div>
+        )}
 
         <div>
           <label>Operational Company ID</label>
@@ -39234,7 +39257,7 @@ onClick={() => setActiveReport("activityLog")}>
                 <td>{Number(item.monthly_amount || 0).toLocaleString()} SAR</td>
                 <td>
                   <Badge value={item.talent_access_enabled ? "Enabled" : "Disabled"} />
-                  {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {Number(item.talent_profile_limit || 0).toLocaleString()} profiles</div>}
+                  {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {formatTalentProfileLimit(item.talent_profile_limit)} profiles</div>}
                 </td>
                 <td className="actions">
                   <button onClick={() => editPlatformClient(item)}>Edit</button>
