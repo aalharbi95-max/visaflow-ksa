@@ -133,6 +133,11 @@ import {
   getWorkspaceRecoveryUrlState,
   storeWorkspaceRecoverySuccess,
 } from "./workspaceRecovery.mjs";
+import {
+  getOwnerTalentProfiles,
+  getTalentEnabledPages,
+  isTalentEmailNotConfirmed,
+} from "./talentAccess.mjs";
 import "./style.css";
 
 const UI_DIRECTION = getUiDirection();
@@ -3736,6 +3741,7 @@ function TalentCandidatePortal({ onBack }) {
   const [authMode, setAuthMode] = useState(initialRecoveryState.requested ? "recovery" : "signin");
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+  const [confirmationRequired, setConfirmationRequired] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryForm, setRecoveryForm] = useState({ password: "", confirm_password: "" });
   const [authForm, setAuthForm] = useState({
@@ -4120,10 +4126,12 @@ function TalentCandidatePortal({ onBack }) {
       }
 
       if (data?.session && data?.user) {
+        setConfirmationRequired(false);
         setSession(data.session);
         await loadCandidateWorkspace(data.user);
         setAuthMessage(isArabic ? "تم إنشاء حسابك بنجاح." : "Your candidate account was created successfully.");
       } else {
+        setConfirmationRequired(true);
         setAuthMessage(isArabic
           ? "تم إنشاء الحساب. افتح رسالة التأكيد في بريدك ثم ارجع لتسجيل الدخول."
           : "Account created. Confirm your email, then return to sign in.");
@@ -4153,10 +4161,29 @@ function TalentCandidatePortal({ onBack }) {
         await supabase.auth.signOut({ scope: "local" });
         throw new Error(isArabic ? "هذا الحساب ليس حساب متقدم." : "This is not a candidate account.");
       }
+      setConfirmationRequired(false);
       setSession(data.session);
       await loadCandidateWorkspace(data.user);
     } catch (error) {
-      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+      if (isTalentEmailNotConfirmed(error)) {
+        setConfirmationRequired(true);
+        try {
+          const { error: resendError } = await supabase.auth.resend({
+            type: "signup",
+            email,
+            options: { emailRedirectTo: getTalentRedirectUrl() },
+          });
+          if (resendError) throw resendError;
+          setAuthMessage(isArabic
+            ? "البريد الإلكتروني غير مؤكد. أرسلنا لك رسالة تأكيد جديدة؛ افتحها ثم ارجع لتسجيل الدخول."
+            : "Email is not confirmed. We sent a new confirmation message; open it, then return to sign in.");
+        } catch (resendError) {
+          setAuthMessage(getTalentAuthErrorMessage(resendError, isArabic, "auth"));
+        }
+      } else {
+        setConfirmationRequired(false);
+        setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+      }
     } finally {
       setAuthBusy(false);
     }
@@ -4207,6 +4234,7 @@ function TalentCandidatePortal({ onBack }) {
         options: { emailRedirectTo: getTalentRedirectUrl() },
       });
       if (error) throw error;
+      setConfirmationRequired(true);
       setAuthMessage(isArabic ? "تمت إعادة إرسال رسالة تأكيد البريد." : "Confirmation email resent.");
     } catch (error) {
       setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
@@ -4739,7 +4767,7 @@ function TalentCandidatePortal({ onBack }) {
               )}
 
               <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap", marginTop: "14px" }}>
-                {["signin", "signup"].includes(authMode) && <button type="button" onClick={handleTalentResendConfirmation} disabled={authBusy} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "إعادة إرسال تأكيد البريد" : "Resend email confirmation"}</button>}
+                {["signin", "signup"].includes(authMode) && <button type="button" onClick={handleTalentResendConfirmation} disabled={authBusy} style={{ border: confirmationRequired ? `1px solid ${palette.blue}` : 0, borderRadius: "10px", background: confirmationRequired ? palette.pale : "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900, padding: confirmationRequired ? "10px 14px" : 0 }}>{isArabic ? "إعادة إرسال تأكيد البريد" : "Resend email confirmation"}</button>}
                 {authMode === "forgot" && <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "العودة لتسجيل الدخول" : "Back to sign in"}</button>}
                 {authMode === "recovery" && !recoveryReady && <button type="button" onClick={() => { clearTalentAuthCallbackUrl(); setAuthMode("forgot"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "طلب رابط استعادة جديد" : "Request a new recovery link"}</button>}
               </div>
@@ -6766,6 +6794,8 @@ const ROLE_PAGES = {
 
   Agency: [
     "Office Portal",
+    "Agency Agreements",
+    "Agency Performance",
     "Notifications",
   ],
 
@@ -6780,7 +6810,12 @@ const ROLE_PAGES = {
 const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
-const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePages, "User Guide"]));
+const roleVisiblePagesWithTalent = getTalentEnabledPages(roleVisiblePages, {
+  enabled: talentEntitlement.enabled === true,
+  isPlatformUser: isCurrentPlatformUser,
+  isAgency: currentRole === "Agency",
+});
+const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePagesWithTalent, "User Guide"]));
 const authenticatedVisiblePages = secureLogFeaturesAvailable
   ? (currentUser?.company_id && currentRole !== "Agency"
       ? Array.from(new Set([...roleVisiblePagesWithGuide, "Email Logs"]))
@@ -9668,7 +9703,7 @@ async function loadProfessionAliases() {
         approved: safeMetric(ownerData.approved),
         published: publicStatsRow ? safeMetric(publicStatsRow.marketplace_ready) : null,
       });
-      setOwnerTalentRecent(Array.isArray(ownerData.latest_profiles) ? ownerData.latest_profiles.slice(0, 10) : []);
+      setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
       setOwnerTalentDistributions({
         country_of_residence: Array.isArray(ownerData.distributions?.country_of_residence) ? ownerData.distributions.country_of_residence : [],
         profession: Array.isArray(ownerData.distributions?.profession) ? ownerData.distributions.profession : [],
@@ -25793,6 +25828,9 @@ async function savePlatformClient() {
 
   const companyName = String(platformClientForm.company_name || "").trim();
   if (!companyName) return alert("Company name is required.");
+  if (platformClientForm.talent_access_enabled && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
+    return alert("Set a visible Talent Profiles Limit greater than zero when VisaFlow Talent Access is enabled.");
+  }
 
   const isNewCompany = !platformClientEditingId;
   const adminName = String(platformClientForm.admin_name || "").trim();
@@ -35695,60 +35733,6 @@ disabled={authorizationWorkflowBusy === "create"}
       </TableCard>
     )}
 
-    {shouldShowAgencyAgreements({ role: currentRole, loading: agencyAgreementsLoading, agreements: agencyAgreements }) && (
-      <TableCard title="Agency Agreements / Electronic Signature">
-        {agencyAgreementsLoading && agencyAgreements.length === 0 ? (
-          <div className="empty-state">Loading agreements...</div>
-        ) : (
-        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
-          <table>
-            <thead>
-              <tr>
-                <th>Agreement No</th>
-                <th>Company Workspace</th>
-                <th>Template</th>
-                <th>SLA</th>
-                <th>Labor SLA Penalty</th>
-                <th>Guarantee</th>
-                <th>Status</th>
-                <th>Agreement</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agencyAgreements.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.agreement_no || "-"}</td>
-                  <td>{currentUser?.company_name || item.company_name || "Current Client"}</td>
-                  <td>{item.template_type || "Standard"}</td>
-                  <td>{item.sla_days || 60} days</td>
-                  <td>{item.delay_penalty_type || "-"} / {item.delay_penalty_amount || 0}</td>
-                  <td>{item.financial_guarantee_required || "No"}{item.financial_guarantee_amount ? ` / ${Number(item.financial_guarantee_amount).toLocaleString()} SAR` : ""}</td>
-                  <td><Badge value={item.status || "Draft"} /></td>
-                  <td>
-                    <details>
-                      <summary>View</summary>
-                      <pre style={{ whiteSpace: "pre-wrap", maxWidth: 520, maxHeight: 260, overflow: "auto" }}>{item.terms || "No agreement terms"}</pre>
-                    </details>
-                  </td>
-                  <td className="table-actions">
-                    {item.status === "Pending Signature" ? (
-                      <button className="save-btn" onClick={() => acceptAgreementByAgency(item)}>Accept & Sign</button>
-                    ) : item.status === "Active" ? (
-                      <span>Accepted</span>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        )}
-      </TableCard>
-    )}
-
     {canManageOfficePortal && (
       <div className="actions-line" style={{ margin: "0 0 14px" }}>
         <button className="new-btn" onClick={downloadCandidateUploadTemplate}>Download Candidate Template</button>
@@ -36712,6 +36696,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
 {activePage === "Agency Agreements" && (
   <>
+    {currentRole === "Agency" && (
+      <div className="executive-hero" style={{ marginBottom: 18 }}>
+        <div>
+          <p className="eyebrow">Office Portal</p>
+          <h1>Agency Agreements</h1>
+          <p>Review the agreement terms for the selected company workspace and sign pending agreements electronically.</p>
+        </div>
+      </div>
+    )}
     <div className="dashboard-grid">
       <Stat title="Total Agreements" value={agencyAgreements.length} />
       <Stat title="Active Agreements" value={agencyAgreements.filter((x) => x.status === "Active").length} className="passed" />
@@ -36789,7 +36782,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       </FormCard>
     )}
 
-    <TableCard title="Agency Agreements List">
+    <TableCard title={currentRole === "Agency" ? "Agreements / Electronic Signature" : "Agency Agreements List"}>
+      {agencyAgreementsLoading && agencyAgreements.length === 0 ? (
+        <div className="empty-state">Loading agreements...</div>
+      ) : (
       <table>
         <thead>
           <tr>
@@ -36802,12 +36798,13 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Status</th>
             <th>Delivery Status</th>
             <th>Agency Accepted</th>
+            <th>Agreement</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {agencyAgreements.length === 0 ? (
-            <tr><td colSpan="10">No agency agreements yet</td></tr>
+            <tr><td colSpan="11">No agency agreements yet</td></tr>
           ) : (
             agencyAgreements.map((item) => (
               <tr key={item.id}>
@@ -36825,7 +36822,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   </div>
                 </td>
                 <td>{item.agency_accepted_at ? new Date(item.agency_accepted_at).toLocaleDateString("en-GB") : item.agency_signature || "-"}</td>
+                <td>
+                  <details>
+                    <summary>View Terms</summary>
+                    <pre style={{ whiteSpace: "pre-wrap", maxWidth: 520, maxHeight: 260, overflow: "auto" }}>{item.terms || "No agreement terms"}</pre>
+                  </details>
+                </td>
                 <td className="table-actions">
+                  {currentRole === "Agency" && item.status === "Pending Signature" && <button className="save-btn" onClick={() => acceptAgreementByAgency(item)}>Accept & Sign</button>}
+                  {currentRole === "Agency" && item.status === "Active" && <span>Accepted</span>}
                   {canManageAgencyAgreements && <button onClick={() => editAgreement(item)}>Edit</button>}
                   {canManageAgencyAgreements && item.status !== "Pending Signature" && item.status !== "Active" && <button onClick={() => sendExistingAgreementToAgency(item)}>Send</button>}
                   {canManageAgencyAgreements && canRetryAgreementEmail(item) && <button onClick={() => sendExistingAgreementToAgency(item)}>Retry Email</button>}
@@ -36836,6 +36841,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           )}
         </tbody>
       </table>
+      )}
     </TableCard>
   </>
 )}
@@ -38724,9 +38730,9 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="section-title-row">
         <div>
           <h2>Latest Candidate Profiles / آخر ملفات المرشحين</h2>
-          <p>Latest 10 candidate profile records only.</p>
+          <p>Latest candidate profile records (up to 50).</p>
         </div>
-        <button type="button" disabled title="The full candidate directory is not included in phase one." style={{ opacity: 0.45, cursor: "not-allowed" }}>View All Candidates</button>
+        <button type="button" onClick={loadOwnerTalentDashboard} disabled={ownerTalentLoading}>{ownerTalentLoading ? "Refreshing..." : "Refresh Candidates"}</button>
       </div>
       <table>
         <thead>
@@ -39185,11 +39191,12 @@ onClick={() => setActiveReport("activityLog")}>
             <th>End</th>
             <th>Remaining</th>
             <th>Monthly</th>
+            <th>Talent Access</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {platformClients.length === 0 ? <tr><td colSpan="13">No companies yet</td></tr> : platformClients.map((item) => {
+          {platformClients.length === 0 ? <tr><td colSpan="14">No companies yet</td></tr> : platformClients.map((item) => {
             const daysRemaining = getClientDaysRemaining(item);
             const renewalStatus = getClientRenewalStatus(item);
             const primaryAdmin = getPrimaryAdminForPlatformClient(item);
@@ -39211,6 +39218,10 @@ onClick={() => setActiveReport("activityLog")}>
                 <td>{item.end_date || "-"}</td>
                 <td>{daysRemaining === null ? "-" : daysRemaining < 0 ? "Expired" : `${daysRemaining} day(s)`}</td>
                 <td>{Number(item.monthly_amount || 0).toLocaleString()} SAR</td>
+                <td>
+                  <Badge value={item.talent_access_enabled ? "Enabled" : "Disabled"} />
+                  {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {Number(item.talent_profile_limit || 0).toLocaleString()} profiles</div>}
+                </td>
                 <td className="actions">
                   <button onClick={() => editPlatformClient(item)}>Edit</button>
                   <button onClick={() => extendPlatformClient(item, 1)}>Extend 30d</button>

@@ -1,6 +1,7 @@
 {
   "scripts": {
     "test:company-users": "node --test src/companyUserManagement.test.mjs",
+    "test:talent-access": "node --test src/talentAccess.test.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
