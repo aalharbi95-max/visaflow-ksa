@@ -12,6 +12,11 @@ const repairMigration = readFileSync(
   "utf8",
 );
 
+const membershipRepairMigration = readFileSync(
+  new URL("../supabase/migrations/20260809000500_repair_agency_membership_gate.sql", import.meta.url),
+  "utf8",
+);
+
 test("candidate and interview ownership uses immutable agency ids", () => {
   assert.match(migration, /add column if not exists agency_id uuid/i);
   assert.match(migration, /agency_recruitment_access_allowed\(company_id, agency_id/i);
@@ -47,4 +52,15 @@ test("active agency user permissions are repaired from office permissions", () =
   assert.match(repairMigration, /can_upload_candidates\s*=\s*office_access\.can_upload_candidates/i);
   assert.match(repairMigration, /can_update_candidates\s*=\s*office_access\.can_update_candidates/i);
   assert.match(repairMigration, /lower\(coalesce\(user_access\.status,\s*''\)\)\s*=\s*'active'/i);
+});
+
+test("invitation-created agency users do not depend on a legacy membership row", () => {
+  assert.match(membershipRepairMigration, /insert\s+into\s+public\.agency_members/i);
+  assert.match(membershipRepairMigration, /on\s+conflict\s*\(agency_id,\s*user_id\)\s+do\s+nothing/i);
+
+  const functionBody = membershipRepairMigration.split("create or replace function public.agency_recruitment_access_allowed")[1];
+  assert.ok(functionBody, "access function should be replaced");
+  assert.match(functionBody, /join\s+public\.agency_company_user_access/i);
+  assert.match(functionBody, /user_access\.can_upload_candidates\s+is\s+true/i);
+  assert.doesNotMatch(functionBody, /join\s+public\.agency_members/i);
 });
