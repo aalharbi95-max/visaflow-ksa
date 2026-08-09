@@ -8437,6 +8437,12 @@ Cancel = إضافتها كوظيفة مستقلة`
     setCompanyEmailSettings(null);
     setEmailSettingsForm(emptyCompanyEmailSettings);
     setCandidates([]);
+    setCandidateForm(emptyCandidate);
+    setCandidateTechnicalForm(emptyCandidateTechnicalProfile);
+    setCandidateEditingId(null);
+    setCandidateSaveFeedback(null);
+    setCandidateSelectedIds([]);
+    setOfficeSelectedCandidateIds([]);
     setCandidateTechnicalProfiles([]);
     setEducationInstitutions([]);
     setInterviews([]);
@@ -23520,21 +23526,67 @@ function getAIAgentAgencyFitScore(request, agencyRow) {
   };
 }
 
+function isAIAgentAgencyEligibleForRequestLine(agencyRow, request, requestLine) {
+  const agencyName = agencyRow?.name || agencyRow?.agency || "";
+  const nationality = requestLine?.nationality || request?.nationality || "";
+  const scorecard = buildAgencyScorecard().find((row) => normalize(row.agency) === normalize(agencyName)) || {};
+  const numericScore = Number(scorecard.score || 0);
+  const hasMeasuredHoldRisk = numericScore > 0 && numericScore < 40;
+  const rejectedThisRequest = notifications.some((notification) =>
+    String(notification.type || "") === "AGENCY_REQUEST_RESPONSE" &&
+    String(notification.request_no || notification?.data?.request_no || "") === String(request?.request_no || "") &&
+    normalize(notification.agency_name || notification?.data?.agency_name || notification?.data?.agency || "") === normalize(agencyName) &&
+    normalize(notification.response_status || notification?.data?.response_status || notification?.data?.agency_decision || "") === "rejected"
+  );
+
+  if (hasMeasuredHoldRisk || rejectedThisRequest) return false;
+  if (!nationality || nationality === "-") return true;
+
+  const countryMatch = nationalitiesMatch(agencyRow?.country || "", nationality, countries);
+  const candidateHistoryMatch = candidates.some((candidate) =>
+    normalize(candidate.agency) === normalize(agencyName) &&
+    nationalitiesMatch(candidate.nationality, nationality, countries)
+  );
+  const authorizationHistoryMatch = visaAuthorizations.some((authorization) =>
+    normalize(authorization.agency) === normalize(agencyName) &&
+    authorization.status !== "Cancelled" &&
+    nationalitiesMatch(authorization.nationality, nationality, countries)
+  );
+
+  return countryMatch || candidateHistoryMatch || authorizationHistoryMatch;
+}
+
 function getAIAgentRequestAssignmentRecommendations() {
   const openStatuses = ["Open", "Under Recruitment", "Interview Stage", "Visa Process"];
-  const activeAgencies = agencies.filter((agency) => String(agency.status || "Active") !== "Inactive");
+  const activeAgencies = agencies.filter((agency) => normalize(agency.status || "Active") === "active");
 
   return requests
     .filter((request) => openStatuses.includes(request.status || "Open"))
-    .map((request) => {
-      const relatedCandidates = candidates.filter((candidate) => String(candidate.request_no || "") === String(request.request_no || "") && !["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "Joined"].includes(candidate.status));
-      const requiredQty = getRequestTotalQty(request);
-      const remaining = Math.max(requiredQty - relatedCandidates.length, 0);
+    .flatMap((request) => getRequestLinesForRequest(request).map((line, lineIndex) => {
+      const requiredQty = Number(line.quantity || 0);
+      const assignedQty = visaAuthorizations
+        .filter((authorization) =>
+          authorization.status !== "Cancelled" &&
+          String(authorization.request_no || "") === String(request.request_no || "") &&
+          isCompatibleText(authorization.profession, line.profession) &&
+          nationalitiesMatch(authorization.nationality, line.nationality, countries) &&
+          (!line.gender || !authorization.gender || normalize(authorization.gender) === normalize(line.gender))
+        )
+        .reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
+      const remaining = Math.max(requiredQty - assignedQty, 0);
       if (remaining <= 0) return null;
 
+      const requestLineContext = {
+        ...request,
+        profession: line.profession || request.profession || "",
+        nationality: line.nationality || request.nationality || "",
+        gender: line.gender || request.gender || "",
+        quantity: remaining,
+      };
       const rankedAgencies = activeAgencies
+        .filter((agency) => isAIAgentAgencyEligibleForRequestLine(agency, request, line))
         .map((agency) => {
-          const fit = getAIAgentAgencyFitScore(request, { ...agency, agency: agency.name });
+          const fit = getAIAgentAgencyFitScore(requestLineContext, { ...agency, agency: agency.name });
           return {
             ...agency,
             agency: agency.name,
@@ -23556,13 +23608,15 @@ function getAIAgentRequestAssignmentRecommendations() {
 
       return {
         request,
+        requestLine: line,
+        recommendationKey: `${request.request_no || request.id || "request"}:${line.id || line.line_no || lineIndex + 1}`,
         request_no: request.request_no || "-",
         project: request.project_name || request.project || "-",
-        profession: request.profession || getRequestLineSummary(request, "profession") || "-",
-        nationality: request.nationality || getRequestLineSummary(request, "nationality") || "-",
-        gender: request.gender || getRequestLineSummary(request, "gender") || "-",
+        profession: line.profession || "-",
+        nationality: line.nationality || "-",
+        gender: line.gender || "-",
         requiredQty,
-        currentCandidates: relatedCandidates.length,
+        assignedQty,
         remaining,
         daysOpen,
         priority,
@@ -23572,7 +23626,7 @@ function getAIAgentRequestAssignmentRecommendations() {
           ? `Assign ${request.request_no || "request"} to ${bestAgency.agency}. Fit score ${bestAgency.fitScore}%. Ask for first batch within 72 hours.`
           : "No active agency found. Add agency or activate agreement first.",
       };
-    })
+    }))
     .filter(Boolean)
     .sort((a, b) => Number(b.remaining || 0) - Number(a.remaining || 0));
 }
@@ -31659,7 +31713,7 @@ if (!currentUser) {
                       <tr><td colSpan="5" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No open requests need agency assignment right now.</td></tr>
                     ) : (
                       getAIAgentRequestAssignmentRecommendations().slice(0, 12).map((item) => (
-                        <tr key={`ai-agent-rec-${item.request_no}`}>
+                        <tr key={`ai-agent-rec-${item.recommendationKey || item.request_no}`}>
                           <td><b>{item.request_no}</b><br /><small>{item.project}</small><br /><Badge value={item.priority} /></td>
                           <td>{item.profession}<br /><small>{item.nationality} / {item.gender}</small><br /><b>Remaining: {item.remaining}</b></td>
                           <td>

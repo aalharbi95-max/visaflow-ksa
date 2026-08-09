@@ -31,3 +31,22 @@ test("trial migration expires access and protects usage records", async () => {
   assert.match(source, /alter table public\.ai_agent_usage_ledger enable row level security/i);
   assert.match(source, /AI_AGENT_PROFESSIONAL_NOT_ENABLED/);
 });
+
+test("AI Agent recommendations respect line assignment, nationality and rejection history", async () => {
+  const source = await read("./App.jsx");
+  assert.match(source, /getRequestLinesForRequest\(request\)\.map\(\(line, lineIndex\)/);
+  assert.match(source, /requiredQty\s*-\s*assignedQty/);
+  assert.match(source, /nationalitiesMatch\(agencyRow\?\.country/);
+  assert.match(source, /AGENCY_REQUEST_RESPONSE/);
+  assert.match(source, /hasMeasuredHoldRisk\s*\|\|\s*rejectedThisRequest/);
+});
+
+test("workspace logout clears candidate form state", async () => {
+  const source = await read("./App.jsx");
+  const clearStart = source.indexOf("function clearTenantSensitiveState()");
+  const clearEnd = source.indexOf("async function loadAll()", clearStart);
+  const clearSource = source.slice(clearStart, clearEnd);
+  assert.match(clearSource, /setCandidateForm\(emptyCandidate\)/);
+  assert.match(clearSource, /setCandidateSaveFeedback\(null\)/);
+  assert.match(clearSource, /setOfficeSelectedCandidateIds\(\[\]\)/);
+});

@@ -7,6 +7,11 @@ const migration = readFileSync(
   "utf8",
 );
 
+const repairMigration = readFileSync(
+  new URL("../supabase/migrations/20260809000400_repair_agency_candidate_workflow.sql", import.meta.url),
+  "utf8",
+);
+
 test("candidate and interview ownership uses immutable agency ids", () => {
   assert.match(migration, /add column if not exists agency_id uuid/i);
   assert.match(migration, /agency_recruitment_access_allowed\(company_id, agency_id/i);
@@ -31,3 +36,15 @@ test("legacy permissive policies are replaced for both recruitment tables", () =
   }
 });
 
+test("candidate trigger reads interview-only candidate_id dynamically", () => {
+  assert.match(repairMigration, /tg_table_name\s*=\s*'interviews'/i);
+  assert.match(repairMigration, /to_jsonb\(new\)->>'candidate_id'/i);
+  assert.doesNotMatch(repairMigration, /if\s+tg_table_name\s*=\s*'interviews'\s+and\s+new\.candidate_id/i);
+});
+
+test("active agency user permissions are repaired from office permissions", () => {
+  assert.match(repairMigration, /update\s+public\.agency_company_user_access\s+as\s+user_access/i);
+  assert.match(repairMigration, /can_upload_candidates\s*=\s*office_access\.can_upload_candidates/i);
+  assert.match(repairMigration, /can_update_candidates\s*=\s*office_access\.can_update_candidates/i);
+  assert.match(repairMigration, /lower\(coalesce\(user_access\.status,\s*''\)\)\s*=\s*'active'/i);
+});
