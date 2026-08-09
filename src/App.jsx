@@ -43,6 +43,13 @@ import {
   shouldShowLanguageToggle,
 } from "./languagePolicy.mjs";
 import {
+  AI_AGENT_PLANS,
+  getAiAgentEntitlementLabel,
+  isAiAgentProfessionalAvailable,
+  normalizeAiAgentEntitlement,
+  validateCompanyTrialForm,
+} from "./aiAgentProfessional.mjs";
+import {
   calculateAgencyMobilizationScore,
   calculateApplicableWeightedScore,
   calculateInterviewQuality,
@@ -5720,12 +5727,46 @@ const PUBLIC_LANDING_COPY = {
 
 function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [trialForm, setTrialForm] = useState({ company_name: "", admin_name: "", email: "", phone: "", job_title: "", team_size: "1-5", website: "", company_fax: "", accepted_terms: false });
+  const [trialSubmitting, setTrialSubmitting] = useState(false);
+  const [trialMessage, setTrialMessage] = useState("");
+  const [trialSucceeded, setTrialSucceeded] = useState(false);
   const effectiveLanguage = resolveUiLanguage({ preferredLanguage: language });
   const copy =
     PUBLIC_LANDING_COPY[effectiveLanguage] || PUBLIC_LANDING_COPY.EN;
   const isArabic = effectiveLanguage === "AR";
-  const demoHref = `mailto:support@visaflowksa.com?subject=${encodeURIComponent(isArabic ? "طلب تجربة VisaFlow KSA" : "VisaFlow KSA demo request")}`;
+  const demoHref = "#company-trial";
   const handleAnchorClick = () => setMobileMenuOpen(false);
+
+  async function submitCompanyTrial(event) {
+    event.preventDefault();
+    if (trialSubmitting) return;
+    const validation = validateCompanyTrialForm(trialForm);
+    if (!validation.ok) {
+      setTrialMessage(isArabic ? "يرجى إكمال البيانات المطلوبة بشكل صحيح والموافقة على شروط التجربة." : validation.error);
+      return;
+    }
+    setTrialSubmitting(true);
+    setTrialMessage("");
+    try {
+      const { data, error } = await supabase.functions.invoke("visaflow-company-trial-provisioner", { body: { ...validation.value, company_fax: trialForm.company_fax } });
+      if (error || data?.ok === false) {
+        const code = String(data?.code || error?.message || "TRIAL_PROVISIONING_FAILED");
+        if (code.includes("ALREADY")) throw new Error(isArabic ? "سبق تسجيل هذا البريد. استخدم تسجيل الدخول أو تواصل مع الدعم." : "This email already has a trial or account. Sign in or contact support.");
+        if (code.includes("RATE_LIMITED")) throw new Error(isArabic ? "تم تجاوز عدد المحاولات المسموح. حاول غدًا أو تواصل مع الدعم." : "Too many trial requests. Try again tomorrow or contact support.");
+        throw new Error(isArabic ? "تعذر إنشاء التجربة الآن. يرجى المحاولة مرة أخرى." : "The trial could not be created. Please try again.");
+      }
+      setTrialSucceeded(true);
+      setTrialMessage(isArabic
+        ? `تم إنشاء تجربة AI Agent Professional لمدة 7 أيام حتى ${data.trial_end}. افتح رسالة الدعوة في بريدك لإنشاء كلمة المرور.`
+        : `Your 7-day AI Agent Professional trial is ready through ${data.trial_end}. Open the invitation email to create your password.`);
+    } catch (error) {
+      setTrialSucceeded(false);
+      setTrialMessage(error?.message || (isArabic ? "تعذر إنشاء التجربة." : "Unable to create the trial."));
+    } finally {
+      setTrialSubmitting(false);
+    }
+  }
 
   return (
     <div className="vf-public" dir={getUiDirection(effectiveLanguage)} lang="en">
@@ -5897,6 +5938,38 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
           <div className="vf-public-container vf-public-governance-grid">
             <div><span className="vf-public-kicker">{copy.governance.eyebrow}</span><h2>{copy.governance.title}</h2></div>
             <div className="vf-public-governance-list">{copy.governance.items.map((item, index) => <article key={item}><span>{["▦", "⌘", "≡", "◉", "◇"][index]}</span><strong>{item}</strong></article>)}</div>
+          </div>
+        </section>
+
+        <section className="vf-public-trial" id="company-trial">
+          <div className="vf-public-container vf-public-trial-grid">
+            <div className="vf-public-trial-copy">
+              <span className="vf-public-kicker">AI Agent Professional</span>
+              <h2>{isArabic ? "ابدأ تجربة شركتك خلال دقائق" : "Start your company trial in minutes"}</h2>
+              <p>{isArabic
+                ? "تجربة مجانية لمدة 7 أيام تشمل مساحة عمل مستقلة وموظف متابعة ذكي. لا تحتاج بطاقة دفع، وتتوقف تلقائيًا عند انتهاء التجربة ما لم يتم تفعيل الاشتراك من مالك المنصة."
+                : "A free 7-day trial with an isolated workspace and an intelligent follow-up employee. No payment card is required, and access stops automatically unless the Platform Owner activates the subscription."}</p>
+              <ul>
+                <li>{isArabic ? "مساحة عمل مستقلة وآمنة لشركتك" : "A secure, isolated company workspace"}</li>
+                <li>{isArabic ? "AI Agent Professional بحدود تجريبية" : "AI Agent Professional with trial limits"}</li>
+                <li>{isArabic ? "رابط آمن يصل إلى بريد مدير الشركة" : "A secure setup link sent to the company administrator"}</li>
+              </ul>
+            </div>
+            <form className="vf-public-trial-form" onSubmit={submitCompanyTrial}>
+              <div className="vf-public-trial-fields">
+                <label><span>{isArabic ? "اسم الشركة" : "Company name"}</span><input value={trialForm.company_name} onChange={(e) => setTrialForm((current) => ({ ...current, company_name: e.target.value }))} required /></label>
+                <label><span>{isArabic ? "اسم مدير الحساب" : "Administrator name"}</span><input value={trialForm.admin_name} onChange={(e) => setTrialForm((current) => ({ ...current, admin_name: e.target.value }))} required /></label>
+                <label><span>{isArabic ? "البريد الإلكتروني للعمل" : "Work email"}</span><input type="email" value={trialForm.email} onChange={(e) => setTrialForm((current) => ({ ...current, email: e.target.value }))} required /></label>
+                <label><span>{isArabic ? "رقم الجوال" : "Mobile number"}</span><input value={trialForm.phone} onChange={(e) => setTrialForm((current) => ({ ...current, phone: e.target.value }))} /></label>
+                <label><span>{isArabic ? "المسمى الوظيفي" : "Job title"}</span><input value={trialForm.job_title} onChange={(e) => setTrialForm((current) => ({ ...current, job_title: e.target.value }))} /></label>
+                <label><span>{isArabic ? "حجم فريق التوظيف" : "Recruitment team size"}</span><select value={trialForm.team_size} onChange={(e) => setTrialForm((current) => ({ ...current, team_size: e.target.value }))}><option>1-5</option><option>6-20</option><option>21-50</option><option>51+</option></select></label>
+              </div>
+              <input className="vf-public-trial-honeypot" tabIndex="-1" autoComplete="off" aria-hidden="true" value={trialForm.company_fax} onChange={(e) => setTrialForm((current) => ({ ...current, company_fax: e.target.value }))} />
+              <label className="vf-public-trial-consent"><input type="checkbox" checked={trialForm.accepted_terms} onChange={(e) => setTrialForm((current) => ({ ...current, accepted_terms: e.target.checked }))} /><span>{isArabic ? "أوافق على إنشاء مساحة عمل تجريبية ومعالجة بيانات التسجيل لغرض تقديم الخدمة." : "I agree to create a trial workspace and to the processing of registration data for providing the service."}</span></label>
+              {trialMessage && <div className={`vf-public-trial-message ${trialSucceeded ? "success" : "error"}`}>{trialMessage}</div>}
+              <button type="submit" className="vf-public-primary" disabled={trialSubmitting || trialSucceeded}>{trialSubmitting ? (isArabic ? "جاري إنشاء التجربة..." : "Creating trial...") : trialSucceeded ? (isArabic ? "تم إنشاء التجربة" : "Trial created") : (isArabic ? "ابدأ التجربة المجانية" : "Start free trial")}</button>
+              {trialSucceeded && <button type="button" className="vf-public-secondary" onClick={onLogin}>{isArabic ? "فتح تسجيل الدخول" : "Open sign in"}</button>}
+            </form>
           </div>
         </section>
 
@@ -6517,6 +6590,8 @@ const [aiAgentLog, setAiAgentLog] = useState("");
 const [aiAgentSettings, setAiAgentSettings] = useState(DEFAULT_AI_AGENT_SETTINGS);
 const [aiAgentSettingsSaving, setAiAgentSettingsSaving] = useState(false);
 const [aiAgentSettingsMessage, setAiAgentSettingsMessage] = useState("");
+const [aiAgentEntitlement, setAiAgentEntitlement] = useState(normalizeAiAgentEntitlement());
+const [aiAgentUsageRows, setAiAgentUsageRows] = useState([]);
 const aiAgentAutoRunRef = useRef("");
 const [offerModalOpen, setOfferModalOpen] = useState(false);
 const [offerCandidate, setOfferCandidate] = useState(null);
@@ -6552,6 +6627,7 @@ const [reportStudioResult, setReportStudioResult] = useState("");
 const [reportStudioLastRun, setReportStudioLastRun] = useState("");
 
 const [platformClients, setPlatformClients] = useState([]);
+const [companyTrialRequests, setCompanyTrialRequests] = useState([]);
 const [subscriptionInvoices, setSubscriptionInvoices] = useState([]);
 const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
@@ -6653,6 +6729,11 @@ const emptyPlatformClient = {
   talent_access_tier: "None",
   talent_profile_limit: 0,
   talent_profile_unlimited: false,
+  ai_agent_enabled: false,
+  ai_agent_plan: "Standard",
+  ai_agent_trial_start: "",
+  ai_agent_trial_end: "",
+  ai_agent_monthly_credit_limit: 5000,
   operational_company_id: "",
   admin_name: "",
   admin_email: "",
@@ -8418,10 +8499,13 @@ Cancel = إضافتها كوظيفة مستقلة`
     setSelectedEmployeeIds([]);
     setMarketplaceSelectedEmployeeIds([]);
     setSelectedPlatformClientUsers(null);
+    setCompanyTrialRequests([]);
     setCompanyReportClient(null);
     setAiAnswer("");
     setAiConversation([]);
     setAiAgentLog("");
+    setAiAgentEntitlement(normalizeAiAgentEntitlement());
+    setAiAgentUsageRows([]);
     setReportStudioResult("");
     setWorkspaceDataReady(false);
     setLoading(false);
@@ -8490,6 +8574,8 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadCompanies(),
       loadCompanyEmailSettings(),
       loadAIAgentSettings(),
+      loadAIAgentEntitlement(),
+      loadAIAgentUsage(),
       loadAuditLogs(),
       loadMobilizations(),
       loadOnboardingValidations(),
@@ -8504,6 +8590,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadEmailLogs(),
       loadEmailTemplates(),
       loadPlatformClients(),
+      loadCompanyTrialRequests(),
       loadSubscriptionInvoices(),
       loadSupportTickets(),
       loadSystemBackups(),
@@ -8925,6 +9012,43 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAiAgentSettings(normalizeAIAgentSettings(data || DEFAULT_AI_AGENT_SETTINGS));
   }
 
+  async function loadAIAgentEntitlement() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAiAgentEntitlement(normalizeAiAgentEntitlement());
+      return;
+    }
+    const { data, error } = await supabase.rpc("get_my_ai_agent_entitlement");
+    if (error) {
+      console.warn("get_my_ai_agent_entitlement:", error.message);
+      setAiAgentEntitlement(normalizeAiAgentEntitlement());
+      return;
+    }
+    setAiAgentEntitlement(normalizeAiAgentEntitlement(data || {}));
+  }
+
+  async function loadAIAgentUsage() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAiAgentUsageRows([]);
+      return;
+    }
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const { data, error } = await supabase
+      .from("ai_agent_usage_ledger")
+      .select("id,feature,model_name,input_tokens,output_tokens,total_tokens,credits_debited,status,created_at")
+      .eq("company_id", currentCompanyId)
+      .gte("created_at", monthStart.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      console.warn("ai_agent_usage_ledger:", error.message);
+      setAiAgentUsageRows([]);
+      return;
+    }
+    setAiAgentUsageRows(data || []);
+  }
+
   function updateAIAgentSetting(field, value) {
     setAiAgentSettings((prev) => normalizeAIAgentSettings({ ...prev, [field]: value }));
     setAiAgentSettingsMessage("");
@@ -8932,6 +9056,7 @@ Cancel = إضافتها كوظيفة مستقلة`
 
   async function saveAIAgentSettings() {
     if (!currentCompanyId) return alert("Company ID is missing.");
+    if (!isAiAgentProfessionalAvailable(aiAgentEntitlement)) return alert("AI Agent Professional is not active for this company. Ask the Platform Owner to enable it.");
 
     setAiAgentSettingsSaving(true);
     setAiAgentSettingsMessage("");
@@ -9438,6 +9563,7 @@ async function loadProfessionAliases() {
   }
 
   const loadPlatformClients = () => loadPlatformTable("platform_clients", setPlatformClients);
+  const loadCompanyTrialRequests = () => loadPlatformTable("company_trial_requests", setCompanyTrialRequests, "id,company_name,admin_name,email,phone,job_title,team_size,status,operational_company_id,platform_client_id,provisioned_at,created_at");
   const loadSubscriptionInvoices = () => loadPlatformTable("subscription_invoices", setSubscriptionInvoices);
   const loadSupportTickets = () => loadPlatformTable(
     "support_tickets",
@@ -25907,6 +26033,11 @@ function editPlatformClient(item) {
     talent_access_tier: item.talent_access_tier || "None",
     talent_profile_limit: Number(item.talent_profile_limit || 0),
     talent_profile_unlimited: isTalentProfileUnlimited(item.talent_profile_limit),
+    ai_agent_enabled: Boolean(item.ai_agent_enabled),
+    ai_agent_plan: item.ai_agent_plan || "Standard",
+    ai_agent_trial_start: item.ai_agent_trial_start || "",
+    ai_agent_trial_end: item.ai_agent_trial_end || "",
+    ai_agent_monthly_credit_limit: Number(item.ai_agent_monthly_credit_limit || 0),
     operational_company_id: item.operational_company_id || "",
     admin_name: "",
     admin_email: "",
@@ -25958,6 +26089,10 @@ async function savePlatformClient() {
   if (platformClientForm.talent_access_enabled && !platformClientForm.talent_profile_unlimited && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
     return alert("Set a visible Talent Profiles Limit greater than zero when VisaFlow Talent Access is enabled.");
   }
+  if (platformClientForm.ai_agent_enabled && platformClientForm.ai_agent_plan === "Professional Trial") {
+    if (!platformClientForm.ai_agent_trial_start || !platformClientForm.ai_agent_trial_end) return alert("Set the AI Agent Professional trial start and end dates.");
+    if (new Date(platformClientForm.ai_agent_trial_end) < new Date(platformClientForm.ai_agent_trial_start)) return alert("AI Agent trial end date must be after the start date.");
+  }
 
   const isNewCompany = !platformClientEditingId;
   const adminName = String(platformClientForm.admin_name || "").trim();
@@ -25989,6 +26124,11 @@ async function savePlatformClient() {
       unlimited: platformClientForm.talent_profile_unlimited,
       limit: platformClientForm.talent_profile_limit,
     }),
+    ai_agent_enabled: Boolean(platformClientForm.ai_agent_enabled),
+    ai_agent_plan: platformClientForm.ai_agent_enabled ? (platformClientForm.ai_agent_plan || "Professional") : "Standard",
+    ai_agent_trial_start: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_start || null) : null,
+    ai_agent_trial_end: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_end || null) : null,
+    ai_agent_monthly_credit_limit: Math.max(0, Number(platformClientForm.ai_agent_monthly_credit_limit || 0)),
   };
 
   setPlatformClientSaving(true);
@@ -26000,14 +26140,39 @@ async function savePlatformClient() {
       // public.users link as one protected provisioning workflow. If any step
       // fails, it removes the records already created instead of leaving an
       // incomplete company in the portfolio.
+      const {
+        ai_agent_enabled: _aiAgentEnabled,
+        ai_agent_plan: _aiAgentPlan,
+        ai_agent_trial_start: _aiAgentTrialStart,
+        ai_agent_trial_end: _aiAgentTrialEnd,
+        ai_agent_monthly_credit_limit: _aiAgentMonthlyCreditLimit,
+        ...provisionerCompanyPayload
+      } = companyPayload;
       const provisionedCompany = await invokePlatformCompanyProvisioner({
         action: "create_company",
-        ...companyPayload,
+        ...provisionerCompanyPayload,
         admin_name: adminName,
         admin_email: adminEmail,
         admin_password: adminPassword,
         admin_role: adminRole,
       });
+
+      const provisionedOperationalCompanyId = provisionedCompany?.company?.id
+        || provisionedCompany?.platform_client?.operational_company_id
+        || provisionedCompany?.operational_company_id;
+      if (provisionedOperationalCompanyId) {
+        const { error: entitlementUpdateError } = await supabase
+          .from("platform_clients")
+          .update({
+            ai_agent_enabled: companyPayload.ai_agent_enabled,
+            ai_agent_plan: companyPayload.ai_agent_plan,
+            ai_agent_trial_start: companyPayload.ai_agent_trial_start,
+            ai_agent_trial_end: companyPayload.ai_agent_trial_end,
+            ai_agent_monthly_credit_limit: companyPayload.ai_agent_monthly_credit_limit,
+          })
+          .eq("operational_company_id", provisionedOperationalCompanyId);
+        if (entitlementUpdateError) throw entitlementUpdateError;
+      }
 
       // Send one branded message that contains the company details and a
       // server-generated, time-limited activation link. The password is never
@@ -31346,6 +31511,34 @@ if (!currentUser) {
 
         {activePage === "AI Agent" && (
           <>
+            {canManagePlatform && (
+              <div className="table-card">
+                <div className="section-title-row">
+                  <div><h2>AI Agent Professional · Platform Control</h2><p>Activate Professional access per company and monitor self-service seven-day trials.</p></div>
+                  <div className="actions"><button onClick={loadCompanyTrialRequests}>Refresh Trials</button><button className="save-btn" onClick={() => setActivePage("Companies Management")}>Manage Company Access</button></div>
+                </div>
+                <div className="stats-grid">
+                  <div className="stat-card"><h3>Professional Companies</h3><strong>{platformClients.filter((item) => isAiAgentProfessionalAvailable(item)).length}</strong><span>Active entitlement</span></div>
+                  <div className="stat-card"><h3>Professional Trials</h3><strong>{platformClients.filter((item) => item.ai_agent_plan === "Professional Trial" && isAiAgentProfessionalAvailable(item)).length}</strong><span>Currently active</span></div>
+                  <div className="stat-card"><h3>Trial Registrations</h3><strong>{companyTrialRequests.length}</strong><span>Public landing requests</span></div>
+                </div>
+                <table>
+                  <thead><tr><th>Company</th><th>Administrator</th><th>Work Email</th><th>Team</th><th>Status</th><th>Requested</th><th>Action</th></tr></thead>
+                  <tbody>{companyTrialRequests.length === 0 ? <tr><td colSpan="7">No company trial registrations yet.</td></tr> : companyTrialRequests.map((request) => <tr key={request.id}><td><b>{request.company_name}</b><br /><small>{request.job_title || "-"}</small></td><td>{request.admin_name}</td><td>{request.email}<br /><small>{request.phone || "-"}</small></td><td>{request.team_size || "-"}</td><td><Badge value={request.status} /></td><td>{request.created_at ? new Date(request.created_at).toLocaleString() : "-"}</td><td><button onClick={() => { const client = platformClients.find((item) => String(item.id) === String(request.platform_client_id)); if (client) editPlatformClient(client); else setActivePage("Companies Management"); }}>Open Company</button></td></tr>)}</tbody>
+                </table>
+              </div>
+            )}
+            {!canManagePlatform && <div className="table-card" style={{ borderColor: isAiAgentProfessionalAvailable(aiAgentEntitlement) ? "#99f6e4" : "#fed7aa", background: isAiAgentProfessionalAvailable(aiAgentEntitlement) ? "#f0fdfa" : "#fff7ed" }}>
+              <div className="section-title-row">
+                <div>
+                  <h2>AI Agent Professional · {getAiAgentEntitlementLabel(aiAgentEntitlement)}</h2>
+                  <p>{isAiAgentProfessionalAvailable(aiAgentEntitlement)
+                    ? `${aiAgentUsageRows.reduce((sum, row) => sum + Number(row.credits_debited || 0), 0).toLocaleString()} of ${Number(aiAgentEntitlement.monthly_credit_limit || 0).toLocaleString()} monthly AI credits used.${aiAgentEntitlement.plan === "Professional Trial" && aiAgentEntitlement.trial_end ? ` Trial ends ${aiAgentEntitlement.trial_end}.` : ""}`
+                    : "Professional automation is locked for this company. The Platform Owner can enable it from Companies Management."}</p>
+                </div>
+                <Badge value={isAiAgentProfessionalAvailable(aiAgentEntitlement) ? "Active" : "Locked"} />
+              </div>
+            </div>}
             <TableCard title="🤖 AI Recruitment Agent - Agency Follow-up Employee">
               <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: "18px", alignItems: "stretch" }}>
                 <div style={{ borderRadius: "28px", padding: "30px", background: "linear-gradient(135deg, #020617 0%, #0f2f68 50%, #0f766e 100%)", color: "white", position: "relative", overflow: "hidden", minHeight: "260px" }}>
@@ -31358,8 +31551,8 @@ if (!currentUser) {
                       موظف ذكي داخل VisaFlow يعمل كـ Recruitment Operations Employee: يقترح المكتب المناسب بعد الطلب، يجهز موافقة مدير التوظيف، يتابع المكاتب، يرسل الإشعارات، ويصعد الحالات المتأخرة.
                     </p>
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "22px" }}>
-                      <button className="save-btn" onClick={createAIAgentManagerBriefNotification}>Create Manager Daily Brief</button>
-                      <button className="new-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading}>
+                      <button className="save-btn" onClick={createAIAgentManagerBriefNotification} disabled={!isAiAgentProfessionalAvailable(aiAgentEntitlement)}>Create Manager Daily Brief</button>
+                      <button className="new-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading || !isAiAgentProfessionalAvailable(aiAgentEntitlement)}>
                         {aiAgentLoading ? "AI Agent Working..." : "Run Manual Follow-up"}
                       </button>
                       <button className="new-btn" onClick={() => setActivePage("Notifications")}>Open Notification Center</button>
@@ -31396,6 +31589,7 @@ if (!currentUser) {
                 <Stat title="Agency Emails" value={shouldAIAgentSendAgencyEmails() ? "Enabled" : "Notifications Only"} className={shouldAIAgentSendAgencyEmails() ? "passed" : "warning"} />
               </div>
 
+              <fieldset disabled={!isAiAgentProfessionalAvailable(aiAgentEntitlement)} style={{ border: 0, padding: 0, margin: 0, opacity: isAiAgentProfessionalAvailable(aiAgentEntitlement) ? 1 : 0.55 }}>
               <div className="form-grid">
                 <Select
                   placeholder="AI Agent Mode"
@@ -31442,6 +31636,7 @@ if (!currentUser) {
                 </button>
                 <button className="light-btn" onClick={loadAIAgentSettings}>Reload Settings</button>
               </div>
+              </fieldset>
             </TableCard>
 
             <TableCard title="🧭 Request Assignment Recommendations">
@@ -39261,6 +39456,46 @@ onClick={() => setActiveReport("activityLog")}>
           </div>
         )}
 
+        <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+          <h3 style={{ margin: "8px 0 4px" }}>AI Agent Professional</h3>
+          <p className="muted">Enable the professional background employee for this company. Trial access stops automatically on its end date.</p>
+        </div>
+
+        <div>
+          <label>AI Agent Professional Access</label>
+          <select
+            value={platformClientForm.ai_agent_enabled ? "Enabled" : "Disabled"}
+            onChange={(e) => setPlatformClientForm((current) => ({
+              ...current,
+              ai_agent_enabled: e.target.value === "Enabled",
+              ai_agent_plan: e.target.value === "Enabled" && current.ai_agent_plan === "Standard" ? "Professional" : current.ai_agent_plan,
+              ai_agent_monthly_credit_limit: e.target.value === "Enabled" && Number(current.ai_agent_monthly_credit_limit || 0) <= 0 ? 5000 : current.ai_agent_monthly_credit_limit,
+            }))}
+          >
+            <option>Disabled</option>
+            <option>Enabled</option>
+          </select>
+        </div>
+
+        <div>
+          <label>AI Agent Plan</label>
+          <select disabled={!platformClientForm.ai_agent_enabled} value={platformClientForm.ai_agent_plan} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_plan", e.target.value)}>
+            {AI_AGENT_PLANS.map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label>Monthly AI Credits Included</label>
+          <input type="number" min="0" disabled={!platformClientForm.ai_agent_enabled} value={platformClientForm.ai_agent_monthly_credit_limit} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_monthly_credit_limit", e.target.value)} />
+        </div>
+
+        {platformClientForm.ai_agent_enabled && platformClientForm.ai_agent_plan === "Professional Trial" && (
+          <>
+            <div><label>Professional Trial Start</label><input type="date" value={platformClientForm.ai_agent_trial_start} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_trial_start", e.target.value)} /></div>
+            <div><label>Professional Trial End</label><input type="date" value={platformClientForm.ai_agent_trial_end} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_trial_end", e.target.value)} /></div>
+          </>
+        )}
+
         <div>
           <label>Operational Company ID</label>
           <input
@@ -39359,11 +39594,12 @@ onClick={() => setActiveReport("activityLog")}>
             <th>Remaining</th>
             <th>Monthly</th>
             <th>Talent Access</th>
+            <th>AI Agent</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {platformClients.length === 0 ? <tr><td colSpan="14">No companies yet</td></tr> : platformClients.map((item) => {
+          {platformClients.length === 0 ? <tr><td colSpan="15">No companies yet</td></tr> : platformClients.map((item) => {
             const daysRemaining = getClientDaysRemaining(item);
             const renewalStatus = getClientRenewalStatus(item);
             const primaryAdmin = getPrimaryAdminForPlatformClient(item);
@@ -39388,6 +39624,10 @@ onClick={() => setActiveReport("activityLog")}>
                 <td>
                   <Badge value={item.talent_access_enabled ? "Enabled" : "Disabled"} />
                   {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {formatTalentProfileLimit(item.talent_profile_limit)} profiles</div>}
+                </td>
+                <td>
+                  <Badge value={getAiAgentEntitlementLabel(item)} />
+                  {item.ai_agent_enabled && <div className="muted">{Number(item.ai_agent_monthly_credit_limit || 0).toLocaleString()} credits{item.ai_agent_plan === "Professional Trial" && item.ai_agent_trial_end ? ` / ends ${item.ai_agent_trial_end}` : ""}</div>}
                 </td>
                 <td className="actions">
                   <button onClick={() => editPlatformClient(item)}>Edit</button>

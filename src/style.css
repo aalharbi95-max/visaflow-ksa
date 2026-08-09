@@ -4014,6 +4014,61 @@ body:has(.vf-public) {
   line-height: 1.55;
 }
 
+.vf-public-trial {
+  padding: 86px 0;
+  background: linear-gradient(145deg, #eef6ff 0%, #f8fafc 48%, #ecfdf5 100%);
+}
+
+.vf-public-trial-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .85fr) minmax(460px, 1.15fr);
+  gap: 48px;
+  align-items: center;
+}
+
+.vf-public-trial-copy h2 {
+  margin: 14px 0;
+  color: #071d49;
+  font-size: clamp(34px, 4vw, 58px);
+  line-height: 1.05;
+  letter-spacing: -.045em;
+}
+
+.vf-public-trial-copy p,
+.vf-public-trial-copy li { color: #475569; line-height: 1.8; }
+.vf-public-trial-copy ul { padding-inline-start: 22px; }
+
+.vf-public-trial-form {
+  padding: 28px;
+  border: 1px solid #dbe7f3;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 24px 70px rgba(15, 47, 104, .12);
+}
+
+.vf-public-trial-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.vf-public-trial-form label { display: grid; gap: 7px; }
+.vf-public-trial-form label > span { color: #0f274f; font-size: 13px; font-weight: 800; }
+.vf-public-trial-form input,
+.vf-public-trial-form select {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.vf-public-trial-consent { grid-template-columns: auto 1fr !important; align-items: start; margin: 18px 0; }
+.vf-public-trial-consent input { width: 18px; min-height: 18px; margin-top: 2px; }
+.vf-public-trial-honeypot { position: absolute !important; left: -10000px !important; width: 1px !important; height: 1px !important; opacity: 0 !important; }
+.vf-public-trial-message { margin: 0 0 16px; padding: 13px 15px; border-radius: 12px; font-weight: 750; line-height: 1.6; }
+.vf-public-trial-message.success { color: #065f46; background: #ecfdf5; border: 1px solid #a7f3d0; }
+.vf-public-trial-message.error { color: #9a3412; background: #fff7ed; border: 1px solid #fed7aa; }
+.vf-public-trial-form > button { margin-inline-end: 10px; }
+
 .vf-public-cta {
   padding: 66px 0;
   background:
@@ -4264,7 +4319,8 @@ body:has(.vf-public) {
 
   .vf-public-hero-grid,
   .vf-public-talent-grid,
-  .vf-public-governance-grid {
+  .vf-public-governance-grid,
+  .vf-public-trial-grid {
     grid-template-columns: 1fr;
   }
 
@@ -4330,6 +4386,9 @@ body:has(.vf-public) {
 }
 
 @media (max-width: 600px) {
+  .vf-public-trial { padding: 58px 0; }
+  .vf-public-trial-form { padding: 20px; border-radius: 22px; }
+  .vf-public-trial-fields { grid-template-columns: 1fr; }
   .vf-public-container {
     width: min(100% - 28px, 1180px);
   }
