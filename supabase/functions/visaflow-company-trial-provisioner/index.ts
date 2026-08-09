@@ -2,7 +2,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const EMAIL_DISPATCHER_SECRET = Deno.env.get("VISAFLOW_EMAIL_DISPATCHER_SECRET") || "";
 const MAX_BODY_BYTES = 12 * 1024;
 const ALLOWED_ORIGINS = new Set([
   "https://visaflowksa.com",
@@ -59,12 +58,20 @@ function dateOnly(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+function workspaceRecoveryUrl() {
+  const url = new URL("https://visaflowksa.com");
+  url.searchParams.set("login", "1");
+  url.searchParams.set("auth_flow", "workspace");
+  url.searchParams.set("recovery", "1");
+  return url.toString();
+}
+
 Deno.serve(async (request) => {
   const origin = request.headers.get("origin");
   if (request.method === "OPTIONS") return originAllowed(origin) ? respond(origin, 204, null) : respond(origin, 403, { ok: false, code: "ORIGIN_NOT_ALLOWED" });
   if (request.method !== "POST") return respond(origin, 405, { ok: false, code: "METHOD_NOT_ALLOWED" });
   if (!originAllowed(origin)) return respond(origin, 403, { ok: false, code: "ORIGIN_NOT_ALLOWED" });
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !EMAIL_DISPATCHER_SECRET) return respond(origin, 503, { ok: false, code: "FUNCTION_NOT_CONFIGURED" });
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return respond(origin, 503, { ok: false, code: "FUNCTION_NOT_CONFIGURED" });
   if (Number(request.headers.get("content-length") || 0) > MAX_BODY_BYTES) return respond(origin, 413, { ok: false, code: "REQUEST_TOO_LARGE" });
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -211,21 +218,10 @@ Deno.serve(async (request) => {
     }).eq("id", requestId);
     if (finalizeError) throw finalizeError;
 
-    const emailResponse = await fetch(`${SUPABASE_URL}/functions/v1/visaflow-email-dispatcher`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
-        "apikey": SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-        "x-visaflow-email-secret": EMAIL_DISPATCHER_SECRET,
-      },
-      body: JSON.stringify({
-        message_type: "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL",
-        target_user_id: appUserId,
-      }),
+    const { error: recoveryError } = await admin.auth.resetPasswordForEmail(email, {
+      redirectTo: workspaceRecoveryUrl(),
     });
-    const emailResult = await emailResponse.json().catch(() => ({}));
-    if (!emailResponse.ok || emailResult?.ok === false) throw new TrialError("INVITATION_FAILED", 502);
+    if (recoveryError) throw new TrialError("INVITATION_FAILED", 502);
 
     return respond(origin, 200, { ok: true, trial_days: 7, trial_end: dateOnly(end), email });
   } catch (error) {

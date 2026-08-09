@@ -19,7 +19,9 @@ test("public trial provisioner is origin limited, rate limited and emails a reco
   assert.match(source, /TRIAL_RATE_LIMITED/);
   assert.match(source, /company_fax/);
   assert.match(source, /createUser/);
-  assert.match(source, /PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL/);
+  assert.match(source, /resetPasswordForEmail/);
+  assert.match(source, /auth_flow/);
+  assert.match(source, /recovery/);
   assert.doesNotMatch(source, /inviteUserByEmail/);
 });
 

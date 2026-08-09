@@ -138,7 +138,7 @@ const messageContracts: Record<string, MessageContract> = {
     subject: "VisaFlow Job Offer", fields: [["candidate_name", "Candidate"], ["profession", "Position"], ["request_no", "Request"], ["project", "Project"], ["salary", "Salary / package"], ["joining_date", "Expected joining"]], allowedInputVariables: ["salary", "joining_date"], allowedPath: "none",
   },
   PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL: {
-    roles: [PLATFORM_OWNER], browserEnabled: true, internalEnabled: true,
+    roles: [PLATFORM_OWNER], browserEnabled: true, internalEnabled: false,
     requiredId: "target_user_id", recipientSource: "target public.users.email", ownershipRule: "Platform Owner with company_id IS NULL; target belongs to an active company",
     subject: "Activate Your VisaFlow Company Account", fields: [["company_name", "Company"], ["admin_email", "Username"], ["action_url", "Secure activation link"], ["login_url", "Login page"]], allowedInputVariables: [], allowedPath: "supabase-auth-link",
   },
@@ -585,7 +585,7 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
   }
 
   if (type === "PLATFORM_CLIENT_LOGIN_DETAILS_EMAIL") {
-    if (caller.kind === "authenticated" && (caller.actor.role !== PLATFORM_OWNER || caller.actor.company_id !== null)) throw new RequestFailure(403, "forbidden");
+    if (caller.kind !== "authenticated" || caller.actor.role !== PLATFORM_OWNER || caller.actor.company_id !== null) throw new RequestFailure(403, "forbidden");
     const targetUserId = safeId(body.target_user_id, "target_user_id");
     const target = await exactlyOne(admin.from("users").select("id, email, name, role, status, is_active, company_id")
       .eq("id", targetUserId).eq("status", "Active").eq("is_active", true), "target_user_not_found");
