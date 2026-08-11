@@ -3,6 +3,14 @@
     {
       "source": "/agency/activate",
       "destination": "/index.html"
+    },
+    {
+      "source": "/housing",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/housing/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
