@@ -6732,6 +6732,8 @@ const [supportTicketEditingId, setSupportTicketEditingId] = useState(null);
 const emptyPlatformClient = {
   company_name: "",
   domain: "",
+  product_access_mode: "Recruitment Only",
+  recruitment_access_enabled: true,
   subscription_status: "Active",
   users_count: 0,
   start_date: "",
@@ -6748,6 +6750,9 @@ const emptyPlatformClient = {
   housing_end_date: "",
   housing_monthly_amount: 0,
   housing_users_limit: 0,
+  housing_admin_name: "",
+  housing_admin_email: "",
+  housing_workspace_id: "",
   ai_agent_enabled: false,
   ai_agent_plan: "Standard",
   ai_agent_trial_start: "",
@@ -26113,6 +26118,8 @@ function editPlatformClient(item) {
   setPlatformClientForm({
     company_name: item.company_name || "",
     domain: item.domain || "",
+    product_access_mode: item.product_access_mode || (item.housing_access_enabled ? "Recruitment + Housing" : "Recruitment Only"),
+    recruitment_access_enabled: item.recruitment_access_enabled !== false,
     subscription_status: item.subscription_status || "Active",
     users_count: item.users_count || 0,
     start_date: item.start_date || "",
@@ -26129,6 +26136,9 @@ function editPlatformClient(item) {
     housing_end_date: item.housing_end_date || "",
     housing_monthly_amount: Number(item.housing_monthly_amount || 0),
     housing_users_limit: Number(item.housing_users_limit || 0),
+    housing_admin_name: item.housing_admin_name || "",
+    housing_admin_email: item.housing_admin_email || "",
+    housing_workspace_id: item.housing_workspace_id || "",
     ai_agent_enabled: Boolean(item.ai_agent_enabled),
     ai_agent_plan: item.ai_agent_plan || "Standard",
     ai_agent_trial_start: item.ai_agent_trial_start || "",
@@ -26182,10 +26192,14 @@ async function savePlatformClient() {
 
   const companyName = String(platformClientForm.company_name || "").trim();
   if (!companyName) return alert("Company name is required.");
+  const productAccessMode = platformClientForm.product_access_mode || "Recruitment Only";
+  const isHousingOnlyCompany = productAccessMode === "Housing Only";
+  const recruitmentAccessEnabled = productAccessMode !== "Housing Only";
+  const housingAccessEnabled = productAccessMode !== "Recruitment Only";
   if (platformClientForm.talent_access_enabled && !platformClientForm.talent_profile_unlimited && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
     return alert("Set a visible Talent Profiles Limit greater than zero when VisaFlow Talent Access is enabled.");
   }
-  if (platformClientForm.housing_access_enabled) {
+  if (housingAccessEnabled) {
     if (!platformClientForm.housing_start_date || !platformClientForm.housing_end_date) return alert("Set the Housing subscription start and end dates.");
     if (new Date(platformClientForm.housing_end_date) < new Date(platformClientForm.housing_start_date)) return alert("Housing subscription end date must be after the start date.");
   }
@@ -26200,9 +26214,16 @@ async function savePlatformClient() {
   const adminPassword = String(platformClientForm.admin_password || "").trim();
   const adminRole = platformClientForm.admin_role || "Admin";
   const adminFieldsStarted = Boolean(adminName || adminEmail || adminPassword);
+  const housingAdminName = String(platformClientForm.housing_admin_name || "").trim();
+  const housingAdminEmail = String(platformClientForm.housing_admin_email || "").trim().toLowerCase();
+
+  if (housingAccessEnabled) {
+    if (!housingAdminName) return alert("Housing Primary Contact Name is required.");
+    if (!housingAdminEmail) return alert("Housing Primary Contact Email is required.");
+  }
 
   // A new client must never be saved without its first secure administrator.
-  if (isNewCompany || adminFieldsStarted) {
+  if ((!isHousingOnlyCompany && isNewCompany) || (!isHousingOnlyCompany && adminFieldsStarted)) {
     if (!adminName) return alert("Primary Admin Name is required.");
     if (!adminEmail) return alert("Primary Admin Email is required.");
     if (!adminPassword) return alert("Initial Provisioning Password is required.");
@@ -26212,27 +26233,32 @@ async function savePlatformClient() {
   const companyPayload = {
     company_name: companyName,
     domain: String(platformClientForm.domain || "").trim(),
-    subscription_status: platformClientForm.subscription_status || "Active",
-    users_count: Number(platformClientForm.users_count || 0),
-    start_date: platformClientForm.start_date || null,
-    end_date: platformClientForm.end_date || null,
-    monthly_amount: Number(platformClientForm.monthly_amount || 0),
-    talent_access_enabled: Boolean(platformClientForm.talent_access_enabled),
-    talent_access_tier: platformClientForm.talent_access_enabled ? (platformClientForm.talent_access_tier || "Standard") : "None",
+    product_access_mode: productAccessMode,
+    recruitment_access_enabled: recruitmentAccessEnabled,
+    subscription_status: recruitmentAccessEnabled ? (platformClientForm.subscription_status || "Active") : "Inactive",
+    users_count: recruitmentAccessEnabled ? Number(platformClientForm.users_count || 0) : 0,
+    start_date: recruitmentAccessEnabled ? (platformClientForm.start_date || null) : null,
+    end_date: recruitmentAccessEnabled ? (platformClientForm.end_date || null) : null,
+    monthly_amount: recruitmentAccessEnabled ? Number(platformClientForm.monthly_amount || 0) : 0,
+    talent_access_enabled: recruitmentAccessEnabled && Boolean(platformClientForm.talent_access_enabled),
+    talent_access_tier: recruitmentAccessEnabled && platformClientForm.talent_access_enabled ? (platformClientForm.talent_access_tier || "Standard") : "None",
     talent_profile_limit: getTalentProfileLimitValue({
       enabled: platformClientForm.talent_access_enabled,
       unlimited: platformClientForm.talent_profile_unlimited,
       limit: platformClientForm.talent_profile_limit,
     }),
-    housing_access_enabled: Boolean(platformClientForm.housing_access_enabled),
-    housing_plan: platformClientForm.housing_access_enabled ? (platformClientForm.housing_plan || "Standard") : "Standard",
-    housing_subscription_status: platformClientForm.housing_access_enabled ? (platformClientForm.housing_subscription_status || "Active") : "Inactive",
-    housing_start_date: platformClientForm.housing_access_enabled ? (platformClientForm.housing_start_date || null) : null,
-    housing_end_date: platformClientForm.housing_access_enabled ? (platformClientForm.housing_end_date || null) : null,
-    housing_monthly_amount: platformClientForm.housing_access_enabled ? Math.max(0, Number(platformClientForm.housing_monthly_amount || 0)) : 0,
-    housing_users_limit: platformClientForm.housing_access_enabled ? Math.max(0, Number(platformClientForm.housing_users_limit || 0)) : 0,
-    ai_agent_enabled: Boolean(platformClientForm.ai_agent_enabled),
-    ai_agent_plan: platformClientForm.ai_agent_enabled ? (platformClientForm.ai_agent_plan || "Professional") : "Standard",
+    housing_access_enabled: housingAccessEnabled,
+    housing_plan: housingAccessEnabled ? (platformClientForm.housing_plan || "Standard") : "Standard",
+    housing_subscription_status: housingAccessEnabled ? (platformClientForm.housing_subscription_status || "Active") : "Inactive",
+    housing_start_date: housingAccessEnabled ? (platformClientForm.housing_start_date || null) : null,
+    housing_end_date: housingAccessEnabled ? (platformClientForm.housing_end_date || null) : null,
+    housing_monthly_amount: housingAccessEnabled ? Math.max(0, Number(platformClientForm.housing_monthly_amount || 0)) : 0,
+    housing_users_limit: housingAccessEnabled ? Math.max(0, Number(platformClientForm.housing_users_limit || 0)) : 0,
+    housing_admin_name: housingAccessEnabled ? housingAdminName : null,
+    housing_admin_email: housingAccessEnabled ? housingAdminEmail : null,
+    housing_workspace_id: housingAccessEnabled ? (platformClientForm.housing_workspace_id || null) : null,
+    ai_agent_enabled: recruitmentAccessEnabled && Boolean(platformClientForm.ai_agent_enabled),
+    ai_agent_plan: recruitmentAccessEnabled && platformClientForm.ai_agent_enabled ? (platformClientForm.ai_agent_plan || "Professional") : "Standard",
     ai_agent_trial_start: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_start || null) : null,
     ai_agent_trial_end: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_end || null) : null,
     ai_agent_monthly_credit_limit: Math.max(0, Number(platformClientForm.ai_agent_monthly_credit_limit || 0)),
@@ -26242,12 +26268,29 @@ async function savePlatformClient() {
 
   try {
     if (isNewCompany) {
+      if (isHousingOnlyCompany) {
+        const { error: housingOnlyError } = await supabase.from("platform_clients").insert([{
+          ...companyPayload,
+          operational_company_id: null,
+        }]);
+        if (housingOnlyError) throw housingOnlyError;
+        resetPlatformClientForm();
+        await loadPlatformClients();
+        alert(`Housing-only company created. ${housingAdminEmail} can create the isolated Housing workspace at ${window.location.origin}/housing without receiving Recruitment access.`);
+        return;
+      }
+
       // The Edge Function uses the service role on the server. It creates the
       // operational company, platform client, Supabase Auth account and
       // public.users link as one protected provisioning workflow. If any step
       // fails, it removes the records already created instead of leaving an
       // incomplete company in the portfolio.
       const {
+        product_access_mode: _productAccessMode,
+        recruitment_access_enabled: _recruitmentAccessEnabled,
+        housing_admin_name: _housingAdminName,
+        housing_admin_email: _housingAdminEmail,
+        housing_workspace_id: _housingWorkspaceId,
         ai_agent_enabled: _aiAgentEnabled,
         ai_agent_plan: _aiAgentPlan,
         ai_agent_trial_start: _aiAgentTrialStart,
@@ -26278,6 +26321,11 @@ async function savePlatformClient() {
         const { error: entitlementUpdateError } = await supabase
           .from("platform_clients")
           .update({
+            product_access_mode: companyPayload.product_access_mode,
+            recruitment_access_enabled: companyPayload.recruitment_access_enabled,
+            housing_admin_name: companyPayload.housing_admin_name,
+            housing_admin_email: companyPayload.housing_admin_email,
+            housing_workspace_id: companyPayload.housing_workspace_id,
             ai_agent_enabled: companyPayload.ai_agent_enabled,
             ai_agent_plan: companyPayload.ai_agent_plan,
             ai_agent_trial_start: companyPayload.ai_agent_trial_start,
@@ -26428,6 +26476,28 @@ async function extendPlatformClient(client, months = 1) {
   await loadPlatformClients();
   alert(`Subscription extended until ${newEndDate}`);
 }
+
+async function extendHousingSubscription(client, months = 1) {
+  if (!canManagePlatform) return alert("You do not have permission to manage Housing subscriptions.");
+  if (!client?.id) return alert("Company is required.");
+
+  const baseDate = client.housing_end_date && new Date(client.housing_end_date) > new Date()
+    ? new Date(client.housing_end_date)
+    : new Date();
+  baseDate.setMonth(baseDate.getMonth() + months);
+  const newEndDate = baseDate.toISOString().slice(0, 10);
+
+  const { error } = await supabase.from("platform_clients").update({
+    housing_access_enabled: true,
+    housing_end_date: newEndDate,
+    housing_subscription_status: "Active",
+  }).eq("id", client.id);
+
+  if (error) return alert(error.message);
+  await loadPlatformClients();
+  alert(`Housing subscription extended until ${newEndDate}`);
+}
+
 async function deletePlatformClient(id) {
   if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
   if (!window.confirm("Delete this platform client?")) return;
@@ -26436,47 +26506,6 @@ async function deletePlatformClient(id) {
   if (error) return alert(error.message);
   await loadPlatformClients();
 }
-
-async function extendPlatformClient(client, days = 30) {
-  if (!canManagePlatform) return alert("You do not have permission to manage the platform.");
-  if (!client?.id) return alert("Company is required.");
-
-  const baseDate = client.end_date && new Date(client.end_date) > new Date()
-    ? new Date(client.end_date)
-    : new Date();
-
-  baseDate.setDate(baseDate.getDate() + Number(days || 30));
-  const newEndDate = baseDate.toISOString().slice(0, 10);
-
-  const { error } = await supabase
-    .from("platform_clients")
-    .update({
-      end_date: newEndDate,
-      subscription_status: "Active",
-    })
-    .eq("id", client.id);
-
-  if (error) return alert(error.message);
-
-  if (client.operational_company_id) {
-    try {
-      await invokeAgencyAdministration(supabase, {
-        action: "update_company_settings",
-        company_id: client.operational_company_id,
-        settings: buildCompanySettingsUpdate({
-          subscription_status: "Active",
-          subscription_end: newEndDate,
-        }, { platform: true }),
-      });
-    } catch (companyError) {
-      return alert(getAgencyAdministrationErrorMessage(companyError));
-    }
-  }
-
-  await loadPlatformClients();
-  alert(`Subscription extended until ${newEndDate}`);
-}
-
 
 function resetSubscriptionInvoiceForm() {
   setSubscriptionInvoiceForm(emptySubscriptionInvoice);
@@ -37565,6 +37594,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
         <thead>
           <tr>
             <th>Company</th>
+            <th>Products</th>
             <th>Domain</th>
             <th>Company Status</th>
             <th>Plan</th>
@@ -39464,11 +39494,13 @@ onClick={() => setActiveReport("activityLog")}>
         <button onClick={loadPlatformClients}>Refresh</button>
       </div>
       <table>
-        <thead><tr><th>Company</th><th>Access</th><th>Plan</th><th>Status</th><th>Start</th><th>End</th><th>Users</th><th>Monthly</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Company</th><th>Products</th><th>Housing Contact</th><th>Access</th><th>Plan</th><th>Status</th><th>Start</th><th>End</th><th>Users</th><th>Monthly</th><th>Actions</th></tr></thead>
         <tbody>
-          {platformClients.length === 0 ? <tr><td colSpan="9">No companies yet</td></tr> : platformClients.map((item) => (
+          {platformClients.length === 0 ? <tr><td colSpan="11">No companies yet</td></tr> : platformClients.map((item) => (
             <tr key={item.id}>
               <td><strong>{item.company_name}</strong><div className="muted">{item.domain || "-"}</div></td>
+              <td><Badge value={item.product_access_mode || (item.housing_access_enabled ? "Recruitment + Housing" : "Recruitment Only")} /></td>
+              <td>{item.housing_admin_name || "-"}<div className="muted">{item.housing_admin_email || "-"}</div></td>
               <td><Badge value={item.housing_access_enabled ? "Enabled" : "Disabled"} /></td>
               <td>{item.housing_plan || "Standard"}</td>
               <td><Badge value={item.housing_subscription_status || "Inactive"} /></td>
@@ -39536,8 +39568,35 @@ onClick={() => setActiveReport("activityLog")}>
         </div>
 
         <div>
+          <label>Products / نوع الاشتراك</label>
+          <select
+            value={platformClientForm.product_access_mode}
+            onChange={(e) => {
+              const mode = e.target.value;
+              const recruitmentEnabled = mode !== "Housing Only";
+              const housingEnabled = mode !== "Recruitment Only";
+              setPlatformClientForm((current) => ({
+                ...current,
+                product_access_mode: mode,
+                recruitment_access_enabled: recruitmentEnabled,
+                housing_access_enabled: housingEnabled,
+                housing_subscription_status: housingEnabled && current.housing_subscription_status === "Inactive" ? "Active" : housingEnabled ? current.housing_subscription_status : "Inactive",
+                talent_access_enabled: recruitmentEnabled ? current.talent_access_enabled : false,
+                ai_agent_enabled: recruitmentEnabled ? current.ai_agent_enabled : false,
+              }));
+            }}
+          >
+            <option>Recruitment Only</option>
+            <option>Housing Only</option>
+            <option>Recruitment + Housing</option>
+          </select>
+          <p className="muted">Housing Only creates no Recruitment workspace or Recruitment user.</p>
+        </div>
+
+        <div>
           <label>Subscription Status</label>
           <select
+            disabled={!platformClientForm.recruitment_access_enabled}
             value={platformClientForm.subscription_status}
             onChange={(e) => updateForm(setPlatformClientForm, "subscription_status", e.target.value)}
           >
@@ -39550,6 +39609,7 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>Users Allowed / Count</label>
           <input
+            disabled={!platformClientForm.recruitment_access_enabled}
             type="number"
             placeholder="Users Count"
             value={platformClientForm.users_count}
@@ -39560,6 +39620,7 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>Subscription Start</label>
           <input
+            disabled={!platformClientForm.recruitment_access_enabled}
             type="date"
             value={platformClientForm.start_date}
             onChange={(e) => updateForm(setPlatformClientForm, "start_date", e.target.value)}
@@ -39569,6 +39630,7 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>Subscription End</label>
           <input
+            disabled={!platformClientForm.recruitment_access_enabled}
             type="date"
             value={platformClientForm.end_date}
             onChange={(e) => updateForm(setPlatformClientForm, "end_date", e.target.value)}
@@ -39578,6 +39640,7 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>Monthly Amount (SAR)</label>
           <input
+            disabled={!platformClientForm.recruitment_access_enabled}
             type="number"
             placeholder="Monthly Amount"
             value={platformClientForm.monthly_amount}
@@ -39588,6 +39651,7 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>VisaFlow Talent Access</label>
           <select
+            disabled={!platformClientForm.recruitment_access_enabled}
             value={platformClientForm.talent_access_enabled ? "Enabled" : "Disabled"}
             onChange={(e) => setPlatformClientForm((current) => ({
               ...current,
@@ -39645,12 +39709,8 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>Housing Access</label>
           <select
-            value={platformClientForm.housing_access_enabled ? "Enabled" : "Disabled"}
-            onChange={(e) => setPlatformClientForm((current) => ({
-              ...current,
-              housing_access_enabled: e.target.value === "Enabled",
-              housing_subscription_status: e.target.value === "Enabled" && current.housing_subscription_status === "Inactive" ? "Active" : e.target.value === "Disabled" ? "Inactive" : current.housing_subscription_status,
-            }))}
+            disabled
+            value={platformClientForm.product_access_mode !== "Recruitment Only" ? "Enabled" : "Disabled"}
           >
             <option>Disabled</option>
             <option>Enabled</option>
@@ -39675,6 +39735,10 @@ onClick={() => setActiveReport("activityLog")}>
         <div><label>Housing Start</label><input type="date" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_start_date} onChange={(e) => updateForm(setPlatformClientForm, "housing_start_date", e.target.value)} /></div>
         <div><label>Housing End</label><input type="date" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_end_date} onChange={(e) => updateForm(setPlatformClientForm, "housing_end_date", e.target.value)} /></div>
         <div><label>Housing Monthly Amount (SAR)</label><input type="number" min="0" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_monthly_amount} onChange={(e) => updateForm(setPlatformClientForm, "housing_monthly_amount", e.target.value)} /></div>
+        <div><label>Housing Primary Contact Name</label><input disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_admin_name} onChange={(e) => updateForm(setPlatformClientForm, "housing_admin_name", e.target.value)} placeholder="Housing administrator" /></div>
+        <div><label>Housing Primary Contact Email</label><input type="email" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_admin_email} onChange={(e) => updateForm(setPlatformClientForm, "housing_admin_email", e.target.value)} placeholder="housing@company.com" /></div>
+        <div><label>Housing Workspace ID (optional)</label><input disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_workspace_id} onChange={(e) => updateForm(setPlatformClientForm, "housing_workspace_id", e.target.value)} placeholder="housing_companies.id" /></div>
+        {platformClientForm.product_access_mode === "Housing Only" && <div style={{ gridColumn: "1 / -1" }} className="muted">The contact creates the isolated Housing account at <a href="/housing" target="_blank" rel="noreferrer">/housing</a>. No Recruitment account is provisioned.</div>}
 
         <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
           <h3 style={{ margin: "8px 0 4px" }}>AI Agent Professional</h3>
@@ -39684,6 +39748,7 @@ onClick={() => setActiveReport("activityLog")}>
         <div>
           <label>AI Agent Professional Access</label>
           <select
+            disabled={!platformClientForm.recruitment_access_enabled}
             value={platformClientForm.ai_agent_enabled ? "Enabled" : "Disabled"}
             onChange={(e) => setPlatformClientForm((current) => ({
               ...current,
@@ -39725,7 +39790,7 @@ onClick={() => setActiveReport("activityLog")}>
           />
         </div>
 
-        <>
+        {platformClientForm.recruitment_access_enabled && <>
           <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
             <h3 style={{ margin: "8px 0 4px" }}>Primary Administrator</h3>
             <p className="muted">
@@ -39782,7 +39847,7 @@ onClick={() => setActiveReport("activityLog")}>
               <option>Viewer</option>
             </select>
           </div>
-        </>
+        </>}
       </div>
       <div className="form-actions">
         <button className="save-btn" disabled={platformClientSaving} onClick={savePlatformClient}>{platformClientSaving ? "Saving securely..." : platformClientEditingId ? "Update Company" : "Save Company"}</button>
@@ -39820,28 +39885,30 @@ onClick={() => setActiveReport("activityLog")}>
           </tr>
         </thead>
         <tbody>
-          {platformClients.length === 0 ? <tr><td colSpan="16">No companies yet</td></tr> : platformClients.map((item) => {
+          {platformClients.length === 0 ? <tr><td colSpan="17">No companies yet</td></tr> : platformClients.map((item) => {
             const daysRemaining = getClientDaysRemaining(item);
             const renewalStatus = getClientRenewalStatus(item);
             const primaryAdmin = getPrimaryAdminForPlatformClient(item);
             const linkedUsers = getUsersForPlatformClient(item);
+            const housingOnly = item.product_access_mode === "Housing Only";
             return (
               <tr key={item.id}>
                 <td>
                   <strong>{item.company_name}</strong>
-                  <div className="muted">Annual: {Number((Number(item.monthly_amount || 0) * 12) || 0).toLocaleString()} SAR</div>
+                  <div className="muted">Annual: {Number((Number(housingOnly ? item.housing_monthly_amount : item.monthly_amount || 0) * 12) || 0).toLocaleString()} SAR</div>
                 </td>
+                <td><Badge value={item.product_access_mode || (item.housing_access_enabled ? "Recruitment + Housing" : "Recruitment Only")} /></td>
                 <td>{item.domain || "-"}</td>
-                <td>{item.operational_company_id ? "Linked" : "Not Linked"}</td>
-                <td>{primaryAdmin?.name || "-"}</td>
-                <td>{primaryAdmin?.email || "-"}</td>
-                <td>{primaryAdmin?.role || "-"}</td>
-                <td><Badge value={renewalStatus} /></td>
-                <td>{linkedUsers.length || item.users_count || 0}</td>
-                <td>{item.start_date || "-"}</td>
-                <td>{item.end_date || "-"}</td>
-                <td>{daysRemaining === null ? "-" : daysRemaining < 0 ? "Expired" : `${daysRemaining} day(s)`}</td>
-                <td>{Number(item.monthly_amount || 0).toLocaleString()} SAR</td>
+                <td>{housingOnly ? (item.housing_workspace_id ? "Housing Linked" : "Not Required") : item.operational_company_id ? "Linked" : "Not Linked"}</td>
+                <td>{housingOnly ? (item.housing_admin_name || "-") : (primaryAdmin?.name || "-")}</td>
+                <td>{housingOnly ? (item.housing_admin_email || "-") : (primaryAdmin?.email || "-")}</td>
+                <td>{housingOnly ? "Housing Admin" : (primaryAdmin?.role || "-")}</td>
+                <td><Badge value={housingOnly ? (item.housing_subscription_status || "Inactive") : renewalStatus} /></td>
+                <td>{housingOnly ? Number(item.housing_users_limit || 0) : (linkedUsers.length || item.users_count || 0)}</td>
+                <td>{housingOnly ? (item.housing_start_date || "-") : (item.start_date || "-")}</td>
+                <td>{housingOnly ? (item.housing_end_date || "-") : (item.end_date || "-")}</td>
+                <td>{housingOnly ? "Housing term" : daysRemaining === null ? "-" : daysRemaining < 0 ? "Expired" : `${daysRemaining} day(s)`}</td>
+                <td>{Number(housingOnly ? item.housing_monthly_amount : item.monthly_amount || 0).toLocaleString()} SAR</td>
                 <td>
                   <Badge value={item.talent_access_enabled ? "Enabled" : "Disabled"} />
                   {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {formatTalentProfileLimit(item.talent_profile_limit)} profiles</div>}
@@ -39856,20 +39923,20 @@ onClick={() => setActiveReport("activityLog")}>
                 </td>
                 <td className="actions">
                   <button onClick={() => editPlatformClient(item)}>Edit</button>
-                  <button onClick={() => extendPlatformClient(item, 1)}>Extend 30d</button>
-<button onClick={() => extendPlatformClient(item, 12)}>Extend 1y</button>
-                  <button onClick={() => createSubscriptionInvoiceForClient(item)}>Invoice</button>
+                  <button onClick={() => housingOnly ? extendHousingSubscription(item, 1) : extendPlatformClient(item, 1)}>Extend 30d</button>
+                  <button onClick={() => housingOnly ? extendHousingSubscription(item, 12) : extendPlatformClient(item, 12)}>Extend 1y</button>
+                  <button disabled={housingOnly} onClick={() => createSubscriptionInvoiceForClient(item)}>Invoice</button>
                   <button disabled={!item.housing_access_enabled} onClick={() => createSubscriptionInvoiceForClient(item, "Housing")}>Housing Invoice</button>
                   <button
                     onClick={() => sendPlatformClientLoginDetails(item)}
-                    disabled={!isPlatformOwner}
+                    disabled={!isPlatformOwner || housingOnly}
                     title={!isPlatformOwner ? "Platform Owner only" : ""}
                     style={!isPlatformOwner ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
                   >
                     Send Setup Link
                   </button>
-                  <button onClick={() => openPlatformClientUsers(item)}>Users</button>
-                  <button onClick={() => openCompanyRequestsReport(item)}>Report</button>
+                  <button disabled={housingOnly} onClick={() => openPlatformClientUsers(item)}>Users</button>
+                  <button disabled={housingOnly} onClick={() => openCompanyRequestsReport(item)}>Report</button>
                   <button className="danger" onClick={() => deletePlatformClient(item.id)}>Delete</button>
                 </td>
               </tr>
