@@ -272,6 +272,68 @@ body:has(.housing-app) { margin: 0; overflow-x: clip; background: var(--housing-
   .housing-employee-status-actions { align-items: flex-start; flex-direction: column; }
   .housing-employee-status-metrics { grid-template-columns: 1fr 1fr; }
 }
+
+/* Multi-channel housing notifications */
+.housing-notifications-page { display: grid; gap: 16px; }
+.housing-notification-summary { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 12px; }
+.housing-notification-summary article { min-height: 86px; padding: 15px; display: flex; align-items: center; gap: 11px; }
+.housing-notification-summary article > div { display: grid; gap: 3px; }
+.housing-notification-summary small { color: var(--housing-muted); font-size: 9px; }
+.housing-notification-summary strong { font-size: 22px; }
+.housing-notification-metric { width: 39px; height: 39px; display: grid; place-items: center; border-radius: 11px; background: #eaf4fb; color: #2080b7; }
+.housing-notification-metric.green { background: #e5f6f1; color: #078d76; }
+.housing-notification-metric.amber { background: #fff2dc; color: #b36b00; }
+.housing-notification-metric.rose { background: #fdebed; color: #c33e4a; }
+.housing-notification-toolbar { padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.housing-notification-toolbar h3,.housing-notification-toolbar p,.housing-notification-feed h3,.housing-notification-feed p,.housing-notification-settings h3,.housing-notification-settings p,.housing-notification-recipients h3,.housing-notification-recipients p,.housing-notification-deliveries h3,.housing-notification-deliveries p { margin: 0; }
+.housing-notification-toolbar p,.housing-notification-feed p,.housing-notification-settings p,.housing-notification-recipients p,.housing-notification-deliveries p { margin-top: 4px; color: var(--housing-muted); font-size: 9px; }
+.housing-notification-toolbar > div:last-child { display: flex; gap: 8px; }
+.housing-notification-layout { display: grid; grid-template-columns: 1.1fr .9fr; gap: 16px; }
+.housing-notification-feed,.housing-notification-settings,.housing-notification-recipients,.housing-notification-deliveries { overflow: hidden; }
+.housing-notification-feed > header,.housing-notification-settings > header,.housing-notification-recipients > header,.housing-notification-deliveries > header { padding: 16px 18px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--housing-border); }
+.housing-notification-scroll { max-height: 430px; overflow: auto; }
+.housing-notification-item { width: 100%; padding: 13px 16px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; text-align: start; border: 0; border-bottom: 1px solid var(--housing-border); background: #fff; cursor: pointer; }
+.housing-notification-item.unread { background: #f2faf8; }
+.housing-notification-item > span:nth-child(2) { display: grid; gap: 4px; }
+.housing-notification-item strong { font-size: 10px; }
+.housing-notification-item small,.housing-notification-item em { color: var(--housing-muted); font-size: 8px; font-style: normal; }
+.housing-notification-item > i { align-self: center; color: #0a8f79; font-size: 8px; font-style: normal; }
+.housing-notification-severity { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: #e8f4fb; color: #257ba6; }
+.housing-notification-severity.high,.housing-notification-severity.critical { background: #fde8eb; color: #c03846; }
+.housing-notification-severity.warning { background: #fff1d8; color: #ad6500; }
+.housing-notification-empty { padding: 34px; text-align: center; color: var(--housing-muted); }
+.housing-notification-settings { padding-bottom: 17px; }
+.housing-notification-settings > :not(header) { margin-inline: 18px; }
+.housing-channel-switches { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.housing-channel-switches label { padding: 10px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--housing-border); border-radius: 9px; font-size: 9px; }
+.housing-channel-switches input { margin-inline-start: auto; }
+.housing-channel-picker { margin-top: 14px; display: grid; gap: 7px; }
+.housing-channel-picker > strong { font-size: 9px; }
+.housing-channel-picker > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.housing-channel-picker label { padding: 6px 9px; border: 1px solid var(--housing-border); border-radius: 999px; color: var(--housing-muted); font-size: 8px; cursor: pointer; }
+.housing-channel-picker label.selected { border-color: #16a085; background: #e7f7f3; color: #087d69; }
+.housing-channel-picker input { display: none; }
+.housing-notification-schedule { margin-block: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.housing-notification-schedule label { display: grid; gap: 5px; font-size: 8px; color: var(--housing-muted); }
+.housing-notification-schedule input { width: 100%; padding: 9px; border: 1px solid var(--housing-border); border-radius: 8px; }
+.housing-notification-recipients table,.housing-notification-deliveries table { min-width: 920px; }
+.housing-notification-recipients td,.housing-notification-deliveries td { white-space: normal; }
+.housing-delivery-status { padding: 5px 7px; border-radius: 7px; background: #eef4f5; color: #547078; font-size: 8px; }
+.housing-delivery-status.sent { background: #e4f7f0; color: #087f6c; }
+.housing-delivery-status.failed { background: #fdebed; color: #be3947; }
+.housing-delivery-status.queued,.housing-delivery-status.processing { background: #fff1dc; color: #a76300; }
+.housing-notification-recipient-modal { max-width: 760px; }
+.housing-check-label { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; }
+
+@media (max-width: 1100px) {
+  .housing-notification-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .housing-notification-layout { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .housing-notification-summary { grid-template-columns: 1fr 1fr; }
+  .housing-notification-toolbar { align-items: flex-start; flex-direction: column; }
+  .housing-notification-toolbar > div:last-child { flex-wrap: wrap; }
+}
 .housing-person { display: flex; align-items: center; gap: 9px; }
 .housing-person > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: #e6f2ef; color: var(--housing-teal); font-weight: 800; }
 .housing-person > div { display: flex; flex-direction: column; }

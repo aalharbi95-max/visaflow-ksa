@@ -13,6 +13,8 @@ messages.ar.reconciliation = 'المطابقة والربط الذكي'
 messages.en.reconciliation = 'Workforce Reconciliation'
 messages.ar.employeeStatus = 'الإجازات والخروج ونهاية الخدمة'
 messages.en.employeeStatus = 'Leave, Exit & End of Service'
+messages.ar.notifications = 'الإشعارات متعددة القنوات'
+messages.en.notifications = 'Multi-Channel Notifications'
 
 const HousingLanguageContext = createContext(null)
 

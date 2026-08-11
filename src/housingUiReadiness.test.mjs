@@ -169,3 +169,23 @@ test('employee leave and exit workflow requires supervisor-approved checkout', a
   assert.match(migration, /status='Ended'/)
   assert.match(migration, /housing_audit_log/)
 })
+
+test('multi-channel housing notifications include secure queue, settings and delivery audit', async () => {
+  const [app, page, service, migration, worker] = await Promise.all([
+    readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./HousingNotificationsPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./housingService.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/housing/migrations/0010_multichannel_notifications.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/functions/housing-notification-dispatcher/index.ts', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /HousingNotificationsPage/)
+  assert.match(app, /goTo\("notifications"\)/)
+  assert.match(page, /WhatsApp/)
+  assert.match(page, /Delivery Log/)
+  assert.match(service, /housing_prepare_weekly_digest/)
+  assert.match(migration, /housing_notification_deliveries/)
+  assert.match(migration, /housing_notify_critical_incident/)
+  assert.match(worker, /HOUSING_NOTIFICATION_WORKER_SECRET/)
+  assert.match(worker, /RESEND_API_KEY/)
+  assert.match(worker, /TWILIO_ACCOUNT_SID/)
+})

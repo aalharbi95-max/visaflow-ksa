@@ -15,6 +15,7 @@ const emptyData = Object.freeze({
   licenses: [], hseReports: [], operations: [], incidents: [], surveys: [],
   maintenance: [], inspections: [], assets: [], contracts: [], utilityAccounts: [], utilityBills: [],
   employeeStatusEvents: [],
+  notificationSettings: null, notificationRecipients: [], notificationEvents: [], notificationDeliveries: [],
 })
 
 export function useHousingWorkspaceData(client, companyId) {

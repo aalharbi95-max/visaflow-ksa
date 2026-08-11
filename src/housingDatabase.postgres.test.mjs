@@ -27,6 +27,7 @@ before(async () => {
     create schema storage;
     create role anon nologin;
     create role authenticated nologin;
+    create role service_role nologin;
     create table auth.users(id uuid primary key,email text);
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
     create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text,name text);
@@ -62,6 +63,8 @@ before(async () => {
   await db.exec(reconciliationMigration)
   const employeeStatusMigration = await readFile(new URL('../supabase/housing/migrations/0009_employee_leave_exit_workflow.sql', import.meta.url), 'utf8')
   await db.exec(employeeStatusMigration)
+  const notificationMigration = await readFile(new URL('../supabase/housing/migrations/0010_multichannel_notifications.sql', import.meta.url), 'utf8')
+  await db.exec(notificationMigration)
 })
 
 after(async () => { await db?.close() })
@@ -71,7 +74,7 @@ test('standalone migration creates all core housing tables', async () => {
     select count(*)::int as count from information_schema.tables
     where table_schema='public' and table_name like 'housing_%'
   `)
-  assert.equal(result.rows[0].count, 32)
+  assert.equal(result.rows[0].count, 36)
 })
 
 test('reconciliation schema supports reviewed checkout without automatic eviction', async () => {
@@ -90,6 +93,23 @@ test('first authenticated user can create an isolated workspace', async () => {
   const context = await asUser(USER_A, () => db.query('select public.get_housing_context() as context'))
   assert.equal(context.rows[0].context.company.name, 'شركة ألف')
   assert.equal(context.rows[0].context.profile.full_name, 'مدير ألف')
+})
+
+test('critical incidents create in-app events and queued external deliveries once', async () => {
+  const company = await asUser(USER_A, () => db.query('select public.housing_current_company_id() as id'))
+  const companyId = company.rows[0].id
+  const site = await asUser(USER_A, () => db.query("insert into public.housing_sites(company_id,code,name,city) values($1,'NOTIFY-1','Notification Site','Riyadh') returning id", [companyId]))
+  await asUser(USER_A, () => db.query("insert into public.housing_notification_settings(company_id,email_enabled,critical_incident_channels) values($1,true,array['In App','Email'])", [companyId]))
+  await asUser(USER_A, () => db.query("insert into public.housing_notification_recipients(company_id,name,email,channels) values($1,'HSE Manager','hse@example.com',array['In App','Email'])", [companyId]))
+  const incident = await asUser(USER_A, () => db.query("insert into public.housing_incidents(company_id,incident_no,site_id,incident_type,severity,occurred_at,description) values($1,'INC-N-1',$2,'Fire','Critical',now(),'Fire alarm') returning id", [companyId, site.rows[0].id]))
+  const events = await asUser(USER_A, () => db.query("select id,status from public.housing_notification_events where source_id=$1", [incident.rows[0].id]))
+  assert.equal(events.rows.length, 1)
+  const deliveries = await asUser(USER_A, () => db.query("select channel,status,destination from public.housing_notification_deliveries where event_id=$1", [events.rows[0].id]))
+  assert.deepEqual(deliveries.rows[0], { channel: 'Email', status: 'Queued', destination: 'hse@example.com' })
+  await asUser(USER_A, () => db.query('select public.housing_mark_notification_read($1)', [events.rows[0].id]))
+  assert.equal((await asUser(USER_A, () => db.query('select status from public.housing_notification_events where id=$1', [events.rows[0].id]))).rows[0].status, 'Read')
+  await asUser(USER_A, () => db.query('delete from public.housing_sites where id=$1', [site.rows[0].id]))
+  await asUser(USER_A, () => db.query('delete from public.housing_notification_recipients where company_id=$1', [companyId]))
 })
 
 test('approved final exit ends housing assignment and releases the bed', async () => {
