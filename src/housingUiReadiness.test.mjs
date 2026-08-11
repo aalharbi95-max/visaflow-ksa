@@ -150,3 +150,22 @@ test('workforce reconciliation is connected to imports, review and approved chec
   assert.match(migration, /housing_audit_log/)
   assert.match(migration, /status='Ended'/)
 })
+
+test('employee leave and exit workflow requires supervisor-approved checkout', async () => {
+  const [app, page, logic, service, migration] = await Promise.all([
+    readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./HousingEmployeeStatusPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./housingEmployeeStatus.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('./housingService.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/housing/migrations/0009_employee_leave_exit_workflow.sql', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /HousingEmployeeStatusPage/)
+  assert.match(app, /employee-status/)
+  assert.match(page, /Checkout Approved/)
+  assert.match(page, /Return to Work/)
+  assert.match(logic, /eventRequiresCheckout/)
+  assert.match(service, /housing_create_employee_status_event/)
+  assert.match(service, /housing_review_employee_status_event/)
+  assert.match(migration, /status='Ended'/)
+  assert.match(migration, /housing_audit_log/)
+})

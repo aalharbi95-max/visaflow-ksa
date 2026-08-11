@@ -60,6 +60,8 @@ before(async () => {
   await db.exec(hierarchyMigration)
   const reconciliationMigration = await readFile(new URL('../supabase/housing/migrations/0008_reconciliation_engine.sql', import.meta.url), 'utf8')
   await db.exec(reconciliationMigration)
+  const employeeStatusMigration = await readFile(new URL('../supabase/housing/migrations/0009_employee_leave_exit_workflow.sql', import.meta.url), 'utf8')
+  await db.exec(employeeStatusMigration)
 })
 
 after(async () => { await db?.close() })
@@ -88,6 +90,31 @@ test('first authenticated user can create an isolated workspace', async () => {
   const context = await asUser(USER_A, () => db.query('select public.get_housing_context() as context'))
   assert.equal(context.rows[0].context.company.name, 'شركة ألف')
   assert.equal(context.rows[0].context.profile.full_name, 'مدير ألف')
+})
+
+test('approved final exit ends housing assignment and releases the bed', async () => {
+  const company = await asUser(USER_A, () => db.query('select public.housing_current_company_id() as id'))
+  const companyId = company.rows[0].id
+  const site = await asUser(USER_A, () => db.query("insert into public.housing_sites(company_id,code,name,city) values($1,'LEAVE-1','Leave Site','Riyadh') returning id", [companyId]))
+  const building = await asUser(USER_A, () => db.query("insert into public.housing_buildings(company_id,site_id,code,name) values($1,$2,'A','A') returning id", [companyId, site.rows[0].id]))
+  const room = await asUser(USER_A, () => db.query("insert into public.housing_rooms(company_id,site_id,building_id,room_number,capacity,area_sqm) values($1,$2,$3,'101',1,4) returning id", [companyId, site.rows[0].id, building.rows[0].id]))
+  const bed = await asUser(USER_A, () => db.query("insert into public.housing_beds(company_id,site_id,room_id,bed_number) values($1,$2,$3,'1') returning id", [companyId, site.rows[0].id, room.rows[0].id]))
+  const employee = await asUser(USER_A, () => db.query("insert into public.housing_employees(company_id,employee_no,full_name) values($1,'LEAVE-E1','Leaving Worker') returning id", [companyId]))
+  const assignment = await asUser(USER_A, () => db.query('select id from public.housing_assign_employee($1,$2)', [employee.rows[0].id, bed.rows[0].id]))
+  const created = await asUser(USER_A, () => db.query("select * from public.housing_create_employee_status_event($1,'Final Exit','2026-08-11',null,'HR','VISA-1')", [employee.rows[0].id]))
+  assert.equal(created.rows[0].checkout_required, true)
+  assert.equal(created.rows[0].assignment_id, assignment.rows[0].id)
+  await asUser(USER_A, () => db.query("select public.housing_review_employee_status_event($1,'Checkout Approved','Final exit approved')", [created.rows[0].id]))
+  const released = await asUser(USER_A, () => db.query('select a.status as assignment_status,b.status as bed_status from public.housing_assignments a join public.housing_beds b on b.id=a.bed_id where a.id=$1', [assignment.rows[0].id]))
+  assert.deepEqual(released.rows[0], { assignment_status: 'Ended', bed_status: 'Available' })
+  const audit = await asUser(USER_A, () => db.query("select count(*)::int as count from public.housing_audit_log where entity_id=$1 and action='EMPLOYEE_STATUS_EVENT_REVIEWED'", [created.rows[0].id]))
+  assert.equal(audit.rows[0].count, 1)
+  await asUser(USER_A, async () => {
+    await db.query('delete from public.housing_employee_status_events where id=$1', [created.rows[0].id])
+    await db.query('delete from public.housing_assignments where id=$1', [assignment.rows[0].id])
+    await db.query('delete from public.housing_sites where id=$1', [site.rows[0].id])
+    await db.query("delete from public.housing_employees where employee_no='LEAVE-E1'")
+  })
 })
 
 test('administrator can invite a scoped user and change their role', async () => {

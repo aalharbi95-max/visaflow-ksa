@@ -242,6 +242,36 @@ body:has(.housing-app) { margin: 0; overflow-x: clip; background: var(--housing-
   .housing-reconciliation-form,.housing-reconciliation-metrics { grid-template-columns: 1fr; }
   .housing-reconciliation-toolbar { flex-direction: column; }
 }
+
+/* Employee leave, exit and end-of-service workflow */
+.housing-employee-status-page { display: grid; gap: 16px; }
+.housing-employee-status-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.housing-employee-status-actions p { margin: 0; color: var(--housing-muted); font-size: 11px; }
+.housing-employee-status-actions small { display: block; margin-top: 5px; color: #a26700; font-size: 9px; }
+.housing-employee-status-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 12px; }
+.housing-employee-status-metrics article { min-height: 90px; padding: 15px; display: flex; align-items: center; gap: 11px; }
+.housing-employee-status-metrics article > div { display: grid; gap: 4px; }
+.housing-employee-status-metrics small { color: var(--housing-muted); font-size: 8px; }
+.housing-employee-status-metrics strong { color: var(--housing-text); font-size: 21px; }
+.housing-employee-status-register table { min-width: 1120px; }
+.housing-employee-status-register td { height: 78px; white-space: normal; min-width: 120px; }
+.housing-event-type { display: inline-flex; padding: 5px 8px; border-radius: 7px; background: #eef5f6; color: #45656b; font-size: 9px; font-weight: 800; white-space: nowrap; }
+.housing-event-type.critical,.housing-event-type.high { background: #fdebed; color: #c43c49; }
+.housing-event-type.overdue { background: #fff1dc; color: #a46200; }
+.housing-event-type.closed { background: #e7f7f2; color: #078a73; }
+.housing-event-actions { display: flex; flex-wrap: wrap; gap: 5px; min-width: 190px; }
+.housing-event-actions button { padding: 5px 7px; border: 1px solid var(--housing-border); border-radius: 6px; background: #fff; color: #31545b; font-size: 8px; cursor: pointer; }
+.housing-event-actions button.danger { border-color: #f0adb4; background: #fff2f3; color: #bb3442; }
+.housing-event-modal { max-width: 720px; }
+.housing-event-form-note { margin: 0 24px 4px; padding: 10px 12px; display: flex; gap: 8px; align-items: center; border-radius: 8px; background: #eef7fb; color: #397083; font-size: 9px; }
+
+@media (max-width: 1100px) {
+  .housing-employee-status-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}
+@media (max-width: 720px) {
+  .housing-employee-status-actions { align-items: flex-start; flex-direction: column; }
+  .housing-employee-status-metrics { grid-template-columns: 1fr 1fr; }
+}
 .housing-person { display: flex; align-items: center; gap: 9px; }
 .housing-person > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: #e6f2ef; color: var(--housing-teal); font-weight: 800; }
 .housing-person > div { display: flex; flex-direction: column; }
