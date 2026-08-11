@@ -8,6 +8,7 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
+  CloudOff,
   ChevronLeft,
   ClipboardCheck,
   Clock3,
@@ -63,6 +64,7 @@ import HousingReconciliationPage from "./HousingReconciliationPage.jsx";
 import HousingEmployeeStatusPage from "./HousingEmployeeStatusPage.jsx";
 import HousingNotificationsPage from "./HousingNotificationsPage.jsx";
 import HousingCostCentersPage from "./HousingCostCentersPage.jsx";
+import HousingOfflinePage from "./HousingOfflinePage.jsx";
 import { LiveAddHousingModal, LiveAllocations, LiveDashboard, LiveDataTable, LiveHousingList, LiveUtilities } from "./HousingLiveViews.jsx";
 
 const navGroups = [
@@ -103,14 +105,14 @@ const navGroups = [
       { id: "reports", labelKey: "reports", icon: BarChart3 },
     ],
   },
-  { labelKey: "system", items: [{ id: "notifications", labelKey: "notifications", icon: Bell }, { id: "test-center", labelKey: "testCenter", icon: CheckCircle2 }, { id: "settings", labelKey: "settings", icon: Settings }] },
+  { labelKey: "system", items: [{ id: "notifications", labelKey: "notifications", icon: Bell }, { id: "offline", labelKey: "offlineMode", icon: CloudOff }, { id: "test-center", labelKey: "testCenter", icon: CheckCircle2 }, { id: "settings", labelKey: "settings", icon: Settings }] },
 ];
 
 const ROLE_PAGE_ACCESS = {
   Admin: null,
-  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","settings","test-center"],
-  "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","reports","notifications","settings","test-center"],
-  Maintenance: ["dashboard","housing","rooms","maintenance","assets","reports","notifications","settings"],
+  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","offline","settings","test-center"],
+  "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","reports","notifications","offline","settings","test-center"],
+  Maintenance: ["dashboard","housing","rooms","maintenance","assets","reports","notifications","offline","settings"],
   Finance: ["dashboard","housing","utilities","contracts","cost-centers","reports","notifications","settings"],
   Viewer: ["dashboard","housing","rooms","residents","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","settings"],
 };
@@ -140,6 +142,7 @@ pageMeta.reconciliation = ["المطابقة والربط الذكي", "مطاب
 pageMeta["employee-status"] = ["الإجازات والخروج ونهاية الخدمة", "تنبيهات حالة العامل وقرارات الإخلاء وإتاحة الأسرة بعد اعتماد المشرف"];
 pageMeta.notifications = ["الإشعارات متعددة القنوات", "تنبيهات داخل المنصة والبريد وSMS وWhatsApp مع سجل إرسال كامل"];
 pageMeta["cost-centers"] = ["مراكز التكلفة والتخصيص اليومي", "توزيع تكلفة السكن على العامل والمشروع ومركز التكلفة حسب أيام الإقامة الفعلية"];
+pageMeta.offline = ["وضع العمل دون إنترنت", "حفظ العمليات الميدانية محلياً ومزامنتها تلقائياً عند عودة الاتصال"];
 
 const pageMetaEn = {
   dashboard: ["Dashboard", "A complete view of housing, occupancy and operations"],
@@ -166,6 +169,7 @@ pageMetaEn.reconciliation = ["Workforce Reconciliation", "Match HR and biometric
 pageMetaEn["employee-status"] = ["Leave, Exit & End of Service", "Employee status alerts and supervisor-approved checkout decisions"];
 pageMetaEn.notifications = ["Multi-Channel Notifications", "In-app, email, SMS and WhatsApp alerts with a complete delivery log"];
 pageMetaEn["cost-centers"] = ["Cost Centers & Daily Allocation", "Allocate housing cost to workers, projects and cost centers by actual occupied days"];
+pageMetaEn.offline = ["Offline Work Mode", "Store field work locally and sync automatically when connectivity returns"];
 
 const housings = [
   { id: "H-001", name: "سكن النخيل", city: "الرياض", project: "مشروع المترو", manager: "أحمد الغامدي", capacity: 240, occupied: 218, status: "نشط", color: "teal", latitude: 24.7136, longitude: 46.6753 },
@@ -442,7 +446,7 @@ function HousingWorkspace({ backendContext }) {
     try { await live.createSite(input); setModalOpen(false); notify(t("saved")); } catch { /* shown by shared error */ }
   };
   const saveRecord = async (table, input) => {
-    try { const result = await live.createRecord(table, input); notify(t("saved")); return result; } catch (error) { throw error; }
+    try { const result = await live.createRecord(table, input); notify(result?.offlineQueued ? (language === "ar" ? "تم الحفظ على الجهاز وسيتم الرفع تلقائياً" : "Saved on device and will sync automatically") : t("saved")); return result; } catch (error) { throw error; }
   };
   const signOut = async () => { await client?.auth.signOut(); };
   const badgeFor = (id) => {
@@ -460,7 +464,7 @@ function HousingWorkspace({ backendContext }) {
       <div className="housing-sidebar-footer"><div className="housing-profile-avatar">{initials}</div><div><strong>{profileName}</strong><span>{backendContext?.profile?.role || t("systemAdministrator")}</span></div><button onClick={signOut} title={t("logout")}><LogOut size={18} /></button></div>
     </aside>
 
-    <main className="housing-main"><header className="housing-topbar"><button className="housing-menu-button" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="housing-search"><Search size={18} /><input placeholder={t("quickSearch")} /></div><div className="housing-topbar-end"><button className="housing-language-button" onClick={toggleLanguage}><Languages size={17} />{t("language")}</button><button className="housing-refresh-button" onClick={live.refresh} disabled={live.loading}><RefreshCw size={17} className={live.loading ? "housing-spin" : ""} /></button><div className="housing-date"><CalendarDays size={17} /><span>{today}</span></div><button className="housing-notification" onClick={() => goTo("notifications")}><Bell size={20} />{live.data.notificationEvents.some((item) => item.status === "Unread") && <i />}</button><div className="housing-top-profile"><span>{initials}</span><div><strong>{profileName}</strong><small>{backendContext?.profile?.role || t("systemAdministrator")}</small></div></div></div></header>
+    <main className="housing-main"><header className="housing-topbar"><button className="housing-menu-button" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button><div className="housing-search"><Search size={18} /><input placeholder={t("quickSearch")} /></div><div className="housing-topbar-end"><button className={`housing-offline-status ${live.offline.online ? "online" : "offline"}`} onClick={() => goTo("offline")} title={language === "ar" ? "حالة المزامنة" : "Sync status"}><CloudOff size={16} /><span>{live.offline.online ? (live.offline.summary.pending ? live.offline.summary.pending : "✓") : (language === "ar" ? "دون اتصال" : "Offline")}</span></button><button className="housing-language-button" onClick={toggleLanguage}><Languages size={17} />{t("language")}</button><button className="housing-refresh-button" onClick={live.refresh} disabled={live.loading}><RefreshCw size={17} className={live.loading ? "housing-spin" : ""} /></button><div className="housing-date"><CalendarDays size={17} /><span>{today}</span></div><button className="housing-notification" onClick={() => goTo("notifications")}><Bell size={20} />{live.data.notificationEvents.some((item) => item.status === "Unread") && <i />}</button><div className="housing-top-profile"><span>{initials}</span><div><strong>{profileName}</strong><small>{backendContext?.profile?.role || t("systemAdministrator")}</small></div></div></div></header>
 
       <div className="housing-content"><div className="housing-page-title"><div><p><Home size={15} /> {t("main")} <ChevronLeft size={14} /> {title}</p><h1>{title}</h1><span>{description}</span></div>{page === "dashboard" && (!allowedPages||allowedPages.has("test-center")) && <button className="housing-primary-button" onClick={() => goTo("test-center")}><UserPlus size={18} />{t("newAssignment")}</button>}</div>
         {live.loading && <div className="housing-live-banner"><LoaderCircle className="housing-spin" size={18} />{t("loading")}</div>}
@@ -475,6 +479,7 @@ function HousingWorkspace({ backendContext }) {
         {page === "reconciliation" && <HousingReconciliationPage client={client} companyId={backendContext?.company?.id} data={live.data} canManage={["Admin","Housing Manager","Housing Supervisor"].includes(currentRole)} />}
         {page === "employee-status" && <HousingEmployeeStatusPage client={client} data={live.data} canManage={["Admin","Housing Manager","Housing Supervisor"].includes(currentRole)} />}
         {page === "notifications" && <HousingNotificationsPage client={client} companyId={backendContext?.company?.id} data={live.data} canManage={["Admin","Housing Manager"].includes(currentRole)} onRefresh={live.refresh} />}
+        {page === "offline" && <HousingOfflinePage offline={live.offline} />}
         {page === "test-center" && <HousingTestCenter data={live.data} loading={live.loading} saving={live.saving} error={live.error} onSeed={live.seedTestData} onAssign={live.assignEmployee} onRefresh={live.refresh} onAcknowledge={live.acknowledgeAlert} />}
         {page === "smart-occupancy" && <SmartOccupancyPage data={live.data} />}
         {page === "utilities" && <LiveUtilities data={live.data} onCreate={saveRecord} saving={live.saving} />}
