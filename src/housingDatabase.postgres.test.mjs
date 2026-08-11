@@ -69,6 +69,8 @@ before(async () => {
   await db.exec(notificationMigration)
   const costAllocationMigration = await readFile(new URL('../supabase/housing/migrations/0011_cost_centers_daily_allocation.sql', import.meta.url), 'utf8')
   await db.exec(costAllocationMigration)
+  const inventoryMigration = await readFile(new URL('../supabase/housing/migrations/0012_inventory_spare_parts.sql', import.meta.url), 'utf8')
+  await db.exec(inventoryMigration)
 })
 
 after(async () => { await db?.close() })
@@ -78,11 +80,26 @@ test('standalone migration creates all core housing tables', async () => {
     select count(*)::int as count from information_schema.tables
     where table_schema='public' and table_name like 'housing_%'
   `)
-  assert.equal(result.rows[0].count, 40)
+  assert.equal(result.rows[0].count, 44)
+})
+
+test('inventory receipt and maintenance issue update stock and actual cost', async () => {
+  await asUser(USER_D, () => db.query("select public.housing_create_workspace('Cost Company','Cost Admin')"))
+  const company = await asUser(USER_D, () => db.query('select public.housing_current_company_id() as id'))
+  const companyId = company.rows[0].id
+  const site = await asUser(USER_D, () => db.query("insert into public.housing_sites(company_id,code,name,city) values($1,'INV-S','Inventory Site','Riyadh') returning id", [companyId]))
+  const location = await asUser(USER_D, () => db.query("insert into public.housing_inventory_locations(company_id,site_id,code,name) values($1,$2,'INV-WH','Inventory Warehouse') returning id", [companyId,site.rows[0].id]))
+  const item = await asUser(USER_D, () => db.query("insert into public.housing_inventory_items(company_id,sku,name,unit_cost,reorder_level) values($1,'INV-VALVE','Valve',25,2) returning id", [companyId]))
+  const request = await asUser(USER_D, () => db.query("insert into public.housing_maintenance_requests(company_id,site_id,request_no,category,title,status) values($1,$2,'MR-INV','Plumbing','Repair valve','Open') returning id", [companyId,site.rows[0].id]))
+  await asUser(USER_D, () => db.query("select public.housing_post_inventory_transaction($1,$2,'Receipt',10,25,null,'PO-1',null,$3)", [location.rows[0].id,item.rows[0].id,'81000000-0000-4000-8000-000000000001']))
+  await asUser(USER_D, () => db.query("select public.housing_post_inventory_transaction($1,$2,'Issue',3,25,$3,'MR-INV',null,$4)", [location.rows[0].id,item.rows[0].id,request.rows[0].id,'81000000-0000-4000-8000-000000000002']))
+  const balance = await asUser(USER_D, () => db.query('select quantity from public.housing_inventory_balances where location_id=$1 and item_id=$2',[location.rows[0].id,item.rows[0].id]))
+  const maintenance = await asUser(USER_D, () => db.query('select actual_cost from public.housing_maintenance_requests where id=$1',[request.rows[0].id]))
+  assert.equal(Number(balance.rows[0].quantity),7)
+  assert.equal(Number(maintenance.rows[0].actual_cost),75)
 })
 
 test('daily cost allocation follows assignment dates and project cost centers', async () => {
-  await asUser(USER_D, () => db.query("select public.housing_create_workspace('Cost Company','Cost Admin')"))
   const company = await asUser(USER_D, () => db.query('select public.housing_current_company_id() as id'))
   const companyId = company.rows[0].id
   const projectA = await asUser(USER_D, () => db.query("insert into public.housing_projects(company_id,code,name) values($1,'COST-A','Cost Project A') returning id", [companyId]))

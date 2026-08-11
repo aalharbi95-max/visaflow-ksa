@@ -5,6 +5,7 @@ import {
   BarChart3,
   BedDouble,
   Bell,
+  Boxes,
   Building2,
   CalendarDays,
   CheckCircle2,
@@ -65,6 +66,7 @@ import HousingEmployeeStatusPage from "./HousingEmployeeStatusPage.jsx";
 import HousingNotificationsPage from "./HousingNotificationsPage.jsx";
 import HousingCostCentersPage from "./HousingCostCentersPage.jsx";
 import HousingOfflinePage from "./HousingOfflinePage.jsx";
+import HousingInventoryPage from "./HousingInventoryPage.jsx";
 import { LiveAddHousingModal, LiveAllocations, LiveDashboard, LiveDataTable, LiveHousingList, LiveUtilities } from "./HousingLiveViews.jsx";
 
 const navGroups = [
@@ -88,6 +90,7 @@ const navGroups = [
     labelKey: "operationsGroup",
     items: [
       { id: "maintenance", labelKey: "maintenance", icon: Wrench },
+      { id: "inventory", labelKey: "inventory", icon: Boxes },
       { id: "inspections", labelKey: "inspections", icon: ClipboardCheck },
       { id: "assets", labelKey: "assets", icon: Package },
       { id: "incidents", labelKey: "incidents", icon: ShieldCheck },
@@ -110,11 +113,11 @@ const navGroups = [
 
 const ROLE_PAGE_ACCESS = {
   Admin: null,
-  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","offline","settings","test-center"],
-  "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","reports","notifications","offline","settings","test-center"],
-  Maintenance: ["dashboard","housing","rooms","maintenance","assets","reports","notifications","offline","settings"],
-  Finance: ["dashboard","housing","utilities","contracts","cost-centers","reports","notifications","settings"],
-  Viewer: ["dashboard","housing","rooms","residents","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","settings"],
+  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inventory","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","offline","settings","test-center"],
+  "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inventory","inspections","assets","incidents","compliance","operations","welfare","reports","notifications","offline","settings","test-center"],
+  Maintenance: ["dashboard","housing","rooms","maintenance","inventory","assets","reports","notifications","offline","settings"],
+  Finance: ["dashboard","housing","inventory","utilities","contracts","cost-centers","reports","notifications","settings"],
+  Viewer: ["dashboard","housing","rooms","residents","reconciliation","employee-status","smart-occupancy","maintenance","inventory","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","settings"],
 };
 
 const pageMeta = {
@@ -143,6 +146,7 @@ pageMeta["employee-status"] = ["الإجازات والخروج ونهاية ا�
 pageMeta.notifications = ["الإشعارات متعددة القنوات", "تنبيهات داخل المنصة والبريد وSMS وWhatsApp مع سجل إرسال كامل"];
 pageMeta["cost-centers"] = ["مراكز التكلفة والتخصيص اليومي", "توزيع تكلفة السكن على العامل والمشروع ومركز التكلفة حسب أيام الإقامة الفعلية"];
 pageMeta.offline = ["وضع العمل دون إنترنت", "حفظ العمليات الميدانية محلياً ومزامنتها تلقائياً عند عودة الاتصال"];
+pageMeta.inventory = ["المخزون وقطع الغيار", "مستودع فرعي لكل سكن وربط صرف القطع بتكلفة بلاغات الصيانة"];
 
 const pageMetaEn = {
   dashboard: ["Dashboard", "A complete view of housing, occupancy and operations"],
@@ -170,6 +174,7 @@ pageMetaEn["employee-status"] = ["Leave, Exit & End of Service", "Employee statu
 pageMetaEn.notifications = ["Multi-Channel Notifications", "In-app, email, SMS and WhatsApp alerts with a complete delivery log"];
 pageMetaEn["cost-centers"] = ["Cost Centers & Daily Allocation", "Allocate housing cost to workers, projects and cost centers by actual occupied days"];
 pageMetaEn.offline = ["Offline Work Mode", "Store field work locally and sync automatically when connectivity returns"];
+pageMetaEn.inventory = ["Inventory & Spare Parts", "Site sub-warehouses and maintenance-linked spare-part costs"];
 
 const housings = [
   { id: "H-001", name: "سكن النخيل", city: "الرياض", project: "مشروع المترو", manager: "أحمد الغامدي", capacity: 240, occupied: 218, status: "نشط", color: "teal", latitude: 24.7136, longitude: 46.6753 },
@@ -487,6 +492,7 @@ function HousingWorkspace({ backendContext }) {
         {page === "operations" && <CateringLaundryPage data={live.data} />}
         {page === "welfare" && <WelfarePage data={live.data} />}
         {page === "maintenance" && <MaintenancePage data={live.data} onCreate={saveRecord} saving={live.saving} />}
+        {page === "inventory" && <HousingInventoryPage client={client} data={live.data} canManage={["Admin","Housing Manager","Housing Supervisor","Maintenance"].includes(currentRole)} onRefresh={live.refresh} />}
         {page === "inspections" && <InspectionsPage data={live.data} onCreate={saveRecord} onUpdate={live.updateInspection} saving={live.saving} />}
         {page === "assets" && <AssetsPage data={live.data} onCreate={saveRecord} saving={live.saving} />}
         {page === "incidents" && <IncidentsPage data={live.data} onCreate={saveRecord} saving={live.saving} />}

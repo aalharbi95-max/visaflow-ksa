@@ -19,6 +19,8 @@ messages.ar.costCenters = 'مراكز التكلفة والتخصيص اليوم
 messages.en.costCenters = 'Cost Centers & Daily Allocation'
 messages.ar.offlineMode = 'وضع العمل دون إنترنت'
 messages.en.offlineMode = 'Offline Work Mode'
+messages.ar.inventory = 'المخزون وقطع الغيار'
+messages.en.inventory = 'Inventory & Spare Parts'
 
 const HousingLanguageContext = createContext(null)
 
