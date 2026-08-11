@@ -54,6 +54,15 @@ test('workspace exposes the full test center and live modules', async () => {
   assert.match(styles, /max-height:\s*1000px/)
 })
 
+test('inventory and spare parts are connected to maintenance costs', async () => {
+  const [app,page,service,migration]=await Promise.all([
+    readFile(new URL('./HousingApp.jsx',import.meta.url),'utf8'), readFile(new URL('./HousingInventoryPage.jsx',import.meta.url),'utf8'),
+    readFile(new URL('./housingService.mjs',import.meta.url),'utf8'), readFile(new URL('../supabase/housing/migrations/0012_inventory_spare_parts.sql',import.meta.url),'utf8'),
+  ])
+  assert.match(app,/HousingInventoryPage/); assert.match(page,/maintenanceRequestId/); assert.match(service,/housing_post_inventory_transaction/)
+  assert.match(migration,/housing_inventory_balances/); assert.match(migration,/actual_cost=coalesce\(actual_cost,0\)/)
+})
+
 test('visible housing action buttons are wired to forms, details, filters and exports', async () => {
   const [app, modules, liveViews, advanced, hook, modal, service] = await Promise.all([
     readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
