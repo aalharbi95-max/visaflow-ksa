@@ -560,6 +560,21 @@ body:has(.housing-app) { margin: 0; overflow-x: clip; background: var(--housing-
   .housing-sidebar-footer span { margin-top: 1px; font-size: 8px; }
 }
 .housing-full-button { width: 100%; margin-top: 14px; justify-content: center; }
+.housing-cost-center-stack { display:flex; flex-direction:column; gap:16px; }
+.housing-cost-toolbar { padding:16px; display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; }
+.housing-cost-toolbar > div { min-width:260px; flex:1; }
+.housing-cost-toolbar h2 { margin:0 0 5px; font-size:14px; }
+.housing-cost-toolbar p { margin:0; color:var(--housing-muted); font-size:9px; line-height:1.6; }
+.housing-cost-toolbar label { display:flex; flex-direction:column; gap:5px; color:var(--housing-muted); font-size:8px; font-weight:800; }
+.housing-cost-toolbar input, .housing-cost-inline-form input, .housing-cost-inline-form select, .housing-cost-entry-form input, .housing-cost-entry-form select { min-height:38px; padding:0 10px; border:1px solid var(--housing-border); border-radius:8px; background:#fff; color:var(--housing-text); font:inherit; font-size:9px; }
+.housing-cost-center-grid { display:grid; grid-template-columns:1.35fr .85fr; gap:16px; }
+.housing-cost-center-grid > article { overflow:hidden; }
+.housing-cost-inline-form { padding:0 16px 16px; display:grid; grid-template-columns:.7fr 1.2fr 1.2fr 1fr 1fr auto; gap:8px; }
+.housing-cost-entry-form { padding:0 16px 16px; display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+.housing-cost-entry-form button { grid-column:1/-1; justify-content:center; }
+.housing-table-wrap td small { display:block; margin-top:3px; color:var(--housing-muted); font-size:8px; }
+@media (max-width:1120px) { .housing-cost-center-grid { grid-template-columns:1fr; }.housing-cost-inline-form { grid-template-columns:repeat(3,1fr); }.housing-cost-inline-form button { justify-content:center; } }
+@media (max-width:620px) { .housing-cost-toolbar { align-items:stretch; }.housing-cost-toolbar label,.housing-cost-toolbar button { width:100%; }.housing-cost-inline-form,.housing-cost-entry-form { grid-template-columns:1fr; }.housing-cost-entry-form button { grid-column:auto; } }
 .housing-rule-banner { padding: 17px 20px; display: flex; align-items: center; gap: 13px; border-color: #b8ded6; background: linear-gradient(90deg,#f1faf8,#fff); }
 .housing-rule-banner > svg { color: var(--housing-teal); }.housing-rule-banner div { flex: 1; }
 .housing-rule-banner h3 { margin: 0 0 4px; font-size: 12px; }.housing-rule-banner p { margin: 0; color: var(--housing-muted); font-size: 9px; line-height: 1.7; }.housing-rule-banner > strong { color: var(--housing-teal); font-size: 16px; white-space: nowrap; }

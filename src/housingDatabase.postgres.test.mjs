@@ -6,6 +6,7 @@ import { PGlite } from '@electric-sql/pglite'
 const USER_A = '10000000-0000-4000-8000-000000000001'
 const USER_B = '10000000-0000-4000-8000-000000000002'
 const USER_C = '10000000-0000-4000-8000-000000000003'
+const USER_D = '10000000-0000-4000-8000-000000000004'
 
 let db
 
@@ -43,7 +44,8 @@ before(async () => {
     insert into auth.users values
       ('${USER_A}','admin-a@example.com'),
       ('${USER_B}','admin-b@example.com'),
-      ('${USER_C}','supervisor@example.com');
+      ('${USER_C}','supervisor@example.com'),
+      ('${USER_D}','cost-admin@example.com');
   `)
   const migration = await readFile(new URL('../supabase/housing/migrations/0001_housing_initial.sql', import.meta.url), 'utf8')
   // Supabase provides pgcrypto. PGlite already provides gen_random_uuid but
@@ -65,6 +67,8 @@ before(async () => {
   await db.exec(employeeStatusMigration)
   const notificationMigration = await readFile(new URL('../supabase/housing/migrations/0010_multichannel_notifications.sql', import.meta.url), 'utf8')
   await db.exec(notificationMigration)
+  const costAllocationMigration = await readFile(new URL('../supabase/housing/migrations/0011_cost_centers_daily_allocation.sql', import.meta.url), 'utf8')
+  await db.exec(costAllocationMigration)
 })
 
 after(async () => { await db?.close() })
@@ -74,7 +78,38 @@ test('standalone migration creates all core housing tables', async () => {
     select count(*)::int as count from information_schema.tables
     where table_schema='public' and table_name like 'housing_%'
   `)
-  assert.equal(result.rows[0].count, 36)
+  assert.equal(result.rows[0].count, 40)
+})
+
+test('daily cost allocation follows assignment dates and project cost centers', async () => {
+  await asUser(USER_D, () => db.query("select public.housing_create_workspace('Cost Company','Cost Admin')"))
+  const company = await asUser(USER_D, () => db.query('select public.housing_current_company_id() as id'))
+  const companyId = company.rows[0].id
+  const projectA = await asUser(USER_D, () => db.query("insert into public.housing_projects(company_id,code,name) values($1,'COST-A','Cost Project A') returning id", [companyId]))
+  const projectB = await asUser(USER_D, () => db.query("insert into public.housing_projects(company_id,code,name) values($1,'COST-B','Cost Project B') returning id", [companyId]))
+  const centerA = await asUser(USER_D, () => db.query("insert into public.housing_cost_centers(company_id,code,name,project_id) values($1,'CC-A','Center A',$2) returning id", [companyId, projectA.rows[0].id]))
+  const centerB = await asUser(USER_D, () => db.query("insert into public.housing_cost_centers(company_id,code,name,project_id) values($1,'CC-B','Center B',$2) returning id", [companyId, projectB.rows[0].id]))
+  const site = await asUser(USER_D, () => db.query("insert into public.housing_sites(company_id,code,name,city) values($1,'COST-S','Cost Site','Riyadh') returning id", [companyId]))
+  const building = await asUser(USER_D, () => db.query("insert into public.housing_buildings(company_id,site_id,code,name) values($1,$2,'A','A') returning id", [companyId, site.rows[0].id]))
+  const room = await asUser(USER_D, () => db.query("insert into public.housing_rooms(company_id,site_id,building_id,room_number,capacity,area_sqm) values($1,$2,$3,'101',2,8) returning id", [companyId, site.rows[0].id, building.rows[0].id]))
+  const beds = await asUser(USER_D, () => db.query("insert into public.housing_beds(company_id,site_id,room_id,bed_number) values($1,$2,$3,'1'),($1,$2,$3,'2') returning id", [companyId, site.rows[0].id, room.rows[0].id]))
+  const workers = await asUser(USER_D, () => db.query("insert into public.housing_employees(company_id,employee_no,full_name,project_id) values($1,'COST-E1','Worker A',$2),($1,'COST-E2','Worker B',$3) returning id", [companyId, projectA.rows[0].id, projectB.rows[0].id]))
+  await asUser(USER_D, async () => {
+    await db.query("insert into public.housing_assignments(company_id,employee_id,site_id,room_id,bed_id,start_date,end_date,status,project_id,cost_center_id) values($1,$2,$3,$4,$5,'2026-08-01','2026-08-02','Ended',$6,$7),($1,$8,$3,$4,$9,'2026-08-02','2026-08-02','Ended',$10,$11)", [companyId,workers.rows[0].id,site.rows[0].id,room.rows[0].id,beds.rows[0].id,projectA.rows[0].id,centerA.rows[0].id,workers.rows[1].id,beds.rows[1].id,projectB.rows[0].id,centerB.rows[0].id])
+    await db.query("insert into public.housing_cost_entries(company_id,site_id,category,description,period_start,period_end,amount) values($1,$2,'Catering','Meals','2026-08-01','2026-08-02',300)", [companyId,site.rows[0].id])
+  })
+  const run = await asUser(USER_D, () => db.query("select public.housing_generate_daily_cost_allocation('2026-08-01','2026-08-02') as id"))
+  const totals = await asUser(USER_D, () => db.query('select total_cost,allocated_cost,unallocated_cost,worker_days from public.housing_cost_allocation_runs where id=$1', [run.rows[0].id]))
+  assert.deepEqual(totals.rows[0], { total_cost: '300.00', allocated_cost: '300.00', unallocated_cost: '0.00', worker_days: 3 })
+  const centers = await asUser(USER_D, () => db.query('select cost_center_id,round(sum(amount),2) amount from public.housing_daily_cost_allocations where run_id=$1 group by cost_center_id order by amount desc', [run.rows[0].id]))
+  assert.deepEqual(centers.rows, [{ cost_center_id: centerA.rows[0].id, amount: '225.00' }, { cost_center_id: centerB.rows[0].id, amount: '75.00' }])
+  await asUser(USER_D, async () => {
+    await db.query("delete from public.housing_assignments where employee_id in ($1,$2)", [workers.rows[0].id,workers.rows[1].id])
+    await db.query('delete from public.housing_sites where id=$1', [site.rows[0].id])
+    await db.query("delete from public.housing_employees where employee_no in ('COST-E1','COST-E2')")
+    await db.query("delete from public.housing_cost_centers where code in ('CC-A','CC-B')")
+    await db.query("delete from public.housing_projects where code in ('COST-A','COST-B')")
+  })
 })
 
 test('reconciliation schema supports reviewed checkout without automatic eviction', async () => {

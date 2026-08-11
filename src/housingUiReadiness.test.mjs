@@ -189,3 +189,19 @@ test('multi-channel housing notifications include secure queue, settings and del
   assert.match(worker, /RESEND_API_KEY/)
   assert.match(worker, /TWILIO_ACCOUNT_SID/)
 })
+
+test('cost centers and daily prorated allocation are connected to finance navigation and Supabase', async () => {
+  const [app, page, service, migration] = await Promise.all([
+    readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./HousingCostCentersPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./housingService.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/housing/migrations/0011_cost_centers_daily_allocation.sql', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /cost-centers/)
+  assert.match(page, /generateHousingDailyCostAllocation/)
+  assert.match(page, /exportHousingExcel/)
+  assert.match(service, /housing_daily_cost_allocations/)
+  assert.match(migration, /housing_generate_daily_cost_allocation/)
+  assert.match(migration, /worker_days/)
+  assert.match(migration, /cost_center_id/)
+})

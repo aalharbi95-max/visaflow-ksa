@@ -16,6 +16,7 @@ import {
   Filter,
   Home,
   LayoutDashboard,
+  Landmark,
   Languages,
   LoaderCircle,
   LogOut,
@@ -61,6 +62,7 @@ import HousingTestCenter from "./HousingTestCenter.jsx";
 import HousingReconciliationPage from "./HousingReconciliationPage.jsx";
 import HousingEmployeeStatusPage from "./HousingEmployeeStatusPage.jsx";
 import HousingNotificationsPage from "./HousingNotificationsPage.jsx";
+import HousingCostCentersPage from "./HousingCostCentersPage.jsx";
 import { LiveAddHousingModal, LiveAllocations, LiveDashboard, LiveDataTable, LiveHousingList, LiveUtilities } from "./HousingLiveViews.jsx";
 
 const navGroups = [
@@ -97,6 +99,7 @@ const navGroups = [
     labelKey: "financeReports",
     items: [
       { id: "contracts", labelKey: "contracts", icon: Wallet },
+      { id: "cost-centers", labelKey: "costCenters", icon: Landmark },
       { id: "reports", labelKey: "reports", icon: BarChart3 },
     ],
   },
@@ -105,11 +108,11 @@ const navGroups = [
 
 const ROLE_PAGE_ACCESS = {
   Admin: null,
-  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","reports","notifications","settings","test-center"],
+  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","settings","test-center"],
   "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","reports","notifications","settings","test-center"],
   Maintenance: ["dashboard","housing","rooms","maintenance","assets","reports","notifications","settings"],
-  Finance: ["dashboard","housing","utilities","contracts","reports","notifications","settings"],
-  Viewer: ["dashboard","housing","rooms","residents","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","reports","notifications","settings"],
+  Finance: ["dashboard","housing","utilities","contracts","cost-centers","reports","notifications","settings"],
+  Viewer: ["dashboard","housing","rooms","residents","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","cost-centers","reports","notifications","settings"],
 };
 
 const pageMeta = {
@@ -136,6 +139,7 @@ const pageMeta = {
 pageMeta.reconciliation = ["المطابقة والربط الذكي", "مطابقة قوائم الموارد البشرية والبصمة مع المقيمين واكتشاف التسكين الوهمي"];
 pageMeta["employee-status"] = ["الإجازات والخروج ونهاية الخدمة", "تنبيهات حالة العامل وقرارات الإخلاء وإتاحة الأسرة بعد اعتماد المشرف"];
 pageMeta.notifications = ["الإشعارات متعددة القنوات", "تنبيهات داخل المنصة والبريد وSMS وWhatsApp مع سجل إرسال كامل"];
+pageMeta["cost-centers"] = ["مراكز التكلفة والتخصيص اليومي", "توزيع تكلفة السكن على العامل والمشروع ومركز التكلفة حسب أيام الإقامة الفعلية"];
 
 const pageMetaEn = {
   dashboard: ["Dashboard", "A complete view of housing, occupancy and operations"],
@@ -161,6 +165,7 @@ const pageMetaEn = {
 pageMetaEn.reconciliation = ["Workforce Reconciliation", "Match HR and biometric lists with residents and detect ghost occupancy"];
 pageMetaEn["employee-status"] = ["Leave, Exit & End of Service", "Employee status alerts and supervisor-approved checkout decisions"];
 pageMetaEn.notifications = ["Multi-Channel Notifications", "In-app, email, SMS and WhatsApp alerts with a complete delivery log"];
+pageMetaEn["cost-centers"] = ["Cost Centers & Daily Allocation", "Allocate housing cost to workers, projects and cost centers by actual occupied days"];
 
 const housings = [
   { id: "H-001", name: "سكن النخيل", city: "الرياض", project: "مشروع المترو", manager: "أحمد الغامدي", capacity: 240, occupied: 218, status: "نشط", color: "teal", latitude: 24.7136, longitude: 46.6753 },
@@ -481,6 +486,7 @@ function HousingWorkspace({ backendContext }) {
         {page === "assets" && <AssetsPage data={live.data} onCreate={saveRecord} saving={live.saving} />}
         {page === "incidents" && <IncidentsPage data={live.data} onCreate={saveRecord} saving={live.saving} />}
         {page === "contracts" && <ContractsPage data={live.data} onCreate={saveRecord} saving={live.saving} />}
+        {page === "cost-centers" && <HousingCostCentersPage client={client} companyId={backendContext?.company?.id} data={live.data} canManage={["Admin","Housing Manager","Finance"].includes(currentRole)} onRefresh={live.refresh} />}
         {page === "reports" && <ReportsPage data={live.data} />}
         {page === "settings" && <HousingSettingsPage client={client} sites={live.data.sites} currentProfile={backendContext?.profile} />}
       </div>

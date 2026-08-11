@@ -11,11 +11,12 @@ import {
 } from './housingService.mjs'
 
 const emptyData = Object.freeze({
-  dashboard: {}, sites: [], buildings: [], floors: [], apartments: [], rooms: [], employees: [], assignments: [], alerts: [],
+  dashboard: {}, projects: [], sites: [], buildings: [], floors: [], apartments: [], rooms: [], employees: [], assignments: [], alerts: [],
   licenses: [], hseReports: [], operations: [], incidents: [], surveys: [],
   maintenance: [], inspections: [], assets: [], contracts: [], utilityAccounts: [], utilityBills: [],
   employeeStatusEvents: [],
   notificationSettings: null, notificationRecipients: [], notificationEvents: [], notificationDeliveries: [],
+  costCenters: [], costEntries: [], costAllocationRuns: [], dailyCostAllocations: [],
 })
 
 export function useHousingWorkspaceData(client, companyId) {

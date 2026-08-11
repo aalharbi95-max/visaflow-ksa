@@ -15,6 +15,8 @@ messages.ar.employeeStatus = 'الإجازات والخروج ونهاية ال�
 messages.en.employeeStatus = 'Leave, Exit & End of Service'
 messages.ar.notifications = 'الإشعارات متعددة القنوات'
 messages.en.notifications = 'Multi-Channel Notifications'
+messages.ar.costCenters = 'مراكز التكلفة والتخصيص اليومي'
+messages.en.costCenters = 'Cost Centers & Daily Allocation'
 
 const HousingLanguageContext = createContext(null)
 
