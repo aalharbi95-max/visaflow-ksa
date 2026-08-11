@@ -15,7 +15,7 @@ const OFFICER_A = "20000000-0000-4000-8000-000000000003";
 const ADMIN_B = "20000000-0000-4000-8000-000000000004";
 const ADMIN_ROLE_A = "20000000-0000-4000-8000-000000000005";
 const AGENCIES = Array.from(
-  { length: 8 },
+  { length: 10 },
   (_, index) =>
     `30000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`
 );
@@ -419,6 +419,13 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
       ),
       "utf8"
     );
+    const multiCompanyIdentityMigration = await readFile(
+      new URL(
+        "../supabase/migrations/20260805000500_allow_existing_agency_user_for_new_company.sql",
+        import.meta.url
+      ),
+      "utf8"
+    );
     await db.exec(fixtureSql);
 
     await db.exec(`
@@ -474,6 +481,7 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
 
     await db.exec(migration);
     await db.exec(hardeningMigration);
+    await db.exec(multiCompanyIdentityMigration);
   });
 
   after(async () => {
@@ -523,6 +531,147 @@ describe("existing agency invitation flow on temporary PostgreSQL", () => {
       agencyId: AGENCIES[1],
     });
     assert.equal(result.request.status, "Invitation Sent");
+  });
+
+  test("an existing user for the same agency can start a new company invitation", async () => {
+    const existingAuthUser = "50000000-0000-4000-8000-000000000001";
+    await db.query(
+      `insert into auth.users (id, email) values ($1::uuid, $2::text)`,
+      [existingAuthUser, "agency-9@example.test"]
+    );
+    await db.query(
+      `insert into public.users (
+         auth_user_id, name, email, role, status, is_active, company_id,
+         agency_id, agency_name
+       ) values (
+         $1::uuid, 'Existing Agency User', $2::text, 'Agency', 'Active', true,
+         null, $3::uuid, 'Agency 9'
+       )`,
+      [existingAuthUser, "agency-9@example.test", AGENCIES[8]]
+    );
+
+    const started = await asAuthenticated(ADMIN_A, async () => {
+      const result = await db.query(
+        `select public.agency_invitation_begin_v2(
+           $1::uuid, $2::jsonb
+         ) as result`,
+        [AGENCIES[8], JSON.stringify({
+          can_view_requests: true,
+          can_upload_candidates: true,
+          can_update_candidates: true,
+          can_view_interviews: true,
+        })]
+      );
+      return result.rows[0].result;
+    });
+
+    assert.equal(started.status, "Provisioning");
+    assert.equal(started.attempt_count, 1);
+    assert.equal(started.auth_user_id, existingAuthUser);
+    assert.equal(started.outcome, "send");
+
+    const recorded = await db.query(
+      `select public.agency_invitation_record_auth_user_v3(
+         $1::uuid, $2::uuid, $3::uuid, true
+       ) as result`,
+      [ADMIN_A, started.id, existingAuthUser]
+    );
+    assert.equal(recorded.rows[0].result.auth_identity_preexisting, true);
+
+    const completed = await db.query(
+      `select public.agency_invitation_complete_v2(
+         $1::uuid, $2::uuid, $3::uuid
+       ) as result`,
+      [ADMIN_A, started.id, existingAuthUser]
+    );
+    assert.equal(completed.rows[0].result.status, "Invitation Sent");
+    assert.equal(completed.rows[0].result.public_user_id != null, true);
+
+    const access = await db.query(
+      `select company_id, agency_id, user_id, status
+       from public.agency_company_user_access
+       where company_id = $1::uuid and agency_id = $2::uuid`,
+      [COMPANY_A, AGENCIES[8]]
+    );
+    assert.deepEqual(access.rows, [{
+      company_id: COMPANY_A,
+      agency_id: AGENCIES[8],
+      user_id: Number(completed.rows[0].result.public_user_id),
+      status: "Invitation Sent",
+    }]);
+
+    await db.query(
+      `insert into public.agency_provisioning_requests (
+         idempotency_key, company_id, agency_id, requested_by_user_id,
+         requested_by_auth_user_id, agency_name, admin_email, permissions,
+         status, auth_user_id, public_user_id, attempt_count, activated_at,
+         created_at, updated_at
+       )
+       select
+         gen_random_uuid(), $1::uuid, agency_id, requested_by_user_id,
+         $2::uuid, agency_name, admin_email, permissions,
+         'Active', auth_user_id, public_user_id, 1, now() - interval '1 day',
+         now() - interval '1 day', now() - interval '1 day'
+       from public.agency_provisioning_requests
+       where id = $3::uuid`,
+      [COMPANY_B, ADMIN_B, started.id]
+    );
+
+    const activated = await asAuthenticated(existingAuthUser, async () => {
+      const result = await db.query(
+        "select public.agency_invitation_activate_v2() as result"
+      );
+      return result.rows[0].result;
+    });
+    assert.equal(activated.id, started.id);
+    assert.equal(activated.status, "Active");
+
+    const activeRequests = await db.query(
+      `select company_id, status
+       from public.agency_provisioning_requests
+       where auth_user_id = $1::uuid and agency_id = $2::uuid
+       order by company_id`,
+      [existingAuthUser, AGENCIES[8]]
+    );
+    assert.deepEqual(activeRequests.rows, [
+      { company_id: COMPANY_A, status: "Active" },
+      { company_id: COMPANY_B, status: "Active" },
+    ]);
+  });
+
+  test("an inactive existing agency identity cannot be reactivated by another company invitation", async () => {
+    const inactiveAuthUser = "50000000-0000-4000-8000-000000000002";
+    await db.query(
+      `insert into auth.users (id, email) values ($1::uuid, $2::text)`,
+      [inactiveAuthUser, "agency-10@example.test"]
+    );
+    await db.query(
+      `insert into public.users (
+         auth_user_id, name, email, role, status, is_active, company_id,
+         agency_id, agency_name
+       ) values (
+         $1::uuid, 'Inactive Agency User', $2::text, 'Agency', 'Suspended', false,
+         null, $3::uuid, 'Agency 10'
+       )`,
+      [inactiveAuthUser, "agency-10@example.test", AGENCIES[9]]
+    );
+
+    await assert.rejects(
+      asAuthenticated(ADMIN_A, () =>
+        db.query(
+          `select public.agency_invitation_begin_v2(
+             $1::uuid, $2::jsonb
+           )`,
+          [AGENCIES[9], JSON.stringify({
+            can_view_requests: true,
+            can_upload_candidates: true,
+            can_update_candidates: true,
+            can_view_interviews: true,
+          })]
+        )
+      ),
+      /AGENCY_INVITATION_EMAIL_ALREADY_ASSIGNED/
+    );
   });
 
   test("an unauthorized user is rejected by core and PostgreSQL", async () => {

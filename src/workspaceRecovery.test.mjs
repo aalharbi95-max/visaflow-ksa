@@ -26,6 +26,18 @@ function memoryStorage(initial = {}) {
 test("recognizes workspace recovery and rejects candidate recovery", () => {
   assert.equal(
     getWorkspaceRecoveryUrlState(
+      "http://localhost:5173/?workspace_recovery=1"
+    ).requested,
+    true
+  );
+  assert.equal(
+    getWorkspaceRecoveryUrlState(
+      "https://visaflowksa.com/#access_token=secret&type=recovery"
+    ).requested,
+    true
+  );
+  assert.equal(
+    getWorkspaceRecoveryUrlState(
       "http://localhost:5173/?login=1&auth_flow=workspace&recovery=1"
     ).requested,
     true
@@ -62,6 +74,31 @@ test("clears old workspace state without clearing candidate auth", () => {
   clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage });
   assert.equal(localStorage.getItem("visaflow-workspace-auth"), null);
   assert.equal(localStorage.getItem("visaflow-talent-auth"), "candidate");
+  assert.equal(sessionStorage.getItem("visaflow_agency_company_id"), null);
+});
+
+test("preserves the temporary recovery session while clearing workspace identity", () => {
+  const localStorage = memoryStorage({
+    "visaflow-workspace-auth": "recovery-session",
+    "visaflow-talent-auth": "candidate-session",
+    visaflow_user: "stale-office",
+  });
+  const sessionStorage = memoryStorage({
+    visaflow_agency_company_id: "stale-company",
+  });
+
+  clearWorkspaceRecoveryLocalState({
+    localStorage,
+    sessionStorage,
+    preserveAuthSession: true,
+  });
+
+  assert.equal(
+    localStorage.getItem("visaflow-workspace-auth"),
+    "recovery-session"
+  );
+  assert.equal(localStorage.getItem("visaflow-talent-auth"), "candidate-session");
+  assert.equal(localStorage.getItem("visaflow_user"), null);
   assert.equal(sessionStorage.getItem("visaflow_agency_company_id"), null);
 });
 
@@ -220,9 +257,10 @@ test("failed sign-out clears only workspace storage and still redirects", async 
 
 test("callback cleanup removes tokens and keeps login", () => {
   const url = getCleanWorkspaceRecoveryUrl(
-    "https://visaflowksa.com/?auth_flow=workspace&recovery=1&code=secret#access_token=secret"
+    "https://visaflowksa.com/?workspace_recovery=1&auth_flow=workspace&recovery=1&code=secret#access_token=secret"
   );
   assert.equal(url.searchParams.get("login"), "1");
+  assert.equal(url.searchParams.get("workspace_recovery"), null);
   assert.equal(url.searchParams.get("code"), null);
   assert.equal(url.hash, "");
 });
@@ -241,6 +279,7 @@ test("App blocks stale workspace reconciliation until a verified manual login", 
   assert.match(effect, /workspaceRecoveryRequested/);
   assert.match(effect, /workspaceRecoveryLoginGuard/);
   assert.match(effect, /clearWorkspaceRecoveryLocalState/);
+  assert.match(effect, /preserveAuthSession: workspaceRecoveryRequested/);
   assert.ok(
     app.indexOf("return <WorkspacePasswordRecoveryScreen") <
       app.indexOf('if (currentRole === "Agency" && !currentCompanyId)')

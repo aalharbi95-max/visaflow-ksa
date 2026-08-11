@@ -4,6 +4,7 @@ import {
   clearWorkspaceRecoveryLocalState,
   getWorkspaceRecoveryUrlState,
 } from './workspaceRecovery.mjs'
+import { getRecoveryAccountType } from './recoveryAccount.mjs'
 
 const {
   url: supabaseUrl,
@@ -108,9 +109,16 @@ talentSupabase.auth.onAuthStateChange((event, session) => {
 
 workspaceSupabase.auth.onAuthStateChange((event, session) => {
   if (event === 'PASSWORD_RECOVERY') {
-    establishWorkspaceRecoveryProof(event, session)
+    if (getRecoveryAccountType(session) === 'candidate') {
+      establishTalentRecoveryProof(event, session)
+      clearWorkspaceRecoveryProof()
+    } else {
+      establishWorkspaceRecoveryProof(event, session)
+      clearTalentRecoveryProof()
+    }
   } else if (event === 'SIGNED_OUT') {
     clearWorkspaceRecoveryProof()
+    clearTalentRecoveryProof()
   }
 })
 

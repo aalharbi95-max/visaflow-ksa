@@ -1,3 +1,5 @@
+import { buildWorkspaceRecoveryRedirectUrl } from "./workspaceRecovery.mjs";
+
 const COMPANY_USER_MANAGER_FUNCTION = "visaflow-user-manager";
 
 export const COMPANY_USER_ROLES = Object.freeze([
@@ -52,11 +54,9 @@ export function getCompanyUserManagerError(error) {
 }
 
 export async function sendCompanyUserSetupEmail(supabase, email, origin = window.location.origin) {
-  const redirectTo = new URL("/", origin);
-  redirectTo.searchParams.set("workspace_recovery", "1");
   const { error } = await supabase.auth.resetPasswordForEmail(
     String(email || "").trim().toLowerCase(),
-    { redirectTo: redirectTo.toString() }
+    { redirectTo: buildWorkspaceRecoveryRedirectUrl(origin) }
   );
   if (error) {
     const failure = new Error("INVITATION_SEND_FAILED");

@@ -29,7 +29,7 @@ before(async()=>{
     create table users(id bigint generated always as identity primary key,auth_user_id uuid,company_id uuid,agency_id uuid,name text,email text,role text,status text,is_active boolean);
     create table company_agency_access(company_id uuid,agency_id uuid,status text);
     create table agency_company_user_access(user_id bigint,company_id uuid,agency_id uuid,status text,can_upload_candidates boolean,can_update_candidates boolean);
-    create table candidates(id uuid default gen_random_uuid() primary key,company_id uuid references companies(id),agency text,candidate_name text not null,status text,request_no text,created_at timestamptz default now(),updated_at timestamptz default now());
+    create table candidates(id uuid default gen_random_uuid() primary key,company_id uuid references companies(id),agency text,candidate_name text not null,nationality text,civil_id_no text,civil_id_expiry_date date,status text,request_no text,created_at timestamptz default now(),updated_at timestamptz default now());
     create table candidate_documents(id uuid default gen_random_uuid(),candidate_id uuid references candidates(id),label text);
     create table system_activity_logs(id uuid default gen_random_uuid(),company_id uuid,module_name text,record_id text,record_label text,action_type text,action_title text,old_values jsonb,new_values jsonb,changed_fields jsonb,changed_by_user_id bigint,changed_by_name text,changed_by_email text,changed_by_role text,notes text,source text,created_at timestamptz default now());
     create function current_app_user_company_id() returns uuid language sql stable as $$select company_id from users where auth_user_id=auth.uid()$$;

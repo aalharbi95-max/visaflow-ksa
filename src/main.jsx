@@ -7,6 +7,22 @@ const root = ReactDOM.createRoot(document.getElementById('root'))
 
 async function startApplication() {
   try {
+    const isHousingApplication = window.location.pathname.startsWith('/housing')
+      || new URLSearchParams(window.location.search).get('app') === 'housing'
+
+    if (isHousingApplication) {
+      const { default: HousingApp } = await import('./HousingApp.jsx')
+      document.documentElement.lang = 'ar'
+      document.documentElement.dir = 'rtl'
+      document.title = 'سكن | إدارة السكنات'
+      root.render(
+        <React.StrictMode>
+          <HousingApp />
+        </React.StrictMode>,
+      )
+      return
+    }
+
     getViteSupabaseConfig()
     const { default: App } = await import('./App.jsx')
     root.render(

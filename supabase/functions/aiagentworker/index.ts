@@ -23,6 +23,7 @@ type AgentSettings = {
   cooldown_minutes?: number;
   max_actions_per_hour?: number;
   max_retry_attempts?: number;
+  ai_agent_monthly_credit_limit?: number;
 };
 
 const corsHeaders = {
@@ -100,6 +101,117 @@ function safeNumber(value: unknown, fallback = 0) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function extractOpenAIText(result: any) {
+  if (typeof result?.output_text === "string" && result.output_text.trim()) return result.output_text.trim();
+  return (Array.isArray(result?.output) ? result.output : [])
+    .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+    .map((item: any) => item?.text || item?.output_text || "")
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+async function professionalSafetyIdentifier(companyId: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`visaflow-ai-agent:${companyId}`));
+  return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function enhanceAgencyDigestWithAI(supabase: any, settings: AgentSettings, runId: string, digest: Row, fallback: Row) {
+  const apiKey = Deno.env.get("OPENAI_API_KEY") || "";
+  const monthlyLimit = Math.max(0, safeNumber(settings.ai_agent_monthly_credit_limit, 0));
+  if (!apiKey || monthlyLimit <= 0) return { ...fallback, ai_enhanced: false, ai_reason: apiKey ? "credit_limit_unavailable" : "openai_not_configured" };
+
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const { data: usageRows, error: usageError } = await supabase
+    .from("ai_agent_usage_ledger")
+    .select("credits_debited")
+    .eq("company_id", settings.company_id)
+    .gte("created_at", monthStart.toISOString())
+    .limit(5000);
+  if (usageError) throw usageError;
+  const usedCredits = (usageRows || []).reduce((sum: number, row: Row) => sum + safeNumber(row.credits_debited, 0), 0);
+  if (usedCredits >= monthlyLimit) return { ...fallback, ai_enhanced: false, ai_reason: "monthly_credit_limit_reached" };
+
+  const model = Deno.env.get("OPENAI_AI_AGENT_MODEL") || "gpt-5.6-terra";
+  const actionKey = `${digest.dedupe_key}|professional-copy`;
+  const facts = (digest.tasks || []).slice(0, 30).map((task: Row) => ({
+    follow_up_type: firstText(task.type, "Follow-up"),
+    priority: firstText(task.priority, "Medium"),
+    reference: firstText(task.reference, "-"),
+    request_no: firstText(task.request_no, "-"),
+    reason: firstText(task.reason, "-"),
+    required_action: firstText(task.action_required, "-"),
+  }));
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      reasoning: { effort: "low" },
+      safety_identifier: await professionalSafetyIdentifier(settings.company_id),
+      max_output_tokens: 1600,
+      input: [
+        {
+          role: "system",
+          content: "You are VisaFlow KSA AI Agent Professional, a Saudi recruitment operations follow-up employee. Draft a concise, polished agency follow-up using only supplied facts. Never invent dates, commitments, penalties, legal conclusions, candidate assessments, or confidential information. Do not make hiring decisions. Keep the request specific, respectful, and action-oriented. Human managers remain responsible for decisions.",
+        },
+        {
+          role: "user",
+          content: `Agency: ${firstText(digest.agency, "Agency")}\nHighest priority: ${firstText(digest.highest_priority, "Medium")}\nPending items JSON:\n${JSON.stringify(facts)}\n\nReturn a professional English daily follow-up email.`,
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "visaflow_ai_agent_digest",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["subject", "body"],
+            properties: {
+              subject: { type: "string", minLength: 8, maxLength: 160 },
+              body: { type: "string", minLength: 80, maxLength: 6000 },
+            },
+          },
+        },
+      },
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    console.warn("AI Agent Professional generation failed", response.status, result?.error?.code || "unknown");
+    return { ...fallback, ai_enhanced: false, ai_reason: "generation_failed" };
+  }
+
+  let generated: Row;
+  try { generated = JSON.parse(extractOpenAIText(result)); } catch { return { ...fallback, ai_enhanced: false, ai_reason: "invalid_output" }; }
+  const subject = firstText(generated.subject).slice(0, 160);
+  const body = firstText(generated.body).slice(0, 6000);
+  if (!subject || body.length < 80) return { ...fallback, ai_enhanced: false, ai_reason: "invalid_output" };
+
+  const inputTokens = safeNumber(result?.usage?.input_tokens, 0);
+  const outputTokens = safeNumber(result?.usage?.output_tokens, 0);
+  const totalTokens = safeNumber(result?.usage?.total_tokens, inputTokens + outputTokens);
+  const credits = Math.max(1, Math.ceil(totalTokens / 100));
+  const { error: ledgerError } = await supabase.from("ai_agent_usage_ledger").insert({
+    company_id: settings.company_id,
+    run_id: runId,
+    action_key: actionKey,
+    feature: "Agency Daily Digest",
+    model_name: model,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    credits_debited: credits,
+    status: "Completed",
+  });
+  if (ledgerError && String(ledgerError.code || "") !== "23505") throw ledgerError;
+  return { subject, body, ai_enhanced: true, credits_debited: credits, model_name: model };
 }
 
 function daysBetween(dateValue: unknown) {
@@ -859,7 +971,7 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
 
     const actionType = "AI_AGENT_AGENCY_DAILY_DIGEST";
     const actionKey = digest.dedupe_key;
-    const email = buildAgencyDigestEmail(digest);
+    let email: Row = buildAgencyDigestEmail(digest);
     const requestNoForHeader = digest.request_nos?.length === 1 ? digest.request_nos[0] : digest.request_nos?.length > 1 ? "Multiple" : "-";
 
     try {
@@ -910,6 +1022,8 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
         }
       }
 
+      email = await enhanceAgencyDigestWithAI(supabase, settings, runId, digest, email);
+
       const notificationRow: Row = {
         company_id: settings.company_id,
         agency_id: digest.agency_id || null,
@@ -926,6 +1040,9 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
           source: "AI Agent Worker / Agency Daily Digest",
           delivery_channel: settings.allow_auto_agency_emails ? "Notification + Email" : "Notification Only",
           auto_generated: true,
+          professional_ai_enhanced: email.ai_enhanced === true,
+          ai_model: email.model_name || null,
+          ai_credits_debited: safeNumber(email.credits_debited, 0),
           digest: true,
           total_pending_items: digest.tasks?.length || 0,
           agency: digest.agency,
@@ -981,6 +1098,8 @@ async function processAgencyFollowUps(supabase: any, settings: AgentSettings, ru
           request_nos: digest.request_nos || [],
           email_sent: !!settings.allow_auto_agency_emails && !!digest.agency_email,
           email_skipped: !!settings.allow_auto_agency_emails && !digest.agency_email,
+          professional_ai_enhanced: email.ai_enhanced === true,
+          ai_credits_debited: safeNumber(email.credits_debited, 0),
         },
       });
       await releaseLock(supabase, settings.company_id, actionKey, "completed");
@@ -1028,13 +1147,31 @@ async function processCompany(supabase: any, settings: AgentSettings, runId: str
     return { company_id: settings.company_id, skipped: true, reason: "AI Agent disabled" };
   }
 
-  const maxPerRun = clamp(safeNumber(settings.max_auto_actions_per_run, 5), 1, 100);
+  const { data: entitlement, error: entitlementError } = await supabase
+    .from("platform_clients")
+    .select("ai_agent_enabled,ai_agent_plan,ai_agent_trial_end,ai_agent_monthly_credit_limit")
+    .eq("operational_company_id", settings.company_id)
+    .maybeSingle();
+  if (entitlementError) throw entitlementError;
+
+  const plan = String(entitlement?.ai_agent_plan || "Standard");
+  const trialEnd = entitlement?.ai_agent_trial_end ? new Date(`${entitlement.ai_agent_trial_end}T23:59:59.999Z`) : null;
+  const trialExpired = plan === "Professional Trial" && (!trialEnd || Number.isNaN(trialEnd.getTime()) || trialEnd < new Date());
+  if (entitlement?.ai_agent_enabled !== true || !["Professional", "Professional Trial"].includes(plan) || trialExpired) {
+    return { company_id: settings.company_id, skipped: true, reason: trialExpired ? "AI Agent Professional trial expired" : "AI Agent Professional is not enabled" };
+  }
+
+  const professionalSettings = {
+    ...settings,
+    ai_agent_monthly_credit_limit: safeNumber(entitlement?.ai_agent_monthly_credit_limit, 0),
+  };
+  const maxPerRun = clamp(safeNumber(professionalSettings.max_auto_actions_per_run, 5), 1, 100);
   const ctx = await loadCompanyContext(supabase, settings.company_id);
 
-  const manager = await processManagerApprovals(supabase, settings, runId, ctx, maxPerRun);
+  const manager = await processManagerApprovals(supabase, professionalSettings, runId, ctx, maxPerRun);
   const used = safeNumber(manager.created, 0);
   const remaining = Math.max(0, maxPerRun - used);
-  const agency = remaining > 0 ? await processAgencyFollowUps(supabase, settings, runId, ctx, remaining) : { created: 0, skipped: 0, errors: 0, emailSkipped: 0 };
+  const agency = remaining > 0 ? await processAgencyFollowUps(supabase, professionalSettings, runId, ctx, remaining) : { created: 0, skipped: 0, errors: 0, emailSkipped: 0 };
 
   return { company_id: settings.company_id, manager, agency, max_per_run: maxPerRun };
 }

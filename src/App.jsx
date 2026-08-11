@@ -43,6 +43,13 @@ import {
   shouldShowLanguageToggle,
 } from "./languagePolicy.mjs";
 import {
+  AI_AGENT_PLANS,
+  getAiAgentEntitlementLabel,
+  isAiAgentProfessionalAvailable,
+  normalizeAiAgentEntitlement,
+  validateCompanyTrialForm,
+} from "./aiAgentProfessional.mjs";
+import {
   calculateAgencyMobilizationScore,
   calculateApplicableWeightedScore,
   calculateInterviewQuality,
@@ -133,6 +140,18 @@ import {
   getWorkspaceRecoveryUrlState,
   storeWorkspaceRecoverySuccess,
 } from "./workspaceRecovery.mjs";
+import {
+  formatTalentProfileLimit,
+  getTalentProfileLimitValue,
+  getOwnerTalentProfiles,
+  getTalentEnabledPages,
+  isTalentProfileUnlimited,
+  isTalentEmailNotConfirmed,
+} from "./talentAccess.mjs";
+import {
+  getRecoveryAccountType,
+  getRecoveryCompletionPath,
+} from "./recoveryAccount.mjs";
 import "./style.css";
 
 const UI_DIRECTION = getUiDirection();
@@ -181,6 +200,7 @@ const PAGES = [
 "Platform Intelligence",
 "Client Usage Monitor",
  "Companies Management",
+ "Housing Subscriptions",
  "Platform Users",
  "Talent Dashboard",
  "Subscription Invoices",
@@ -238,6 +258,7 @@ const SIDEBAR_GROUPS = [
   "Platform Dashboard",
   "Client Usage Monitor",
   "Companies Management",
+  "Housing Subscriptions",
   "Platform Users",
   "Talent Dashboard",
   "Subscription Invoices",
@@ -3544,6 +3565,7 @@ const EMPTY_TALENT_CONSENTS = {
   "Platform Terms": false,
   "Privacy Policy": false,
   "Employer Sharing": false,
+  "Employer Contact Sharing": false,
   "AI CV Analysis": false,
   "AI Interview": false,
   "Evaluation Email": false,
@@ -3736,6 +3758,7 @@ function TalentCandidatePortal({ onBack }) {
   const [authMode, setAuthMode] = useState(initialRecoveryState.requested ? "recovery" : "signin");
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+  const [confirmationRequired, setConfirmationRequired] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryForm, setRecoveryForm] = useState({ password: "", confirm_password: "" });
   const [authForm, setAuthForm] = useState({
@@ -3772,6 +3795,7 @@ function TalentCandidatePortal({ onBack }) {
   const [education, setEducation] = useState([]);
   const [certifications, setCertifications] = useState([]);
   const [resumeVersions, setResumeVersions] = useState([]);
+  const [talentInterviews, setTalentInterviews] = useState([]);
   const [resumeStudioBusy, setResumeStudioBusy] = useState(false);
 
   const isArabic = portalLanguage === "AR";
@@ -3879,7 +3903,7 @@ function TalentCandidatePortal({ onBack }) {
 
     try {
       const candidateRow = await ensureTalentProfile(user);
-      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult, resumeVersionsResult] = await Promise.all([
+      const [documentsResult, consentsResult, skillsResult, experienceResult, educationResult, certificationsResult, resumeVersionsResult, interviewsResult] = await Promise.all([
         supabase
           .from("talent_candidate_documents")
           .select("id, candidate_id, document_type, file_name, storage_path, mime_type, size_bytes, is_primary, parse_status, uploaded_at")
@@ -3894,6 +3918,7 @@ function TalentCandidatePortal({ onBack }) {
         supabase.from("talent_candidate_education").select("*").eq("candidate_id", candidateRow.id).order("sort_order", { ascending: true }),
         supabase.from("talent_candidate_certifications").select("*").eq("candidate_id", candidateRow.id).order("issue_date", { ascending: false }),
         supabase.from("talent_resume_versions").select("*").eq("candidate_id", candidateRow.id).order("version_number", { ascending: false }),
+        supabase.rpc("list_candidate_talent_interviews"),
       ]);
 
       if (documentsResult.error) throw documentsResult.error;
@@ -3903,6 +3928,7 @@ function TalentCandidatePortal({ onBack }) {
       if (educationResult.error) throw educationResult.error;
       if (certificationsResult.error) throw certificationsResult.error;
       if (resumeVersionsResult.error && !String(resumeVersionsResult.error.message || "").includes("talent_resume_versions")) throw resumeVersionsResult.error;
+      if (interviewsResult.error) throw interviewsResult.error;
 
       const nextConsents = { ...EMPTY_TALENT_CONSENTS };
       (consentsResult.data || []).forEach((item) => {
@@ -3920,6 +3946,7 @@ function TalentCandidatePortal({ onBack }) {
       setEducation(educationResult.data || []);
       setCertifications(certificationsResult.data || []);
       setResumeVersions(resumeVersionsResult.data || []);
+      setTalentInterviews(interviewsResult.data || []);
       loadedTalentUserRef.current = user.id;
       profileDirtyRef.current = false;
       setWorkspaceHydrated(true);
@@ -4120,10 +4147,12 @@ function TalentCandidatePortal({ onBack }) {
       }
 
       if (data?.session && data?.user) {
+        setConfirmationRequired(false);
         setSession(data.session);
         await loadCandidateWorkspace(data.user);
         setAuthMessage(isArabic ? "تم إنشاء حسابك بنجاح." : "Your candidate account was created successfully.");
       } else {
+        setConfirmationRequired(true);
         setAuthMessage(isArabic
           ? "تم إنشاء الحساب. افتح رسالة التأكيد في بريدك ثم ارجع لتسجيل الدخول."
           : "Account created. Confirm your email, then return to sign in.");
@@ -4153,10 +4182,29 @@ function TalentCandidatePortal({ onBack }) {
         await supabase.auth.signOut({ scope: "local" });
         throw new Error(isArabic ? "هذا الحساب ليس حساب متقدم." : "This is not a candidate account.");
       }
+      setConfirmationRequired(false);
       setSession(data.session);
       await loadCandidateWorkspace(data.user);
     } catch (error) {
-      setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+      if (isTalentEmailNotConfirmed(error)) {
+        setConfirmationRequired(true);
+        try {
+          const { error: resendError } = await supabase.auth.resend({
+            type: "signup",
+            email,
+            options: { emailRedirectTo: getTalentRedirectUrl() },
+          });
+          if (resendError) throw resendError;
+          setAuthMessage(isArabic
+            ? "البريد الإلكتروني غير مؤكد. أرسلنا لك رسالة تأكيد جديدة؛ افتحها ثم ارجع لتسجيل الدخول."
+            : "Email is not confirmed. We sent a new confirmation message; open it, then return to sign in.");
+        } catch (resendError) {
+          setAuthMessage(getTalentAuthErrorMessage(resendError, isArabic, "auth"));
+        }
+      } else {
+        setConfirmationRequired(false);
+        setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
+      }
     } finally {
       setAuthBusy(false);
     }
@@ -4207,6 +4255,7 @@ function TalentCandidatePortal({ onBack }) {
         options: { emailRedirectTo: getTalentRedirectUrl() },
       });
       if (error) throw error;
+      setConfirmationRequired(true);
       setAuthMessage(isArabic ? "تمت إعادة إرسال رسالة تأكيد البريد." : "Confirmation email resent.");
     } catch (error) {
       setAuthMessage(getTalentAuthErrorMessage(error, isArabic, "auth"));
@@ -4302,6 +4351,7 @@ function TalentCandidatePortal({ onBack }) {
       linkedin_url: String(profileForm.linkedin_url || "").trim() || null,
       portfolio_url: String(profileForm.portfolio_url || "").trim() || null,
       employer_sharing_consent: Boolean(consents["Employer Sharing"]),
+      employer_contact_sharing_consent: Boolean(consents["Employer Contact Sharing"]),
       profile_visibility: consents["Employer Sharing"] ? "Anonymized" : "Private",
       last_active_at: new Date().toISOString(),
     };
@@ -4546,10 +4596,10 @@ function TalentCandidatePortal({ onBack }) {
       setWorkspaceTab("CV");
       return;
     }
-    if (!consents["Platform Terms"] || !consents["Privacy Policy"] || !consents["AI CV Analysis"]) {
+    if (!consents["Platform Terms"] || !consents["Privacy Policy"] || !consents["AI CV Analysis"] || !consents["Employer Sharing"] || !consents["Employer Contact Sharing"]) {
       setWorkspaceMessage(isArabic
         ? "يلزم قبول شروط المنصة وسياسة الخصوصية وتحليل السيرة بالذكاء الاصطناعي."
-        : "Accept platform terms, privacy policy, and AI CV analysis consent.");
+        : "Accept the required terms and authorize profile and contact sharing with subscribed employers.");
       setWorkspaceTab("Consent");
       return;
     }
@@ -4739,7 +4789,7 @@ function TalentCandidatePortal({ onBack }) {
               )}
 
               <div style={{ display: "flex", justifyContent: "center", gap: "10px", flexWrap: "wrap", marginTop: "14px" }}>
-                {["signin", "signup"].includes(authMode) && <button type="button" onClick={handleTalentResendConfirmation} disabled={authBusy} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "إعادة إرسال تأكيد البريد" : "Resend email confirmation"}</button>}
+                {["signin", "signup"].includes(authMode) && <button type="button" onClick={handleTalentResendConfirmation} disabled={authBusy} style={{ border: confirmationRequired ? `1px solid ${palette.blue}` : 0, borderRadius: "10px", background: confirmationRequired ? palette.pale : "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900, padding: confirmationRequired ? "10px 14px" : 0 }}>{isArabic ? "إعادة إرسال تأكيد البريد" : "Resend email confirmation"}</button>}
                 {authMode === "forgot" && <button type="button" onClick={() => { setAuthMode("signin"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "العودة لتسجيل الدخول" : "Back to sign in"}</button>}
                 {authMode === "recovery" && !recoveryReady && <button type="button" onClick={() => { clearTalentAuthCallbackUrl(); setAuthMode("forgot"); setAuthMessage(""); }} style={{ border: 0, background: "transparent", color: palette.blue, cursor: "pointer", fontWeight: 900 }}>{isArabic ? "طلب رابط استعادة جديد" : "Request a new recovery link"}</button>}
               </div>
@@ -4748,6 +4798,26 @@ function TalentCandidatePortal({ onBack }) {
         </div>
       </main>
     );
+  }
+
+  async function respondToTalentInterview(invitationId, response) {
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+    try {
+      const { error } = await supabase.rpc("respond_talent_interview", {
+        p_invitation_id: invitationId,
+        p_response: response,
+      });
+      if (error) throw error;
+      const { data, error: reloadError } = await supabase.rpc("list_candidate_talent_interviews");
+      if (reloadError) throw reloadError;
+      setTalentInterviews(data || []);
+      setWorkspaceMessage(isArabic ? `تم ${response === "Accepted" ? "قبول" : "رفض"} دعوة المقابلة.` : `Interview invitation ${response.toLowerCase()}.`);
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر تحديث دعوة المقابلة." : "Unable to update the interview invitation."));
+    } finally {
+      setWorkspaceBusy(false);
+    }
   }
 
   const statusLabel = profile?.marketplace_status || "Draft";
@@ -4760,6 +4830,7 @@ function TalentCandidatePortal({ onBack }) {
     ["Consent", isArabic ? "الموافقات" : "Consents"],
     ["Review", isArabic ? "المراجعة والإرسال" : "Review & Submit"],
   ];
+  tabItems.splice(5, 0, ["Interviews", isArabic ? "دعوات المقابلات" : "Interview Invitations"]);
 
   return (
     <main dir={isArabic ? "rtl" : "ltr"} style={{ minHeight: "100vh", background: "#f4f8fb", color: palette.text, fontFamily: "inherit" }}>
@@ -4960,17 +5031,39 @@ function TalentCandidatePortal({ onBack }) {
               </>
             )}
 
+            {workspaceTab === "Interviews" && (
+              <>
+                <h2 style={{ marginTop: 0 }}>{isArabic ? "دعوات المقابلات" : "Interview Invitations"}</h2>
+                <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "راجع المواعيد المرسلة من الشركات واقبل الدعوة أو ارفضها من هنا." : "Review interview invitations from employers and accept or decline them here."}</p>
+                <div style={{ display: "grid", gap: "12px" }}>
+                  {talentInterviews.length === 0 ? (
+                    <div style={{ padding: "22px", border: `1px dashed ${palette.border}`, borderRadius: "14px", color: palette.muted }}>{isArabic ? "لا توجد دعوات مقابلة حاليًا." : "No interview invitations yet."}</div>
+                  ) : talentInterviews.map((interview) => (
+                    <div key={interview.invitation_id} style={{ padding: "18px", border: `1px solid ${palette.border}`, borderRadius: "15px", background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                        <div><strong style={{ fontSize: "18px" }}>{interview.company_name}</strong><div style={{ color: palette.muted, marginTop: "5px" }}>{interview.interview_type}</div></div>
+                        <strong style={{ color: interview.status === "Accepted" ? palette.success : interview.status === "Declined" ? palette.danger : palette.blue }}>{interview.status}</strong>
+                      </div>
+                      <div style={{ marginTop: "12px", lineHeight: 1.8 }}><strong>{new Date(interview.scheduled_at).toLocaleString(isArabic ? "ar-SA" : "en-US")}</strong>{interview.location && <div>{isArabic ? "الموقع: " : "Location: "}{interview.location}</div>}{interview.meeting_url && <div><a href={interview.meeting_url} target="_blank" rel="noreferrer">{isArabic ? "فتح رابط المقابلة" : "Open meeting link"}</a></div>}{interview.notes && <div>{interview.notes}</div>}</div>
+                      {interview.status === "Scheduled" && <div style={{ display: "flex", gap: "9px", marginTop: "14px" }}><button type="button" disabled={workspaceBusy} onClick={() => respondToTalentInterview(interview.invitation_id, "Accepted")} style={{ border: 0, borderRadius: "10px", background: palette.success, color: "#fff", padding: "10px 16px", fontWeight: 900 }}>{isArabic ? "قبول" : "Accept"}</button><button type="button" disabled={workspaceBusy} onClick={() => respondToTalentInterview(interview.invitation_id, "Declined")} style={{ border: `1px solid ${palette.danger}`, borderRadius: "10px", background: "#fff", color: palette.danger, padding: "10px 16px", fontWeight: 900 }}>{isArabic ? "رفض" : "Decline"}</button></div>}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
             {workspaceTab === "Consent" && (
               <>
                 <h2 style={{ marginTop: 0 }}>{isArabic ? "الموافقات والخصوصية" : "Consent & Privacy"}</h2>
                 <p style={{ color: palette.muted, lineHeight: 1.7 }}>{isArabic ? "يمكنك سحب الموافقات الاختيارية لاحقًا. مشاركة الملف مع الشركات مستقلة عن موافقة تحليل السيرة." : "Optional consents can be withdrawn later. Employer sharing is separate from AI CV analysis."}</p>
                 <div style={{ display: "grid", gap: "11px" }}>
                   {Object.keys(EMPTY_TALENT_CONSENTS).map((key) => {
-                    const required = ["Platform Terms", "Privacy Policy", "AI CV Analysis"].includes(key);
+                    const required = ["Platform Terms", "Privacy Policy", "AI CV Analysis", "Employer Sharing", "Employer Contact Sharing"].includes(key);
                     const labels = {
                       "Platform Terms": isArabic ? "أوافق على شروط استخدام المنصة" : "I accept the platform terms",
                       "Privacy Policy": isArabic ? "أوافق على سياسة الخصوصية ومعالجة البيانات" : "I accept the privacy policy and data processing",
                       "Employer Sharing": isArabic ? "أوافق على إظهار ملف مجهول الهوية للشركات المشتركة" : "I allow an anonymized profile to be shown to subscribed employers",
+                      "Employer Contact Sharing": isArabic ? "أوافق على مشاركة اسمي وبريدي الإلكتروني ورقم الجوال وملفي المهني مع الشركات المشتركة بعد اعتماد الملف" : "I agree to share my name, email, mobile number and professional profile with subscribed employers after approval",
                       "AI CV Analysis": isArabic ? "أوافق على تحليل سيرتي الذاتية بالذكاء الاصطناعي" : "I consent to AI analysis of my CV",
                       "AI Interview": isArabic ? "أوافق على دعوة مقابلة AI عند التأهل" : "I consent to AI interview invitations when qualified",
                       "Evaluation Email": isArabic ? "أوافق على استقبال ملخص التقييم عبر البريد" : "I consent to receiving evaluation summaries by email",
@@ -5004,19 +5097,19 @@ function TalentCandidatePortal({ onBack }) {
                     [isArabic ? "الراتب المتوقع" : "Expected Salary", profileForm.expected_salary === "" ? "—" : `${profileForm.expected_salary} ${profileForm.expected_salary_currency || "SAR"}`],
                     [isArabic ? "السيرة" : "CV", primaryCv?.file_name || "—"],
                     [isArabic ? "اكتمال الملف" : "Profile Completion", `${estimatedCompleteness}%`],
-                    [isArabic ? "المشاركة مع الشركات" : "Employer Sharing", consents["Employer Sharing"] ? (isArabic ? "موافق — مجهول الهوية" : "Allowed — anonymized") : (isArabic ? "غير موافق" : "Not allowed")],
+                    [isArabic ? "المشاركة مع الشركات" : "Employer Sharing", consents["Employer Contact Sharing"] ? (isArabic ? "موافق — البيانات ظاهرة" : "Allowed — identity and contact shared") : consents["Employer Sharing"] ? (isArabic ? "موافق — مجهول الهوية" : "Allowed — anonymized") : (isArabic ? "غير موافق" : "Not allowed")],
                     [isArabic ? "حالة الملف" : "Status", statusLabel],
                   ].map(([label, value]) => <div key={label} style={{ border: `1px solid ${palette.border}`, borderRadius: "13px", padding: "14px" }}><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{label}</span><strong style={{ display: "block", marginTop: "7px" }}>{value}</strong></div>)}
                 </div>
                 <div style={{ border: `1px solid ${palette.border}`, borderRadius: "14px", padding: "16px", marginBottom: "14px" }}>
                   <h3 style={{ margin: "0 0 12px" }}>{isArabic ? "ملخص الموافقات" : "Consent Summary"}</h3>
                   <div style={{ display: "grid", gap: "8px" }}>
-                    {[["Platform Terms", isArabic ? "شروط المنصة" : "Platform Terms"], ["Privacy Policy", isArabic ? "الخصوصية ومعالجة البيانات" : "Privacy & Data Processing"], ["AI CV Analysis", isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI CV Analysis"], ["Employer Sharing", isArabic ? "مشاركة الملف مع الشركات" : "Employer Sharing"], ["AI Interview", isArabic ? "دعوات مقابلات AI" : "AI Interview Invitations"]].map(([key, label]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}><span>{label}</span><strong style={{ color: consents[key] ? palette.success : palette.muted }}>{consents[key] ? (isArabic ? "موافق ✓" : "Accepted ✓") : (isArabic ? "غير موافق" : "Not accepted")}</strong></div>)}
+                    {[["Platform Terms", isArabic ? "شروط المنصة" : "Platform Terms"], ["Privacy Policy", isArabic ? "الخصوصية ومعالجة البيانات" : "Privacy & Data Processing"], ["AI CV Analysis", isArabic ? "تحليل السيرة بالذكاء الاصطناعي" : "AI CV Analysis"], ["Employer Sharing", isArabic ? "مشاركة الملف مع الشركات" : "Employer Sharing"], ["Employer Contact Sharing", isArabic ? "مشاركة الاسم وبيانات التواصل" : "Identity & Contact Sharing"], ["AI Interview", isArabic ? "دعوات مقابلات AI" : "AI Interview Invitations"]].map(([key, label]) => <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}><span>{label}</span><strong style={{ color: consents[key] ? palette.success : palette.muted }}>{consents[key] ? (isArabic ? "موافق ✓" : "Accepted ✓") : (isArabic ? "غير موافق" : "Not accepted")}</strong></div>)}
                   </div>
                 </div>
                 <div style={{ padding: "16px", borderRadius: "14px", background: consents["Employer Sharing"] ? "#ecfdf5" : "#fff7ed", color: consents["Employer Sharing"] ? palette.success : "#9a3412", lineHeight: 1.7, fontWeight: 800 }}>
                   {consents["Employer Sharing"]
-                    ? (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات ملفًا مجهول الهوية. فتح الاسم وبيانات الاتصال سيكون وفق آلية الموافقة لاحقًا." : "After approval, employers will see an anonymized profile. Identity and contact details will require the controlled unlock workflow.")
+                    ? (consents["Employer Contact Sharing"] ? (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات المشتركة اسمك وبريدك ورقم جوالك وملفك المهني، ويمكنها إرسال دعوة مقابلة لك." : "After approval, subscribed employers can see your identity and contact details and send you interview invitations.") : (isArabic ? "بعد اعتماد الملف، ستشاهد الشركات ملفًا مجهول الهوية فقط." : "After approval, employers will see an anonymized profile only."))
                     : (isArabic ? "ملفك سيبقى خاصًا ولن يظهر للشركات حتى تمنح موافقة المشاركة." : "Your profile remains private and will not appear to employers until sharing consent is granted.")}
                 </div>
                 <button type="button" disabled={workspaceBusy || statusLabel === "Under Review" || statusLabel === "Approved"} onClick={handleSubmitTalentProfile} style={{ width: "100%", border: 0, borderRadius: "13px", background: statusLabel === "Submitted" ? palette.success : `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: "pointer", fontWeight: 900, fontSize: "16px" }}>
@@ -5245,6 +5338,7 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
   const [checking, setChecking] = useState(true);
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState(null);
+  const [accountType, setAccountType] = useState(null);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [saving, setSaving] = useState(false);
@@ -5268,16 +5362,17 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
 
     const accept = (nextSession) => {
       const user = nextSession?.user;
-      if (
-        !user?.id ||
-        user.user_metadata?.account_type === "candidate" ||
-        !establishWorkspaceRecoveryProof("PASSWORD_RECOVERY", nextSession)
-      ) {
+      const nextAccountType = getRecoveryAccountType(nextSession);
+      const hasProof = nextAccountType === "candidate"
+        ? establishTalentRecoveryProof("PASSWORD_RECOVERY", nextSession)
+        : establishWorkspaceRecoveryProof("PASSWORD_RECOVERY", nextSession);
+      if (!user?.id || !nextAccountType || !hasProof) {
         reject({ code: "invalid_token" });
         return;
       }
       if (!mounted) return;
       setSession(nextSession);
+      setAccountType(nextAccountType);
       setReady(true);
       setChecking(false);
       setMessage("");
@@ -5300,11 +5395,13 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
       if (!mounted) return;
       if (error) return reject(error);
       const activeSession = data?.session;
-      if (
-        activeSession?.user?.id &&
-        hasWorkspaceRecoveryProof(activeSession.user.id)
-      ) {
+      const activeAccountType = getRecoveryAccountType(activeSession);
+      const hasActiveProof = activeAccountType === "candidate"
+        ? hasTalentRecoveryProof(activeSession?.user?.id)
+        : hasWorkspaceRecoveryProof(activeSession?.user?.id);
+      if (activeSession?.user?.id && hasActiveProof) {
         setSession(activeSession);
+        setAccountType(activeAccountType);
         setReady(true);
         setChecking(false);
         return;
@@ -5334,7 +5431,9 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
         userId: session?.user?.id || "",
         password,
         confirmation,
-        hasRecoveryProof: hasWorkspaceRecoveryProof,
+        hasRecoveryProof: accountType === "candidate"
+          ? hasTalentRecoveryProof
+          : hasWorkspaceRecoveryProof,
       });
     } catch (error) {
       if (error?.code === "password_too_short") {
@@ -5359,13 +5458,15 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
       auth: supabase.auth,
       localStorage,
       sessionStorage,
-      clearRecoveryProof: clearWorkspaceRecoveryProof,
+      clearRecoveryProof: accountType === "candidate"
+        ? clearTalentRecoveryProof
+        : clearWorkspaceRecoveryProof,
       cleanCallbackUrl: clearWorkspaceRecoveryCallbackUrl,
-      storeSuccessMessage: (value) =>
-        storeWorkspaceRecoverySuccess(sessionStorage, value),
+      storeSuccessMessage: accountType === "candidate"
+        ? undefined
+        : (value) => storeWorkspaceRecoverySuccess(sessionStorage, value),
       redirectToLogin: () => {
-        const loginUrl = getCleanWorkspaceRecoveryUrl(window.location.href);
-        window.location.replace(`${loginUrl.pathname}${loginUrl.search}`);
+        window.location.replace(getRecoveryCompletionPath(accountType));
       },
       logger: (...args) => console.warn(...args),
     });
@@ -5395,7 +5496,9 @@ function WorkspacePasswordRecoveryScreen({ language = "EN" }) {
               : ready
                 ? isArabic
                   ? "أنشئ كلمة مرور قوية لحساب الشركة أو المكتب."
-                  : "Create a strong password for your company or agency account."
+                  : accountType === "candidate"
+                    ? "Create a strong password for your VisaFlow Talent account."
+                    : "Create a strong password for your company or agency account."
                 : isArabic
                   ? "لا يمكن استخدام رابط الاستعادة الحالي."
                   : "The current recovery link cannot be used."}
@@ -5449,6 +5552,7 @@ const PUBLIC_LANDING_COPY = {
       home: "الرئيسية",
       companies: "حلول الشركات",
       talent: "منصة المواهب",
+      housing: "إدارة السكنات",
       interviews: "المقابلات الذكية",
       about: "عن المنصة",
       login: "تسجيل الدخول",
@@ -5462,6 +5566,7 @@ const PUBLIC_LANDING_COPY = {
       promise: "من الطلب إلى المباشرة… رحلة توظيف واحدة، ذكية ومتكاملة.",
       company: "ابدأ تجربة شركتك",
       candidate: "سجّل كباحث عن عمل",
+      housing: "فتح برنامج السكنات",
       trust: ["صلاحيات حسب الدور", "عزل بيانات الشركات", "قرار بشري مدعوم بالذكاء الاصطناعي"],
     },
     mockup: {
@@ -5485,6 +5590,7 @@ const PUBLIC_LANDING_COPY = {
         { icon: "🏢", title: "الشركات", text: "إدارة التوظيف والاستقدام والتأشيرات.", action: "ابدأ كشركة", kind: "login" },
         { icon: "◎", title: "المرشحون", text: "أنشئ ملفك المهني وارفع سيرتك الذاتية.", action: "انضم إلى المواهب", kind: "talent" },
         { icon: "◆", title: "الوكالات", text: "إدارة المرشحين والطلبات والمتابعة.", action: "دخول الوكالة", kind: "login" },
+        { icon: "🏠", title: "إدارة السكنات", text: "إدارة السكنات والغرف والتسكين والامتثال والسلامة وتكلفة العامل.", action: "فتح برنامج السكنات", kind: "housing" },
       ],
     },
     capabilities: {
@@ -5499,6 +5605,7 @@ const PUBLIC_LANDING_COPY = {
         ["بوابة الوكالات", "إدارة تقديم المرشحين والطلبات والمتابعة."],
         ["التقارير التنفيذية", "مؤشرات تشغيلية تساعد الفرق على اتخاذ القرار."],
         ["الأمان والصلاحيات", "عزل بيانات الشركات ووصول مضبوط حسب الدور."],
+        ["إدارة السكنات", "إدارة الإشغال والامتثال والسلامة والتكاليف التشغيلية للسكنات."],
       ],
     },
     journey: {
@@ -5539,6 +5646,7 @@ const PUBLIC_LANDING_COPY = {
       home: "Home",
       companies: "Company Solutions",
       talent: "Talent Platform",
+      housing: "Housing",
       interviews: "Smart Interviews",
       about: "About",
       login: "Sign in",
@@ -5552,6 +5660,7 @@ const PUBLIC_LANDING_COPY = {
       promise: "From request to joining—one connected, intelligent hiring journey.",
       company: "Start your company journey",
       candidate: "Register as a job seeker",
+      housing: "Open Housing",
       trust: ["Role-based access", "Company data isolation", "Human decisions supported by AI"],
     },
     mockup: {
@@ -5575,6 +5684,7 @@ const PUBLIC_LANDING_COPY = {
         { icon: "🏢", title: "Companies", text: "Manage recruitment, mobilization, and visas.", action: "Start as a company", kind: "login" },
         { icon: "◎", title: "Candidates", text: "Build your professional profile and upload your CV.", action: "Join VisaFlow Talent", kind: "talent" },
         { icon: "◆", title: "Agencies", text: "Manage candidates, requests, and follow-up.", action: "Agency sign in", kind: "login" },
+        { icon: "🏠", title: "Housing Management", text: "Manage housing sites, rooms, occupancy, compliance, safety, and worker costs.", action: "Open Housing", kind: "housing" },
       ],
     },
     capabilities: {
@@ -5589,6 +5699,7 @@ const PUBLIC_LANDING_COPY = {
         ["Agency portal", "Manage candidate submissions, requests, and follow-up."],
         ["Executive reporting", "Operational indicators that support better decisions."],
         ["Security and access", "Tenant isolation and controlled role-based access."],
+        ["Housing management", "Manage occupancy, compliance, safety, and housing operating costs."],
       ],
     },
     journey: {
@@ -5624,14 +5735,48 @@ const PUBLIC_LANDING_COPY = {
   },
 };
 
-function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
+function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHousing }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [trialForm, setTrialForm] = useState({ company_name: "", admin_name: "", email: "", phone: "", job_title: "", team_size: "1-5", website: "", company_fax: "", accepted_terms: false });
+  const [trialSubmitting, setTrialSubmitting] = useState(false);
+  const [trialMessage, setTrialMessage] = useState("");
+  const [trialSucceeded, setTrialSucceeded] = useState(false);
   const effectiveLanguage = resolveUiLanguage({ preferredLanguage: language });
   const copy =
     PUBLIC_LANDING_COPY[effectiveLanguage] || PUBLIC_LANDING_COPY.EN;
   const isArabic = effectiveLanguage === "AR";
-  const demoHref = `mailto:support@visaflowksa.com?subject=${encodeURIComponent(isArabic ? "طلب تجربة VisaFlow KSA" : "VisaFlow KSA demo request")}`;
+  const demoHref = "#company-trial";
   const handleAnchorClick = () => setMobileMenuOpen(false);
+
+  async function submitCompanyTrial(event) {
+    event.preventDefault();
+    if (trialSubmitting) return;
+    const validation = validateCompanyTrialForm(trialForm);
+    if (!validation.ok) {
+      setTrialMessage(isArabic ? "يرجى إكمال البيانات المطلوبة بشكل صحيح والموافقة على شروط التجربة." : validation.error);
+      return;
+    }
+    setTrialSubmitting(true);
+    setTrialMessage("");
+    try {
+      const { data, error } = await supabase.functions.invoke("visaflow-company-trial-provisioner", { body: { ...validation.value, company_fax: trialForm.company_fax } });
+      if (error || data?.ok === false) {
+        const code = String(data?.code || error?.message || "TRIAL_PROVISIONING_FAILED");
+        if (code.includes("ALREADY")) throw new Error(isArabic ? "سبق تسجيل هذا البريد. استخدم تسجيل الدخول أو تواصل مع الدعم." : "This email already has a trial or account. Sign in or contact support.");
+        if (code.includes("RATE_LIMITED")) throw new Error(isArabic ? "تم تجاوز عدد المحاولات المسموح. حاول غدًا أو تواصل مع الدعم." : "Too many trial requests. Try again tomorrow or contact support.");
+        throw new Error(isArabic ? "تعذر إنشاء التجربة الآن. يرجى المحاولة مرة أخرى." : "The trial could not be created. Please try again.");
+      }
+      setTrialSucceeded(true);
+      setTrialMessage(isArabic
+        ? `تم إنشاء تجربة AI Agent Professional لمدة 7 أيام حتى ${data.trial_end}. افتح رسالة الدعوة في بريدك لإنشاء كلمة المرور.`
+        : `Your 7-day AI Agent Professional trial is ready through ${data.trial_end}. Open the invitation email to create your password.`);
+    } catch (error) {
+      setTrialSucceeded(false);
+      setTrialMessage(error?.message || (isArabic ? "تعذر إنشاء التجربة." : "Unable to create the trial."));
+    } finally {
+      setTrialSubmitting(false);
+    }
+  }
 
   return (
     <div className="vf-public" dir={getUiDirection(effectiveLanguage)} lang="en">
@@ -5656,6 +5801,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
           <a href="#home" onClick={handleAnchorClick}>{copy.nav.home}</a>
           <a href="#solutions" onClick={handleAnchorClick}>{copy.nav.companies}</a>
           <a href="#talent" onClick={handleAnchorClick}>{copy.nav.talent}</a>
+          <a href="/housing" onClick={handleAnchorClick}>{copy.nav.housing}</a>
           <a href="#interviews" onClick={handleAnchorClick}>{copy.nav.interviews}</a>
           <a href="#about" onClick={handleAnchorClick}>{copy.nav.about}</a>
           <div className="vf-public-mobile-actions">
@@ -5685,6 +5831,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
               <div className="vf-public-button-row">
                 <a className="vf-public-primary" href={demoHref}>{copy.hero.company}</a>
                 <button type="button" className="vf-public-secondary" onClick={onTalent}>{copy.hero.candidate}</button>
+                <button type="button" className="vf-public-secondary" onClick={onHousing}>{copy.hero.housing}</button>
               </div>
               <ul className="vf-public-trust-list">
                 {copy.hero.trust.map((item) => <li key={item}><span>✓</span>{item}</li>)}
@@ -5728,7 +5875,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
                   <span className="vf-public-path-icon">{item.icon}</span>
                   <h3>{item.title}</h3>
                   <p>{item.text}</p>
-                  <button type="button" onClick={item.kind === "talent" ? onTalent : onLogin}>{item.action}<span aria-hidden="true">↗</span></button>
+                  <button type="button" onClick={item.kind === "talent" ? onTalent : item.kind === "housing" ? onHousing : onLogin}>{item.action}<span aria-hidden="true">↗</span></button>
                 </article>
               ))}
             </div>
@@ -5803,6 +5950,38 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
           <div className="vf-public-container vf-public-governance-grid">
             <div><span className="vf-public-kicker">{copy.governance.eyebrow}</span><h2>{copy.governance.title}</h2></div>
             <div className="vf-public-governance-list">{copy.governance.items.map((item, index) => <article key={item}><span>{["▦", "⌘", "≡", "◉", "◇"][index]}</span><strong>{item}</strong></article>)}</div>
+          </div>
+        </section>
+
+        <section className="vf-public-trial" id="company-trial">
+          <div className="vf-public-container vf-public-trial-grid">
+            <div className="vf-public-trial-copy">
+              <span className="vf-public-kicker">AI Agent Professional</span>
+              <h2>{isArabic ? "ابدأ تجربة شركتك خلال دقائق" : "Start your company trial in minutes"}</h2>
+              <p>{isArabic
+                ? "تجربة مجانية لمدة 7 أيام تشمل مساحة عمل مستقلة وموظف متابعة ذكي. لا تحتاج بطاقة دفع، وتتوقف تلقائيًا عند انتهاء التجربة ما لم يتم تفعيل الاشتراك من مالك المنصة."
+                : "A free 7-day trial with an isolated workspace and an intelligent follow-up employee. No payment card is required, and access stops automatically unless the Platform Owner activates the subscription."}</p>
+              <ul>
+                <li>{isArabic ? "مساحة عمل مستقلة وآمنة لشركتك" : "A secure, isolated company workspace"}</li>
+                <li>{isArabic ? "AI Agent Professional بحدود تجريبية" : "AI Agent Professional with trial limits"}</li>
+                <li>{isArabic ? "رابط آمن يصل إلى بريد مدير الشركة" : "A secure setup link sent to the company administrator"}</li>
+              </ul>
+            </div>
+            <form className="vf-public-trial-form" onSubmit={submitCompanyTrial}>
+              <div className="vf-public-trial-fields">
+                <label><span>{isArabic ? "اسم الشركة" : "Company name"}</span><input value={trialForm.company_name} onChange={(e) => setTrialForm((current) => ({ ...current, company_name: e.target.value }))} required /></label>
+                <label><span>{isArabic ? "اسم مدير الحساب" : "Administrator name"}</span><input value={trialForm.admin_name} onChange={(e) => setTrialForm((current) => ({ ...current, admin_name: e.target.value }))} required /></label>
+                <label><span>{isArabic ? "البريد الإلكتروني للعمل" : "Work email"}</span><input type="email" value={trialForm.email} onChange={(e) => setTrialForm((current) => ({ ...current, email: e.target.value }))} required /></label>
+                <label><span>{isArabic ? "رقم الجوال" : "Mobile number"}</span><input value={trialForm.phone} onChange={(e) => setTrialForm((current) => ({ ...current, phone: e.target.value }))} /></label>
+                <label><span>{isArabic ? "المسمى الوظيفي" : "Job title"}</span><input value={trialForm.job_title} onChange={(e) => setTrialForm((current) => ({ ...current, job_title: e.target.value }))} /></label>
+                <label><span>{isArabic ? "حجم فريق التوظيف" : "Recruitment team size"}</span><select value={trialForm.team_size} onChange={(e) => setTrialForm((current) => ({ ...current, team_size: e.target.value }))}><option>1-5</option><option>6-20</option><option>21-50</option><option>51+</option></select></label>
+              </div>
+              <input className="vf-public-trial-honeypot" tabIndex="-1" autoComplete="off" aria-hidden="true" value={trialForm.company_fax} onChange={(e) => setTrialForm((current) => ({ ...current, company_fax: e.target.value }))} />
+              <label className="vf-public-trial-consent"><input type="checkbox" checked={trialForm.accepted_terms} onChange={(e) => setTrialForm((current) => ({ ...current, accepted_terms: e.target.checked }))} /><span>{isArabic ? "أوافق على إنشاء مساحة عمل تجريبية ومعالجة بيانات التسجيل لغرض تقديم الخدمة." : "I agree to create a trial workspace and to the processing of registration data for providing the service."}</span></label>
+              {trialMessage && <div className={`vf-public-trial-message ${trialSucceeded ? "success" : "error"}`}>{trialMessage}</div>}
+              <button type="submit" className="vf-public-primary" disabled={trialSubmitting || trialSucceeded}>{trialSubmitting ? (isArabic ? "جاري إنشاء التجربة..." : "Creating trial...") : trialSucceeded ? (isArabic ? "تم إنشاء التجربة" : "Trial created") : (isArabic ? "ابدأ التجربة المجانية" : "Start free trial")}</button>
+              {trialSucceeded && <button type="button" className="vf-public-secondary" onClick={onLogin}>{isArabic ? "فتح تسجيل الدخول" : "Open sign in"}</button>}
+            </form>
           </div>
         </section>
 
@@ -6423,6 +6602,8 @@ const [aiAgentLog, setAiAgentLog] = useState("");
 const [aiAgentSettings, setAiAgentSettings] = useState(DEFAULT_AI_AGENT_SETTINGS);
 const [aiAgentSettingsSaving, setAiAgentSettingsSaving] = useState(false);
 const [aiAgentSettingsMessage, setAiAgentSettingsMessage] = useState("");
+const [aiAgentEntitlement, setAiAgentEntitlement] = useState(normalizeAiAgentEntitlement());
+const [aiAgentUsageRows, setAiAgentUsageRows] = useState([]);
 const aiAgentAutoRunRef = useRef("");
 const [offerModalOpen, setOfferModalOpen] = useState(false);
 const [offerCandidate, setOfferCandidate] = useState(null);
@@ -6458,6 +6639,7 @@ const [reportStudioResult, setReportStudioResult] = useState("");
 const [reportStudioLastRun, setReportStudioLastRun] = useState("");
 
 const [platformClients, setPlatformClients] = useState([]);
+const [companyTrialRequests, setCompanyTrialRequests] = useState([]);
 const [subscriptionInvoices, setSubscriptionInvoices] = useState([]);
 const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
@@ -6492,6 +6674,15 @@ const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tie
 const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
 const [companyTalentMessage, setCompanyTalentMessage] = useState("");
+const [companyTalentSearch, setCompanyTalentSearch] = useState("");
+const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
+const [talentInterviewForm, setTalentInterviewForm] = useState({
+  interview_type: "Online Video",
+  scheduled_at: "",
+  meeting_url: "",
+  location: "",
+  notes: "",
+});
 const [localContentSettings, setLocalContentSettings] = useState({
   saudi_labor_weight: 100,
   non_saudi_labor_weight: 54,
@@ -6549,6 +6740,19 @@ const emptyPlatformClient = {
   talent_access_enabled: false,
   talent_access_tier: "None",
   talent_profile_limit: 0,
+  talent_profile_unlimited: false,
+  housing_access_enabled: false,
+  housing_plan: "Standard",
+  housing_subscription_status: "Inactive",
+  housing_start_date: "",
+  housing_end_date: "",
+  housing_monthly_amount: 0,
+  housing_users_limit: 0,
+  ai_agent_enabled: false,
+  ai_agent_plan: "Standard",
+  ai_agent_trial_start: "",
+  ai_agent_trial_end: "",
+  ai_agent_monthly_credit_limit: 5000,
   operational_company_id: "",
   admin_name: "",
   admin_email: "",
@@ -6558,6 +6762,7 @@ const emptyPlatformClient = {
 
 const emptySubscriptionInvoice = {
   client_id: "",
+  subscription_type: "Recruitment",
   invoice_no: "",
   amount: 0,
   status: "Unpaid",
@@ -6598,6 +6803,7 @@ const PLATFORM_PAGES = [
   "Platform Intelligence",
   "Client Usage Monitor",
   "Companies Management",
+  "Housing Subscriptions",
   "Platform Users",
   "Talent Dashboard",
   "Subscription Invoices",
@@ -6611,6 +6817,7 @@ const PLATFORM_ACCOUNT_PAGES = [
   "Platform Dashboard",
   "Platform Intelligence",
   "Companies Management",
+  "Housing Subscriptions",
   "Platform Users",
   "Talent Dashboard",
   "Subscription Invoices",
@@ -6766,6 +6973,8 @@ const ROLE_PAGES = {
 
   Agency: [
     "Office Portal",
+    "Agency Agreements",
+    "Agency Performance",
     "Notifications",
   ],
 
@@ -6780,7 +6989,12 @@ const ROLE_PAGES = {
 const roleVisiblePages = currentRole === "Platform Owner"
   ? PLATFORM_PAGES
   : (ROLE_PAGES[currentRole] || ROLE_PAGES.Viewer);
-const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePages, "User Guide"]));
+const roleVisiblePagesWithTalent = getTalentEnabledPages(roleVisiblePages, {
+  enabled: talentEntitlement.enabled === true,
+  isPlatformUser: isCurrentPlatformUser,
+  isAgency: currentRole === "Agency",
+});
+const roleVisiblePagesWithGuide = Array.from(new Set([...roleVisiblePagesWithTalent, "User Guide"]));
 const authenticatedVisiblePages = secureLogFeaturesAvailable
   ? (currentUser?.company_id && currentRole !== "Agency"
       ? Array.from(new Set([...roleVisiblePagesWithGuide, "Email Logs"]))
@@ -8245,6 +8459,12 @@ Cancel = إضافتها كوظيفة مستقلة`
     setCompanyEmailSettings(null);
     setEmailSettingsForm(emptyCompanyEmailSettings);
     setCandidates([]);
+    setCandidateForm(emptyCandidate);
+    setCandidateTechnicalForm(emptyCandidateTechnicalProfile);
+    setCandidateEditingId(null);
+    setCandidateSaveFeedback(null);
+    setCandidateSelectedIds([]);
+    setOfficeSelectedCandidateIds([]);
     setCandidateTechnicalProfiles([]);
     setEducationInstitutions([]);
     setInterviews([]);
@@ -8307,10 +8527,13 @@ Cancel = إضافتها كوظيفة مستقلة`
     setSelectedEmployeeIds([]);
     setMarketplaceSelectedEmployeeIds([]);
     setSelectedPlatformClientUsers(null);
+    setCompanyTrialRequests([]);
     setCompanyReportClient(null);
     setAiAnswer("");
     setAiConversation([]);
     setAiAgentLog("");
+    setAiAgentEntitlement(normalizeAiAgentEntitlement());
+    setAiAgentUsageRows([]);
     setReportStudioResult("");
     setWorkspaceDataReady(false);
     setLoading(false);
@@ -8379,6 +8602,8 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadCompanies(),
       loadCompanyEmailSettings(),
       loadAIAgentSettings(),
+      loadAIAgentEntitlement(),
+      loadAIAgentUsage(),
       loadAuditLogs(),
       loadMobilizations(),
       loadOnboardingValidations(),
@@ -8393,6 +8618,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadEmailLogs(),
       loadEmailTemplates(),
       loadPlatformClients(),
+      loadCompanyTrialRequests(),
       loadSubscriptionInvoices(),
       loadSupportTickets(),
       loadSystemBackups(),
@@ -8814,6 +9040,43 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAiAgentSettings(normalizeAIAgentSettings(data || DEFAULT_AI_AGENT_SETTINGS));
   }
 
+  async function loadAIAgentEntitlement() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAiAgentEntitlement(normalizeAiAgentEntitlement());
+      return;
+    }
+    const { data, error } = await supabase.rpc("get_my_ai_agent_entitlement");
+    if (error) {
+      console.warn("get_my_ai_agent_entitlement:", error.message);
+      setAiAgentEntitlement(normalizeAiAgentEntitlement());
+      return;
+    }
+    setAiAgentEntitlement(normalizeAiAgentEntitlement(data || {}));
+  }
+
+  async function loadAIAgentUsage() {
+    if (!currentCompanyId || currentRole === "Agency" || isCurrentPlatformUser) {
+      setAiAgentUsageRows([]);
+      return;
+    }
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const { data, error } = await supabase
+      .from("ai_agent_usage_ledger")
+      .select("id,feature,model_name,input_tokens,output_tokens,total_tokens,credits_debited,status,created_at")
+      .eq("company_id", currentCompanyId)
+      .gte("created_at", monthStart.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      console.warn("ai_agent_usage_ledger:", error.message);
+      setAiAgentUsageRows([]);
+      return;
+    }
+    setAiAgentUsageRows(data || []);
+  }
+
   function updateAIAgentSetting(field, value) {
     setAiAgentSettings((prev) => normalizeAIAgentSettings({ ...prev, [field]: value }));
     setAiAgentSettingsMessage("");
@@ -8821,6 +9084,7 @@ Cancel = إضافتها كوظيفة مستقلة`
 
   async function saveAIAgentSettings() {
     if (!currentCompanyId) return alert("Company ID is missing.");
+    if (!isAiAgentProfessionalAvailable(aiAgentEntitlement)) return alert("AI Agent Professional is not active for this company. Ask the Platform Owner to enable it.");
 
     setAiAgentSettingsSaving(true);
     setAiAgentSettingsMessage("");
@@ -9327,6 +9591,7 @@ async function loadProfessionAliases() {
   }
 
   const loadPlatformClients = () => loadPlatformTable("platform_clients", setPlatformClients);
+  const loadCompanyTrialRequests = () => loadPlatformTable("company_trial_requests", setCompanyTrialRequests, "id,company_name,admin_name,email,phone,job_title,team_size,status,operational_company_id,platform_client_id,provisioned_at,created_at");
   const loadSubscriptionInvoices = () => loadPlatformTable("subscription_invoices", setSubscriptionInvoices);
   const loadSupportTickets = () => loadPlatformTable(
     "support_tickets",
@@ -9599,7 +9864,7 @@ async function loadProfessionAliases() {
       const { data, error } = await supabase.rpc("list_company_talent_marketplace");
       if (error) throw error;
       setCompanyTalentProfiles(Array.isArray(data) ? data : []);
-      setCompanyTalentMessage(`Loaded ${Array.isArray(data) ? data.length : 0} approved anonymized talent profile(s).`);
+      setCompanyTalentMessage(`Loaded ${Array.isArray(data) ? data.length : 0} approved talent profile(s). Contact details appear only with candidate consent.`);
       return Array.isArray(data) ? data : [];
     } catch (error) {
       console.warn("Talent marketplace:", error?.message || error);
@@ -9607,6 +9872,56 @@ async function loadProfessionAliases() {
       setCompanyTalentProfiles([]);
       setCompanyTalentMessage("Unable to load the Talent Marketplace entitlement.");
       return [];
+    } finally {
+      setCompanyTalentLoading(false);
+    }
+  }
+
+  async function scheduleCompanyTalentInterview(candidateId) {
+    if (!talentInterviewForm.scheduled_at) {
+      setCompanyTalentMessage("Choose the interview date and time.");
+      return;
+    }
+    if (talentInterviewForm.interview_type === "Online Video" && !talentInterviewForm.meeting_url.trim()) {
+      setCompanyTalentMessage("Add the online meeting link.");
+      return;
+    }
+    if (talentInterviewForm.interview_type === "Online Video" && !talentInterviewForm.meeting_url.trim().toLowerCase().startsWith("https://")) {
+      setCompanyTalentMessage("The online meeting link must start with https://");
+      return;
+    }
+    if (talentInterviewForm.interview_type === "In Person" && !talentInterviewForm.location.trim()) {
+      setCompanyTalentMessage("Add the interview location.");
+      return;
+    }
+
+    setCompanyTalentLoading(true);
+    setCompanyTalentMessage("");
+    try {
+      const { data: invitationId, error } = await supabase.rpc("schedule_talent_interview", {
+        p_candidate_id: candidateId,
+        p_interview_type: talentInterviewForm.interview_type,
+        p_scheduled_at: new Date(talentInterviewForm.scheduled_at).toISOString(),
+        p_meeting_url: talentInterviewForm.meeting_url.trim() || null,
+        p_location: talentInterviewForm.location.trim() || null,
+        p_notes: talentInterviewForm.notes.trim() || null,
+      });
+      if (error) throw error;
+
+      let emailWarning = "";
+      try {
+        await dispatchVisaFlowEmail({ type: "TALENT_INTERVIEW_INVITATION", identifiers: { talent_interview_id: invitationId } });
+      } catch (emailError) {
+        console.warn("Talent interview email:", emailError?.message || emailError);
+        emailWarning = " The invitation is visible in the candidate portal, but the email could not be sent.";
+      }
+
+      setTalentInterviewForm({ interview_type: "Online Video", scheduled_at: "", meeting_url: "", location: "", notes: "" });
+      setSelectedTalentCandidateId("");
+      await loadCompanyTalentMarketplace();
+      setCompanyTalentMessage(`Interview invitation created successfully.${emailWarning}`);
+    } catch (error) {
+      setCompanyTalentMessage(error?.message || "Unable to schedule the interview.");
     } finally {
       setCompanyTalentLoading(false);
     }
@@ -9668,7 +9983,7 @@ async function loadProfessionAliases() {
         approved: safeMetric(ownerData.approved),
         published: publicStatsRow ? safeMetric(publicStatsRow.marketplace_ready) : null,
       });
-      setOwnerTalentRecent(Array.isArray(ownerData.latest_profiles) ? ownerData.latest_profiles.slice(0, 10) : []);
+      setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
       setOwnerTalentDistributions({
         country_of_residence: Array.isArray(ownerData.distributions?.country_of_residence) ? ownerData.distributions.country_of_residence : [],
         profession: Array.isArray(ownerData.distributions?.profession) ? ownerData.distributions.profession : [],
@@ -10412,7 +10727,14 @@ useEffect(() => {
     setValidatedWorkspaceKey("");
     clearTenantSensitiveState();
     clearStoredWorkspaceIdentity();
-    clearWorkspaceRecoveryLocalState({ localStorage, sessionStorage });
+    // Supabase has already consumed the callback by the time this effect runs.
+    // Clear stale workspace identity metadata without deleting the temporary
+    // recovery session that is required to render the password fields.
+    clearWorkspaceRecoveryLocalState({
+      localStorage,
+      sessionStorage,
+      preserveAuthSession: workspaceRecoveryRequested,
+    });
     setAgencyClientAccess([]);
     setActiveAgencyCompanyId("");
     setActiveAgencyCompanyName("");
@@ -13693,14 +14015,19 @@ async function saveAgency() {
     await loadAgencies();
     alert(data?.idempotent
       ? "This agency is already linked to your company."
-      : "Agency saved and linked to your company.");
+      : data?.linked_existing
+        ? "The existing agency account is now linked to your company."
+        : "Agency saved and linked to your company.");
   } catch (error) {
     const message = String(error?.message || "");
     if (message.includes("COMPANY_AGENCY_CREATE_UNAUTHORIZED")) {
       return alert("You are not authorized to create agencies.");
     }
     if (message.includes("COMPANY_AGENCY_CREATE_ALREADY_EXISTS")) {
-      return alert("An agency with the same email or identity already exists.");
+      return alert("This agency already exists. Please link its existing account to your company.");
+    }
+    if (message.includes("COMPANY_AGENCY_CREATE_AGENCY_INACTIVE")) {
+      return alert("This agency account is inactive or suspended. Contact the platform owner before linking it.");
     }
     if (message.includes("COMPANY_AGENCY_CREATE_USER_INACTIVE")) {
       return alert("Your user account is inactive.");
@@ -23221,21 +23548,67 @@ function getAIAgentAgencyFitScore(request, agencyRow) {
   };
 }
 
+function isAIAgentAgencyEligibleForRequestLine(agencyRow, request, requestLine) {
+  const agencyName = agencyRow?.name || agencyRow?.agency || "";
+  const nationality = requestLine?.nationality || request?.nationality || "";
+  const scorecard = buildAgencyScorecard().find((row) => normalize(row.agency) === normalize(agencyName)) || {};
+  const numericScore = Number(scorecard.score || 0);
+  const hasMeasuredHoldRisk = numericScore > 0 && numericScore < 40;
+  const rejectedThisRequest = notifications.some((notification) =>
+    String(notification.type || "") === "AGENCY_REQUEST_RESPONSE" &&
+    String(notification.request_no || notification?.data?.request_no || "") === String(request?.request_no || "") &&
+    normalize(notification.agency_name || notification?.data?.agency_name || notification?.data?.agency || "") === normalize(agencyName) &&
+    normalize(notification.response_status || notification?.data?.response_status || notification?.data?.agency_decision || "") === "rejected"
+  );
+
+  if (hasMeasuredHoldRisk || rejectedThisRequest) return false;
+  if (!nationality || nationality === "-") return true;
+
+  const countryMatch = nationalitiesMatch(agencyRow?.country || "", nationality, countries);
+  const candidateHistoryMatch = candidates.some((candidate) =>
+    normalize(candidate.agency) === normalize(agencyName) &&
+    nationalitiesMatch(candidate.nationality, nationality, countries)
+  );
+  const authorizationHistoryMatch = visaAuthorizations.some((authorization) =>
+    normalize(authorization.agency) === normalize(agencyName) &&
+    authorization.status !== "Cancelled" &&
+    nationalitiesMatch(authorization.nationality, nationality, countries)
+  );
+
+  return countryMatch || candidateHistoryMatch || authorizationHistoryMatch;
+}
+
 function getAIAgentRequestAssignmentRecommendations() {
   const openStatuses = ["Open", "Under Recruitment", "Interview Stage", "Visa Process"];
-  const activeAgencies = agencies.filter((agency) => String(agency.status || "Active") !== "Inactive");
+  const activeAgencies = agencies.filter((agency) => normalize(agency.status || "Active") === "active");
 
   return requests
     .filter((request) => openStatuses.includes(request.status || "Open"))
-    .map((request) => {
-      const relatedCandidates = candidates.filter((candidate) => String(candidate.request_no || "") === String(request.request_no || "") && !["Rejected", "Interview Failed", "Medical Failed", "Cancelled", "Joined"].includes(candidate.status));
-      const requiredQty = getRequestTotalQty(request);
-      const remaining = Math.max(requiredQty - relatedCandidates.length, 0);
+    .flatMap((request) => getRequestLinesForRequest(request).map((line, lineIndex) => {
+      const requiredQty = Number(line.quantity || 0);
+      const assignedQty = visaAuthorizations
+        .filter((authorization) =>
+          authorization.status !== "Cancelled" &&
+          String(authorization.request_no || "") === String(request.request_no || "") &&
+          isCompatibleText(authorization.profession, line.profession) &&
+          nationalitiesMatch(authorization.nationality, line.nationality, countries) &&
+          (!line.gender || !authorization.gender || normalize(authorization.gender) === normalize(line.gender))
+        )
+        .reduce((sum, authorization) => sum + Number(authorization.allocated_qty || 0), 0);
+      const remaining = Math.max(requiredQty - assignedQty, 0);
       if (remaining <= 0) return null;
 
+      const requestLineContext = {
+        ...request,
+        profession: line.profession || request.profession || "",
+        nationality: line.nationality || request.nationality || "",
+        gender: line.gender || request.gender || "",
+        quantity: remaining,
+      };
       const rankedAgencies = activeAgencies
+        .filter((agency) => isAIAgentAgencyEligibleForRequestLine(agency, request, line))
         .map((agency) => {
-          const fit = getAIAgentAgencyFitScore(request, { ...agency, agency: agency.name });
+          const fit = getAIAgentAgencyFitScore(requestLineContext, { ...agency, agency: agency.name });
           return {
             ...agency,
             agency: agency.name,
@@ -23257,13 +23630,15 @@ function getAIAgentRequestAssignmentRecommendations() {
 
       return {
         request,
+        requestLine: line,
+        recommendationKey: `${request.request_no || request.id || "request"}:${line.id || line.line_no || lineIndex + 1}`,
         request_no: request.request_no || "-",
         project: request.project_name || request.project || "-",
-        profession: request.profession || getRequestLineSummary(request, "profession") || "-",
-        nationality: request.nationality || getRequestLineSummary(request, "nationality") || "-",
-        gender: request.gender || getRequestLineSummary(request, "gender") || "-",
+        profession: line.profession || "-",
+        nationality: line.nationality || "-",
+        gender: line.gender || "-",
         requiredQty,
-        currentCandidates: relatedCandidates.length,
+        assignedQty,
         remaining,
         daysOpen,
         priority,
@@ -23273,7 +23648,7 @@ function getAIAgentRequestAssignmentRecommendations() {
           ? `Assign ${request.request_no || "request"} to ${bestAgency.agency}. Fit score ${bestAgency.fitScore}%. Ask for first batch within 72 hours.`
           : "No active agency found. Add agency or activate agreement first.",
       };
-    })
+    }))
     .filter(Boolean)
     .sort((a, b) => Number(b.remaining || 0) - Number(a.remaining || 0));
 }
@@ -25557,7 +25932,7 @@ function printSubscriptionInvoice(invoice) {
           </thead>
           <tbody>
             <tr>
-              <td>VisaFlow KSA Monthly Subscription</td>
+              <td>VisaFlow KSA ${invoice.subscription_type || "Recruitment"} Monthly Subscription</td>
               <td>${amount.toLocaleString()} SAR</td>
             </tr>
             <tr>
@@ -25628,6 +26003,16 @@ const platformDashboard = useMemo(() => {
     0
   );
 
+  const activeHousingClients = platformClients.filter((client) =>
+    client.housing_access_enabled
+    && ["active", "trial"].includes(String(client.housing_subscription_status || "").toLowerCase())
+    && (!client.housing_end_date || new Date(client.housing_end_date) >= today)
+  );
+  const housingMonthlyRevenue = activeHousingClients.reduce(
+    (sum, client) => sum + Number(client.housing_monthly_amount || 0),
+    0
+  );
+
   const unpaidInvoices = subscriptionInvoices.filter((invoice) =>
     String(invoice.status || "").toLowerCase() !== "paid"
   );
@@ -25654,7 +26039,10 @@ const platformDashboard = useMemo(() => {
     suspendedClients: suspendedClients.length,
     expiringThisMonth: expiringThisMonth.length,
     monthlyRevenue,
-    annualRevenue: monthlyRevenue * 12,
+    housingSubscriptions: activeHousingClients.length,
+    housingMonthlyRevenue,
+    totalMonthlyRevenue: monthlyRevenue + housingMonthlyRevenue,
+    annualRevenue: (monthlyRevenue + housingMonthlyRevenue) * 12,
     unpaidInvoices: unpaidInvoices.length,
     unpaidAmount,
     overdueInvoices: overdueInvoices.length,
@@ -25733,6 +26121,19 @@ function editPlatformClient(item) {
     talent_access_enabled: Boolean(item.talent_access_enabled),
     talent_access_tier: item.talent_access_tier || "None",
     talent_profile_limit: Number(item.talent_profile_limit || 0),
+    talent_profile_unlimited: isTalentProfileUnlimited(item.talent_profile_limit),
+    housing_access_enabled: Boolean(item.housing_access_enabled),
+    housing_plan: item.housing_plan || "Standard",
+    housing_subscription_status: item.housing_subscription_status || "Inactive",
+    housing_start_date: item.housing_start_date || "",
+    housing_end_date: item.housing_end_date || "",
+    housing_monthly_amount: Number(item.housing_monthly_amount || 0),
+    housing_users_limit: Number(item.housing_users_limit || 0),
+    ai_agent_enabled: Boolean(item.ai_agent_enabled),
+    ai_agent_plan: item.ai_agent_plan || "Standard",
+    ai_agent_trial_start: item.ai_agent_trial_start || "",
+    ai_agent_trial_end: item.ai_agent_trial_end || "",
+    ai_agent_monthly_credit_limit: Number(item.ai_agent_monthly_credit_limit || 0),
     operational_company_id: item.operational_company_id || "",
     admin_name: "",
     admin_email: "",
@@ -25781,6 +26182,17 @@ async function savePlatformClient() {
 
   const companyName = String(platformClientForm.company_name || "").trim();
   if (!companyName) return alert("Company name is required.");
+  if (platformClientForm.talent_access_enabled && !platformClientForm.talent_profile_unlimited && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
+    return alert("Set a visible Talent Profiles Limit greater than zero when VisaFlow Talent Access is enabled.");
+  }
+  if (platformClientForm.housing_access_enabled) {
+    if (!platformClientForm.housing_start_date || !platformClientForm.housing_end_date) return alert("Set the Housing subscription start and end dates.");
+    if (new Date(platformClientForm.housing_end_date) < new Date(platformClientForm.housing_start_date)) return alert("Housing subscription end date must be after the start date.");
+  }
+  if (platformClientForm.ai_agent_enabled && platformClientForm.ai_agent_plan === "Professional Trial") {
+    if (!platformClientForm.ai_agent_trial_start || !platformClientForm.ai_agent_trial_end) return alert("Set the AI Agent Professional trial start and end dates.");
+    if (new Date(platformClientForm.ai_agent_trial_end) < new Date(platformClientForm.ai_agent_trial_start)) return alert("AI Agent trial end date must be after the start date.");
+  }
 
   const isNewCompany = !platformClientEditingId;
   const adminName = String(platformClientForm.admin_name || "").trim();
@@ -25807,7 +26219,23 @@ async function savePlatformClient() {
     monthly_amount: Number(platformClientForm.monthly_amount || 0),
     talent_access_enabled: Boolean(platformClientForm.talent_access_enabled),
     talent_access_tier: platformClientForm.talent_access_enabled ? (platformClientForm.talent_access_tier || "Standard") : "None",
-    talent_profile_limit: platformClientForm.talent_access_enabled ? Number(platformClientForm.talent_profile_limit || 0) : 0,
+    talent_profile_limit: getTalentProfileLimitValue({
+      enabled: platformClientForm.talent_access_enabled,
+      unlimited: platformClientForm.talent_profile_unlimited,
+      limit: platformClientForm.talent_profile_limit,
+    }),
+    housing_access_enabled: Boolean(platformClientForm.housing_access_enabled),
+    housing_plan: platformClientForm.housing_access_enabled ? (platformClientForm.housing_plan || "Standard") : "Standard",
+    housing_subscription_status: platformClientForm.housing_access_enabled ? (platformClientForm.housing_subscription_status || "Active") : "Inactive",
+    housing_start_date: platformClientForm.housing_access_enabled ? (platformClientForm.housing_start_date || null) : null,
+    housing_end_date: platformClientForm.housing_access_enabled ? (platformClientForm.housing_end_date || null) : null,
+    housing_monthly_amount: platformClientForm.housing_access_enabled ? Math.max(0, Number(platformClientForm.housing_monthly_amount || 0)) : 0,
+    housing_users_limit: platformClientForm.housing_access_enabled ? Math.max(0, Number(platformClientForm.housing_users_limit || 0)) : 0,
+    ai_agent_enabled: Boolean(platformClientForm.ai_agent_enabled),
+    ai_agent_plan: platformClientForm.ai_agent_enabled ? (platformClientForm.ai_agent_plan || "Professional") : "Standard",
+    ai_agent_trial_start: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_start || null) : null,
+    ai_agent_trial_end: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_end || null) : null,
+    ai_agent_monthly_credit_limit: Math.max(0, Number(platformClientForm.ai_agent_monthly_credit_limit || 0)),
   };
 
   setPlatformClientSaving(true);
@@ -25819,14 +26247,53 @@ async function savePlatformClient() {
       // public.users link as one protected provisioning workflow. If any step
       // fails, it removes the records already created instead of leaving an
       // incomplete company in the portfolio.
+      const {
+        ai_agent_enabled: _aiAgentEnabled,
+        ai_agent_plan: _aiAgentPlan,
+        ai_agent_trial_start: _aiAgentTrialStart,
+        ai_agent_trial_end: _aiAgentTrialEnd,
+        ai_agent_monthly_credit_limit: _aiAgentMonthlyCreditLimit,
+        housing_access_enabled: _housingAccessEnabled,
+        housing_plan: _housingPlan,
+        housing_subscription_status: _housingSubscriptionStatus,
+        housing_start_date: _housingStartDate,
+        housing_end_date: _housingEndDate,
+        housing_monthly_amount: _housingMonthlyAmount,
+        housing_users_limit: _housingUsersLimit,
+        ...provisionerCompanyPayload
+      } = companyPayload;
       const provisionedCompany = await invokePlatformCompanyProvisioner({
         action: "create_company",
-        ...companyPayload,
+        ...provisionerCompanyPayload,
         admin_name: adminName,
         admin_email: adminEmail,
         admin_password: adminPassword,
         admin_role: adminRole,
       });
+
+      const provisionedOperationalCompanyId = provisionedCompany?.company?.id
+        || provisionedCompany?.platform_client?.operational_company_id
+        || provisionedCompany?.operational_company_id;
+      if (provisionedOperationalCompanyId) {
+        const { error: entitlementUpdateError } = await supabase
+          .from("platform_clients")
+          .update({
+            ai_agent_enabled: companyPayload.ai_agent_enabled,
+            ai_agent_plan: companyPayload.ai_agent_plan,
+            ai_agent_trial_start: companyPayload.ai_agent_trial_start,
+            ai_agent_trial_end: companyPayload.ai_agent_trial_end,
+            ai_agent_monthly_credit_limit: companyPayload.ai_agent_monthly_credit_limit,
+            housing_access_enabled: companyPayload.housing_access_enabled,
+            housing_plan: companyPayload.housing_plan,
+            housing_subscription_status: companyPayload.housing_subscription_status,
+            housing_start_date: companyPayload.housing_start_date,
+            housing_end_date: companyPayload.housing_end_date,
+            housing_monthly_amount: companyPayload.housing_monthly_amount,
+            housing_users_limit: companyPayload.housing_users_limit,
+          })
+          .eq("operational_company_id", provisionedOperationalCompanyId);
+        if (entitlementUpdateError) throw entitlementUpdateError;
+      }
 
       // Send one branded message that contains the company details and a
       // server-generated, time-limited activation link. The password is never
@@ -26021,6 +26488,7 @@ function editSubscriptionInvoice(item) {
   setSubscriptionInvoiceEditingId(item.id);
   setSubscriptionInvoiceForm({
     client_id: item.client_id || "",
+    subscription_type: item.subscription_type || "Recruitment",
     invoice_no: item.invoice_no || "",
     amount: item.amount || 0,
     status: item.status || "Unpaid",
@@ -26050,6 +26518,7 @@ async function saveSubscriptionInvoice() {
 
   const payload = {
     client_id: validClient.id,
+    subscription_type: subscriptionInvoiceForm.subscription_type || "Recruitment",
     invoice_no: subscriptionInvoiceForm.invoice_no || generatePlatformNo("SUB", subscriptionInvoices, "invoice_no", 5),
     amount: Number(subscriptionInvoiceForm.amount || 0),
     status: subscriptionInvoiceForm.status || "Unpaid",
@@ -26068,7 +26537,7 @@ async function saveSubscriptionInvoice() {
   alert(subscriptionInvoiceEditingId ? "Invoice updated successfully" : `Invoice saved: ${payload.invoice_no}`);
 }
 
-async function createSubscriptionInvoiceForClient(client) {
+async function createSubscriptionInvoiceForClient(client, subscriptionType = "Recruitment") {
   if (!canManagePlatform) return alert("You do not have permission to generate subscription invoices.");
   if (!client?.id && !client?.company_name) return alert("Company is required.");
 
@@ -26079,7 +26548,7 @@ async function createSubscriptionInvoiceForClient(client) {
   if (client?.id) {
     const { data, error } = await supabase
       .from("platform_clients")
-      .select("id, company_name, monthly_amount")
+      .select("id, company_name, monthly_amount, housing_monthly_amount, housing_access_enabled")
       .eq("id", client.id)
       .maybeSingle();
 
@@ -26089,7 +26558,7 @@ async function createSubscriptionInvoiceForClient(client) {
   if (!validClient && client?.company_name) {
     const { data, error } = await supabase
       .from("platform_clients")
-      .select("id, company_name, monthly_amount")
+      .select("id, company_name, monthly_amount, housing_monthly_amount, housing_access_enabled")
       .eq("company_name", client.company_name)
       .maybeSingle();
 
@@ -26101,7 +26570,10 @@ async function createSubscriptionInvoiceForClient(client) {
     return alert("Company record was not found in platform_clients. Please refresh the page and try again.");
   }
 
-  const amount = Number(validClient.monthly_amount || client.monthly_amount || 0);
+  if (subscriptionType === "Housing" && !validClient.housing_access_enabled) return alert("Housing subscription is not enabled for this company.");
+  const amount = subscriptionType === "Housing"
+    ? Number(validClient.housing_monthly_amount || client.housing_monthly_amount || 0)
+    : Number(validClient.monthly_amount || client.monthly_amount || 0);
   if (!amount) return alert("Monthly amount is required before generating an invoice.");
 
   const dueDate = new Date();
@@ -26111,6 +26583,7 @@ async function createSubscriptionInvoiceForClient(client) {
 
   const { error } = await supabase.from("subscription_invoices").insert([{
     client_id: validClient.id,
+    subscription_type: subscriptionType,
     invoice_no: invoiceNo,
     amount,
     status: "Unpaid",
@@ -29859,6 +30332,7 @@ if (!currentUser && publicView === PUBLIC_VIEW.LANDING) {
       onLanguageChange={() => setLoginLanguage((language) => language === "AR" ? "EN" : "AR")}
       onLogin={openCompanyLogin}
       onTalent={openTalentPortal}
+      onHousing={() => window.location.assign("/housing")}
     />
   );
 }
@@ -31165,6 +31639,34 @@ if (!currentUser) {
 
         {activePage === "AI Agent" && (
           <>
+            {canManagePlatform && (
+              <div className="table-card">
+                <div className="section-title-row">
+                  <div><h2>AI Agent Professional · Platform Control</h2><p>Activate Professional access per company and monitor self-service seven-day trials.</p></div>
+                  <div className="actions"><button onClick={loadCompanyTrialRequests}>Refresh Trials</button><button className="save-btn" onClick={() => setActivePage("Companies Management")}>Manage Company Access</button></div>
+                </div>
+                <div className="stats-grid">
+                  <div className="stat-card"><h3>Professional Companies</h3><strong>{platformClients.filter((item) => isAiAgentProfessionalAvailable(item)).length}</strong><span>Active entitlement</span></div>
+                  <div className="stat-card"><h3>Professional Trials</h3><strong>{platformClients.filter((item) => item.ai_agent_plan === "Professional Trial" && isAiAgentProfessionalAvailable(item)).length}</strong><span>Currently active</span></div>
+                  <div className="stat-card"><h3>Trial Registrations</h3><strong>{companyTrialRequests.length}</strong><span>Public landing requests</span></div>
+                </div>
+                <table>
+                  <thead><tr><th>Company</th><th>Administrator</th><th>Work Email</th><th>Team</th><th>Status</th><th>Requested</th><th>Action</th></tr></thead>
+                  <tbody>{companyTrialRequests.length === 0 ? <tr><td colSpan="7">No company trial registrations yet.</td></tr> : companyTrialRequests.map((request) => <tr key={request.id}><td><b>{request.company_name}</b><br /><small>{request.job_title || "-"}</small></td><td>{request.admin_name}</td><td>{request.email}<br /><small>{request.phone || "-"}</small></td><td>{request.team_size || "-"}</td><td><Badge value={request.status} /></td><td>{request.created_at ? new Date(request.created_at).toLocaleString() : "-"}</td><td><button onClick={() => { const client = platformClients.find((item) => String(item.id) === String(request.platform_client_id)); if (client) editPlatformClient(client); else setActivePage("Companies Management"); }}>Open Company</button></td></tr>)}</tbody>
+                </table>
+              </div>
+            )}
+            {!canManagePlatform && <div className="table-card" style={{ borderColor: isAiAgentProfessionalAvailable(aiAgentEntitlement) ? "#99f6e4" : "#fed7aa", background: isAiAgentProfessionalAvailable(aiAgentEntitlement) ? "#f0fdfa" : "#fff7ed" }}>
+              <div className="section-title-row">
+                <div>
+                  <h2>AI Agent Professional · {getAiAgentEntitlementLabel(aiAgentEntitlement)}</h2>
+                  <p>{isAiAgentProfessionalAvailable(aiAgentEntitlement)
+                    ? `${aiAgentUsageRows.reduce((sum, row) => sum + Number(row.credits_debited || 0), 0).toLocaleString()} of ${Number(aiAgentEntitlement.monthly_credit_limit || 0).toLocaleString()} monthly AI credits used.${aiAgentEntitlement.plan === "Professional Trial" && aiAgentEntitlement.trial_end ? ` Trial ends ${aiAgentEntitlement.trial_end}.` : ""}`
+                    : "Professional automation is locked for this company. The Platform Owner can enable it from Companies Management."}</p>
+                </div>
+                <Badge value={isAiAgentProfessionalAvailable(aiAgentEntitlement) ? "Active" : "Locked"} />
+              </div>
+            </div>}
             <TableCard title="🤖 AI Recruitment Agent - Agency Follow-up Employee">
               <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: "18px", alignItems: "stretch" }}>
                 <div style={{ borderRadius: "28px", padding: "30px", background: "linear-gradient(135deg, #020617 0%, #0f2f68 50%, #0f766e 100%)", color: "white", position: "relative", overflow: "hidden", minHeight: "260px" }}>
@@ -31177,8 +31679,8 @@ if (!currentUser) {
                       موظف ذكي داخل VisaFlow يعمل كـ Recruitment Operations Employee: يقترح المكتب المناسب بعد الطلب، يجهز موافقة مدير التوظيف، يتابع المكاتب، يرسل الإشعارات، ويصعد الحالات المتأخرة.
                     </p>
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "22px" }}>
-                      <button className="save-btn" onClick={createAIAgentManagerBriefNotification}>Create Manager Daily Brief</button>
-                      <button className="new-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading}>
+                      <button className="save-btn" onClick={createAIAgentManagerBriefNotification} disabled={!isAiAgentProfessionalAvailable(aiAgentEntitlement)}>Create Manager Daily Brief</button>
+                      <button className="new-btn" onClick={runAIAgentAgencyFollowUp} disabled={aiAgentLoading || !isAiAgentProfessionalAvailable(aiAgentEntitlement)}>
                         {aiAgentLoading ? "AI Agent Working..." : "Run Manual Follow-up"}
                       </button>
                       <button className="new-btn" onClick={() => setActivePage("Notifications")}>Open Notification Center</button>
@@ -31215,6 +31717,7 @@ if (!currentUser) {
                 <Stat title="Agency Emails" value={shouldAIAgentSendAgencyEmails() ? "Enabled" : "Notifications Only"} className={shouldAIAgentSendAgencyEmails() ? "passed" : "warning"} />
               </div>
 
+              <fieldset disabled={!isAiAgentProfessionalAvailable(aiAgentEntitlement)} style={{ border: 0, padding: 0, margin: 0, opacity: isAiAgentProfessionalAvailable(aiAgentEntitlement) ? 1 : 0.55 }}>
               <div className="form-grid">
                 <Select
                   placeholder="AI Agent Mode"
@@ -31261,6 +31764,7 @@ if (!currentUser) {
                 </button>
                 <button className="light-btn" onClick={loadAIAgentSettings}>Reload Settings</button>
               </div>
+              </fieldset>
             </TableCard>
 
             <TableCard title="🧭 Request Assignment Recommendations">
@@ -31283,7 +31787,7 @@ if (!currentUser) {
                       <tr><td colSpan="5" style={{ textAlign: "center", color: "#64748b", padding: "24px" }}>No open requests need agency assignment right now.</td></tr>
                     ) : (
                       getAIAgentRequestAssignmentRecommendations().slice(0, 12).map((item) => (
-                        <tr key={`ai-agent-rec-${item.request_no}`}>
+                        <tr key={`ai-agent-rec-${item.recommendationKey || item.request_no}`}>
                           <td><b>{item.request_no}</b><br /><small>{item.project}</small><br /><Badge value={item.priority} /></td>
                           <td>{item.profession}<br /><small>{item.nationality} / {item.gender}</small><br /><b>Remaining: {item.remaining}</b></td>
                           <td>
@@ -33790,7 +34294,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div>
                     <p className="eyebrow">VisaFlow Talent</p>
                     <h1>Talent Marketplace</h1>
-                    <p>Approved anonymized profiles only. Candidate contact details remain private and introductions are managed by VisaFlow.</p>
+                    <p>Search approved profiles, view contact details shared by the candidate, and schedule interviews directly.</p>
                   </div>
                   <div className="hero-actions">
                     <button onClick={loadCompanyTalentMarketplace} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
@@ -33799,36 +34303,58 @@ disabled={authorizationWorkflowBusy === "create"}
 
                 <div className="stats-grid">
                   <div className="stat-card"><h3>Package</h3><strong>{talentEntitlement.tier || "Standard"}</strong><span>Controlled by Platform Owner</span></div>
-                  <div className="stat-card"><h3>Profile Limit</h3><strong>{Number(talentEntitlement.profile_limit || 0).toLocaleString()}</strong><span>Maximum available profiles</span></div>
+                  <div className="stat-card"><h3>Profile Limit</h3><strong>{formatTalentProfileLimit(talentEntitlement.profile_limit)}</strong><span>{isTalentProfileUnlimited(talentEntitlement.profile_limit) ? "All published profiles" : "Maximum available profiles"}</span></div>
                   <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentProfiles.length}</strong><span>Approved and consented</span></div>
                 </div>
 
                 {companyTalentMessage && <div className="form-card"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
 
+                <div className="toolbar"><input placeholder="Search name, profession, nationality, location or skills" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} /></div>
+
                 <TableCard title="Approved Talent Profiles">
                   <div className="table-wrap">
                     <table>
-                      <thead><tr><th>Reference</th><th>Headline</th><th>Profession</th><th>Nationality</th><th>Location</th><th>Experience</th><th>Languages</th><th>Availability</th><th>Profile</th></tr></thead>
+                      <thead><tr><th>Candidate</th><th>Profession</th><th>Nationality</th><th>Location</th><th>Experience</th><th>Skills</th><th>Contact</th><th>Interview</th></tr></thead>
                       <tbody>
                         {companyTalentProfiles.length === 0 ? (
-                          <tr><td colSpan="9">No published profiles are available in this package.</td></tr>
-                        ) : companyTalentProfiles.map((candidate) => (
+                          <tr><td colSpan="8">No published profiles are available in this package.</td></tr>
+                        ) : companyTalentProfiles.filter((candidate) => {
+                          const query = companyTalentSearch.trim().toLowerCase();
+                          if (!query) return true;
+                          return [candidate.full_name, candidate.public_reference, candidate.headline, candidate.profession, candidate.nationality, candidate.city, candidate.country_of_residence, ...(Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name) : [])].filter(Boolean).join(" ").toLowerCase().includes(query);
+                        }).map((candidate) => (
                           <tr key={candidate.candidate_id}>
-                            <td>{candidate.public_reference || "-"}</td>
-                            <td>{candidate.headline || "-"}</td>
+                            <td><strong>{candidate.full_name || candidate.public_reference || "-"}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{candidate.headline || candidate.public_reference || "-"}</div></td>
                             <td>{candidate.profession || "-"}</td>
                             <td>{candidate.nationality || "-"}</td>
                             <td>{[candidate.city, candidate.country_of_residence].filter(Boolean).join(", ") || "-"}</td>
                             <td>{candidate.years_experience == null ? "-" : `${candidate.years_experience} years`}</td>
-                            <td>{Array.isArray(candidate.languages) ? candidate.languages.join(", ") : "-"}</td>
-                            <td><Badge value={candidate.availability_status || "Open to Opportunities"} /></td>
-                            <td>{Number(candidate.profile_completeness || 0)}%</td>
+                            <td>{Array.isArray(candidate.skills) ? candidate.skills.slice(0, 4).map((skill) => skill?.name).filter(Boolean).join(", ") || "-" : "-"}</td>
+                            <td>{candidate.identity_shared ? <div><a href={`mailto:${candidate.email}`}>{candidate.email}</a><div>{candidate.phone || "-"}</div></div> : <span style={{ color: "#92400e" }}>Awaiting candidate consent</span>}</td>
+                            <td><button type="button" className="light-btn" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule"}</button>{candidate.latest_interview_status && <div style={{ marginTop: 7 }}><Badge value={candidate.latest_interview_status} /></div>}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 </TableCard>
+
+                {selectedTalentCandidateId && (() => {
+                  const candidate = companyTalentProfiles.find((item) => item.candidate_id === selectedTalentCandidateId);
+                  if (!candidate) return null;
+                  return <div className="form-card">
+                    <h2>Schedule Interview — {candidate.full_name || candidate.public_reference}</h2>
+                    {candidate.professional_summary && <p style={{ color: "#475569", lineHeight: 1.7 }}>{candidate.professional_summary}</p>}
+                    <div className="form-grid">
+                      <label><span>Interview Type</span><select value={talentInterviewForm.interview_type} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, interview_type: event.target.value }))}><option>Online Video</option><option>Phone</option><option>In Person</option></select></label>
+                      <label><span>Date & Time</span><input type="datetime-local" value={talentInterviewForm.scheduled_at} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, scheduled_at: event.target.value }))} /></label>
+                      {talentInterviewForm.interview_type === "Online Video" && <label><span>Meeting Link</span><input type="url" placeholder="https://..." value={talentInterviewForm.meeting_url} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, meeting_url: event.target.value }))} /></label>}
+                      {talentInterviewForm.interview_type === "In Person" && <label><span>Location</span><input value={talentInterviewForm.location} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, location: event.target.value }))} /></label>}
+                      <label><span>Notes</span><textarea rows="3" value={talentInterviewForm.notes} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, notes: event.target.value }))} /></label>
+                    </div>
+                    <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate.candidate_id)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
+                  </div>;
+                })()}
               </div>
             )}
 
@@ -35683,60 +36209,6 @@ disabled={authorizationWorkflowBusy === "create"}
       </TableCard>
     )}
 
-    {shouldShowAgencyAgreements({ role: currentRole, loading: agencyAgreementsLoading, agreements: agencyAgreements }) && (
-      <TableCard title="Agency Agreements / Electronic Signature">
-        {agencyAgreementsLoading && agencyAgreements.length === 0 ? (
-          <div className="empty-state">Loading agreements...</div>
-        ) : (
-        <div className="mini-table-scroll" style={{ height: "auto", maxHeight: "420px" }}>
-          <table>
-            <thead>
-              <tr>
-                <th>Agreement No</th>
-                <th>Company Workspace</th>
-                <th>Template</th>
-                <th>SLA</th>
-                <th>Labor SLA Penalty</th>
-                <th>Guarantee</th>
-                <th>Status</th>
-                <th>Agreement</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agencyAgreements.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.agreement_no || "-"}</td>
-                  <td>{currentUser?.company_name || item.company_name || "Current Client"}</td>
-                  <td>{item.template_type || "Standard"}</td>
-                  <td>{item.sla_days || 60} days</td>
-                  <td>{item.delay_penalty_type || "-"} / {item.delay_penalty_amount || 0}</td>
-                  <td>{item.financial_guarantee_required || "No"}{item.financial_guarantee_amount ? ` / ${Number(item.financial_guarantee_amount).toLocaleString()} SAR` : ""}</td>
-                  <td><Badge value={item.status || "Draft"} /></td>
-                  <td>
-                    <details>
-                      <summary>View</summary>
-                      <pre style={{ whiteSpace: "pre-wrap", maxWidth: 520, maxHeight: 260, overflow: "auto" }}>{item.terms || "No agreement terms"}</pre>
-                    </details>
-                  </td>
-                  <td className="table-actions">
-                    {item.status === "Pending Signature" ? (
-                      <button className="save-btn" onClick={() => acceptAgreementByAgency(item)}>Accept & Sign</button>
-                    ) : item.status === "Active" ? (
-                      <span>Accepted</span>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        )}
-      </TableCard>
-    )}
-
     {canManageOfficePortal && (
       <div className="actions-line" style={{ margin: "0 0 14px" }}>
         <button className="new-btn" onClick={downloadCandidateUploadTemplate}>Download Candidate Template</button>
@@ -36700,6 +37172,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
 {activePage === "Agency Agreements" && (
   <>
+    {currentRole === "Agency" && (
+      <div className="executive-hero" style={{ marginBottom: 18 }}>
+        <div>
+          <p className="eyebrow">Office Portal</p>
+          <h1>Agency Agreements</h1>
+          <p>Review the agreement terms for the selected company workspace and sign pending agreements electronically.</p>
+        </div>
+      </div>
+    )}
     <div className="dashboard-grid">
       <Stat title="Total Agreements" value={agencyAgreements.length} />
       <Stat title="Active Agreements" value={agencyAgreements.filter((x) => x.status === "Active").length} className="passed" />
@@ -36777,7 +37258,10 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
       </FormCard>
     )}
 
-    <TableCard title="Agency Agreements List">
+    <TableCard title={currentRole === "Agency" ? "Agreements / Electronic Signature" : "Agency Agreements List"}>
+      {agencyAgreementsLoading && agencyAgreements.length === 0 ? (
+        <div className="empty-state">Loading agreements...</div>
+      ) : (
       <table>
         <thead>
           <tr>
@@ -36790,12 +37274,13 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
             <th>Status</th>
             <th>Delivery Status</th>
             <th>Agency Accepted</th>
+            <th>Agreement</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {agencyAgreements.length === 0 ? (
-            <tr><td colSpan="10">No agency agreements yet</td></tr>
+            <tr><td colSpan="11">No agency agreements yet</td></tr>
           ) : (
             agencyAgreements.map((item) => (
               <tr key={item.id}>
@@ -36813,7 +37298,15 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
                   </div>
                 </td>
                 <td>{item.agency_accepted_at ? new Date(item.agency_accepted_at).toLocaleDateString("en-GB") : item.agency_signature || "-"}</td>
+                <td>
+                  <details>
+                    <summary>View Terms</summary>
+                    <pre style={{ whiteSpace: "pre-wrap", maxWidth: 520, maxHeight: 260, overflow: "auto" }}>{item.terms || "No agreement terms"}</pre>
+                  </details>
+                </td>
                 <td className="table-actions">
+                  {currentRole === "Agency" && item.status === "Pending Signature" && <button className="save-btn" onClick={() => acceptAgreementByAgency(item)}>Accept & Sign</button>}
+                  {currentRole === "Agency" && item.status === "Active" && <span>Accepted</span>}
                   {canManageAgencyAgreements && <button onClick={() => editAgreement(item)}>Edit</button>}
                   {canManageAgencyAgreements && item.status !== "Pending Signature" && item.status !== "Active" && <button onClick={() => sendExistingAgreementToAgency(item)}>Send</button>}
                   {canManageAgencyAgreements && canRetryAgreementEmail(item) && <button onClick={() => sendExistingAgreementToAgency(item)}>Retry Email</button>}
@@ -36824,6 +37317,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
           )}
         </tbody>
       </table>
+      )}
     </TableCard>
   </>
 )}
@@ -38712,9 +39206,9 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="section-title-row">
         <div>
           <h2>Latest Candidate Profiles / آخر ملفات المرشحين</h2>
-          <p>Latest 10 candidate profile records only.</p>
+          <p>Latest candidate profile records (up to 50).</p>
         </div>
-        <button type="button" disabled title="The full candidate directory is not included in phase one." style={{ opacity: 0.45, cursor: "not-allowed" }}>View All Candidates</button>
+        <button type="button" onClick={loadOwnerTalentDashboard} disabled={ownerTalentLoading}>{ownerTalentLoading ? "Refreshing..." : "Refresh Candidates"}</button>
       </div>
       <table>
         <thead>
@@ -38943,6 +39437,57 @@ onClick={() => setActiveReport("activityLog")}>
   </div>
 )}
 
+{activePage === "Housing Subscriptions" && canManagePlatform && (
+  <div className="page-section">
+    <div className="executive-hero" style={{ marginBottom: 18 }}>
+      <div>
+        <p className="eyebrow">Platform Administration</p>
+        <h1>Housing Subscriptions</h1>
+        <p>إدارة اشتراكات برنامج السكن بصورة مستقلة عن اشتراكات التوظيف.</p>
+      </div>
+      <div className="hero-actions">
+        <button onClick={() => window.open("/housing", "_blank")}>Open Housing</button>
+        <button onClick={() => setActivePage("Companies Management")}>Manage Company Plans</button>
+        <button onClick={() => setActivePage("Subscription Invoices")}>Housing Invoices</button>
+      </div>
+    </div>
+
+    <div className="stats-grid">
+      <div className="stat-card"><h3>Active Housing</h3><strong>{platformDashboard.housingSubscriptions || 0}</strong><span>Active or trial subscriptions</span></div>
+      <div className="stat-card"><h3>Housing MRR</h3><strong>{Number(platformDashboard.housingMonthlyRevenue || 0).toLocaleString()} SAR</strong><span>Monthly Housing revenue</span></div>
+      <div className="stat-card"><h3>Available Product</h3><strong>Housing</strong><span>Independent from Recruitment</span></div>
+    </div>
+
+    <div className="table-card">
+      <div className="section-title-row">
+        <div><h2>Company Housing Plans</h2><p>Enable, suspend, renew, or invoice Housing for every company.</p></div>
+        <button onClick={loadPlatformClients}>Refresh</button>
+      </div>
+      <table>
+        <thead><tr><th>Company</th><th>Access</th><th>Plan</th><th>Status</th><th>Start</th><th>End</th><th>Users</th><th>Monthly</th><th>Actions</th></tr></thead>
+        <tbody>
+          {platformClients.length === 0 ? <tr><td colSpan="9">No companies yet</td></tr> : platformClients.map((item) => (
+            <tr key={item.id}>
+              <td><strong>{item.company_name}</strong><div className="muted">{item.domain || "-"}</div></td>
+              <td><Badge value={item.housing_access_enabled ? "Enabled" : "Disabled"} /></td>
+              <td>{item.housing_plan || "Standard"}</td>
+              <td><Badge value={item.housing_subscription_status || "Inactive"} /></td>
+              <td>{item.housing_start_date || "-"}</td>
+              <td>{item.housing_end_date || "-"}</td>
+              <td>{Number(item.housing_users_limit || 0).toLocaleString()}</td>
+              <td>{Number(item.housing_monthly_amount || 0).toLocaleString()} SAR</td>
+              <td className="actions">
+                <button onClick={() => editPlatformClient(item)}>Edit Plan</button>
+                <button disabled={!item.housing_access_enabled} onClick={() => createSubscriptionInvoiceForClient(item, "Housing")}>Create Invoice</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
+
 {activePage === "Companies Management" && canManagePlatform && (
   <div className="page-section">
     <div className="executive-hero" style={{ marginBottom: 18 }}>
@@ -38964,6 +39509,8 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="stat-card"><h3>Trial</h3><strong>{platformDashboard.trialClients}</strong><span>Trial accounts</span></div>
       <div className="stat-card"><h3>Renewal Soon</h3><strong>{platformDashboard.expiringThisMonth}</strong><span>Ending within 30 days</span></div>
       <div className="stat-card"><h3>Monthly Revenue</h3><strong>{Number(platformDashboard.monthlyRevenue || 0).toLocaleString()} SAR</strong><span>Current active MRR</span></div>
+      <div className="stat-card"><h3>Housing Subscriptions</h3><strong>{platformDashboard.housingSubscriptions || 0}</strong><span>Active Housing clients</span></div>
+      <div className="stat-card"><h3>Housing MRR</h3><strong>{Number(platformDashboard.housingMonthlyRevenue || 0).toLocaleString()} SAR</strong><span>Independent Housing revenue</span></div>
       <div className="stat-card"><h3>Unpaid Amount</h3><strong>{Number(platformDashboard.unpaidAmount || 0).toLocaleString()} SAR</strong><span>{platformDashboard.unpaidInvoices} unpaid invoice(s)</span></div>
     </div>
 
@@ -39065,16 +39612,109 @@ onClick={() => setActiveReport("activityLog")}>
         </div>
 
         <div>
-          <label>Visible Talent Profiles Limit</label>
-          <input
-            type="number"
-            min="0"
-            max="100000"
+          <label>Visible Talent Profiles</label>
+          <select
             disabled={!platformClientForm.talent_access_enabled}
-            value={platformClientForm.talent_profile_limit}
-            onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_limit", e.target.value)}
-          />
+            value={platformClientForm.talent_profile_unlimited ? "Unlimited" : "Limited"}
+            onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_unlimited", e.target.value === "Unlimited")}
+          >
+            <option>Limited</option>
+            <option>Unlimited</option>
+          </select>
         </div>
+
+        {!platformClientForm.talent_profile_unlimited && (
+          <div>
+            <label>Visible Talent Profiles Limit</label>
+            <input
+              type="number"
+              min="1"
+              max="99999"
+              disabled={!platformClientForm.talent_access_enabled}
+              value={platformClientForm.talent_profile_limit}
+              onChange={(e) => updateForm(setPlatformClientForm, "talent_profile_limit", e.target.value)}
+            />
+          </div>
+        )}
+
+        <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+          <h3 style={{ margin: "8px 0 4px" }}>Housing Management Subscription</h3>
+          <p className="muted">Manage Housing as an independent product without changing the company&apos;s recruitment subscription.</p>
+        </div>
+
+        <div>
+          <label>Housing Access</label>
+          <select
+            value={platformClientForm.housing_access_enabled ? "Enabled" : "Disabled"}
+            onChange={(e) => setPlatformClientForm((current) => ({
+              ...current,
+              housing_access_enabled: e.target.value === "Enabled",
+              housing_subscription_status: e.target.value === "Enabled" && current.housing_subscription_status === "Inactive" ? "Active" : e.target.value === "Disabled" ? "Inactive" : current.housing_subscription_status,
+            }))}
+          >
+            <option>Disabled</option>
+            <option>Enabled</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Housing Plan</label>
+          <select disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_plan} onChange={(e) => updateForm(setPlatformClientForm, "housing_plan", e.target.value)}>
+            {["Standard", "Professional", "Enterprise"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label>Housing Subscription Status</label>
+          <select disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_subscription_status} onChange={(e) => updateForm(setPlatformClientForm, "housing_subscription_status", e.target.value)}>
+            {["Inactive", "Trial", "Active", "Suspended", "Expired", "Cancelled"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div><label>Housing Users Limit</label><input type="number" min="0" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_users_limit} onChange={(e) => updateForm(setPlatformClientForm, "housing_users_limit", e.target.value)} /></div>
+        <div><label>Housing Start</label><input type="date" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_start_date} onChange={(e) => updateForm(setPlatformClientForm, "housing_start_date", e.target.value)} /></div>
+        <div><label>Housing End</label><input type="date" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_end_date} onChange={(e) => updateForm(setPlatformClientForm, "housing_end_date", e.target.value)} /></div>
+        <div><label>Housing Monthly Amount (SAR)</label><input type="number" min="0" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_monthly_amount} onChange={(e) => updateForm(setPlatformClientForm, "housing_monthly_amount", e.target.value)} /></div>
+
+        <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+          <h3 style={{ margin: "8px 0 4px" }}>AI Agent Professional</h3>
+          <p className="muted">Enable the professional background employee for this company. Trial access stops automatically on its end date.</p>
+        </div>
+
+        <div>
+          <label>AI Agent Professional Access</label>
+          <select
+            value={platformClientForm.ai_agent_enabled ? "Enabled" : "Disabled"}
+            onChange={(e) => setPlatformClientForm((current) => ({
+              ...current,
+              ai_agent_enabled: e.target.value === "Enabled",
+              ai_agent_plan: e.target.value === "Enabled" && current.ai_agent_plan === "Standard" ? "Professional" : current.ai_agent_plan,
+              ai_agent_monthly_credit_limit: e.target.value === "Enabled" && Number(current.ai_agent_monthly_credit_limit || 0) <= 0 ? 5000 : current.ai_agent_monthly_credit_limit,
+            }))}
+          >
+            <option>Disabled</option>
+            <option>Enabled</option>
+          </select>
+        </div>
+
+        <div>
+          <label>AI Agent Plan</label>
+          <select disabled={!platformClientForm.ai_agent_enabled} value={platformClientForm.ai_agent_plan} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_plan", e.target.value)}>
+            {AI_AGENT_PLANS.map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label>Monthly AI Credits Included</label>
+          <input type="number" min="0" disabled={!platformClientForm.ai_agent_enabled} value={platformClientForm.ai_agent_monthly_credit_limit} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_monthly_credit_limit", e.target.value)} />
+        </div>
+
+        {platformClientForm.ai_agent_enabled && platformClientForm.ai_agent_plan === "Professional Trial" && (
+          <>
+            <div><label>Professional Trial Start</label><input type="date" value={platformClientForm.ai_agent_trial_start} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_trial_start", e.target.value)} /></div>
+            <div><label>Professional Trial End</label><input type="date" value={platformClientForm.ai_agent_trial_end} onChange={(e) => updateForm(setPlatformClientForm, "ai_agent_trial_end", e.target.value)} /></div>
+          </>
+        )}
 
         <div>
           <label>Operational Company ID</label>
@@ -39173,11 +39813,14 @@ onClick={() => setActiveReport("activityLog")}>
             <th>End</th>
             <th>Remaining</th>
             <th>Monthly</th>
+            <th>Talent Access</th>
+            <th>Housing</th>
+            <th>AI Agent</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {platformClients.length === 0 ? <tr><td colSpan="13">No companies yet</td></tr> : platformClients.map((item) => {
+          {platformClients.length === 0 ? <tr><td colSpan="16">No companies yet</td></tr> : platformClients.map((item) => {
             const daysRemaining = getClientDaysRemaining(item);
             const renewalStatus = getClientRenewalStatus(item);
             const primaryAdmin = getPrimaryAdminForPlatformClient(item);
@@ -39199,11 +39842,24 @@ onClick={() => setActiveReport("activityLog")}>
                 <td>{item.end_date || "-"}</td>
                 <td>{daysRemaining === null ? "-" : daysRemaining < 0 ? "Expired" : `${daysRemaining} day(s)`}</td>
                 <td>{Number(item.monthly_amount || 0).toLocaleString()} SAR</td>
+                <td>
+                  <Badge value={item.talent_access_enabled ? "Enabled" : "Disabled"} />
+                  {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {formatTalentProfileLimit(item.talent_profile_limit)} profiles</div>}
+                </td>
+                <td>
+                  <Badge value={item.housing_access_enabled ? (item.housing_subscription_status || "Active") : "Disabled"} />
+                  {item.housing_access_enabled && <div className="muted">{item.housing_plan || "Standard"} / {Number(item.housing_monthly_amount || 0).toLocaleString()} SAR</div>}
+                </td>
+                <td>
+                  <Badge value={getAiAgentEntitlementLabel(item)} />
+                  {item.ai_agent_enabled && <div className="muted">{Number(item.ai_agent_monthly_credit_limit || 0).toLocaleString()} credits{item.ai_agent_plan === "Professional Trial" && item.ai_agent_trial_end ? ` / ends ${item.ai_agent_trial_end}` : ""}</div>}
+                </td>
                 <td className="actions">
                   <button onClick={() => editPlatformClient(item)}>Edit</button>
                   <button onClick={() => extendPlatformClient(item, 1)}>Extend 30d</button>
 <button onClick={() => extendPlatformClient(item, 12)}>Extend 1y</button>
                   <button onClick={() => createSubscriptionInvoiceForClient(item)}>Invoice</button>
+                  <button disabled={!item.housing_access_enabled} onClick={() => createSubscriptionInvoiceForClient(item, "Housing")}>Housing Invoice</button>
                   <button
                     onClick={() => sendPlatformClientLoginDetails(item)}
                     disabled={!isPlatformOwner}
@@ -39426,6 +40082,9 @@ onClick={() => setActiveReport("activityLog")}>
           <option value="">Select Company</option>
           {platformClients.map((client) => <option key={client.id} value={client.id}>{client.company_name}</option>)}
         </select>
+        <select value={subscriptionInvoiceForm.subscription_type} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "subscription_type", e.target.value)}>
+          {["Recruitment", "Housing", "Combined", "Talent", "AI Agent"].map((item) => <option key={item}>{item}</option>)}
+        </select>
         <input placeholder="Invoice No (Auto if empty)" value={subscriptionInvoiceForm.invoice_no} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "invoice_no", e.target.value)} />
         <input type="number" placeholder="Amount" value={subscriptionInvoiceForm.amount} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "amount", e.target.value)} />
         <select value={subscriptionInvoiceForm.status} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "status", e.target.value)}>
@@ -39443,12 +40102,13 @@ onClick={() => setActiveReport("activityLog")}>
     <div className="table-card">
       <h2>Subscription Invoices</h2>
       <table>
-        <thead><tr><th>Invoice No</th><th>Company</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Paid At</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Invoice No</th><th>Company</th><th>Product</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Paid At</th><th>Actions</th></tr></thead>
         <tbody>
-          {subscriptionInvoices.length === 0 ? <tr><td colSpan="7">No invoices yet</td></tr> : subscriptionInvoices.map((item) => (
+          {subscriptionInvoices.length === 0 ? <tr><td colSpan="8">No invoices yet</td></tr> : subscriptionInvoices.map((item) => (
             <tr key={item.id}>
               <td>{item.invoice_no}</td>
               <td>{getPlatformClientName(item.client_id)}</td>
+              <td><Badge value={item.subscription_type || "Recruitment"} /></td>
               <td>{Number(item.amount || 0).toLocaleString()} SAR</td>
               <td><Badge value={item.status || "Unpaid"} /></td>
               <td>{item.due_date || "-"}</td>

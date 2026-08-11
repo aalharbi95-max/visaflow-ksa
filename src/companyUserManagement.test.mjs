@@ -31,7 +31,7 @@ test("setup email uses only the approved workspace recovery route", async () => 
   let captured;
   await sendCompanyUserSetupEmail({ auth: { resetPasswordForEmail: async (email, options) => { captured = { email, options }; return { error: null }; } } }, " User@Example.com ", "https://visaflowksa.com");
   assert.equal(captured.email, "user@example.com");
-  assert.equal(captured.options.redirectTo, "https://visaflowksa.com/?workspace_recovery=1");
+  assert.equal(captured.options.redirectTo, "https://visaflowksa.com/?login=1&auth_flow=workspace&recovery=1");
 });
 
 test("server error codes are translated into safe operator messages", () => {
