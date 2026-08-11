@@ -126,6 +126,43 @@ export async function listHousingNotificationData(client) {
   }
 }
 
+export async function listHousingCostAllocationData(client) {
+  const [centers, entries, runs] = await Promise.all([
+    client.from('housing_cost_centers').select('*, project:housing_projects(id,code,name)').order('code'),
+    client.from('housing_cost_entries').select('*, site:housing_sites(id,code,name), cost_center:housing_cost_centers(id,code,name)').order('period_start', { ascending: false }).limit(250),
+    client.from('housing_cost_allocation_runs').select('*').order('generated_at', { ascending: false }).limit(24),
+  ])
+  const runRows = throwIfError(runs, 'Unable to load allocation runs.') || []
+  const allocations = []
+  if (runRows[0]?.id) {
+    for (let offset = 0; ; offset += 1000) {
+      const page = throwIfError(await client.from('housing_daily_cost_allocations')
+        .select('*, site:housing_sites(id,code,name), employee:housing_employees(id,employee_no,full_name), project:housing_projects(id,code,name), cost_center:housing_cost_centers(id,code,name)')
+        .eq('run_id', runRows[0].id).order('allocation_date', { ascending: false }).range(offset, offset + 999), 'Unable to load daily cost allocations.') || []
+      allocations.push(...page)
+      if (page.length < 1000) break
+    }
+  }
+  return {
+    costCenters: throwIfError(centers, 'Unable to load cost centers.') || [],
+    costEntries: throwIfError(entries, 'Unable to load housing costs.') || [],
+    costAllocationRuns: runRows,
+    dailyCostAllocations: allocations,
+  }
+}
+
+export async function createHousingCostCenter(client, companyId, input) {
+  return throwIfError(await client.from('housing_cost_centers').insert({ ...input, company_id: required(companyId, 'Company') }).select().single(), 'Unable to create cost center.')
+}
+
+export async function createHousingCostEntry(client, companyId, input) {
+  return throwIfError(await client.from('housing_cost_entries').insert({ ...input, company_id: required(companyId, 'Company') }).select().single(), 'Unable to create housing cost.')
+}
+
+export async function generateHousingDailyCostAllocation(client, periodStart, periodEnd) {
+  return throwIfError(await client.rpc('housing_generate_daily_cost_allocation', { p_period_start: required(periodStart, 'Period start'), p_period_end: required(periodEnd, 'Period end') }), 'Unable to generate daily cost allocation.')
+}
+
 export async function saveHousingNotificationSettings(client, payload) {
   return throwIfError(await client.from('housing_notification_settings').upsert(payload, { onConflict: 'company_id' }).select().single(), 'Unable to save notification settings.')
 }
@@ -238,11 +275,11 @@ async function listTable(client, table, orderColumn = 'created_at') {
 }
 
 export async function loadHousingWorkspaceData(client) {
-  const [dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, notificationData] = await Promise.all([
-    loadHousingDashboard(client), listHousingSites(client), listHousingBuildings(client), listHousingFloors(client), listHousingApartments(client), listHousingRooms(client), listHousingEmployees(client), listHousingResidents(client), listHousingComplianceAlerts(client), listHousingLicenses(client), listHousingHseReports(client), listHousingOperations(client), listHousingIncidents(client), listHousingSurveys(client),
-    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client), listHousingNotificationData(client),
+  const [dashboard, projects, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, notificationData, costAllocationData] = await Promise.all([
+    loadHousingDashboard(client), listTable(client, 'housing_projects', 'name'), listHousingSites(client), listHousingBuildings(client), listHousingFloors(client), listHousingApartments(client), listHousingRooms(client), listHousingEmployees(client), listHousingResidents(client), listHousingComplianceAlerts(client), listHousingLicenses(client), listHousingHseReports(client), listHousingOperations(client), listHousingIncidents(client), listHousingSurveys(client),
+    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client), listHousingNotificationData(client), listHousingCostAllocationData(client),
   ])
-  return { dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, ...notificationData }
+  return { dashboard, projects, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, ...notificationData, ...costAllocationData }
 }
 
 export async function createHousingSite(client, companyId, input) {
