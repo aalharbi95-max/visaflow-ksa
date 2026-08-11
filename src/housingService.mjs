@@ -111,6 +111,45 @@ export async function reviewHousingEmployeeStatusEvent(client, eventId, decision
   }), 'Unable to review employee status event.')
 }
 
+export async function listHousingNotificationData(client) {
+  const [settings, recipients, events, deliveries] = await Promise.all([
+    client.from('housing_notification_settings').select('*').maybeSingle(),
+    client.from('housing_notification_recipients').select('*, site:housing_sites(id,name)').order('name'),
+    client.from('housing_notification_events').select('*, site:housing_sites(id,name)').order('created_at', { ascending: false }).limit(200),
+    client.from('housing_notification_deliveries').select('*, event:housing_notification_events(id,event_type,severity,title_ar,title_en)').order('created_at', { ascending: false }).limit(200),
+  ])
+  return {
+    notificationSettings: throwIfError(settings, 'Unable to load notification settings.') || null,
+    notificationRecipients: throwIfError(recipients, 'Unable to load notification recipients.') || [],
+    notificationEvents: throwIfError(events, 'Unable to load notifications.') || [],
+    notificationDeliveries: throwIfError(deliveries, 'Unable to load notification deliveries.') || [],
+  }
+}
+
+export async function saveHousingNotificationSettings(client, payload) {
+  return throwIfError(await client.from('housing_notification_settings').upsert(payload, { onConflict: 'company_id' }).select().single(), 'Unable to save notification settings.')
+}
+
+export async function createHousingNotificationRecipient(client, payload) {
+  return throwIfError(await client.from('housing_notification_recipients').insert(payload).select().single(), 'Unable to create notification recipient.')
+}
+
+export async function deleteHousingNotificationRecipient(client, recipientId) {
+  return throwIfError(await client.from('housing_notification_recipients').delete().eq('id', required(recipientId, 'Recipient')).select().single(), 'Unable to delete notification recipient.')
+}
+
+export async function markHousingNotificationRead(client, eventId) {
+  return throwIfError(await client.rpc('housing_mark_notification_read', { p_event_id: required(eventId, 'Notification') }), 'Unable to mark notification as read.')
+}
+
+export async function retryHousingNotificationDelivery(client, deliveryId) {
+  return throwIfError(await client.rpc('housing_retry_notification_delivery', { p_delivery_id: required(deliveryId, 'Delivery') }), 'Unable to retry notification delivery.')
+}
+
+export async function prepareHousingWeeklyDigest(client) {
+  return throwIfError(await client.rpc('housing_prepare_weekly_digest'), 'Unable to prepare the weekly digest.')
+}
+
 export async function getHousingSession(client) {
   return throwIfError(await client.auth.getSession(), 'Unable to read the current session.')?.session || null
 }
@@ -199,11 +238,11 @@ async function listTable(client, table, orderColumn = 'created_at') {
 }
 
 export async function loadHousingWorkspaceData(client) {
-  const [dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents] = await Promise.all([
+  const [dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, notificationData] = await Promise.all([
     loadHousingDashboard(client), listHousingSites(client), listHousingBuildings(client), listHousingFloors(client), listHousingApartments(client), listHousingRooms(client), listHousingEmployees(client), listHousingResidents(client), listHousingComplianceAlerts(client), listHousingLicenses(client), listHousingHseReports(client), listHousingOperations(client), listHousingIncidents(client), listHousingSurveys(client),
-    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client),
+    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client), listHousingNotificationData(client),
   ])
-  return { dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents }
+  return { dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, ...notificationData }
 }
 
 export async function createHousingSite(client, companyId, input) {
