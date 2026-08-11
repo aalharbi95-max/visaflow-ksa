@@ -9,6 +9,9 @@ const messages = {
   },
 }
 
+messages.ar.reconciliation = 'المطابقة والربط الذكي'
+messages.en.reconciliation = 'Workforce Reconciliation'
+
 const HousingLanguageContext = createContext(null)
 
 export function HousingLanguageProvider({ children }) {

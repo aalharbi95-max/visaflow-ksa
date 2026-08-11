@@ -53,6 +53,43 @@ function throwIfError(result, fallbackMessage) {
   return result?.data
 }
 
+export async function listHousingReconciliationImports(client) {
+  return throwIfError(await client.from('housing_reconciliation_imports').select('*').order('created_at', { ascending: false }).limit(25), 'Unable to load reconciliation history.') || []
+}
+
+export async function listHousingReconciliationRows(client, importId) {
+  if (!importId) return []
+  return throwIfError(
+    await client.from('housing_reconciliation_rows').select('*, employee:housing_employees(id,employee_no,full_name), assignment:housing_assignments(id,status,site:housing_sites(id,name),room:housing_rooms(id,room_number),bed:housing_beds(id,bed_number))').eq('import_id', importId).order('row_number'),
+    'Unable to load reconciliation results.'
+  ) || []
+}
+
+export async function saveHousingReconciliation(client, companyId, input) {
+  const summary = input.summary || {}
+  const created = throwIfError(await client.from('housing_reconciliation_imports').insert({
+    company_id: required(companyId, 'Company'), file_name: required(input.fileName, 'File name'),
+    source_type: clean(input.sourceType) || 'HR', period_month: required(input.periodMonth, 'Period month'),
+    status: 'Processing', total_rows: summary.total || input.rows?.length || 0,
+    matched_rows: summary.matched || 0, exception_rows: summary.exceptions || 0, ghost_rows: summary.ghost || 0,
+  }).select().single(), 'Unable to create reconciliation import.')
+
+  try {
+    const rows = Array.isArray(input.rows) ? input.rows.map((row) => ({ ...row, company_id: companyId, import_id: created.id })) : []
+    for (let index = 0; index < rows.length; index += 500) {
+      throwIfError(await client.from('housing_reconciliation_rows').insert(rows.slice(index, index + 500)), 'Unable to save reconciliation results.')
+    }
+    return throwIfError(await client.from('housing_reconciliation_imports').update({ status: 'Completed', completed_at: new Date().toISOString() }).eq('id', created.id).select().single(), 'Unable to complete reconciliation import.')
+  } catch (error) {
+    await client.from('housing_reconciliation_imports').update({ status: 'Failed', completed_at: new Date().toISOString() }).eq('id', created.id)
+    throw error
+  }
+}
+
+export async function resolveHousingReconciliationRow(client, rowId, decision, note = '') {
+  return throwIfError(await client.rpc('housing_resolve_reconciliation_row', { p_row_id: required(rowId, 'Reconciliation row'), p_decision: required(decision, 'Decision'), p_note: clean(note) || null }), 'Unable to resolve reconciliation exception.')
+}
+
 export async function getHousingSession(client) {
   return throwIfError(await client.auth.getSession(), 'Unable to read the current session.')?.session || null
 }

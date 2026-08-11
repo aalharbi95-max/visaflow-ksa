@@ -190,6 +190,58 @@ body:has(.housing-app) { margin: 0; overflow-x: clip; background: var(--housing-
 .housing-table-panel th { height: 44px; padding: 0 17px; text-align: start; color: #76878b; background: #f8fafb; border-bottom: 1px solid var(--housing-border); font-size: 9px; font-weight: 700; }
 .housing-table-panel td { height: 65px; padding: 0 17px; color: #53686d; border-bottom: 1px solid #edf0f1; font-size: 10px; }
 .housing-table-panel td strong { color: var(--housing-text); font-size: 11px; }
+
+/* Workforce reconciliation */
+.housing-reconciliation-page { display: grid; gap: 16px; }
+.housing-reconciliation-upload .housing-panel-head h2 { font-size: 15px; }
+.housing-reconciliation-form { padding: 18px 20px; display: grid; grid-template-columns: minmax(230px,1.5fr) minmax(145px,.7fr) minmax(160px,.7fr) auto; align-items: end; gap: 14px; }
+.housing-reconciliation-form label { display: grid; gap: 7px; color: #61767b; font-size: 10px; font-weight: 700; }
+.housing-reconciliation-form select,.housing-reconciliation-form input,.housing-reconciliation-toolbar select { height: 42px; padding: 0 12px; border: 1px solid var(--housing-border); border-radius: 9px; background: #fff; color: var(--housing-text); font: inherit; outline: none; }
+.housing-file-drop { min-height: 82px; padding: 13px 18px; display: grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr 1fr; align-items: center; column-gap: 12px; border: 1px dashed #7abcb0; border-radius: 11px; background: #f3fbf9; color: #0c8e78; text-align: start; cursor: pointer; }
+.housing-file-drop svg { grid-row: 1 / 3; }
+.housing-file-drop strong { color: var(--housing-text); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.housing-file-drop small { color: var(--housing-muted); font-size: 9px; }
+.housing-file-drop:disabled { cursor: not-allowed; opacity: .65; }
+.housing-reconciliation-note { margin: 0 20px 15px; color: #a26700; font-size: 10px; }
+.housing-reconciliation-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
+.housing-reconciliation-metrics article { min-height: 90px; padding: 17px; display: flex; align-items: center; gap: 13px; }
+.housing-reconciliation-metrics article > div { display: grid; gap: 4px; }
+.housing-reconciliation-metrics small { color: var(--housing-muted); font-size: 9px; }
+.housing-reconciliation-metrics strong { color: var(--housing-text); font-size: 22px; }
+.housing-reconciliation-layout { display: grid; grid-template-columns: 240px minmax(0,1fr); gap: 14px; align-items: start; }
+.housing-reconciliation-history .housing-panel-head h2 { display: flex; align-items: center; gap: 7px; }
+.housing-reconciliation-history > div:last-child { max-height: 580px; overflow: auto; }
+.housing-reconciliation-history > div:last-child > button { width: 100%; padding: 13px 16px; display: grid; gap: 4px; border: 0; border-bottom: 1px solid #edf0f1; background: #fff; color: var(--housing-text); text-align: start; cursor: pointer; }
+.housing-reconciliation-history > div:last-child > button:hover,.housing-reconciliation-history > div:last-child > button.active { background: #eefaf7; }
+.housing-reconciliation-history button strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.housing-reconciliation-history button span,.housing-reconciliation-history button small { color: var(--housing-muted); font-size: 8px; }
+.housing-reconciliation-history button small { color: #c26b00; }
+.housing-reconciliation-toolbar { padding: 12px 16px; display: flex; gap: 10px; border-bottom: 1px solid #edf0f1; }
+.housing-reconciliation-toolbar .housing-search { flex: 1; }
+.housing-reconciliation-toolbar select { min-width: 145px; }
+.housing-reconciliation-results table { min-width: 1080px; }
+.housing-reconciliation-results td { height: 76px; white-space: normal; min-width: 120px; }
+.housing-reconciliation-results td:nth-child(6) { min-width: 190px; max-width: 260px; }
+.housing-reconciliation-status { display: inline-flex; padding: 4px 8px; border-radius: 999px; font-size: 8px; font-weight: 800; white-space: nowrap; }
+.housing-reconciliation-status.green { background: #e5f7f2; color: #078b74; }
+.housing-reconciliation-status.red { background: #fdebed; color: #c53d4a; }
+.housing-reconciliation-status.amber { background: #fff3df; color: #a96700; }
+.housing-reconciliation-status.blue { background: #e9f4fc; color: #2776a7; }
+.housing-reconciliation-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.housing-reconciliation-actions button { padding: 5px 7px; border: 1px solid var(--housing-border); border-radius: 6px; background: #fff; color: #31545b; font-size: 8px; cursor: pointer; }
+.housing-reconciliation-actions button:first-child { border-color: #eab56a; color: #a55e00; background: #fff8ed; }
+.housing-reconciliation-empty { min-height: 220px; display: grid; place-items: center; align-content: center; gap: 9px; color: #95a5a9; }
+.housing-reconciliation-empty p { margin: 0; font-size: 11px; }
+
+@media (max-width: 1100px) {
+  .housing-reconciliation-form { grid-template-columns: 1fr 1fr; }
+  .housing-reconciliation-layout { grid-template-columns: 1fr; }
+  .housing-reconciliation-history > div:last-child { max-height: 190px; }
+}
+@media (max-width: 720px) {
+  .housing-reconciliation-form,.housing-reconciliation-metrics { grid-template-columns: 1fr; }
+  .housing-reconciliation-toolbar { flex-direction: column; }
+}
 .housing-person { display: flex; align-items: center; gap: 9px; }
 .housing-person > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: #e6f2ef; color: var(--housing-teal); font-weight: 800; }
 .housing-person > div { display: flex; flex-direction: column; }

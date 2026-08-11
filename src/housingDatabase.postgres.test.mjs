@@ -58,6 +58,8 @@ before(async () => {
   await db.exec(ajeerMigration)
   const hierarchyMigration = await readFile(new URL('../supabase/housing/migrations/0007_housing_hierarchy_demo_portfolio.sql', import.meta.url), 'utf8')
   await db.exec(hierarchyMigration)
+  const reconciliationMigration = await readFile(new URL('../supabase/housing/migrations/0008_reconciliation_engine.sql', import.meta.url), 'utf8')
+  await db.exec(reconciliationMigration)
 })
 
 after(async () => { await db?.close() })
@@ -67,7 +69,14 @@ test('standalone migration creates all core housing tables', async () => {
     select count(*)::int as count from information_schema.tables
     where table_schema='public' and table_name like 'housing_%'
   `)
-  assert.equal(result.rows[0].count, 29)
+  assert.equal(result.rows[0].count, 32)
+})
+
+test('reconciliation schema supports reviewed checkout without automatic eviction', async () => {
+  const tables = await db.query("select table_name from information_schema.tables where table_schema='public' and table_name like 'housing_reconciliation_%' order by table_name")
+  assert.deepEqual(tables.rows.map((row) => row.table_name), ['housing_reconciliation_imports','housing_reconciliation_rows'])
+  const functionResult = await db.query("select count(*)::int as count from pg_proc where proname='housing_resolve_reconciliation_row'")
+  assert.equal(functionResult.rows[0].count, 1)
 })
 
 test('first authenticated user can create an isolated workspace', async () => {

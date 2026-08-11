@@ -131,3 +131,22 @@ test('housing contracts support preview and Ajeer details', async () => {
   assert.match(migration, /ajeer_expiry_date/)
   assert.match(migration, /housing_contracts_ajeer_status_check/)
 })
+
+test('workforce reconciliation is connected to imports, review and approved checkout', async () => {
+  const [app, page, engine, service, migration] = await Promise.all([
+    readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./HousingReconciliationPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./housingReconciliation.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('./housingService.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/housing/migrations/0008_reconciliation_engine.sql', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /HousingReconciliationPage/)
+  assert.match(page, /accept="\.xlsx,\.xls,\.csv"/)
+  assert.match(page, /approveCheckout/)
+  assert.match(engine, /Ghost Occupancy/)
+  assert.match(engine, /Duplicate identifier/)
+  assert.match(service, /saveHousingReconciliation/)
+  assert.match(service, /housing_resolve_reconciliation_row/)
+  assert.match(migration, /housing_audit_log/)
+  assert.match(migration, /status='Ended'/)
+})
