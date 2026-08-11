@@ -90,6 +90,27 @@ export async function resolveHousingReconciliationRow(client, rowId, decision, n
   return throwIfError(await client.rpc('housing_resolve_reconciliation_row', { p_row_id: required(rowId, 'Reconciliation row'), p_decision: required(decision, 'Decision'), p_note: clean(note) || null }), 'Unable to resolve reconciliation exception.')
 }
 
+export async function listHousingEmployeeStatusEvents(client) {
+  return throwIfError(
+    await client.from('housing_employee_status_events').select('*, employee:housing_employees(id,employee_no,full_name,iqama_no,status,project:housing_projects(id,code,name)), assignment:housing_assignments(id,status,site:housing_sites(id,name),room:housing_rooms(id,room_number),bed:housing_beds(id,bed_number))').order('effective_date', { ascending: false }).limit(250),
+    'Unable to load employee leave and exit events.'
+  ) || []
+}
+
+export async function createHousingEmployeeStatusEvent(client, input) {
+  return throwIfError(await client.rpc('housing_create_employee_status_event', {
+    p_employee_id: required(input.employeeId, 'Employee'), p_event_type: required(input.eventType, 'Event type'),
+    p_effective_date: required(input.effectiveDate, 'Effective date'), p_expected_return_date: input.expectedReturnDate || null,
+    p_source: clean(input.source) || 'Manual', p_source_reference: clean(input.sourceReference) || null,
+  }), 'Unable to create employee status event.')
+}
+
+export async function reviewHousingEmployeeStatusEvent(client, eventId, decision, note = '') {
+  return throwIfError(await client.rpc('housing_review_employee_status_event', {
+    p_event_id: required(eventId, 'Employee status event'), p_decision: required(decision, 'Decision'), p_note: clean(note) || null,
+  }), 'Unable to review employee status event.')
+}
+
 export async function getHousingSession(client) {
   return throwIfError(await client.auth.getSession(), 'Unable to read the current session.')?.session || null
 }
@@ -178,11 +199,11 @@ async function listTable(client, table, orderColumn = 'created_at') {
 }
 
 export async function loadHousingWorkspaceData(client) {
-  const [dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills] = await Promise.all([
+  const [dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents] = await Promise.all([
     loadHousingDashboard(client), listHousingSites(client), listHousingBuildings(client), listHousingFloors(client), listHousingApartments(client), listHousingRooms(client), listHousingEmployees(client), listHousingResidents(client), listHousingComplianceAlerts(client), listHousingLicenses(client), listHousingHseReports(client), listHousingOperations(client), listHousingIncidents(client), listHousingSurveys(client),
-    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'),
+    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client),
   ])
-  return { dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills }
+  return { dashboard, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents }
 }
 
 export async function createHousingSite(client, companyId, input) {

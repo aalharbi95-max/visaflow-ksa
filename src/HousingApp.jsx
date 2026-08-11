@@ -59,6 +59,7 @@ import { HousingLanguageProvider, useHousingLanguage } from "./housingI18n.jsx";
 import { useHousingWorkspaceData } from "./useHousingWorkspaceData.js";
 import HousingTestCenter from "./HousingTestCenter.jsx";
 import HousingReconciliationPage from "./HousingReconciliationPage.jsx";
+import HousingEmployeeStatusPage from "./HousingEmployeeStatusPage.jsx";
 import { LiveAddHousingModal, LiveAllocations, LiveDashboard, LiveDataTable, LiveHousingList, LiveUtilities } from "./HousingLiveViews.jsx";
 
 const navGroups = [
@@ -74,6 +75,7 @@ const navGroups = [
       { id: "residents", labelKey: "residents", icon: Users },
       { id: "allocations", labelKey: "allocations", icon: ArrowRightLeft },
       { id: "reconciliation", labelKey: "reconciliation", icon: FileText },
+      { id: "employee-status", labelKey: "employeeStatus", icon: CalendarDays },
       { id: "smart-occupancy", labelKey: "smartOccupancy", icon: BedDouble },
     ],
   },
@@ -102,11 +104,11 @@ const navGroups = [
 
 const ROLE_PAGE_ACCESS = {
   Admin: null,
-  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","reports","settings","test-center"],
-  "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","reports","settings","test-center"],
+  "Housing Manager": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","reports","settings","test-center"],
+  "Housing Supervisor": ["dashboard","housing","rooms","residents","allocations","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","reports","settings","test-center"],
   Maintenance: ["dashboard","housing","rooms","maintenance","assets","reports","settings"],
   Finance: ["dashboard","housing","utilities","contracts","reports","settings"],
-  Viewer: ["dashboard","housing","rooms","residents","reconciliation","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","reports","settings"],
+  Viewer: ["dashboard","housing","rooms","residents","reconciliation","employee-status","smart-occupancy","maintenance","inspections","assets","incidents","compliance","operations","welfare","utilities","contracts","reports","settings"],
 };
 
 const pageMeta = {
@@ -131,6 +133,7 @@ const pageMeta = {
 };
 
 pageMeta.reconciliation = ["المطابقة والربط الذكي", "مطابقة قوائم الموارد البشرية والبصمة مع المقيمين واكتشاف التسكين الوهمي"];
+pageMeta["employee-status"] = ["الإجازات والخروج ونهاية الخدمة", "تنبيهات حالة العامل وقرارات الإخلاء وإتاحة الأسرة بعد اعتماد المشرف"];
 
 const pageMetaEn = {
   dashboard: ["Dashboard", "A complete view of housing, occupancy and operations"],
@@ -154,6 +157,7 @@ const pageMetaEn = {
 };
 
 pageMetaEn.reconciliation = ["Workforce Reconciliation", "Match HR and biometric lists with residents and detect ghost occupancy"];
+pageMetaEn["employee-status"] = ["Leave, Exit & End of Service", "Employee status alerts and supervisor-approved checkout decisions"];
 
 const housings = [
   { id: "H-001", name: "سكن النخيل", city: "الرياض", project: "مشروع المترو", manager: "أحمد الغامدي", capacity: 240, occupied: 218, status: "نشط", color: "teal", latitude: 24.7136, longitude: 46.6753 },
@@ -433,7 +437,11 @@ function HousingWorkspace({ backendContext }) {
     try { const result = await live.createRecord(table, input); notify(t("saved")); return result; } catch (error) { throw error; }
   };
   const signOut = async () => { await client?.auth.signOut(); };
-  const badgeFor = (id) => id === "compliance" && live.data.alerts.filter((item) => item.status === "Open").length ? live.data.alerts.filter((item) => item.status === "Open").length : null;
+  const badgeFor = (id) => {
+    if (id === "compliance") return live.data.alerts.filter((item) => item.status === "Open").length || null;
+    if (id === "employee-status") return live.data.employeeStatusEvents.filter((item) => item.status === "Open").length || null;
+    return null;
+  };
 
   return <div className="housing-app" dir={dir} data-language={language}>
     {sidebarOpen && <button className="housing-overlay" aria-label="close" onClick={() => setSidebarOpen(false)} />}
@@ -456,6 +464,7 @@ function HousingWorkspace({ backendContext }) {
         {page === "residents" && <LiveDataTable type="residents" data={live.data} />}
         {page === "allocations" && <LiveAllocations data={live.data} goTo={goTo} />}
         {page === "reconciliation" && <HousingReconciliationPage client={client} companyId={backendContext?.company?.id} data={live.data} canManage={["Admin","Housing Manager","Housing Supervisor"].includes(currentRole)} />}
+        {page === "employee-status" && <HousingEmployeeStatusPage client={client} data={live.data} canManage={["Admin","Housing Manager","Housing Supervisor"].includes(currentRole)} />}
         {page === "test-center" && <HousingTestCenter data={live.data} loading={live.loading} saving={live.saving} error={live.error} onSeed={live.seedTestData} onAssign={live.assignEmployee} onRefresh={live.refresh} onAcknowledge={live.acknowledgeAlert} />}
         {page === "smart-occupancy" && <SmartOccupancyPage data={live.data} />}
         {page === "utilities" && <LiveUtilities data={live.data} onCreate={saveRecord} saving={live.saving} />}
