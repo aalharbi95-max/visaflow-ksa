@@ -71,6 +71,8 @@ before(async () => {
   await db.exec(costAllocationMigration)
   const inventoryMigration = await readFile(new URL('../supabase/housing/migrations/0012_inventory_spare_parts.sql', import.meta.url), 'utf8')
   await db.exec(inventoryMigration)
+  const gateMigration = await readFile(new URL('../supabase/housing/migrations/0013_security_gate_control.sql', import.meta.url), 'utf8')
+  await db.exec(gateMigration)
 })
 
 after(async () => { await db?.close() })
@@ -80,7 +82,7 @@ test('standalone migration creates all core housing tables', async () => {
     select count(*)::int as count from information_schema.tables
     where table_schema='public' and table_name like 'housing_%'
   `)
-  assert.equal(result.rows[0].count, 44)
+  assert.equal(result.rows[0].count, 47)
 })
 
 test('inventory receipt and maintenance issue update stock and actual cost', async () => {
@@ -97,6 +99,16 @@ test('inventory receipt and maintenance issue update stock and actual cost', asy
   const maintenance = await asUser(USER_D, () => db.query('select actual_cost from public.housing_maintenance_requests where id=$1',[request.rows[0].id]))
   assert.equal(Number(balance.rows[0].quantity),7)
   assert.equal(Number(maintenance.rows[0].actual_cost),75)
+})
+
+test('gate control records visitors and enforces checkout transition', async () => {
+  const company=await asUser(USER_D,()=>db.query('select public.housing_current_company_id() id')); const companyId=company.rows[0].id
+  const site=await asUser(USER_D,()=>db.query("insert into public.housing_sites(company_id,code,name,city) values($1,'GATE-S','Gate Site','Riyadh') returning id",[companyId]))
+  const visitor=await asUser(USER_D,()=>db.query("insert into public.housing_gate_visitors(company_id,site_id,visit_no,visitor_name,purpose) values($1,$2,'VIS-T1','Test Visitor','Maintenance visit') returning id,status",[companyId,site.rows[0].id]))
+  assert.equal(visitor.rows[0].status,'Checked In')
+  const checkedOut=await asUser(USER_D,()=>db.query("select public.housing_gate_transition('Visitor',$1,'Checkout') record",[visitor.rows[0].id]))
+  assert.equal(checkedOut.rows[0].record.status,'Checked Out')
+  await assert.rejects(()=>asUser(USER_D,()=>db.query("select public.housing_gate_transition('Visitor',$1,'Checkout')",[visitor.rows[0].id])),/unavailable|not allowed/i)
 })
 
 test('daily cost allocation follows assignment dates and project cost centers', async () => {

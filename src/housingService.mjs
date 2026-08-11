@@ -166,6 +166,23 @@ export async function listHousingInventoryData(client) {
   }
 }
 
+export async function listHousingGateData(client) {
+  const [visitors, deliveries, passes] = await Promise.all([
+    client.from('housing_gate_visitors').select('*, site:housing_sites(id,code,name)').order('entry_at', { ascending: false }).limit(250),
+    client.from('housing_gate_deliveries').select('*, site:housing_sites(id,code,name)').order('arrived_at', { ascending: false }).limit(250),
+    client.from('housing_gate_passes').select('*, site:housing_sites(id,code,name), asset:housing_assets(id,asset_no,name)').order('created_at', { ascending: false }).limit(250),
+  ])
+  return {
+    gateVisitors: throwIfError(visitors, 'Unable to load visitors.') || [],
+    gateDeliveries: throwIfError(deliveries, 'Unable to load deliveries.') || [],
+    gatePasses: throwIfError(passes, 'Unable to load gate passes.') || [],
+  }
+}
+
+export async function transitionHousingGateRecord(client, entity, id, action) {
+  return throwIfError(await client.rpc('housing_gate_transition', { p_entity: required(entity, 'Gate entity'), p_id: required(id, 'Gate record'), p_action: required(action, 'Gate action') }), 'Unable to update gate record.')
+}
+
 export async function postHousingInventoryTransaction(client, input) {
   return throwIfError(await client.rpc('housing_post_inventory_transaction', {
     p_location_id: required(input.locationId, 'Warehouse'), p_item_id: required(input.itemId, 'Item'),
@@ -300,11 +317,11 @@ async function listTable(client, table, orderColumn = 'created_at') {
 }
 
 export async function loadHousingWorkspaceData(client) {
-  const [dashboard, projects, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, notificationData, costAllocationData, inventoryData] = await Promise.all([
+  const [dashboard, projects, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, notificationData, costAllocationData, inventoryData, gateData] = await Promise.all([
     loadHousingDashboard(client), listTable(client, 'housing_projects', 'name'), listHousingSites(client), listHousingBuildings(client), listHousingFloors(client), listHousingApartments(client), listHousingRooms(client), listHousingEmployees(client), listHousingResidents(client), listHousingComplianceAlerts(client), listHousingLicenses(client), listHousingHseReports(client), listHousingOperations(client), listHousingIncidents(client), listHousingSurveys(client),
-    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client), listHousingNotificationData(client), listHousingCostAllocationData(client), listHousingInventoryData(client),
+    listTable(client, 'housing_maintenance_requests'), listTable(client, 'housing_inspections'), listTable(client, 'housing_assets'), listTable(client, 'housing_contracts'), listTable(client, 'housing_utility_accounts'), listTable(client, 'housing_utility_bills'), listHousingEmployeeStatusEvents(client), listHousingNotificationData(client), listHousingCostAllocationData(client), listHousingInventoryData(client), listHousingGateData(client),
   ])
-  return { dashboard, projects, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, ...notificationData, ...costAllocationData, ...inventoryData }
+  return { dashboard, projects, sites, buildings, floors, apartments, rooms, employees, assignments, alerts, licenses, hseReports, operations, incidents, surveys, maintenance, inspections, assets, contracts, utilityAccounts, utilityBills, employeeStatusEvents, ...notificationData, ...costAllocationData, ...inventoryData, ...gateData }
 }
 
 export async function createHousingSite(client, companyId, input) {
@@ -348,6 +365,7 @@ export async function createHousingRecord(client, table, companyId, input) {
     'housing_incidents',
     'housing_licenses', 'housing_hse_reports', 'housing_operation_schedules',
     'housing_disciplinary_actions', 'housing_welfare_surveys', 'housing_welfare_responses',
+    'housing_gate_visitors', 'housing_gate_deliveries', 'housing_gate_passes',
   ])
   if (!allowedTables.has(table)) throw new Error('Unsupported housing record type.')
   return throwIfError(
