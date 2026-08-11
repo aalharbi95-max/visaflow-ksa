@@ -1,5 +1,7 @@
 {
   "scripts": {
+    "test:housing": "node --test src/housingService.test.mjs src/housingSupabaseConfig.test.mjs src/housingCompliance.test.mjs src/housingCostReport.test.mjs src/housingExcelExport.test.mjs src/housingUiReadiness.test.mjs src/housingSubscriptionIntegration.test.mjs",
+    "test:housing-db": "node --test src/housingDatabase.postgres.test.mjs",
     "test:company-users": "node --test src/companyUserManagement.test.mjs",
     "test:talent-access": "node --test src/talentAccess.test.mjs",
     "dev": "vite --host 0.0.0.0",
@@ -33,7 +35,8 @@
     "react-dom": "latest",
     "tailwindcss": "latest",
     "vite": "latest",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",

@@ -200,6 +200,7 @@ const PAGES = [
 "Platform Intelligence",
 "Client Usage Monitor",
  "Companies Management",
+ "Housing Subscriptions",
  "Platform Users",
  "Talent Dashboard",
  "Subscription Invoices",
@@ -257,6 +258,7 @@ const SIDEBAR_GROUPS = [
   "Platform Dashboard",
   "Client Usage Monitor",
   "Companies Management",
+  "Housing Subscriptions",
   "Platform Users",
   "Talent Dashboard",
   "Subscription Invoices",
@@ -5550,6 +5552,7 @@ const PUBLIC_LANDING_COPY = {
       home: "الرئيسية",
       companies: "حلول الشركات",
       talent: "منصة المواهب",
+      housing: "إدارة السكنات",
       interviews: "المقابلات الذكية",
       about: "عن المنصة",
       login: "تسجيل الدخول",
@@ -5563,6 +5566,7 @@ const PUBLIC_LANDING_COPY = {
       promise: "من الطلب إلى المباشرة… رحلة توظيف واحدة، ذكية ومتكاملة.",
       company: "ابدأ تجربة شركتك",
       candidate: "سجّل كباحث عن عمل",
+      housing: "فتح برنامج السكنات",
       trust: ["صلاحيات حسب الدور", "عزل بيانات الشركات", "قرار بشري مدعوم بالذكاء الاصطناعي"],
     },
     mockup: {
@@ -5586,6 +5590,7 @@ const PUBLIC_LANDING_COPY = {
         { icon: "🏢", title: "الشركات", text: "إدارة التوظيف والاستقدام والتأشيرات.", action: "ابدأ كشركة", kind: "login" },
         { icon: "◎", title: "المرشحون", text: "أنشئ ملفك المهني وارفع سيرتك الذاتية.", action: "انضم إلى المواهب", kind: "talent" },
         { icon: "◆", title: "الوكالات", text: "إدارة المرشحين والطلبات والمتابعة.", action: "دخول الوكالة", kind: "login" },
+        { icon: "🏠", title: "إدارة السكنات", text: "إدارة السكنات والغرف والتسكين والامتثال والسلامة وتكلفة العامل.", action: "فتح برنامج السكنات", kind: "housing" },
       ],
     },
     capabilities: {
@@ -5600,6 +5605,7 @@ const PUBLIC_LANDING_COPY = {
         ["بوابة الوكالات", "إدارة تقديم المرشحين والطلبات والمتابعة."],
         ["التقارير التنفيذية", "مؤشرات تشغيلية تساعد الفرق على اتخاذ القرار."],
         ["الأمان والصلاحيات", "عزل بيانات الشركات ووصول مضبوط حسب الدور."],
+        ["إدارة السكنات", "إدارة الإشغال والامتثال والسلامة والتكاليف التشغيلية للسكنات."],
       ],
     },
     journey: {
@@ -5640,6 +5646,7 @@ const PUBLIC_LANDING_COPY = {
       home: "Home",
       companies: "Company Solutions",
       talent: "Talent Platform",
+      housing: "Housing",
       interviews: "Smart Interviews",
       about: "About",
       login: "Sign in",
@@ -5653,6 +5660,7 @@ const PUBLIC_LANDING_COPY = {
       promise: "From request to joining—one connected, intelligent hiring journey.",
       company: "Start your company journey",
       candidate: "Register as a job seeker",
+      housing: "Open Housing",
       trust: ["Role-based access", "Company data isolation", "Human decisions supported by AI"],
     },
     mockup: {
@@ -5676,6 +5684,7 @@ const PUBLIC_LANDING_COPY = {
         { icon: "🏢", title: "Companies", text: "Manage recruitment, mobilization, and visas.", action: "Start as a company", kind: "login" },
         { icon: "◎", title: "Candidates", text: "Build your professional profile and upload your CV.", action: "Join VisaFlow Talent", kind: "talent" },
         { icon: "◆", title: "Agencies", text: "Manage candidates, requests, and follow-up.", action: "Agency sign in", kind: "login" },
+        { icon: "🏠", title: "Housing Management", text: "Manage housing sites, rooms, occupancy, compliance, safety, and worker costs.", action: "Open Housing", kind: "housing" },
       ],
     },
     capabilities: {
@@ -5690,6 +5699,7 @@ const PUBLIC_LANDING_COPY = {
         ["Agency portal", "Manage candidate submissions, requests, and follow-up."],
         ["Executive reporting", "Operational indicators that support better decisions."],
         ["Security and access", "Tenant isolation and controlled role-based access."],
+        ["Housing management", "Manage occupancy, compliance, safety, and housing operating costs."],
       ],
     },
     journey: {
@@ -5725,7 +5735,7 @@ const PUBLIC_LANDING_COPY = {
   },
 };
 
-function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
+function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHousing }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [trialForm, setTrialForm] = useState({ company_name: "", admin_name: "", email: "", phone: "", job_title: "", team_size: "1-5", website: "", company_fax: "", accepted_terms: false });
   const [trialSubmitting, setTrialSubmitting] = useState(false);
@@ -5791,6 +5801,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
           <a href="#home" onClick={handleAnchorClick}>{copy.nav.home}</a>
           <a href="#solutions" onClick={handleAnchorClick}>{copy.nav.companies}</a>
           <a href="#talent" onClick={handleAnchorClick}>{copy.nav.talent}</a>
+          <a href="/housing" onClick={handleAnchorClick}>{copy.nav.housing}</a>
           <a href="#interviews" onClick={handleAnchorClick}>{copy.nav.interviews}</a>
           <a href="#about" onClick={handleAnchorClick}>{copy.nav.about}</a>
           <div className="vf-public-mobile-actions">
@@ -5820,6 +5831,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
               <div className="vf-public-button-row">
                 <a className="vf-public-primary" href={demoHref}>{copy.hero.company}</a>
                 <button type="button" className="vf-public-secondary" onClick={onTalent}>{copy.hero.candidate}</button>
+                <button type="button" className="vf-public-secondary" onClick={onHousing}>{copy.hero.housing}</button>
               </div>
               <ul className="vf-public-trust-list">
                 {copy.hero.trust.map((item) => <li key={item}><span>✓</span>{item}</li>)}
@@ -5863,7 +5875,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent }) {
                   <span className="vf-public-path-icon">{item.icon}</span>
                   <h3>{item.title}</h3>
                   <p>{item.text}</p>
-                  <button type="button" onClick={item.kind === "talent" ? onTalent : onLogin}>{item.action}<span aria-hidden="true">↗</span></button>
+                  <button type="button" onClick={item.kind === "talent" ? onTalent : item.kind === "housing" ? onHousing : onLogin}>{item.action}<span aria-hidden="true">↗</span></button>
                 </article>
               ))}
             </div>
@@ -6729,6 +6741,13 @@ const emptyPlatformClient = {
   talent_access_tier: "None",
   talent_profile_limit: 0,
   talent_profile_unlimited: false,
+  housing_access_enabled: false,
+  housing_plan: "Standard",
+  housing_subscription_status: "Inactive",
+  housing_start_date: "",
+  housing_end_date: "",
+  housing_monthly_amount: 0,
+  housing_users_limit: 0,
   ai_agent_enabled: false,
   ai_agent_plan: "Standard",
   ai_agent_trial_start: "",
@@ -6743,6 +6762,7 @@ const emptyPlatformClient = {
 
 const emptySubscriptionInvoice = {
   client_id: "",
+  subscription_type: "Recruitment",
   invoice_no: "",
   amount: 0,
   status: "Unpaid",
@@ -6783,6 +6803,7 @@ const PLATFORM_PAGES = [
   "Platform Intelligence",
   "Client Usage Monitor",
   "Companies Management",
+  "Housing Subscriptions",
   "Platform Users",
   "Talent Dashboard",
   "Subscription Invoices",
@@ -6796,6 +6817,7 @@ const PLATFORM_ACCOUNT_PAGES = [
   "Platform Dashboard",
   "Platform Intelligence",
   "Companies Management",
+  "Housing Subscriptions",
   "Platform Users",
   "Talent Dashboard",
   "Subscription Invoices",
@@ -25910,7 +25932,7 @@ function printSubscriptionInvoice(invoice) {
           </thead>
           <tbody>
             <tr>
-              <td>VisaFlow KSA Monthly Subscription</td>
+              <td>VisaFlow KSA ${invoice.subscription_type || "Recruitment"} Monthly Subscription</td>
               <td>${amount.toLocaleString()} SAR</td>
             </tr>
             <tr>
@@ -25981,6 +26003,16 @@ const platformDashboard = useMemo(() => {
     0
   );
 
+  const activeHousingClients = platformClients.filter((client) =>
+    client.housing_access_enabled
+    && ["active", "trial"].includes(String(client.housing_subscription_status || "").toLowerCase())
+    && (!client.housing_end_date || new Date(client.housing_end_date) >= today)
+  );
+  const housingMonthlyRevenue = activeHousingClients.reduce(
+    (sum, client) => sum + Number(client.housing_monthly_amount || 0),
+    0
+  );
+
   const unpaidInvoices = subscriptionInvoices.filter((invoice) =>
     String(invoice.status || "").toLowerCase() !== "paid"
   );
@@ -26007,7 +26039,10 @@ const platformDashboard = useMemo(() => {
     suspendedClients: suspendedClients.length,
     expiringThisMonth: expiringThisMonth.length,
     monthlyRevenue,
-    annualRevenue: monthlyRevenue * 12,
+    housingSubscriptions: activeHousingClients.length,
+    housingMonthlyRevenue,
+    totalMonthlyRevenue: monthlyRevenue + housingMonthlyRevenue,
+    annualRevenue: (monthlyRevenue + housingMonthlyRevenue) * 12,
     unpaidInvoices: unpaidInvoices.length,
     unpaidAmount,
     overdueInvoices: overdueInvoices.length,
@@ -26087,6 +26122,13 @@ function editPlatformClient(item) {
     talent_access_tier: item.talent_access_tier || "None",
     talent_profile_limit: Number(item.talent_profile_limit || 0),
     talent_profile_unlimited: isTalentProfileUnlimited(item.talent_profile_limit),
+    housing_access_enabled: Boolean(item.housing_access_enabled),
+    housing_plan: item.housing_plan || "Standard",
+    housing_subscription_status: item.housing_subscription_status || "Inactive",
+    housing_start_date: item.housing_start_date || "",
+    housing_end_date: item.housing_end_date || "",
+    housing_monthly_amount: Number(item.housing_monthly_amount || 0),
+    housing_users_limit: Number(item.housing_users_limit || 0),
     ai_agent_enabled: Boolean(item.ai_agent_enabled),
     ai_agent_plan: item.ai_agent_plan || "Standard",
     ai_agent_trial_start: item.ai_agent_trial_start || "",
@@ -26143,6 +26185,10 @@ async function savePlatformClient() {
   if (platformClientForm.talent_access_enabled && !platformClientForm.talent_profile_unlimited && Number(platformClientForm.talent_profile_limit || 0) <= 0) {
     return alert("Set a visible Talent Profiles Limit greater than zero when VisaFlow Talent Access is enabled.");
   }
+  if (platformClientForm.housing_access_enabled) {
+    if (!platformClientForm.housing_start_date || !platformClientForm.housing_end_date) return alert("Set the Housing subscription start and end dates.");
+    if (new Date(platformClientForm.housing_end_date) < new Date(platformClientForm.housing_start_date)) return alert("Housing subscription end date must be after the start date.");
+  }
   if (platformClientForm.ai_agent_enabled && platformClientForm.ai_agent_plan === "Professional Trial") {
     if (!platformClientForm.ai_agent_trial_start || !platformClientForm.ai_agent_trial_end) return alert("Set the AI Agent Professional trial start and end dates.");
     if (new Date(platformClientForm.ai_agent_trial_end) < new Date(platformClientForm.ai_agent_trial_start)) return alert("AI Agent trial end date must be after the start date.");
@@ -26178,6 +26224,13 @@ async function savePlatformClient() {
       unlimited: platformClientForm.talent_profile_unlimited,
       limit: platformClientForm.talent_profile_limit,
     }),
+    housing_access_enabled: Boolean(platformClientForm.housing_access_enabled),
+    housing_plan: platformClientForm.housing_access_enabled ? (platformClientForm.housing_plan || "Standard") : "Standard",
+    housing_subscription_status: platformClientForm.housing_access_enabled ? (platformClientForm.housing_subscription_status || "Active") : "Inactive",
+    housing_start_date: platformClientForm.housing_access_enabled ? (platformClientForm.housing_start_date || null) : null,
+    housing_end_date: platformClientForm.housing_access_enabled ? (platformClientForm.housing_end_date || null) : null,
+    housing_monthly_amount: platformClientForm.housing_access_enabled ? Math.max(0, Number(platformClientForm.housing_monthly_amount || 0)) : 0,
+    housing_users_limit: platformClientForm.housing_access_enabled ? Math.max(0, Number(platformClientForm.housing_users_limit || 0)) : 0,
     ai_agent_enabled: Boolean(platformClientForm.ai_agent_enabled),
     ai_agent_plan: platformClientForm.ai_agent_enabled ? (platformClientForm.ai_agent_plan || "Professional") : "Standard",
     ai_agent_trial_start: platformClientForm.ai_agent_plan === "Professional Trial" ? (platformClientForm.ai_agent_trial_start || null) : null,
@@ -26200,6 +26253,13 @@ async function savePlatformClient() {
         ai_agent_trial_start: _aiAgentTrialStart,
         ai_agent_trial_end: _aiAgentTrialEnd,
         ai_agent_monthly_credit_limit: _aiAgentMonthlyCreditLimit,
+        housing_access_enabled: _housingAccessEnabled,
+        housing_plan: _housingPlan,
+        housing_subscription_status: _housingSubscriptionStatus,
+        housing_start_date: _housingStartDate,
+        housing_end_date: _housingEndDate,
+        housing_monthly_amount: _housingMonthlyAmount,
+        housing_users_limit: _housingUsersLimit,
         ...provisionerCompanyPayload
       } = companyPayload;
       const provisionedCompany = await invokePlatformCompanyProvisioner({
@@ -26223,6 +26283,13 @@ async function savePlatformClient() {
             ai_agent_trial_start: companyPayload.ai_agent_trial_start,
             ai_agent_trial_end: companyPayload.ai_agent_trial_end,
             ai_agent_monthly_credit_limit: companyPayload.ai_agent_monthly_credit_limit,
+            housing_access_enabled: companyPayload.housing_access_enabled,
+            housing_plan: companyPayload.housing_plan,
+            housing_subscription_status: companyPayload.housing_subscription_status,
+            housing_start_date: companyPayload.housing_start_date,
+            housing_end_date: companyPayload.housing_end_date,
+            housing_monthly_amount: companyPayload.housing_monthly_amount,
+            housing_users_limit: companyPayload.housing_users_limit,
           })
           .eq("operational_company_id", provisionedOperationalCompanyId);
         if (entitlementUpdateError) throw entitlementUpdateError;
@@ -26421,6 +26488,7 @@ function editSubscriptionInvoice(item) {
   setSubscriptionInvoiceEditingId(item.id);
   setSubscriptionInvoiceForm({
     client_id: item.client_id || "",
+    subscription_type: item.subscription_type || "Recruitment",
     invoice_no: item.invoice_no || "",
     amount: item.amount || 0,
     status: item.status || "Unpaid",
@@ -26450,6 +26518,7 @@ async function saveSubscriptionInvoice() {
 
   const payload = {
     client_id: validClient.id,
+    subscription_type: subscriptionInvoiceForm.subscription_type || "Recruitment",
     invoice_no: subscriptionInvoiceForm.invoice_no || generatePlatformNo("SUB", subscriptionInvoices, "invoice_no", 5),
     amount: Number(subscriptionInvoiceForm.amount || 0),
     status: subscriptionInvoiceForm.status || "Unpaid",
@@ -26468,7 +26537,7 @@ async function saveSubscriptionInvoice() {
   alert(subscriptionInvoiceEditingId ? "Invoice updated successfully" : `Invoice saved: ${payload.invoice_no}`);
 }
 
-async function createSubscriptionInvoiceForClient(client) {
+async function createSubscriptionInvoiceForClient(client, subscriptionType = "Recruitment") {
   if (!canManagePlatform) return alert("You do not have permission to generate subscription invoices.");
   if (!client?.id && !client?.company_name) return alert("Company is required.");
 
@@ -26479,7 +26548,7 @@ async function createSubscriptionInvoiceForClient(client) {
   if (client?.id) {
     const { data, error } = await supabase
       .from("platform_clients")
-      .select("id, company_name, monthly_amount")
+      .select("id, company_name, monthly_amount, housing_monthly_amount, housing_access_enabled")
       .eq("id", client.id)
       .maybeSingle();
 
@@ -26489,7 +26558,7 @@ async function createSubscriptionInvoiceForClient(client) {
   if (!validClient && client?.company_name) {
     const { data, error } = await supabase
       .from("platform_clients")
-      .select("id, company_name, monthly_amount")
+      .select("id, company_name, monthly_amount, housing_monthly_amount, housing_access_enabled")
       .eq("company_name", client.company_name)
       .maybeSingle();
 
@@ -26501,7 +26570,10 @@ async function createSubscriptionInvoiceForClient(client) {
     return alert("Company record was not found in platform_clients. Please refresh the page and try again.");
   }
 
-  const amount = Number(validClient.monthly_amount || client.monthly_amount || 0);
+  if (subscriptionType === "Housing" && !validClient.housing_access_enabled) return alert("Housing subscription is not enabled for this company.");
+  const amount = subscriptionType === "Housing"
+    ? Number(validClient.housing_monthly_amount || client.housing_monthly_amount || 0)
+    : Number(validClient.monthly_amount || client.monthly_amount || 0);
   if (!amount) return alert("Monthly amount is required before generating an invoice.");
 
   const dueDate = new Date();
@@ -26511,6 +26583,7 @@ async function createSubscriptionInvoiceForClient(client) {
 
   const { error } = await supabase.from("subscription_invoices").insert([{
     client_id: validClient.id,
+    subscription_type: subscriptionType,
     invoice_no: invoiceNo,
     amount,
     status: "Unpaid",
@@ -30259,6 +30332,7 @@ if (!currentUser && publicView === PUBLIC_VIEW.LANDING) {
       onLanguageChange={() => setLoginLanguage((language) => language === "AR" ? "EN" : "AR")}
       onLogin={openCompanyLogin}
       onTalent={openTalentPortal}
+      onHousing={() => window.location.assign("/housing")}
     />
   );
 }
@@ -39363,6 +39437,57 @@ onClick={() => setActiveReport("activityLog")}>
   </div>
 )}
 
+{activePage === "Housing Subscriptions" && canManagePlatform && (
+  <div className="page-section">
+    <div className="executive-hero" style={{ marginBottom: 18 }}>
+      <div>
+        <p className="eyebrow">Platform Administration</p>
+        <h1>Housing Subscriptions</h1>
+        <p>إدارة اشتراكات برنامج السكن بصورة مستقلة عن اشتراكات التوظيف.</p>
+      </div>
+      <div className="hero-actions">
+        <button onClick={() => window.open("/housing", "_blank")}>Open Housing</button>
+        <button onClick={() => setActivePage("Companies Management")}>Manage Company Plans</button>
+        <button onClick={() => setActivePage("Subscription Invoices")}>Housing Invoices</button>
+      </div>
+    </div>
+
+    <div className="stats-grid">
+      <div className="stat-card"><h3>Active Housing</h3><strong>{platformDashboard.housingSubscriptions || 0}</strong><span>Active or trial subscriptions</span></div>
+      <div className="stat-card"><h3>Housing MRR</h3><strong>{Number(platformDashboard.housingMonthlyRevenue || 0).toLocaleString()} SAR</strong><span>Monthly Housing revenue</span></div>
+      <div className="stat-card"><h3>Available Product</h3><strong>Housing</strong><span>Independent from Recruitment</span></div>
+    </div>
+
+    <div className="table-card">
+      <div className="section-title-row">
+        <div><h2>Company Housing Plans</h2><p>Enable, suspend, renew, or invoice Housing for every company.</p></div>
+        <button onClick={loadPlatformClients}>Refresh</button>
+      </div>
+      <table>
+        <thead><tr><th>Company</th><th>Access</th><th>Plan</th><th>Status</th><th>Start</th><th>End</th><th>Users</th><th>Monthly</th><th>Actions</th></tr></thead>
+        <tbody>
+          {platformClients.length === 0 ? <tr><td colSpan="9">No companies yet</td></tr> : platformClients.map((item) => (
+            <tr key={item.id}>
+              <td><strong>{item.company_name}</strong><div className="muted">{item.domain || "-"}</div></td>
+              <td><Badge value={item.housing_access_enabled ? "Enabled" : "Disabled"} /></td>
+              <td>{item.housing_plan || "Standard"}</td>
+              <td><Badge value={item.housing_subscription_status || "Inactive"} /></td>
+              <td>{item.housing_start_date || "-"}</td>
+              <td>{item.housing_end_date || "-"}</td>
+              <td>{Number(item.housing_users_limit || 0).toLocaleString()}</td>
+              <td>{Number(item.housing_monthly_amount || 0).toLocaleString()} SAR</td>
+              <td className="actions">
+                <button onClick={() => editPlatformClient(item)}>Edit Plan</button>
+                <button disabled={!item.housing_access_enabled} onClick={() => createSubscriptionInvoiceForClient(item, "Housing")}>Create Invoice</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
+
 {activePage === "Companies Management" && canManagePlatform && (
   <div className="page-section">
     <div className="executive-hero" style={{ marginBottom: 18 }}>
@@ -39384,6 +39509,8 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="stat-card"><h3>Trial</h3><strong>{platformDashboard.trialClients}</strong><span>Trial accounts</span></div>
       <div className="stat-card"><h3>Renewal Soon</h3><strong>{platformDashboard.expiringThisMonth}</strong><span>Ending within 30 days</span></div>
       <div className="stat-card"><h3>Monthly Revenue</h3><strong>{Number(platformDashboard.monthlyRevenue || 0).toLocaleString()} SAR</strong><span>Current active MRR</span></div>
+      <div className="stat-card"><h3>Housing Subscriptions</h3><strong>{platformDashboard.housingSubscriptions || 0}</strong><span>Active Housing clients</span></div>
+      <div className="stat-card"><h3>Housing MRR</h3><strong>{Number(platformDashboard.housingMonthlyRevenue || 0).toLocaleString()} SAR</strong><span>Independent Housing revenue</span></div>
       <div className="stat-card"><h3>Unpaid Amount</h3><strong>{Number(platformDashboard.unpaidAmount || 0).toLocaleString()} SAR</strong><span>{platformDashboard.unpaidInvoices} unpaid invoice(s)</span></div>
     </div>
 
@@ -39509,6 +39636,45 @@ onClick={() => setActiveReport("activityLog")}>
             />
           </div>
         )}
+
+        <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+          <h3 style={{ margin: "8px 0 4px" }}>Housing Management Subscription</h3>
+          <p className="muted">Manage Housing as an independent product without changing the company&apos;s recruitment subscription.</p>
+        </div>
+
+        <div>
+          <label>Housing Access</label>
+          <select
+            value={platformClientForm.housing_access_enabled ? "Enabled" : "Disabled"}
+            onChange={(e) => setPlatformClientForm((current) => ({
+              ...current,
+              housing_access_enabled: e.target.value === "Enabled",
+              housing_subscription_status: e.target.value === "Enabled" && current.housing_subscription_status === "Inactive" ? "Active" : e.target.value === "Disabled" ? "Inactive" : current.housing_subscription_status,
+            }))}
+          >
+            <option>Disabled</option>
+            <option>Enabled</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Housing Plan</label>
+          <select disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_plan} onChange={(e) => updateForm(setPlatformClientForm, "housing_plan", e.target.value)}>
+            {["Standard", "Professional", "Enterprise"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label>Housing Subscription Status</label>
+          <select disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_subscription_status} onChange={(e) => updateForm(setPlatformClientForm, "housing_subscription_status", e.target.value)}>
+            {["Inactive", "Trial", "Active", "Suspended", "Expired", "Cancelled"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </div>
+
+        <div><label>Housing Users Limit</label><input type="number" min="0" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_users_limit} onChange={(e) => updateForm(setPlatformClientForm, "housing_users_limit", e.target.value)} /></div>
+        <div><label>Housing Start</label><input type="date" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_start_date} onChange={(e) => updateForm(setPlatformClientForm, "housing_start_date", e.target.value)} /></div>
+        <div><label>Housing End</label><input type="date" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_end_date} onChange={(e) => updateForm(setPlatformClientForm, "housing_end_date", e.target.value)} /></div>
+        <div><label>Housing Monthly Amount (SAR)</label><input type="number" min="0" disabled={!platformClientForm.housing_access_enabled} value={platformClientForm.housing_monthly_amount} onChange={(e) => updateForm(setPlatformClientForm, "housing_monthly_amount", e.target.value)} /></div>
 
         <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
           <h3 style={{ margin: "8px 0 4px" }}>AI Agent Professional</h3>
@@ -39648,12 +39814,13 @@ onClick={() => setActiveReport("activityLog")}>
             <th>Remaining</th>
             <th>Monthly</th>
             <th>Talent Access</th>
+            <th>Housing</th>
             <th>AI Agent</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {platformClients.length === 0 ? <tr><td colSpan="15">No companies yet</td></tr> : platformClients.map((item) => {
+          {platformClients.length === 0 ? <tr><td colSpan="16">No companies yet</td></tr> : platformClients.map((item) => {
             const daysRemaining = getClientDaysRemaining(item);
             const renewalStatus = getClientRenewalStatus(item);
             const primaryAdmin = getPrimaryAdminForPlatformClient(item);
@@ -39680,6 +39847,10 @@ onClick={() => setActiveReport("activityLog")}>
                   {item.talent_access_enabled && <div className="muted">{item.talent_access_tier || "Standard"} / {formatTalentProfileLimit(item.talent_profile_limit)} profiles</div>}
                 </td>
                 <td>
+                  <Badge value={item.housing_access_enabled ? (item.housing_subscription_status || "Active") : "Disabled"} />
+                  {item.housing_access_enabled && <div className="muted">{item.housing_plan || "Standard"} / {Number(item.housing_monthly_amount || 0).toLocaleString()} SAR</div>}
+                </td>
+                <td>
                   <Badge value={getAiAgentEntitlementLabel(item)} />
                   {item.ai_agent_enabled && <div className="muted">{Number(item.ai_agent_monthly_credit_limit || 0).toLocaleString()} credits{item.ai_agent_plan === "Professional Trial" && item.ai_agent_trial_end ? ` / ends ${item.ai_agent_trial_end}` : ""}</div>}
                 </td>
@@ -39688,6 +39859,7 @@ onClick={() => setActiveReport("activityLog")}>
                   <button onClick={() => extendPlatformClient(item, 1)}>Extend 30d</button>
 <button onClick={() => extendPlatformClient(item, 12)}>Extend 1y</button>
                   <button onClick={() => createSubscriptionInvoiceForClient(item)}>Invoice</button>
+                  <button disabled={!item.housing_access_enabled} onClick={() => createSubscriptionInvoiceForClient(item, "Housing")}>Housing Invoice</button>
                   <button
                     onClick={() => sendPlatformClientLoginDetails(item)}
                     disabled={!isPlatformOwner}
@@ -39910,6 +40082,9 @@ onClick={() => setActiveReport("activityLog")}>
           <option value="">Select Company</option>
           {platformClients.map((client) => <option key={client.id} value={client.id}>{client.company_name}</option>)}
         </select>
+        <select value={subscriptionInvoiceForm.subscription_type} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "subscription_type", e.target.value)}>
+          {["Recruitment", "Housing", "Combined", "Talent", "AI Agent"].map((item) => <option key={item}>{item}</option>)}
+        </select>
         <input placeholder="Invoice No (Auto if empty)" value={subscriptionInvoiceForm.invoice_no} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "invoice_no", e.target.value)} />
         <input type="number" placeholder="Amount" value={subscriptionInvoiceForm.amount} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "amount", e.target.value)} />
         <select value={subscriptionInvoiceForm.status} onChange={(e) => updateForm(setSubscriptionInvoiceForm, "status", e.target.value)}>
@@ -39927,12 +40102,13 @@ onClick={() => setActiveReport("activityLog")}>
     <div className="table-card">
       <h2>Subscription Invoices</h2>
       <table>
-        <thead><tr><th>Invoice No</th><th>Company</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Paid At</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Invoice No</th><th>Company</th><th>Product</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Paid At</th><th>Actions</th></tr></thead>
         <tbody>
-          {subscriptionInvoices.length === 0 ? <tr><td colSpan="7">No invoices yet</td></tr> : subscriptionInvoices.map((item) => (
+          {subscriptionInvoices.length === 0 ? <tr><td colSpan="8">No invoices yet</td></tr> : subscriptionInvoices.map((item) => (
             <tr key={item.id}>
               <td>{item.invoice_no}</td>
               <td>{getPlatformClientName(item.client_id)}</td>
+              <td><Badge value={item.subscription_type || "Recruitment"} /></td>
               <td>{Number(item.amount || 0).toLocaleString()} SAR</td>
               <td><Badge value={item.status || "Unpaid"} /></td>
               <td>{item.due_date || "-"}</td>
