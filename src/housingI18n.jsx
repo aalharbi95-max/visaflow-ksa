@@ -17,6 +17,8 @@ messages.ar.notifications = 'الإشعارات متعددة القنوات'
 messages.en.notifications = 'Multi-Channel Notifications'
 messages.ar.costCenters = 'مراكز التكلفة والتخصيص اليومي'
 messages.en.costCenters = 'Cost Centers & Daily Allocation'
+messages.ar.offlineMode = 'وضع العمل دون إنترنت'
+messages.en.offlineMode = 'Offline Work Mode'
 
 const HousingLanguageContext = createContext(null)
 
