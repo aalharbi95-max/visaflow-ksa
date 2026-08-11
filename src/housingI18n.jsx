@@ -21,6 +21,8 @@ messages.ar.offlineMode = 'وضع العمل دون إنترنت'
 messages.en.offlineMode = 'Offline Work Mode'
 messages.ar.inventory = 'المخزون وقطع الغيار'
 messages.en.inventory = 'Inventory & Spare Parts'
+messages.ar.securityGates = 'الأمن والبوابات'
+messages.en.securityGates = 'Security & Gate Control'
 
 const HousingLanguageContext = createContext(null)
 

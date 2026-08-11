@@ -63,6 +63,15 @@ test('inventory and spare parts are connected to maintenance costs', async () =>
   assert.match(migration,/housing_inventory_balances/); assert.match(migration,/actual_cost=coalesce\(actual_cost,0\)/)
 })
 
+test('security and gate control covers visitors deliveries and asset passes', async()=>{
+  const [app,page,service,migration]=await Promise.all([
+    readFile(new URL('./HousingApp.jsx',import.meta.url),'utf8'),readFile(new URL('./HousingSecurityPage.jsx',import.meta.url),'utf8'),
+    readFile(new URL('./housingService.mjs',import.meta.url),'utf8'),readFile(new URL('../supabase/housing/migrations/0013_security_gate_control.sql',import.meta.url),'utf8'),
+  ])
+  assert.match(app,/HousingSecurityPage/);assert.match(page,/Visitor/);assert.match(page,/Delivery/);assert.match(page,/Pass/)
+  assert.match(service,/housing_gate_transition/);assert.match(migration,/housing_gate_visitors/);assert.match(migration,/housing_gate_deliveries/);assert.match(migration,/housing_gate_passes/)
+})
+
 test('visible housing action buttons are wired to forms, details, filters and exports', async () => {
   const [app, modules, liveViews, advanced, hook, modal, service] = await Promise.all([
     readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
