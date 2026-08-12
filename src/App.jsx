@@ -6872,7 +6872,8 @@ const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
 const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
 const [ownerTalentCampaign, setOwnerTalentCampaign] = useState(null);
-const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, invited: 0, claimed: 0 });
+const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
+const [ownerTalentInviteBusy, setOwnerTalentInviteBusy] = useState(false);
 const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
 const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
@@ -10199,7 +10200,9 @@ async function loadProfessionAliases() {
       setOwnerTalentProspectStats({
         total: Number(prospectData?.total || 0),
         awaiting_candidate: Number(prospectData?.awaiting_candidate || 0),
+        queued: Number(prospectData?.queued || 0),
         invited: Number(prospectData?.invited || 0),
+        failed: Number(prospectData?.failed || 0),
         claimed: Number(prospectData?.claimed || 0),
       });
       setOwnerTalentDistributions({
@@ -10220,7 +10223,7 @@ async function loadProfessionAliases() {
       setOwnerTalentStats(unavailableStats);
       setOwnerTalentRecent([]);
       setOwnerTalentCampaign(null);
-      setOwnerTalentProspectStats({ total: 0, awaiting_candidate: 0, invited: 0, claimed: 0 });
+      setOwnerTalentProspectStats({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
       setOwnerTalentDistributions({ country_of_residence: [], profession: [], marketplace_status: [] });
       setOwnerTalentError({
         code: error?.code || "OWNER_TALENT_DASHBOARD_FAILED",
@@ -10259,6 +10262,21 @@ async function loadProfessionAliases() {
     } finally {
       setOwnerTalentActionId("");
     }
+  }
+
+  async function queueOwnerTalentEmailInvitations() {
+    if (currentRole !== "Platform Owner" || ownerTalentInviteBusy) return;
+    const count = Number(ownerTalentProspectStats.awaiting_candidate || 0);
+    if (!count) return alert("No imported candidates are waiting for an email invitation.");
+    if (!window.confirm(`Queue ${count.toLocaleString()} email invitations? Emails will be sent gradually in the background.`)) return;
+    setOwnerTalentInviteBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("queue_talent_prospect_email_invitations");
+      if (error) throw error;
+      await loadOwnerTalentDashboard();
+      alert(`${Number(data?.queued || 0).toLocaleString()} email invitations were queued.`);
+    } catch (error) { alert(`Unable to queue invitations: ${error?.message || "Unknown error"}`); }
+    finally { setOwnerTalentInviteBusy(false); }
   }
 
   async function loadSystemActivityLogs() {
@@ -39478,13 +39496,16 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="section-title-row">
         <div>
           <h2>Imported Talent Counter / عداد المرشحين المستوردين</h2>
-          <p>Counts only. Imported prospects remain private and are not visible to companies.</p>
+          <p>Email-only invitations. Imported prospects remain private until they complete their profile and grant consent.</p>
         </div>
+        {currentRole === "Platform Owner" && <button type="button" onClick={queueOwnerTalentEmailInvitations} disabled={ownerTalentInviteBusy || !ownerTalentProspectStats.awaiting_candidate}>{ownerTalentInviteBusy ? "Queuing..." : "Queue Email Invitations / إرسال دعوات البريد"}</button>}
       </div>
       <div className="stats-grid" style={{ marginTop: 14 }}>
         <div className="stat-card"><h3>Imported Total</h3><strong>{ownerTalentProspectStats.total.toLocaleString()}</strong><span>إجمالي المستوردين</span></div>
         <div className="stat-card"><h3>Awaiting Candidate</h3><strong>{ownerTalentProspectStats.awaiting_candidate.toLocaleString()}</strong><span>بانتظار إكمال الملف</span></div>
+        <div className="stat-card"><h3>Email Queue</h3><strong>{ownerTalentProspectStats.queued.toLocaleString()}</strong><span>قيد الإرسال</span></div>
         <div className="stat-card"><h3>Invited</h3><strong>{ownerTalentProspectStats.invited.toLocaleString()}</strong><span>تم إرسال الدعوة</span></div>
+        <div className="stat-card"><h3>Failed</h3><strong>{ownerTalentProspectStats.failed.toLocaleString()}</strong><span>تعذر الإرسال</span></div>
         <div className="stat-card"><h3>Claimed</h3><strong>{ownerTalentProspectStats.claimed.toLocaleString()}</strong><span>تم ربط الملف</span></div>
       </div>
     </div>

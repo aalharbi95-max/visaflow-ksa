@@ -33,3 +33,13 @@ test("public Talent page exposes only the aggregate imported prospect counter", 
   assert.match(migration, /select count\(\*\)::bigint[\s\S]*from public\.talent_imported_prospects/i);
   assert.doesNotMatch(migration, /returns table\([\s\S]*email/i);
 });
+
+test("owner email invitations require explicit confirmation and use a background queue", async () => {
+  const app = await readFile(appUrl, "utf8");
+  const migration = await readFile(new URL("../supabase/migrations/20260812000500_talent_prospect_email_invitations.sql", import.meta.url), "utf8");
+  assert.match(app, /queueOwnerTalentEmailInvitations/);
+  assert.match(app, /window\.confirm/);
+  assert.match(app, /Queue Email Invitations/);
+  assert.match(migration, /queue_talent_prospect_email_invitations/);
+  assert.match(migration, /visaflow-talent-prospect-email-every-minute/);
+});
