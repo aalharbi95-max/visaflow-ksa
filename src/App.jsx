@@ -38,6 +38,11 @@ import {
   PUBLIC_VIEW,
 } from "./publicNavigation.mjs";
 import {
+  ENGINEERING_TALENT_CAMPAIGN_SLUG,
+  getCampaignReadiness,
+  getTalentCampaignSlug,
+} from "./talentCampaign.mjs";
+import {
   getUiDirection,
   resolveUiLanguage,
   shouldShowLanguageToggle,
@@ -3752,6 +3757,8 @@ function clearTalentAuthCallbackUrl() {
 function TalentCandidatePortal({ onBack }) {
   const supabase = talentSupabase;
   const initialRecoveryState = useMemo(() => getTalentRecoveryUrlState(), []);
+  const requestedCampaignSlug = useMemo(() => getTalentCampaignSlug(), []);
+  const campaignSlug = requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG;
   const [portalLanguage, setPortalLanguage] = useState("AR");
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -3774,7 +3781,7 @@ function TalentCandidatePortal({ onBack }) {
   const [consents, setConsents] = useState({ ...EMPTY_TALENT_CONSENTS });
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
-  const [workspaceTab, setWorkspaceTab] = useState("Profile");
+  const [workspaceTab, setWorkspaceTab] = useState(requestedCampaignSlug ? "Engineering Campaign" : "Profile");
   const [talentStats, setTalentStats] = useState({
     registered_candidates: 0,
     marketplace_ready: 0,
@@ -3797,6 +3804,11 @@ function TalentCandidatePortal({ onBack }) {
   const [resumeVersions, setResumeVersions] = useState([]);
   const [talentInterviews, setTalentInterviews] = useState([]);
   const [resumeStudioBusy, setResumeStudioBusy] = useState(false);
+  const [talentCampaign, setTalentCampaign] = useState(null);
+  const [campaignApplication, setCampaignApplication] = useState(null);
+  const [campaignTemplateId, setCampaignTemplateId] = useState("");
+  const [campaignResultSharing, setCampaignResultSharing] = useState(false);
+  const [campaignLoading, setCampaignLoading] = useState(true);
 
   const isArabic = portalLanguage === "AR";
   const emailSuggestion = useMemo(() => getTalentEmailSuggestion(authForm.email), [authForm.email]);
@@ -4042,6 +4054,7 @@ function TalentCandidatePortal({ onBack }) {
       if (initialRecoveryState.requested) return;
       if (nextSession?.user?.user_metadata?.account_type === "candidate") {
         setSession(nextSession);
+        loadTalentCampaign(nextSession.user);
         if (!initialRecoveryState.requested && ["INITIAL_SESSION", "SIGNED_IN", "USER_UPDATED"].includes(event) && loadedTalentUserRef.current !== nextSession.user.id) {
           loadCandidateWorkspace(nextSession.user);
         }
@@ -4056,6 +4069,7 @@ function TalentCandidatePortal({ onBack }) {
     // Subscribe before getSession. Supabase saves the callback session first and
     // emits PASSWORD_RECOVERY on a queued timer after initialization completes.
     loadTalentStats();
+    loadTalentCampaign();
     supabase.auth.getSession().then(({ data, error }) => {
       if (!mounted) return;
       const activeSession = data?.session || null;
@@ -4085,6 +4099,7 @@ function TalentCandidatePortal({ onBack }) {
       if (isCandidateSession) {
         setSession(activeSession);
         loadCandidateWorkspace(activeSession.user);
+        loadTalentCampaign(activeSession.user);
       } else {
         setSession(null);
       }
@@ -4102,6 +4117,7 @@ function TalentCandidatePortal({ onBack }) {
     const url = new URL("/", window.location.origin);
     url.searchParams.set("talent", "1");
     url.searchParams.set("auth_flow", "candidate");
+    if (requestedCampaignSlug) url.searchParams.set("talent_campaign", requestedCampaignSlug);
     if (recovery) url.searchParams.set("recovery", "1");
     return url.toString();
   }
@@ -4138,6 +4154,7 @@ function TalentCandidatePortal({ onBack }) {
             account_type: "candidate",
             full_name: fullName,
             phone,
+            registration_campaign: requestedCampaignSlug || null,
           },
         },
       });
@@ -4324,7 +4341,7 @@ function TalentCandidatePortal({ onBack }) {
     profileDirtyRef.current = false;
     setWorkspaceHydrated(false);
     setAutoSaveStatus("Idle");
-    setWorkspaceTab("Profile");
+    setWorkspaceTab(requestedCampaignSlug ? "Engineering Campaign" : "Profile");
     setAuthMode("signin");
   }
 
@@ -4669,15 +4686,23 @@ function TalentCandidatePortal({ onBack }) {
           <div className="vf-talent-auth-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(340px, .85fr)", gap: "28px", alignItems: "stretch" }}>
             <section style={{ color: "#fff", padding: "38px 12px 28px" }}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", background: "rgba(18,184,176,.16)", border: "1px solid rgba(45,212,191,.35)", borderRadius: "999px", padding: "8px 12px", fontWeight: 900, fontSize: "13px" }}>
-                ✦ {isArabic ? "ابنِ ملفك المهني مرة واحدة" : "Build your professional profile once"}
+                ✦ {requestedCampaignSlug
+                  ? (isArabic ? "حملة VisaFlow للمواهب الهندسية" : "VisaFlow Engineering Talent Campaign")
+                  : (isArabic ? "ابنِ ملفك المهني مرة واحدة" : "Build your professional profile once")}
               </div>
               <h1 style={{ fontSize: "clamp(38px, 6vw, 72px)", lineHeight: 1.02, margin: "22px 0 18px", letterSpacing: "-0.04em" }}>
-                {isArabic ? "قدّم سيرتك الذاتية. دع الفرص تصل إليك." : "Submit your CV. Let opportunities find you."}
+                {requestedCampaignSlug
+                  ? (isArabic ? "للمهندسين: سجّل، اختر تخصصك، واختبر جاهزيتك." : "Engineers: register, choose your profession, and test your readiness.")
+                  : (isArabic ? "قدّم سيرتك الذاتية. دع الفرص تصل إليك." : "Submit your CV. Let opportunities find you.")}
               </h1>
               <p style={{ maxWidth: "720px", fontSize: "18px", lineHeight: 1.8, color: "rgba(255,255,255,.8)", margin: 0 }}>
-                {isArabic
-                  ? "سجّل ملفك، ارفع سيرتك، وافق على التحليل الذكي، ثم يظهر ملف مجهول الهوية للشركات المشتركة بعد المراجعة. بياناتك الكاملة لا تُشارك دون موافقتك."
-                  : "Create your profile, upload your CV, consent to AI analysis, and become discoverable to subscribed employers after review. Your full identity is never shared without consent."}
+                {requestedCampaignSlug
+                  ? (isArabic
+                    ? "الحملة تشمل جميع التخصصات الهندسية التي لها قالب معتمد في منصة المالك. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك."
+                    : "The campaign includes every engineering profession with an approved Platform Owner template. CV sharing is required to enter the assessment; sharing the result is optional and remains under your control.")
+                  : (isArabic
+                    ? "سجّل ملفك، ارفع سيرتك، وافق على التحليل الذكي، ثم يظهر ملف مجهول الهوية للشركات المشتركة بعد المراجعة. بياناتك الكاملة لا تُشارك دون موافقتك."
+                    : "Create your profile, upload your CV, consent to AI analysis, and become discoverable to subscribed employers after review. Your full identity is never shared without consent.")}
               </p>
 
               <div className="vf-talent-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px", marginTop: "34px" }}>
@@ -4820,8 +4845,117 @@ function TalentCandidatePortal({ onBack }) {
     }
   }
 
+  function openTalentCampaignInterview(invitationUrl) {
+    if (!invitationUrl) return;
+    try {
+      const target = new URL(invitationUrl, window.location.origin);
+      const token = target.searchParams.get("ai_interview");
+      if (token && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+        window.location.assign(`${window.location.origin}${window.location.pathname}?ai_interview=${encodeURIComponent(token)}`);
+        return;
+      }
+    } catch {
+      // Fall back to the trusted URL returned by the secure enrolment RPC.
+    }
+    window.location.assign(invitationUrl);
+  }
+
+  async function handleTalentCampaignEnroll() {
+    const readiness = getCampaignReadiness({
+      profile: { ...profile, ...profileForm },
+      primaryCv,
+      consents,
+      templateId: campaignTemplateId,
+    });
+    if (!readiness.ready) {
+      setWorkspaceMessage(isArabic
+        ? "أكمل البيانات المطلوبة، ارفع السيرة الذاتية، ووافق على مشاركة السيرة وبيانات التواصل وعلى اختبار AI قبل البدء."
+        : "Complete the required profile fields, upload your CV, and accept CV/contact sharing and the AI interview terms before starting.");
+      return;
+    }
+
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+    try {
+      const saved = await handleSaveTalentProfile({ quiet: true });
+      if (!saved) throw new Error(isArabic ? "تعذر حفظ الملف قبل التسجيل." : "The profile could not be saved before enrolment.");
+      const params = new URLSearchParams(window.location.search);
+      const { data, error } = await supabase.rpc("enroll_in_talent_campaign", {
+        p_slug: campaignSlug,
+        p_template_id: campaignTemplateId,
+        p_result_sharing_consent: campaignResultSharing,
+        p_source: params.get("utm_source") || (requestedCampaignSlug ? "Campaign Link" : "Talent Portal"),
+        p_source_metadata: {
+          utm_source: params.get("utm_source"),
+          utm_medium: params.get("utm_medium"),
+          utm_campaign: params.get("utm_campaign"),
+        },
+      });
+      if (error) throw error;
+      await loadTalentCampaign(session.user);
+      await logTalentEvent("ENGINEERING_CAMPAIGN_ENROLLED", {
+        campaign_slug: campaignSlug,
+        template_id: campaignTemplateId,
+        result_sharing_consent: campaignResultSharing,
+      });
+      setWorkspaceMessage(isArabic ? "تم تسجيلك في الحملة وتجهيز الاختبار." : "Campaign enrolment completed and your interview is ready.");
+      openTalentCampaignInterview(data?.invitation_url);
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر التسجيل في الحملة." : "Unable to enrol in the campaign."));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function updateTalentCampaignResultSharing(isGranted) {
+    setCampaignResultSharing(isGranted);
+    if (!campaignApplication?.id) return;
+    setWorkspaceBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("update_my_talent_campaign_result_consent", {
+        p_slug: campaignSlug,
+        p_is_granted: isGranted,
+      });
+      if (error) throw error;
+      if (!data) throw new Error("Campaign application was not found.");
+      await loadTalentCampaign(session.user);
+      setWorkspaceMessage(isArabic ? "تم تحديث خيار مشاركة النتيجة." : "Result-sharing preference updated.");
+    } catch (error) {
+      setCampaignResultSharing(!isGranted);
+      setWorkspaceMessage(error?.message || (isArabic ? "تعذر تحديث الخيار." : "Unable to update the preference."));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function loadTalentCampaign(candidateUser = null) {
+    setCampaignLoading(true);
+    try {
+      const { data, error } = await supabase.rpc("get_public_talent_campaign", { p_slug: campaignSlug });
+      if (error) throw error;
+      setTalentCampaign(data || null);
+      const templates = Array.isArray(data?.templates) ? data.templates : [];
+      setCampaignTemplateId((current) => current || templates[0]?.id || "");
+      if (candidateUser?.id) {
+        const { data: application, error: applicationError } = await supabase.rpc(
+          "get_my_talent_campaign_application",
+          { p_slug: campaignSlug }
+        );
+        if (applicationError) throw applicationError;
+        setCampaignApplication(application || null);
+        setCampaignResultSharing(Boolean(application?.result_sharing_consent));
+      }
+    } catch (error) {
+      console.warn("Talent campaign load failed", error?.message || error);
+      setTalentCampaign(null);
+    } finally {
+      setCampaignLoading(false);
+    }
+  }
+
   const statusLabel = profile?.marketplace_status || "Draft";
   const tabItems = [
+    ["Engineering Campaign", isArabic ? "حملة المهندسين" : "Engineering Campaign"],
     ["Dashboard", isArabic ? "لوحة التحكم" : "Dashboard"],
     ["Profile", isArabic ? "الملف المهني" : "Professional Profile"],
     ["CV", isArabic ? "السيرة الذاتية" : "CV Upload"],
@@ -4830,7 +4964,7 @@ function TalentCandidatePortal({ onBack }) {
     ["Consent", isArabic ? "الموافقات" : "Consents"],
     ["Review", isArabic ? "المراجعة والإرسال" : "Review & Submit"],
   ];
-  tabItems.splice(5, 0, ["Interviews", isArabic ? "دعوات المقابلات" : "Interview Invitations"]);
+  tabItems.splice(6, 0, ["Interviews", isArabic ? "دعوات المقابلات" : "Interview Invitations"]);
 
   return (
     <main dir={isArabic ? "rtl" : "ltr"} style={{ minHeight: "100vh", background: "#f4f8fb", color: palette.text, fontFamily: "inherit" }}>
@@ -4892,6 +5026,70 @@ function TalentCandidatePortal({ onBack }) {
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "10px", minHeight: "20px", color: autoSaveStatus === "Error" ? palette.danger : autoSaveStatus === "Saved" ? palette.success : palette.muted, fontSize: "12px", fontWeight: 900 }}>
                 {autoSaveStatus === "Saving" ? (isArabic ? "جاري الحفظ التلقائي..." : "Auto-saving...") : autoSaveStatus === "Saved" ? (isArabic ? "تم الحفظ ✓" : "Saved ✓") : autoSaveStatus === "Unsaved" ? (isArabic ? "تغييرات غير محفوظة..." : "Unsaved changes...") : autoSaveStatus === "Error" ? (isArabic ? "تعذر الحفظ" : "Unable to save") : ""}
               </div>
+            )}
+
+            {workspaceTab === "Engineering Campaign" && (
+              <>
+                <div style={{ padding: "22px", borderRadius: "18px", color: "#fff", background: `linear-gradient(135deg, ${palette.navy}, ${palette.blue} 62%, ${palette.cyan})`, marginBottom: "18px" }}>
+                  <div style={{ fontSize: "12px", fontWeight: 900, color: "#99f6e4", letterSpacing: ".08em", textTransform: "uppercase" }}>VisaFlow Talent 2026</div>
+                  <h2 style={{ margin: "8px 0" }}>{isArabic ? (talentCampaign?.name_ar || "حملة المواهب الهندسية") : (talentCampaign?.name_en || "Engineering Talent Campaign")}</h2>
+                  <p style={{ margin: 0, lineHeight: 1.8, color: "rgba(255,255,255,.82)" }}>{isArabic
+                    ? (talentCampaign?.description_ar || "سجّل سيرتك واختر تخصصك وأجرِ اختبار المقابلة المهنية.")
+                    : (talentCampaign?.description_en || "Register your CV, select your engineering profession, and take the professional interview assessment.")}</p>
+                </div>
+
+                {campaignLoading ? (
+                  <div style={{ padding: "24px", textAlign: "center", color: palette.muted }}>{isArabic ? "جاري تحميل الحملة..." : "Loading campaign..."}</div>
+                ) : !talentCampaign ? (
+                  <div style={{ padding: "18px", borderRadius: "14px", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>{isArabic ? "الحملة غير متاحة حاليًا." : "The campaign is not currently available."}</div>
+                ) : campaignApplication ? (
+                  <div style={{ display: "grid", gap: "14px" }}>
+                    <div style={{ border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px", background: "#ecfdf5" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                        <div><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{isArabic ? "التخصص" : "Profession"}</span><h3 style={{ margin: "5px 0 0" }}>{campaignApplication.profession}</h3></div>
+                        <div><span style={{ color: palette.muted, fontSize: "12px", fontWeight: 800 }}>{isArabic ? "حالة الاختبار" : "Interview Status"}</span><h3 style={{ margin: "5px 0 0", color: palette.success }}>{campaignApplication.interview_status || campaignApplication.status}</h3></div>
+                      </div>
+                      {campaignApplication.overall_score != null && <div style={{ marginTop: "12px", fontWeight: 900 }}>{isArabic ? "النتيجة: " : "Score: "}{campaignApplication.overall_score}%</div>}
+                    </div>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: "12px", padding: "16px", border: `1px solid ${palette.border}`, borderRadius: "14px", cursor: "pointer" }}>
+                      <input type="checkbox" checked={campaignResultSharing} onChange={(event) => updateTalentCampaignResultSharing(event.target.checked)} style={{ width: "19px", height: "19px", marginTop: "3px" }} />
+                      <span><strong>{isArabic ? "مشاركة نتيجة الاختبار مع الشركات (اختياري)" : "Share my interview result with employers (optional)"}</strong><small style={{ display: "block", marginTop: "5px", color: palette.muted, lineHeight: 1.6 }}>{isArabic ? "يمكنك تغيير هذا الخيار في أي وقت. عدم الموافقة لا يمنع ظهور سيرتك وفق موافقة مشاركة السيرة." : "You can change this at any time. Declining does not cancel the separate CV-sharing consent."}</small></span>
+                    </label>
+                    {campaignApplication.invitation_url && campaignApplication.interview_status !== "Completed" && <button type="button" onClick={() => openTalentCampaignInterview(campaignApplication.invitation_url)} style={{ border: 0, borderRadius: "13px", padding: "14px 18px", background: palette.blue, color: "#fff", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "متابعة اختبار المقابلة" : "Continue Interview Assessment"}</button>}
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gap: "16px" }}>
+                    <div style={{ border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px" }}>
+                      <label style={{ display: "grid", gap: "8px", fontWeight: 900 }}>
+                        <span>{isArabic ? "اختر تخصصك الهندسي" : "Select your engineering profession"}</span>
+                        <select value={campaignTemplateId} onChange={(event) => setCampaignTemplateId(event.target.value)} style={{ minHeight: "48px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px", background: "#fff", fontWeight: 800 }}>
+                          <option value="">{isArabic ? "اختر التخصص" : "Choose profession"}</option>
+                          {(talentCampaign.templates || []).map((template) => <option key={template.id} value={template.id}>{template.profession} — {template.duration_minutes} min</option>)}
+                        </select>
+                      </label>
+                      {(talentCampaign.templates || []).length === 0 && <p style={{ color: palette.danger, fontWeight: 800 }}>{isArabic ? "لا توجد قوالب هندسية معتمدة ونشطة حاليًا في منصة المالك." : "No approved, active engineering templates are currently available in Platform Owner."}</p>}
+                    </div>
+
+                    <div style={{ border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px" }}>
+                      <h3 style={{ marginTop: 0 }}>{isArabic ? "متطلبات دخول الاختبار" : "Assessment requirements"}</h3>
+                      {!primaryCv && <button type="button" onClick={() => setWorkspaceTab("CV")} style={{ width: "100%", border: `1px solid ${palette.danger}`, borderRadius: "11px", padding: "11px", background: "#fff", color: palette.danger, fontWeight: 900, cursor: "pointer", marginBottom: "12px" }}>{isArabic ? "السيرة غير مرفوعة — ارفعها الآن" : "CV missing — upload it now"}</button>}
+                      {[
+                        ["Platform Terms", isArabic ? "أوافق على شروط استخدام المنصة" : "I accept the platform terms"],
+                        ["Privacy Policy", isArabic ? "أوافق على سياسة الخصوصية ومعالجة البيانات" : "I accept the privacy and data-processing policy"],
+                        ["Employer Sharing", isArabic ? "أوافق على مشاركة سيرتي وملفي المهني مع الشركات المشتركة" : "I agree to share my CV and professional profile with subscribed employers"],
+                        ["Employer Contact Sharing", isArabic ? "أوافق على مشاركة اسمي وبيانات التواصل الموجودة في السيرة مع الشركات بعد اعتماد الملف" : "I agree to share my identity and CV contact details with employers after profile approval"],
+                        ["AI Interview", isArabic ? "أوافق على إجراء اختبار المقابلة وتحليله بالذكاء الاصطناعي" : "I consent to taking and AI analysis of the interview assessment"],
+                      ].map(([key, label]) => <label key={key} style={{ display: "flex", gap: "11px", alignItems: "flex-start", padding: "11px 0", borderBottom: `1px solid ${palette.border}`, cursor: "pointer" }}><input type="checkbox" checked={Boolean(consents[key])} onChange={(event) => updateTalentConsent(key, event.target.checked)} style={{ width: "18px", height: "18px", marginTop: "2px" }} /><span style={{ lineHeight: 1.6, fontWeight: 800 }}>{label} <strong style={{ color: palette.danger }}>*</strong></span></label>)}
+                    </div>
+
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: "12px", padding: "16px", border: `1px solid ${palette.border}`, borderRadius: "14px", cursor: "pointer", background: "#f8fafc" }}>
+                      <input type="checkbox" checked={campaignResultSharing} onChange={(event) => setCampaignResultSharing(event.target.checked)} style={{ width: "19px", height: "19px", marginTop: "3px" }} />
+                      <span><strong>{isArabic ? "أوافق على مشاركة نتيجة الاختبار مع الشركات" : "I agree to share my interview result with employers"}</strong><small style={{ display: "block", marginTop: "5px", color: palette.muted }}>{isArabic ? "اختياري — تستطيع دخول الاختبار بدون تفعيله وتغييره لاحقًا." : "Optional — you can take the assessment without enabling it and change it later."}</small></span>
+                    </label>
+                    <button type="button" disabled={workspaceBusy || !(talentCampaign.templates || []).length} onClick={handleTalentCampaignEnroll} style={{ border: 0, borderRadius: "13px", padding: "15px 18px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", fontWeight: 900, fontSize: "16px", cursor: workspaceBusy ? "wait" : "pointer" }}>{workspaceBusy ? (isArabic ? "جاري التجهيز..." : "Preparing...") : (isArabic ? "التسجيل وبدء اختبار المقابلة" : "Enrol & Start Interview Assessment")}</button>
+                  </div>
+                )}
+              </>
             )}
 
             {workspaceTab === "Dashboard" && (
@@ -6670,6 +6868,7 @@ const [ownerTalentDistributions, setOwnerTalentDistributions] = useState({
 const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
 const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
+const [ownerTalentCampaign, setOwnerTalentCampaign] = useState(null);
 const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
 const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
@@ -9962,9 +10161,10 @@ async function loadProfessionAliases() {
       : Number(value);
 
     try {
-      const [ownerResult, publicStatsResult] = await Promise.all([
+      const [ownerResult, publicStatsResult, campaignResult] = await Promise.all([
         supabase.rpc("get_owner_talent_dashboard"),
         supabase.rpc("get_talent_public_stats"),
+        supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: ENGINEERING_TALENT_CAMPAIGN_SLUG }),
       ]);
 
       if (ownerResult.error) throw ownerResult.error;
@@ -9989,6 +10189,7 @@ async function loadProfessionAliases() {
         published: publicStatsRow ? safeMetric(publicStatsRow.marketplace_ready) : null,
       });
       setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
+      setOwnerTalentCampaign(campaignResult.error ? null : campaignResult.data);
       setOwnerTalentDistributions({
         country_of_residence: Array.isArray(ownerData.distributions?.country_of_residence) ? ownerData.distributions.country_of_residence : [],
         profession: Array.isArray(ownerData.distributions?.profession) ? ownerData.distributions.profession : [],
@@ -10006,6 +10207,7 @@ async function loadProfessionAliases() {
     } catch (error) {
       setOwnerTalentStats(unavailableStats);
       setOwnerTalentRecent([]);
+      setOwnerTalentCampaign(null);
       setOwnerTalentDistributions({ country_of_residence: [], profession: [], marketplace_status: [] });
       setOwnerTalentError({
         code: error?.code || "OWNER_TALENT_DASHBOARD_FAILED",
@@ -39230,6 +39432,33 @@ onClick={() => setActiveReport("activityLog")}>
           );
         })}
       </div>
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <div className="section-title-row">
+        <div>
+          <h2>Engineering Talent Campaign / حملة المواهب الهندسية</h2>
+          <p>All approved, active engineering templates in Platform Owner are offered automatically.</p>
+        </div>
+        <button type="button" onClick={async () => {
+          const url = `${window.location.origin}/?talent=1&talent_campaign=${ENGINEERING_TALENT_CAMPAIGN_SLUG}&utm_source=linkedin&utm_medium=social&utm_campaign=saudi_engineers_2026`;
+          await navigator.clipboard.writeText(url);
+          setOwnerTalentMessage(`Campaign link copied: ${url}`);
+        }}>Copy LinkedIn Campaign Link</button>
+      </div>
+      {ownerTalentCampaign ? <>
+        <div className="stats-grid" style={{ marginTop: 14 }}>
+          <div className="stat-card"><h3>Registered</h3><strong>{Number(ownerTalentCampaign.registered || 0)}</strong><span>المسجلون</span></div>
+          <div className="stat-card"><h3>Started</h3><strong>{Number(ownerTalentCampaign.started || 0)}</strong><span>بدؤوا الاختبار</span></div>
+          <div className="stat-card"><h3>Completed</h3><strong>{Number(ownerTalentCampaign.completed || 0)}</strong><span>أكملوا الاختبار</span></div>
+          <div className="stat-card"><h3>Result Sharing</h3><strong>{Number(ownerTalentCampaign.result_sharing_granted || 0)}</strong><span>وافقوا على مشاركة النتيجة</span></div>
+        </div>
+        <div className="table-card" style={{ marginTop: 14 }}>
+          <table><thead><tr><th>Reference</th><th>Candidate</th><th>Engineering Profession</th><th>Status</th><th>Result Sharing</th><th>Score</th><th>Registered</th></tr></thead>
+            <tbody>{(ownerTalentCampaign.applications || []).length === 0 ? <tr><td colSpan="7">No campaign registrations yet.</td></tr> : (ownerTalentCampaign.applications || []).map((application) => <tr key={application.id}><td>{application.candidate_reference || "-"}</td><td>{application.candidate_name || "-"}</td><td>{application.profession || "-"}</td><td><Badge value={application.status || "Registered"} /></td><td>{application.result_sharing_consent ? "Allowed" : "Private"}</td><td>{application.result_sharing_consent && application.score != null ? `${application.score}%` : "Private"}</td><td>{application.created_at ? new Date(application.created_at).toLocaleString() : "-"}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </> : <p style={{ color: "#64748b" }}>Campaign data will appear after the campaign database migration is deployed.</p>}
     </div>
 
     <div className="table-card" style={{ marginTop: 16 }}>
