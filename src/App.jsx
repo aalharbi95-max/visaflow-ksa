@@ -3775,7 +3775,8 @@ function TalentCandidatePortal({ onBack }) {
       return stored ? buildTalentImportPayload(normalizeCvDraft(stored)) : null;
     } catch { return null; }
   }, [requestedCvBuilderImport]);
-  const campaignSlug = requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG;
+  const [campaignSlug, setCampaignSlug] = useState(requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG);
+  const isEngineeringTalentCampaign = campaignSlug === ENGINEERING_TALENT_CAMPAIGN_SLUG;
   const [portalLanguage, setPortalLanguage] = useState("AR");
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -4086,7 +4087,7 @@ function TalentCandidatePortal({ onBack }) {
       if (initialRecoveryState.requested) return;
       if (nextSession?.user?.user_metadata?.account_type === "candidate") {
         setSession(nextSession);
-        loadTalentCampaign(nextSession.user);
+        loadResolvedTalentCampaign(nextSession.user);
         if (!initialRecoveryState.requested && ["INITIAL_SESSION", "SIGNED_IN", "USER_UPDATED"].includes(event) && loadedTalentUserRef.current !== nextSession.user.id) {
           loadCandidateWorkspace(nextSession.user);
         }
@@ -4131,7 +4132,7 @@ function TalentCandidatePortal({ onBack }) {
       if (isCandidateSession) {
         setSession(activeSession);
         loadCandidateWorkspace(activeSession.user);
-        loadTalentCampaign(activeSession.user);
+        loadResolvedTalentCampaign(activeSession.user);
       } else {
         setSession(null);
       }
@@ -4373,6 +4374,7 @@ function TalentCandidatePortal({ onBack }) {
     profileDirtyRef.current = false;
     setWorkspaceHydrated(false);
     setAutoSaveStatus("Idle");
+    setCampaignSlug(requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG);
     setWorkspaceTab(requestedCampaignSlug ? "Engineering Campaign" : "Profile");
     setAuthMode("signin");
   }
@@ -4961,10 +4963,25 @@ function TalentCandidatePortal({ onBack }) {
     }
   }
 
-  async function loadTalentCampaign(candidateUser = null) {
+  async function loadResolvedTalentCampaign(candidateUser = null) {
+    let resolvedSlug = requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG;
+    if (!requestedCampaignSlug && candidateUser?.id) {
+      const { data, error } = await supabase.rpc("get_my_latest_talent_campaign");
+      if (!error && data?.slug) resolvedSlug = data.slug;
+    }
+
+    setCampaignSlug(resolvedSlug);
+    if (resolvedSlug !== ENGINEERING_TALENT_CAMPAIGN_SLUG) {
+      setWorkspaceTab("Engineering Campaign");
+    }
+    return loadTalentCampaign(candidateUser, resolvedSlug);
+  }
+
+  async function loadTalentCampaign(candidateUser = null, slugOverride = campaignSlug) {
+    const activeCampaignSlug = slugOverride || ENGINEERING_TALENT_CAMPAIGN_SLUG;
     setCampaignLoading(true);
     try {
-      const { data, error } = await supabase.rpc("get_public_talent_campaign", { p_slug: campaignSlug });
+      const { data, error } = await supabase.rpc("get_public_talent_campaign", { p_slug: activeCampaignSlug });
       if (error) throw error;
       setTalentCampaign(data || null);
       const templates = Array.isArray(data?.templates) ? data.templates : [];
@@ -4972,7 +4989,7 @@ function TalentCandidatePortal({ onBack }) {
       if (candidateUser?.id) {
         const { data: application, error: applicationError } = await supabase.rpc(
           "get_my_talent_campaign_application",
-          { p_slug: campaignSlug }
+          { p_slug: activeCampaignSlug }
         );
         if (applicationError) throw applicationError;
         setCampaignApplication(application || null);
@@ -4988,7 +5005,9 @@ function TalentCandidatePortal({ onBack }) {
 
   const statusLabel = profile?.marketplace_status || "Draft";
   const tabItems = [
-    ["Engineering Campaign", isArabic ? "حملة المهندسين" : "Engineering Campaign"],
+    ["Engineering Campaign", isEngineeringTalentCampaign
+      ? (isArabic ? "حملة المهندسين" : "Engineering Campaign")
+      : (isArabic ? "الحملة المهنية" : "Professional Campaign")],
     ["Dashboard", isArabic ? "لوحة التحكم" : "Dashboard"],
     ["Profile", isArabic ? "الملف المهني" : "Professional Profile"],
     ["CV", isArabic ? "السيرة الذاتية" : "CV Upload"],
@@ -9544,9 +9563,9 @@ async function loadProfessionAliases() {
       .range(0, 2000);
 
     if (isPlatformOwner) {
-      // Central platform library: review every engineering master, including
-      // the pending templates originally generated under the library owner company.
-      query = query.eq("profession_category", "Engineering");
+      // Central platform library: review engineering masters and centrally
+      // managed security/safety templates under the library owner company.
+      query = query.in("profession_category", ["Engineering", "Security & Safety"]);
     } else if (isCurrentPlatformUser || !currentCompanyId) {
       setAIInterviewTemplates([]);
       return [];
@@ -9564,7 +9583,7 @@ async function loadProfessionAliases() {
     }
 
     const rows = (data || []).filter((template) => {
-      if (isPlatformOwner) return normalize(template.profession_category) === "engineering";
+      if (isPlatformOwner) return ["engineering", "security & safety"].includes(normalize(template.profession_category));
       if (String(template.company_id || "") === String(currentCompanyId || "")) return true;
       return template.is_global === true && template.approval_status === "Approved" && template.is_active === true;
     });
@@ -35292,7 +35311,7 @@ disabled={authorizationWorkflowBusy === "create"}
                       value={aiInterviewGenerationForm.profession_category}
                       onChange={(value) => updateForm(setAIInterviewGenerationForm, "profession_category", value)}
                       placeholder="Profession Category"
-                      options={["Engineering", "Technical / Skilled", "Administrative", "Finance & Accounting", "HR & Recruitment", "Operations", "IT", "Sales", "Other"]}
+                      options={["Engineering", "Security & Safety", "Technical / Skilled", "Administrative", "Finance & Accounting", "HR & Recruitment", "Operations", "IT", "Sales", "Other"]}
                     />
                     <Input
                       placeholder="Required Experience"
