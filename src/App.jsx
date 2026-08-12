@@ -4577,7 +4577,16 @@ function TalentCandidatePortal({ onBack }) {
       const { data, error } = await supabase.functions.invoke("visaflow-talent-cv-analyzer", {
         body: { document_id: primaryCv.id },
       });
-      if (error) throw error;
+      if (error) {
+        let functionMessage = error?.message || "AI CV analysis failed";
+        try {
+          const errorPayload = await error?.context?.clone?.().json();
+          functionMessage = errorPayload?.error || errorPayload?.message || functionMessage;
+        } catch {
+          // Keep the SDK message when the Edge Function response is not JSON.
+        }
+        throw new Error(functionMessage);
+      }
       if (!data?.ok) throw new Error(data?.error || "AI CV analysis failed");
       loadedTalentUserRef.current = null;
       await loadCandidateWorkspace(session.user, { force: true });
