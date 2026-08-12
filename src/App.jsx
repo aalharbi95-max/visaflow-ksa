@@ -75,6 +75,12 @@ import { buildBulkAssignmentPreview, getBatchCandidateIds, getMatchingCandidateI
 import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import UserGuide from "./UserGuide";
+import CvBuilder from "./CvBuilder.jsx";
+import {
+  CV_BUILDER_STORAGE_KEY,
+  buildTalentImportPayload,
+  normalizeCvDraft,
+} from "./cvBuilder.mjs";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
 import {
   createAgencyAgreement,
@@ -3758,6 +3764,17 @@ function TalentCandidatePortal({ onBack }) {
   const supabase = talentSupabase;
   const initialRecoveryState = useMemo(() => getTalentRecoveryUrlState(), []);
   const requestedCampaignSlug = useMemo(() => getTalentCampaignSlug(), []);
+  const requestedCvBuilderImport = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("cv_builder_import") === "1"; }
+    catch { return false; }
+  }, []);
+  const cvBuilderImport = useMemo(() => {
+    if (!requestedCvBuilderImport) return null;
+    try {
+      const stored = JSON.parse(localStorage.getItem(CV_BUILDER_STORAGE_KEY) || "null");
+      return stored ? buildTalentImportPayload(normalizeCvDraft(stored)) : null;
+    } catch { return null; }
+  }, [requestedCvBuilderImport]);
   const campaignSlug = requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG;
   const [portalLanguage, setPortalLanguage] = useState("AR");
   const [session, setSession] = useState(null);
@@ -3769,9 +3786,9 @@ function TalentCandidatePortal({ onBack }) {
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryForm, setRecoveryForm] = useState({ password: "", confirm_password: "" });
   const [authForm, setAuthForm] = useState({
-    full_name: "",
-    phone: "",
-    email: "",
+    full_name: cvBuilderImport?.full_name || "",
+    phone: cvBuilderImport?.phone || "",
+    email: cvBuilderImport?.email || "",
     password: "",
     confirm_password: "",
   });
@@ -3852,7 +3869,7 @@ function TalentCandidatePortal({ onBack }) {
   }
 
   function mapTalentProfileToForm(row) {
-    return {
+    const mapped = {
       ...EMPTY_TALENT_PROFILE_FORM,
       full_name: row?.full_name || "",
       phone: row?.phone || "",
@@ -3875,6 +3892,11 @@ function TalentCandidatePortal({ onBack }) {
       linkedin_url: row?.linkedin_url || "",
       portfolio_url: row?.portfolio_url || "",
     };
+    if (!cvBuilderImport) return mapped;
+    return Object.fromEntries(Object.entries(mapped).map(([key, value]) => [
+      key,
+      value === "" || value == null ? (cvBuilderImport[key] ?? value) : value,
+    ]));
   }
 
   async function ensureTalentProfile(user) {
@@ -3965,6 +3987,14 @@ function TalentCandidatePortal({ onBack }) {
       profileDirtyRef.current = false;
       setWorkspaceHydrated(true);
       setAutoSaveStatus("Saved");
+      if (cvBuilderImport) {
+        profileDirtyRef.current = true;
+        setAutoSaveStatus("Unsaved");
+        setWorkspaceTab("Profile");
+        setWorkspaceMessage(isArabic
+          ? "تم استيراد بيانات منشئ السيرة. راجعها ثم احفظ ووافق على النشر من صفحة الموافقات."
+          : "Your CV Builder details were imported. Review, save, and grant sharing consent before publication.");
+      }
       if (candidateRow.marketplace_status === "Submitted" && workspaceTab === "Profile") setWorkspaceTab("Dashboard");
     } catch (error) {
       console.error("Talent workspace load failed", error);
@@ -5936,7 +5966,7 @@ const PUBLIC_LANDING_COPY = {
   },
 };
 
-function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHousing }) {
+function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHousing, onCvBuilder }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [trialForm, setTrialForm] = useState({ company_name: "", admin_name: "", email: "", phone: "", job_title: "", team_size: "1-5", website: "", company_fax: "", accepted_terms: false });
   const [trialSubmitting, setTrialSubmitting] = useState(false);
@@ -6002,6 +6032,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHo
           <a href="#home" onClick={handleAnchorClick}>{copy.nav.home}</a>
           <a href="#solutions" onClick={handleAnchorClick}>{copy.nav.companies}</a>
           <a href="#talent" onClick={handleAnchorClick}>{copy.nav.talent}</a>
+          <button type="button" onClick={() => { handleAnchorClick(); onCvBuilder(); }}>Free CV Builder</button>
           <a href="/housing" onClick={handleAnchorClick}>{copy.nav.housing}</a>
           <a href="#interviews" onClick={handleAnchorClick}>{copy.nav.interviews}</a>
           <a href="#about" onClick={handleAnchorClick}>{copy.nav.about}</a>
@@ -6032,6 +6063,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHo
               <div className="vf-public-button-row">
                 <a className="vf-public-primary" href={demoHref}>{copy.hero.company}</a>
                 <button type="button" className="vf-public-secondary" onClick={onTalent}>{copy.hero.candidate}</button>
+                <button type="button" className="vf-public-secondary" onClick={onCvBuilder}>Build CV for Free</button>
                 <button type="button" className="vf-public-secondary" onClick={onHousing}>{copy.hero.housing}</button>
               </div>
               <ul className="vf-public-trust-list">
@@ -20245,6 +20277,24 @@ function openTalentPortal() {
   navigatePublicView(PUBLIC_VIEW.TALENT);
 }
 
+function openCvBuilder() {
+  navigatePublicView(PUBLIC_VIEW.CV_BUILDER);
+}
+
+function publishCvBuilderToTalent() {
+  try {
+    const nextUrl = new URL(buildPublicViewUrl(window.location.href, PUBLIC_VIEW.TALENT));
+    nextUrl.searchParams.set("cv_builder_import", "1");
+    window.history.pushState({}, "", nextUrl);
+  } catch {
+    window.location.assign("/?talent=1&cv_builder_import=1");
+    return;
+  }
+  setPublicView(PUBLIC_VIEW.TALENT);
+  setTalentPortalOpen(true);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function closeTalentPortal() {
   navigatePublicView(PUBLIC_VIEW.LANDING);
 }
@@ -30565,6 +30615,10 @@ if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
 }
 
+if (publicView === PUBLIC_VIEW.CV_BUILDER) {
+  return <CvBuilder onBack={openLandingPage} onPublish={publishCvBuilderToTalent} />;
+}
+
 if (talentPortalOpen) {
   return <TalentCandidatePortal onBack={closeTalentPortal} />;
 }
@@ -30595,6 +30649,7 @@ if (!currentUser && publicView === PUBLIC_VIEW.LANDING) {
       onLogin={openCompanyLogin}
       onTalent={openTalentPortal}
       onHousing={() => window.location.assign("/housing")}
+      onCvBuilder={openCvBuilder}
     />
   );
 }

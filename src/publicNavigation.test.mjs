@@ -30,6 +30,17 @@ test("company login and talent routes remain independent", () => {
     getPublicViewFromLocation({ search: "?talent=1", hash: "" }),
     PUBLIC_VIEW.TALENT
   );
+  assert.equal(
+    getPublicViewFromLocation({ pathname: "/cv-builder", search: "", hash: "" }),
+    PUBLIC_VIEW.CV_BUILDER
+  );
+});
+
+test("CV builder uses a clean public route without losing unrelated parameters", () => {
+  const builderUrl = new URL(buildPublicViewUrl("https://visaflowksa.com/?utm_source=google", PUBLIC_VIEW.CV_BUILDER));
+  assert.equal(builderUrl.pathname, "/cv-builder");
+  assert.equal(builderUrl.searchParams.get("utm_source"), "google");
+  assert.equal(getPublicViewFromLocation(builderUrl), PUBLIC_VIEW.CV_BUILDER);
 });
 
 test("navigation preserves unrelated authentication callback parameters", () => {
@@ -47,6 +58,7 @@ test("navigation preserves unrelated authentication callback parameters", () => 
 
   const landingUrl = new URL(buildPublicViewUrl(talentUrl, PUBLIC_VIEW.LANDING));
   assert.equal(landingUrl.searchParams.get("talent"), null);
+  assert.equal(landingUrl.searchParams.get("cv_builder_import"), null);
   assert.equal(landingUrl.searchParams.get("auth_flow"), "candidate");
 });
 

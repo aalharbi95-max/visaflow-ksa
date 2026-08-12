@@ -11,6 +11,10 @@
     {
       "source": "/housing/(.*)",
       "destination": "/index.html"
+    },
+    {
+      "source": "/cv-builder",
+      "destination": "/index.html"
     }
   ]
 }
