@@ -36,7 +36,7 @@ const COPY = {
     addProject: "+ إضافة مشروع",
     remove: "حذف",
     preview: "معاينة السيرة",
-    printPdf: "تنزيل PDF / طباعة",
+    printPdf: "تنزيل PDF",
     downloadWord: "تنزيل Word",
     publish: "نشر ملفي للشركات",
     publishNote: "سيطلب منك تسجيل الدخول والموافقة قبل ظهور الملف للشركات.",
@@ -68,7 +68,7 @@ const COPY = {
     addProject: "+ Add Project",
     remove: "Remove",
     preview: "Resume Preview",
-    printPdf: "Download PDF / Print",
+    printPdf: "Download PDF",
     downloadWord: "Download Word",
     publish: "Publish My Profile to Employers",
     publishNote: "You will sign in and explicitly consent before employers can see your profile.",
@@ -157,9 +157,34 @@ function buildWordHtml(draft, copy) {
   return `<!doctype html><html dir="${copy.dir}"><head><meta charset="utf-8"><style>@page{size:A4;margin:16mm}body{font-family:Arial,sans-serif;color:#172033;line-height:1.42}h1{font-size:28px;color:#0b2545;margin:0}h2{font-size:15px;color:#176b87;margin:4px 0}h3{font-size:13px;color:#0b2545;margin:10px 0 2px}h4{font-size:13px;color:#176b87;border-bottom:2px solid #16a6a1;padding-bottom:3px;margin:18px 0 7px}.contact,.meta,small{font-size:10px;color:#607386}p,li{font-size:10.5px;margin:3px 0}section{page-break-inside:avoid}.tags{font-size:10.5px}</style></head><body><h1>${escapeHtml(draft.personal.fullName)}</h1><h2>${escapeHtml(draft.personal.targetTitle)}</h2><div class="contact">${escapeHtml(contact)}</div>${draft.summary ? `<h4>${escapeHtml(copy.summary)}</h4><p>${escapeHtml(draft.summary)}</p>` : ""}${experience ? `<h4>${escapeHtml(copy.experiences)}</h4>${experience}` : ""}${education ? `<h4>${escapeHtml(copy.education)}</h4>${education}` : ""}${courses ? `<h4>${escapeHtml(copy.courses)}</h4><ul>${courses}</ul>` : ""}${projects ? `<h4>${escapeHtml(copy.projects)}</h4>${projects}` : ""}${draft.skills ? `<h4>${escapeHtml(copy.skills)}</h4><p class="tags">${splitList(draft.skills).map(escapeHtml).join(" | ")}</p>` : ""}${draft.languages ? `<h4>${escapeHtml(copy.languages)}</h4><p>${splitList(draft.languages).map(escapeHtml).join(" | ")}</p>` : ""}</body></html>`;
 }
 
+function loadPdfScript(src, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-cv-pdf="${globalName}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window[globalName]), { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.dataset.cvPdf = globalName;
+    script.onload = () => resolve(window[globalName]);
+    script.onerror = () => reject(new Error(`Unable to load ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
+function cvFileName(name, extension) {
+  const safeName = String(name || "VisaFlow-Resume").replace(/[^\p{L}\p{N}_-]+/gu, "_");
+  return `${safeName}.${extension}`;
+}
+
 export default function CvBuilder({ onBack, onPublish }) {
   const [draft, setDraft] = useState(loadDraft);
   const [message, setMessage] = useState("");
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const copy = COPY[draft.language] || COPY.AR;
   const completion = useMemo(() => calculateCvCompletion(draft), [draft]);
 
@@ -181,11 +206,52 @@ export default function CvBuilder({ onBack, onPublish }) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${String(draft.personal.fullName || "VisaFlow-Resume").replace(/[^\p{L}\p{N}_-]+/gu, "_")}.doc`;
+    anchor.download = cvFileName(draft.personal.fullName, "doc");
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  async function downloadPdf() {
+    if (isDownloadingPdf) return;
+    const paper = document.querySelector(".cvb-paper");
+    if (!paper) return;
+    setIsDownloadingPdf(true);
+    setMessage(draft.language === "AR" ? "جاري إنشاء ملف PDF..." : "Creating your PDF...");
+    try {
+      await Promise.all([
+        loadPdfScript("/vendor/html2canvas.min.js", "html2canvas"),
+        loadPdfScript("/vendor/jspdf.umd.min.js", "jspdf"),
+        document.fonts?.ready || Promise.resolve(),
+      ]);
+      const canvas = await window.html2canvas(paper, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+      });
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+      const pageWidth = 210;
+      const pageHeight = 297;
+      const imageHeight = (canvas.height * pageWidth) / canvas.width;
+      const image = canvas.toDataURL("image/jpeg", 0.95);
+      let position = 0;
+      pdf.addImage(image, "JPEG", 0, position, pageWidth, imageHeight, undefined, "FAST");
+      for (let remaining = imageHeight - pageHeight; remaining > 0; remaining -= pageHeight) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(image, "JPEG", 0, position, pageWidth, imageHeight, undefined, "FAST");
+      }
+      pdf.save(cvFileName(draft.personal.fullName, "pdf"));
+      setMessage(draft.language === "AR" ? "تم تنزيل ملف PDF بنجاح." : "PDF downloaded successfully.");
+    } catch (error) {
+      console.error("CV PDF download failed", error);
+      setMessage(draft.language === "AR" ? "تعذر إنشاء PDF. حاول مرة أخرى." : "Could not create the PDF. Please try again.");
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   }
 
   function publishProfile() {
@@ -252,7 +318,7 @@ export default function CvBuilder({ onBack, onPublish }) {
           <div className="cvb-danger-zone"><button type="button" onClick={resetDraft}>{copy.reset}</button></div>
         </div>
 
-        <aside className="cvb-preview-panel"><div className="cvb-preview-toolbar"><h2>{copy.preview}</h2><select value={draft.template} onChange={(event) => setDraft((current) => ({ ...current, template: event.target.value }))}><option value="classic">Classic ATS</option><option value="modern">Modern Teal</option></select></div><ResumePreview draft={draft} copy={copy} /><div className="cvb-download-actions"><button type="button" onClick={() => window.print()}>{copy.printPdf}</button><button type="button" onClick={downloadWord}>{copy.downloadWord}</button><button type="button" className="primary" onClick={publishProfile}>{copy.publish}</button><small>{copy.publishNote}</small></div></aside>
+        <aside className="cvb-preview-panel"><div className="cvb-preview-toolbar"><h2>{copy.preview}</h2><select value={draft.template} onChange={(event) => setDraft((current) => ({ ...current, template: event.target.value }))}><option value="classic">Classic ATS</option><option value="modern">Modern Teal</option></select></div><ResumePreview draft={draft} copy={copy} /><div className="cvb-download-actions"><button type="button" onClick={downloadPdf} disabled={isDownloadingPdf} aria-busy={isDownloadingPdf}>{isDownloadingPdf ? (draft.language === "AR" ? "جاري إنشاء PDF..." : "Creating PDF...") : copy.printPdf}</button><button type="button" onClick={downloadWord}>{copy.downloadWord}</button><button type="button" className="primary" onClick={publishProfile}>{copy.publish}</button><small>{copy.publishNote}</small></div></aside>
       </div>
     </main>
   );
