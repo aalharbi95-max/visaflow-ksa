@@ -43,3 +43,12 @@ test("owner email invitations require explicit confirmation and use a background
   assert.match(migration, /queue_talent_prospect_email_invitations/);
   assert.match(migration, /visaflow-talent-prospect-email-every-minute/);
 });
+
+test("Talent prospect email delivery is capped at 250 messages per rolling hour", async () => {
+  const throttle = await readFile(new URL("../supabase/migrations/20260812000600_talent_email_hourly_throttle.sql", import.meta.url), "utf8");
+  assert.match(throttle, /pg_advisory_xact_lock/);
+  assert.match(throttle, /interval '60 minutes'/);
+  assert.match(throttle, /v_in_window\s*>=\s*250/);
+  assert.match(throttle, /email_delivery_status\s*=\s*'Sending'/);
+  assert.match(throttle, /set status\s*=\s*'Invitation Queued'[\s\S]*email_delivery_status\s*=\s*'Queued'[\s\S]*where email_delivery_status\s*=\s*'Failed'/);
+});
