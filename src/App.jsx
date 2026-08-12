@@ -3786,6 +3786,7 @@ function TalentCandidatePortal({ onBack }) {
     registered_candidates: 0,
     marketplace_ready: 0,
     completed_ai_interviews: 0,
+    imported_prospects: 0,
   });
   const cvInputRef = useRef(null);
   const loadedTalentUserRef = useRef(null);
@@ -3842,6 +3843,7 @@ function TalentCandidatePortal({ onBack }) {
           registered_candidates: Number(row.registered_candidates || 0),
           marketplace_ready: Number(row.marketplace_ready || 0),
           completed_ai_interviews: Number(row.completed_ai_interviews || 0),
+          imported_prospects: Number(row.imported_prospects || 0),
         });
       }
     } catch (error) {
@@ -4705,11 +4707,12 @@ function TalentCandidatePortal({ onBack }) {
                     : "Create your profile, upload your CV, consent to AI analysis, and become discoverable to subscribed employers after review. Your full identity is never shared without consent.")}
               </p>
 
-              <div className="vf-talent-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px", marginTop: "34px" }}>
+              <div className="vf-talent-stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px", marginTop: "34px" }}>
                 {[
                   [talentStats.registered_candidates, isArabic ? "متقدم مسجل" : "Registered"],
                   [talentStats.marketplace_ready, isArabic ? "جاهز للشركات" : "Marketplace Ready"],
                   [talentStats.completed_ai_interviews, isArabic ? "أكمل مقابلة AI" : "AI Interviews"],
+                  [talentStats.imported_prospects, isArabic ? "مرشح مستورد" : "Imported Prospects"],
                 ].map(([value, label]) => (
                   <div key={label} style={{ background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)", borderRadius: "16px", padding: "18px" }}>
                     <strong style={{ display: "block", fontSize: "28px" }}>{Number(value || 0).toLocaleString()}</strong>
@@ -6869,6 +6872,7 @@ const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
 const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
 const [ownerTalentCampaign, setOwnerTalentCampaign] = useState(null);
+const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, invited: 0, claimed: 0 });
 const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
 const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
@@ -10161,10 +10165,11 @@ async function loadProfessionAliases() {
       : Number(value);
 
     try {
-      const [ownerResult, publicStatsResult, campaignResult] = await Promise.all([
+      const [ownerResult, publicStatsResult, campaignResult, prospectsResult] = await Promise.all([
         supabase.rpc("get_owner_talent_dashboard"),
         supabase.rpc("get_talent_public_stats"),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: ENGINEERING_TALENT_CAMPAIGN_SLUG }),
+        supabase.rpc("list_owner_talent_prospects", { p_limit: 500 }),
       ]);
 
       if (ownerResult.error) throw ownerResult.error;
@@ -10190,6 +10195,13 @@ async function loadProfessionAliases() {
       });
       setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
       setOwnerTalentCampaign(campaignResult.error ? null : campaignResult.data);
+      const prospectData = prospectsResult.error ? null : prospectsResult.data;
+      setOwnerTalentProspectStats({
+        total: Number(prospectData?.total || 0),
+        awaiting_candidate: Number(prospectData?.awaiting_candidate || 0),
+        invited: Number(prospectData?.invited || 0),
+        claimed: Number(prospectData?.claimed || 0),
+      });
       setOwnerTalentDistributions({
         country_of_residence: Array.isArray(ownerData.distributions?.country_of_residence) ? ownerData.distributions.country_of_residence : [],
         profession: Array.isArray(ownerData.distributions?.profession) ? ownerData.distributions.profession : [],
@@ -10208,6 +10220,7 @@ async function loadProfessionAliases() {
       setOwnerTalentStats(unavailableStats);
       setOwnerTalentRecent([]);
       setOwnerTalentCampaign(null);
+      setOwnerTalentProspectStats({ total: 0, awaiting_candidate: 0, invited: 0, claimed: 0 });
       setOwnerTalentDistributions({ country_of_residence: [], profession: [], marketplace_status: [] });
       setOwnerTalentError({
         code: error?.code || "OWNER_TALENT_DASHBOARD_FAILED",
@@ -39459,6 +39472,21 @@ onClick={() => setActiveReport("activityLog")}>
           </table>
         </div>
       </> : <p style={{ color: "#64748b" }}>Campaign data will appear after the campaign database migration is deployed.</p>}
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <div className="section-title-row">
+        <div>
+          <h2>Imported Talent Counter / عداد المرشحين المستوردين</h2>
+          <p>Counts only. Imported prospects remain private and are not visible to companies.</p>
+        </div>
+      </div>
+      <div className="stats-grid" style={{ marginTop: 14 }}>
+        <div className="stat-card"><h3>Imported Total</h3><strong>{ownerTalentProspectStats.total.toLocaleString()}</strong><span>إجمالي المستوردين</span></div>
+        <div className="stat-card"><h3>Awaiting Candidate</h3><strong>{ownerTalentProspectStats.awaiting_candidate.toLocaleString()}</strong><span>بانتظار إكمال الملف</span></div>
+        <div className="stat-card"><h3>Invited</h3><strong>{ownerTalentProspectStats.invited.toLocaleString()}</strong><span>تم إرسال الدعوة</span></div>
+        <div className="stat-card"><h3>Claimed</h3><strong>{ownerTalentProspectStats.claimed.toLocaleString()}</strong><span>تم ربط الملف</span></div>
+      </div>
     </div>
 
     <div className="table-card" style={{ marginTop: 16 }}>
