@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   ENGINEERING_TALENT_CAMPAIGN_SLUG,
+  FINANCE_TALENT_CAMPAIGN_SLUG,
   HR_TALENT_CAMPAIGN_SLUG,
   buildCampaignUrl,
+  buildLinkedInFinanceCampaignDraft,
   buildLinkedInHrCampaignDraft,
+  getAvailableTalentCampaigns,
   getCampaignProfessionLabel,
   getCampaignReadiness,
   getTalentCampaignSlug,
@@ -23,6 +26,16 @@ test("HR campaign has its own URL, profession label and LinkedIn copy", () => {
   assert.equal(url.searchParams.get("talent_campaign"), HR_TALENT_CAMPAIGN_SLUG);
   assert.equal(getCampaignProfessionLabel(HR_TALENT_CAMPAIGN_SLUG, "AR"), "اختر تخصصك في الموارد البشرية");
   assert.match(buildLinkedInHrCampaignDraft(url.toString()).body, /الموارد البشرية/);
+});
+
+test("Finance campaign is nationality-neutral and available in the Talent portal", () => {
+  const url = new URL(buildCampaignUrl("https://www.visaflowksa.com/", FINANCE_TALENT_CAMPAIGN_SLUG));
+  assert.equal(url.searchParams.get("talent_campaign"), FINANCE_TALENT_CAMPAIGN_SLUG);
+  assert.equal(getCampaignProfessionLabel(FINANCE_TALENT_CAMPAIGN_SLUG, "AR"), "اختر تخصصك في المالية والمحاسبة");
+  assert.match(buildLinkedInFinanceCampaignDraft(url.toString()).body, /دون اشتراط جنسية/);
+  const campaign = getAvailableTalentCampaigns("AR").find((item) => item.slug === FINANCE_TALENT_CAMPAIGN_SLUG);
+  assert.equal(campaign?.name, "حملة الكفاءات المالية والمحاسبية");
+  assert.doesNotMatch(campaign?.name || "", /سعود/);
 });
 
 test("CV and employer sharing are required while result sharing is not", () => {
@@ -78,6 +91,17 @@ test("HR campaign migration exposes HR templates through campaign-aware eligibil
   assert.match(sql, /Human Resources/i);
   assert.match(sql, /talent_campaign_template_is_eligible/i);
   assert.match(sql, /Select an approved interview template for this campaign/i);
+});
+
+test("Finance campaign migration seeds finance templates and rejects cross-campaign templates", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260813000500_talent_finance_campaign.sql", import.meta.url), "utf8");
+  assert.match(sql, /finance-accounting-professionals-2026/i);
+  assert.match(sql, /Finance & Accounting/);
+  assert.match(sql, /finance_accounting/);
+  assert.match(sql, /nationality_restriction"\s*:\s*false/i);
+  assert.match(sql, /else false/i);
+  assert.match(sql, /General Accounting \| المحاسبة العامة/);
+  assert.match(sql, /Corporate Finance & Investment \| تمويل الشركات والاستثمار/);
 });
 
 test("failed campaign interviews can be retried without overwriting history", async () => {

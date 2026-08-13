@@ -1,5 +1,70 @@
 export const ENGINEERING_TALENT_CAMPAIGN_SLUG = "saudi-engineers-2026";
 export const HR_TALENT_CAMPAIGN_SLUG = "saudi-hr-professionals-2026";
+export const FINANCE_TALENT_CAMPAIGN_SLUG = "finance-accounting-professionals-2026";
+
+const TALENT_CAMPAIGN_CONTENT = {
+  [ENGINEERING_TALENT_CAMPAIGN_SLUG]: {
+    nameAr: "حملة المهندسين",
+    nameEn: "Engineering Campaign",
+    descriptionAr: "محاكاة مقابلات لجميع التخصصات الهندسية المعتمدة.",
+    descriptionEn: "Interview simulations for approved engineering professions.",
+    professionLabelAr: "اختر تخصصك الهندسي",
+    professionLabelEn: "Select your engineering profession",
+    badgeAr: "حملة VisaFlow للمواهب الهندسية",
+    badgeEn: "VisaFlow Engineering Talent Campaign",
+    headlineAr: "للمهندسين: سجّل، اختر تخصصك، واختبر جاهزيتك.",
+    headlineEn: "Engineers: register, choose your profession, and test your readiness.",
+    introAr: "الحملة تشمل جميع التخصصات الهندسية التي لها قالب معتمد. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.",
+    introEn: "The campaign includes every engineering profession with an approved template. CV sharing is required to enter the assessment; sharing the result is optional and remains under your control.",
+  },
+  [HR_TALENT_CAMPAIGN_SLUG]: {
+    nameAr: "حملة الموارد البشرية",
+    nameEn: "Human Resources Campaign",
+    descriptionAr: "محاكاة مقابلات لمسارات وتخصصات الموارد البشرية.",
+    descriptionEn: "Interview simulations for Human Resources specializations.",
+    professionLabelAr: "اختر تخصصك في الموارد البشرية",
+    professionLabelEn: "Select your HR specialization",
+    badgeAr: "حملة VisaFlow لمواهب الموارد البشرية",
+    badgeEn: "VisaFlow Human Resources Talent Campaign",
+    headlineAr: "لمتخصصي الموارد البشرية: سجّل، اختر مسارك، واختبر جاهزيتك.",
+    headlineEn: "HR professionals: register, choose your track, and test your readiness.",
+    introAr: "الحملة تشمل مسارات الموارد البشرية المعتمدة. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.",
+    introEn: "The campaign includes approved HR specializations. CV sharing is required to enter the assessment; result sharing remains optional.",
+  },
+  [FINANCE_TALENT_CAMPAIGN_SLUG]: {
+    nameAr: "حملة الكفاءات المالية والمحاسبية",
+    nameEn: "Finance & Accounting Campaign",
+    descriptionAr: "محاكاة مقابلات لمسارات المالية والمحاسبة والمراجعة والمخاطر.",
+    descriptionEn: "Interview simulations for finance, accounting, audit, treasury, and risk tracks.",
+    professionLabelAr: "اختر تخصصك في المالية والمحاسبة",
+    professionLabelEn: "Select your finance or accounting specialization",
+    badgeAr: "حملة VisaFlow للكفاءات المالية والمحاسبية",
+    badgeEn: "VisaFlow Finance & Accounting Talent Campaign",
+    headlineAr: "للكفاءات المالية والمحاسبية: سجّل، اختر مسارك، واختبر جاهزيتك.",
+    headlineEn: "Finance and accounting professionals: register, choose your track, and test your readiness.",
+    introAr: "الحملة متاحة لجميع المتخصصين المؤهلين في المالية والمحاسبة دون اشتراط جنسية. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.",
+    introEn: "The campaign is open to qualified finance and accounting professionals of all nationalities. CV sharing is required to enter the assessment; result sharing remains optional.",
+  },
+};
+
+export function getTalentCampaignContent(slug, language = "AR") {
+  const content = TALENT_CAMPAIGN_CONTENT[slug] || null;
+  if (!content) return null;
+  const isArabic = String(language).toUpperCase() === "AR";
+  return {
+    slug,
+    name: isArabic ? content.nameAr : content.nameEn,
+    description: isArabic ? content.descriptionAr : content.descriptionEn,
+    professionLabel: isArabic ? content.professionLabelAr : content.professionLabelEn,
+    badge: isArabic ? content.badgeAr : content.badgeEn,
+    headline: isArabic ? content.headlineAr : content.headlineEn,
+    intro: isArabic ? content.introAr : content.introEn,
+  };
+}
+
+export function getAvailableTalentCampaigns(language = "AR") {
+  return Object.keys(TALENT_CAMPAIGN_CONTENT).map((slug) => getTalentCampaignContent(slug, language));
+}
 
 export function getTalentCampaignSlug(locationLike = globalThis.location) {
   try {
@@ -19,7 +84,7 @@ export function getCampaignReadiness({ profile, primaryCv, consents, templateId 
   if (!consents?.["Employer Sharing"]) missing.push("cv_sharing");
   if (!consents?.["Employer Contact Sharing"]) missing.push("contact_sharing");
   if (!consents?.["AI Interview"]) missing.push("ai_interview");
-  if (!String(templateId || "").trim()) missing.push("engineering_template");
+  if (!String(templateId || "").trim()) missing.push("campaign_template");
   return { ready: missing.length === 0, missing };
 }
 
@@ -46,12 +111,8 @@ export function buildLinkedInEngineeringCampaignDraft(campaignUrl) {
 
 export function getCampaignProfessionLabel(slug, language = "AR") {
   const isArabic = String(language).toUpperCase() === "AR";
-  if (slug === ENGINEERING_TALENT_CAMPAIGN_SLUG) {
-    return isArabic ? "اختر تخصصك الهندسي" : "Select your engineering profession";
-  }
-  if (slug === HR_TALENT_CAMPAIGN_SLUG) {
-    return isArabic ? "اختر تخصصك في الموارد البشرية" : "Select your HR specialization";
-  }
+  const content = getTalentCampaignContent(slug, language);
+  if (content) return content.professionLabel;
   return isArabic ? "اختر تخصصك المهني" : "Select your professional specialization";
 }
 
@@ -65,6 +126,20 @@ export function buildLinkedInHrCampaignDraft(campaignUrl) {
       "مشاركة السيرة وبيانات التواصل مع الشركات المشتركة شرط لدخول الاختبار، أما مشاركة نتيجة الاختبار فهي اختيارية بالكامل.",
       `التسجيل: ${campaignUrl}`,
       "#HumanResources #HRJobs #SaudiArabia #موارد_بشرية #وظائف #VisaFlowTalent",
+    ].join("\n\n"),
+  };
+}
+
+export function buildLinkedInFinanceCampaignDraft(campaignUrl) {
+  return {
+    title: "دعوة للكفاءات المالية والمحاسبية: اختبر جاهزيتك المهنية مع VisaFlow Talent",
+    body: [
+      "هل تعمل في المالية أو المحاسبة وتبحث عن فرصة مهنية جديدة؟",
+      "سجّل في VisaFlow Talent، ارفع سيرتك الذاتية، واختر مسارك لإجراء مقابلة مهنية مدعومة بالذكاء الاصطناعي.",
+      "تشمل الحملة: المحاسبة، الحسابات الدائنة والمدينة، محاسبة التكاليف، التخطيط والتحليل المالي، المراجعة الداخلية، الزكاة والضرائب، الخزينة، الائتمان، المخاطر والالتزام، والاستثمار وتمويل الشركات.",
+      "الحملة متاحة لجميع المتخصصين المؤهلين دون اشتراط جنسية. مشاركة السيرة وبيانات التواصل مع الشركات المشتركة شرط لدخول الاختبار، أما مشاركة نتيجة الاختبار فهي اختيارية بالكامل.",
+      `التسجيل: ${campaignUrl}`,
+      "#Finance #Accounting #Audit #FinancialJobs #محاسبة #مالية #وظائف #VisaFlowTalent",
     ].join("\n\n"),
   };
 }

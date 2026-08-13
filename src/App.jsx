@@ -39,9 +39,12 @@ import {
 } from "./publicNavigation.mjs";
 import {
   ENGINEERING_TALENT_CAMPAIGN_SLUG,
+  FINANCE_TALENT_CAMPAIGN_SLUG,
   HR_TALENT_CAMPAIGN_SLUG,
+  getAvailableTalentCampaigns,
   getCampaignProfessionLabel,
   getCampaignReadiness,
+  getTalentCampaignContent,
   getTalentCampaignSlug,
 } from "./talentCampaign.mjs";
 import {
@@ -4082,6 +4085,7 @@ function TalentCandidatePortal({ onBack }) {
   const [campaignLoading, setCampaignLoading] = useState(true);
 
   const isArabic = portalLanguage === "AR";
+  const requestedCampaignContent = getTalentCampaignContent(requestedCampaignSlug, portalLanguage);
   const emailSuggestion = useMemo(() => getTalentEmailSuggestion(authForm.email), [authForm.email]);
   const authMessageIsSuccess = ["تم إنشاء", "تم إرسال", "تمت إعادة", "تم استلام", "بنجاح", "created", "sent", "resent", "successfully"]
     .some((token) => authMessage.toLowerCase().includes(token.toLowerCase()));
@@ -4982,27 +4986,19 @@ function TalentCandidatePortal({ onBack }) {
             <section style={{ color: "#fff", padding: "38px 12px 28px" }}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", background: "rgba(18,184,176,.16)", border: "1px solid rgba(45,212,191,.35)", borderRadius: "999px", padding: "8px 12px", fontWeight: 900, fontSize: "13px" }}>
                 ✦ {requestedCampaignSlug
-                  ? (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
-                    ? (isArabic ? "حملة VisaFlow لمواهب الموارد البشرية" : "VisaFlow Human Resources Talent Campaign")
-                    : (isArabic ? "حملة VisaFlow للمواهب الهندسية" : "VisaFlow Engineering Talent Campaign"))
+                  ? (requestedCampaignContent?.badge || (isArabic ? "حملة VisaFlow للمواهب" : "VisaFlow Talent Campaign"))
                   : (isArabic ? "ابنِ ملفك المهني مرة واحدة" : "Build your professional profile once")}
               </div>
               <h1 style={{ fontSize: "clamp(38px, 6vw, 72px)", lineHeight: 1.02, margin: "22px 0 18px", letterSpacing: "-0.04em" }}>
                 {requestedCampaignSlug
-                  ? (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
-                    ? (isArabic ? "لمتخصصي HR: سجّل، اختر مسارك، واختبر جاهزيتك." : "HR professionals: register, choose your track, and test your readiness.")
-                    : (isArabic ? "للمهندسين: سجّل، اختر تخصصك، واختبر جاهزيتك." : "Engineers: register, choose your profession, and test your readiness."))
+                  ? (requestedCampaignContent?.headline || (isArabic ? "سجّل، اختر تخصصك، واختبر جاهزيتك." : "Register, choose your specialization, and test your readiness."))
                   : (isArabic ? "قدّم سيرتك الذاتية. دع الفرص تصل إليك." : "Submit your CV. Let opportunities find you.")}
               </h1>
               <p style={{ maxWidth: "720px", fontSize: "18px", lineHeight: 1.8, color: "rgba(255,255,255,.8)", margin: 0 }}>
                 {requestedCampaignSlug
-                  ? (isArabic
-                    ? (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
-                      ? "الحملة تشمل مسارات الموارد البشرية المعتمدة. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك."
-                      : "الحملة تشمل جميع التخصصات الهندسية التي لها قالب معتمد في منصة المالك. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.")
-                    : (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
-                      ? "The campaign includes approved HR specializations. CV sharing is required to enter the assessment; result sharing remains optional."
-                      : "The campaign includes every engineering profession with an approved Platform Owner template. CV sharing is required to enter the assessment; sharing the result is optional and remains under your control."))
+                  ? (requestedCampaignContent?.intro || (isArabic
+                    ? "اختر تخصصك وأكمل ملفك المهني لبدء التقييم."
+                    : "Choose your specialization and complete your professional profile to start the assessment."))
                   : (isArabic
                     ? "سجّل ملفك، ارفع سيرتك، وافق على التحليل الذكي، ثم يظهر ملف مجهول الهوية للشركات المشتركة بعد المراجعة. بياناتك الكاملة لا تُشارك دون موافقتك."
                     : "Create your profile, upload your CV, consent to AI analysis, and become discoverable to subscribed employers after review. Your full identity is never shared without consent.")}
@@ -5307,22 +5303,7 @@ function TalentCandidatePortal({ onBack }) {
   }
 
   const statusLabel = profile?.marketplace_status || "Draft";
-  const availableTalentCampaigns = [
-    {
-      slug: ENGINEERING_TALENT_CAMPAIGN_SLUG,
-      nameAr: "حملة المهندسين",
-      nameEn: "Engineering Campaign",
-      descriptionAr: "محاكاة مقابلات لجميع التخصصات الهندسية المعتمدة.",
-      descriptionEn: "Interview simulations for approved engineering professions.",
-    },
-    {
-      slug: HR_TALENT_CAMPAIGN_SLUG,
-      nameAr: "حملة الموارد البشرية",
-      nameEn: "Human Resources Campaign",
-      descriptionAr: "محاكاة مقابلات لمسارات وتخصصات الموارد البشرية.",
-      descriptionEn: "Interview simulations for Human Resources specializations.",
-    },
-  ];
+  const availableTalentCampaigns = getAvailableTalentCampaigns(portalLanguage);
 
   function selectTalentCampaign(nextSlug) {
     setCampaignSlug(nextSlug);
@@ -5421,8 +5402,8 @@ function TalentCandidatePortal({ onBack }) {
                     const selected = campaignSlug === item.slug;
                     return (
                       <button key={item.slug} type="button" onClick={() => selectTalentCampaign(item.slug)} style={{ border: `2px solid ${selected ? palette.cyan : palette.border}`, borderRadius: "16px", padding: "17px", background: selected ? "#ecfeff" : "#fff", color: palette.text, textAlign: isArabic ? "right" : "left", cursor: "pointer" }}>
-                        <strong style={{ display: "block", fontSize: "17px", marginBottom: "7px" }}>{isArabic ? item.nameAr : item.nameEn}</strong>
-                        <span style={{ display: "block", color: palette.muted, lineHeight: 1.6, fontSize: "13px" }}>{isArabic ? item.descriptionAr : item.descriptionEn}</span>
+                        <strong style={{ display: "block", fontSize: "17px", marginBottom: "7px" }}>{item.name}</strong>
+                        <span style={{ display: "block", color: palette.muted, lineHeight: 1.6, fontSize: "13px" }}>{item.description}</span>
                         <span style={{ display: "inline-block", marginTop: "10px", color: selected ? palette.success : palette.blue, fontWeight: 900 }}>{selected ? (isArabic ? "مختارة ✓" : "Selected ✓") : (isArabic ? "اختيار الحملة" : "Select campaign")}</span>
                       </button>
                     );
@@ -5430,10 +5411,10 @@ function TalentCandidatePortal({ onBack }) {
                 </div>
                 <div style={{ padding: "22px", borderRadius: "18px", color: "#fff", background: `linear-gradient(135deg, ${palette.navy}, ${palette.blue} 62%, ${palette.cyan})`, marginBottom: "18px" }}>
                   <div style={{ fontSize: "12px", fontWeight: 900, color: "#99f6e4", letterSpacing: ".08em", textTransform: "uppercase" }}>VisaFlow Talent 2026</div>
-                  <h2 style={{ margin: "8px 0" }}>{isArabic ? (talentCampaign?.name_ar || "حملة المواهب الهندسية") : (talentCampaign?.name_en || "Engineering Talent Campaign")}</h2>
+                  <h2 style={{ margin: "8px 0" }}>{isArabic ? (talentCampaign?.name_ar || "حملة المواهب") : (talentCampaign?.name_en || "Talent Campaign")}</h2>
                   <p style={{ margin: 0, lineHeight: 1.8, color: "rgba(255,255,255,.82)" }}>{isArabic
                     ? (talentCampaign?.description_ar || "سجّل سيرتك واختر تخصصك وأجرِ اختبار المقابلة المهنية.")
-                    : (talentCampaign?.description_en || "Register your CV, select your engineering profession, and take the professional interview assessment.")}</p>
+                    : (talentCampaign?.description_en || "Register your CV, select your specialization, and take the professional interview assessment.")}</p>
                 </div>
 
                 {campaignLoading ? (
@@ -7291,6 +7272,7 @@ const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
 const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
 const [ownerTalentCampaign, setOwnerTalentCampaign] = useState(null);
+const [ownerFinanceTalentCampaign, setOwnerFinanceTalentCampaign] = useState(null);
 const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
 const [ownerTalentInviteBusy, setOwnerTalentInviteBusy] = useState(false);
 const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
@@ -10616,10 +10598,11 @@ async function loadProfessionAliases() {
       : Number(value);
 
     try {
-      const [ownerResult, publicStatsResult, campaignResult, prospectsResult] = await Promise.all([
+      const [ownerResult, publicStatsResult, campaignResult, financeCampaignResult, prospectsResult] = await Promise.all([
         supabase.rpc("get_owner_talent_dashboard"),
         supabase.rpc("get_talent_public_stats"),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: ENGINEERING_TALENT_CAMPAIGN_SLUG }),
+        supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: FINANCE_TALENT_CAMPAIGN_SLUG }),
         supabase.rpc("list_owner_talent_prospects", { p_limit: 500 }),
       ]);
 
@@ -10646,6 +10629,7 @@ async function loadProfessionAliases() {
       });
       setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
       setOwnerTalentCampaign(campaignResult.error ? null : campaignResult.data);
+      setOwnerFinanceTalentCampaign(financeCampaignResult.error ? null : financeCampaignResult.data);
       const prospectData = prospectsResult.error ? null : prospectsResult.data;
       setOwnerTalentProspectStats({
         total: Number(prospectData?.total || 0),
@@ -40061,6 +40045,33 @@ onClick={() => setActiveReport("activityLog")}>
           );
         })}
       </div>
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <div className="section-title-row">
+        <div>
+          <h2>Finance &amp; Accounting Talent Campaign / حملة الكفاءات المالية والمحاسبية</h2>
+          <p>Open to qualified professionals of all nationalities. Only approved Finance &amp; Accounting interview templates are offered.</p>
+        </div>
+        <button type="button" onClick={async () => {
+          const url = `${window.location.origin}/?talent=1&talent_campaign=${FINANCE_TALENT_CAMPAIGN_SLUG}&utm_source=linkedin&utm_medium=social&utm_campaign=finance_accounting_2026`;
+          await navigator.clipboard.writeText(url);
+          setOwnerTalentMessage(`Campaign link copied: ${url}`);
+        }}>Copy Finance Campaign Link</button>
+      </div>
+      {ownerFinanceTalentCampaign ? <>
+        <div className="stats-grid" style={{ marginTop: 14 }}>
+          <div className="stat-card"><h3>Registered</h3><strong>{Number(ownerFinanceTalentCampaign.registered || 0)}</strong><span>المسجلون</span></div>
+          <div className="stat-card"><h3>Started</h3><strong>{Number(ownerFinanceTalentCampaign.started || 0)}</strong><span>بدؤوا الاختبار</span></div>
+          <div className="stat-card"><h3>Completed</h3><strong>{Number(ownerFinanceTalentCampaign.completed || 0)}</strong><span>أكملوا الاختبار</span></div>
+          <div className="stat-card"><h3>Result Sharing</h3><strong>{Number(ownerFinanceTalentCampaign.result_sharing_granted || 0)}</strong><span>وافقوا على مشاركة النتيجة</span></div>
+        </div>
+        <div className="table-card" style={{ marginTop: 14 }}>
+          <table><thead><tr><th>Reference</th><th>Candidate</th><th>Finance Specialization</th><th>Status</th><th>Result Sharing</th><th>Score</th><th>Registered</th></tr></thead>
+            <tbody>{(ownerFinanceTalentCampaign.applications || []).length === 0 ? <tr><td colSpan="7">No finance campaign registrations yet.</td></tr> : (ownerFinanceTalentCampaign.applications || []).map((application) => <tr key={application.id}><td>{application.candidate_reference || "-"}</td><td>{application.candidate_name || "-"}</td><td>{application.profession || "-"}</td><td><Badge value={application.status || "Registered"} /></td><td>{application.result_sharing_consent ? "Allowed" : "Private"}</td><td>{application.result_sharing_consent && application.score != null ? `${application.score}%` : "Private"}</td><td>{application.created_at ? new Date(application.created_at).toLocaleString() : "-"}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </> : <p style={{ color: "#64748b" }}>Finance campaign data will appear after the database migration is deployed.</p>}
     </div>
 
     <div className="form-card" style={{ marginTop: 16 }}>
