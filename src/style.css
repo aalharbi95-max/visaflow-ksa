@@ -2716,6 +2716,38 @@ main.ai-candidate-shell {
   font-size: 12px;
 }
 
+.ai-candidate-recording-meter {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 15px;
+  border: 1px solid #fecaca;
+  border-radius: 14px;
+  background: #fff7f7;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.ai-candidate-recording-meter-track {
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #fee2e2;
+}
+
+.ai-candidate-recording-meter-track span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f59e0b, #16a34a);
+  transition: width 80ms linear;
+}
+
+.ai-candidate-recording-meter b.voice-detected {
+  color: #15803d;
+}
+
 .ai-candidate-audio-preview {
   margin-top: 14px;
   padding: 15px;
@@ -4987,4 +5019,197 @@ body:has(.vf-public) {
 
 @keyframes workspace-loading-spin {
   to { transform: rotate(360deg); }
+}
+
+.talent-marketplace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.talent-marketplace-search {
+  min-width: 260px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border: 1px solid #d8e2ee;
+  border-radius: 14px;
+  background: #fff;
+  color: #64748b;
+}
+
+.talent-marketplace-search input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.talent-marketplace-section {
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 22px;
+  background: #f8fafc;
+}
+
+.talent-marketplace-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 20px;
+}
+
+.talent-marketplace-heading h2,
+.talent-marketplace-heading p { margin: 0; }
+.talent-marketplace-heading h2 { color: #092758; }
+.talent-marketplace-heading p:last-child { margin-top: 6px; color: #64748b; }
+
+.talent-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.talent-profile-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #dce6f1;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 39, 75, 0.05);
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+
+.talent-profile-card:hover {
+  transform: translateY(-2px);
+  border-color: #9edbd2;
+  box-shadow: 0 14px 32px rgba(15, 39, 75, 0.1);
+}
+
+.talent-profile-card > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 72px;
+}
+
+.talent-profile-avatar {
+  width: 50px;
+  height: 50px;
+  flex: 0 0 50px;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #0b2d62, #17b8aa);
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+
+.talent-profile-identity { min-width: 0; flex: 1; }
+.talent-profile-identity h3 { margin: 2px 0 5px; color: #092758; font-size: 18px; }
+.talent-profile-identity p { margin: 0; color: #64748b; line-height: 1.45; }
+
+.talent-profile-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 17px 0;
+}
+
+.talent-profile-facts span {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f4f7fb;
+}
+
+.talent-profile-facts small,
+.talent-profile-facts strong { display: block; }
+.talent-profile-facts small { margin-bottom: 4px; color: #7b8ca5; }
+.talent-profile-facts strong { color: #1e365c; overflow-wrap: anywhere; }
+
+.talent-profile-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 33px;
+}
+
+.talent-profile-skills span {
+  padding: 6px 9px;
+  border: 1px solid #cbe8e3;
+  border-radius: 999px;
+  background: #effcf9;
+  color: #087c70;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.talent-profile-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 58px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #edf1f5;
+  color: #64748b;
+  overflow-wrap: anywhere;
+}
+
+.talent-profile-contact a { color: #0a72b8; font-weight: 700; }
+
+.talent-profile-card > footer {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 15px;
+}
+
+.talent-profile-card > footer button {
+  min-height: 40px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.talent-profile-card > footer button:disabled { cursor: not-allowed; opacity: .55; }
+.talent-cv-button { border: 1px solid #0f766e; background: #fff; color: #0f766e; }
+.talent-download-button { border: 1px solid #dbe5ef; background: #eef3f9; color: #17365f; }
+.talent-schedule-button { border: 0; background: #0b2d62; color: #fff; }
+
+.talent-marketplace-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 22px;
+  color: #52637c;
+}
+
+.talent-marketplace-empty {
+  padding: 56px 20px;
+  border: 1px dashed #bed0e2;
+  border-radius: 16px;
+  background: #fff;
+  color: #64748b;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .talent-marketplace-toolbar { align-items: stretch; flex-direction: column; }
+  .talent-profile-grid { grid-template-columns: 1fr; }
+  .talent-profile-card > footer { grid-template-columns: 1fr 1fr; }
+  .talent-schedule-button { grid-column: 1 / -1; }
+  .talent-marketplace-pagination { gap: 8px; }
 }

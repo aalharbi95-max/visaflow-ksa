@@ -42,6 +42,16 @@ test("AI interview start requires a fresh audible microphone signal", async () =
   assert.match(app, /Please test your microphone before starting\./);
 });
 
+test("recorded answers show a live sound meter and playback before approval", async () => {
+  const app = await readFile(appUrl, "utf8");
+  assert.match(app, /startRecordingLevelMeter\(stream\)/);
+  assert.match(app, /recordingAudioLevel/);
+  assert.match(app, /Voice is being received/);
+  assert.match(app, /Listen to your answer before continuing/);
+  assert.match(app, /Record answer again/);
+  assert.match(app, /disabled=\{savingAnswer \|\| !currentAudioUrl\}/);
+});
+
 test("email recipient is resolved server-side from the authorized Talent candidate", async () => {
   const dispatcher = await readFile(dispatcherUrl, "utf8");
   assert.match(dispatcher, /TALENT_INTERVIEW_INVITATION:[\s\S]*?recipientSource: "talent_interview_invitations -> talent_candidates\.email"/);

@@ -1662,6 +1662,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const [currentMediaType, setCurrentMediaType] = useState("audio");
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingAudioLevel, setRecordingAudioLevel] = useState(0);
+  const [recordingVoiceDetected, setRecordingVoiceDetected] = useState(false);
   const [savingAnswer, setSavingAnswer] = useState(false);
   const [currentAnswerSaved, setCurrentAnswerSaved] = useState(false);
   const [currentAudioUrl, setCurrentAudioUrl] = useState("");
@@ -1680,6 +1682,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const cameraPreviewRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingTimerRef = useRef(null);
+  const recordingAudioContextRef = useRef(null);
+  const recordingLevelFrameRef = useRef(null);
   const recordingStartedAtRef = useRef(null);
   const interviewStartedAtRef = useRef(null);
   const questionAskedAtRef = useRef(null);
@@ -1738,6 +1742,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
     return () => {
       if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
+      if (recordingLevelFrameRef.current) window.cancelAnimationFrame(recordingLevelFrameRef.current);
+      recordingAudioContextRef.current?.close?.().catch?.(() => {});
       if (mediaRecorderRef.current?.state === "recording") {
         try { mediaRecorderRef.current.stop(); } catch { /* no-op */ }
       }
@@ -2755,6 +2761,46 @@ function AIInterviewCandidatePortal({ accessToken }) {
     return options.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
   }
 
+  async function startRecordingLevelMeter(stream) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    if (recordingLevelFrameRef.current) window.cancelAnimationFrame(recordingLevelFrameRef.current);
+    await recordingAudioContextRef.current?.close?.().catch?.(() => {});
+
+    const audioContext = new AudioContextClass();
+    recordingAudioContextRef.current = audioContext;
+    await audioContext.resume?.();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.45;
+    source.connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+
+    const measure = () => {
+      analyser.getByteTimeDomainData(samples);
+      let sumSquares = 0;
+      for (let index = 0; index < samples.length; index += 1) {
+        const sample = (samples[index] - 128) / 128;
+        sumSquares += sample * sample;
+      }
+      const rms = Math.sqrt(sumSquares / samples.length);
+      setRecordingAudioLevel(Math.min(100, Math.round(rms * 500)));
+      if (rms >= 0.015) setRecordingVoiceDetected(true);
+      recordingLevelFrameRef.current = window.requestAnimationFrame(measure);
+    };
+    recordingLevelFrameRef.current = window.requestAnimationFrame(measure);
+  }
+
+  function stopRecordingLevelMeter() {
+    if (recordingLevelFrameRef.current) window.cancelAnimationFrame(recordingLevelFrameRef.current);
+    recordingLevelFrameRef.current = null;
+    recordingAudioContextRef.current?.close?.().catch?.(() => {});
+    recordingAudioContextRef.current = null;
+    setRecordingAudioLevel(0);
+  }
+
   async function startRecordingAnswer() {
     if (!currentQuestion || isRecording || savingAnswer) return;
     if (!window.MediaRecorder) {
@@ -2784,17 +2830,21 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
       recorder.onerror = (event) => {
         setPortalMessage(event?.error?.message || tr("Recording failed.", "فشل التسجيل."));
+        stopRecordingLevelMeter();
         setIsRecording(false);
       };
 
       recorder.onstop = async () => {
         if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
         recordingTimerRef.current = null;
+        stopRecordingLevelMeter();
         setIsRecording(false);
         await saveRecordedAnswer(recorder, currentQuestion);
       };
 
       recorder.start(500);
+      setRecordingVoiceDetected(false);
+      await startRecordingLevelMeter(stream);
       setIsRecording(true);
       setRecordingSeconds(0);
       setCurrentAnswerSaved(false);
@@ -2813,6 +2863,7 @@ function AIInterviewCandidatePortal({ accessToken }) {
         }
       }, 500);
     } catch (error) {
+      stopRecordingLevelMeter();
       setPortalMessage(error?.message || tr("Camera or microphone access was denied.", "تم رفض الوصول إلى الكاميرا أو الميكروفون."));
       setIsRecording(false);
     }
@@ -3619,9 +3670,22 @@ function AIInterviewCandidatePortal({ accessToken }) {
               </div>
             </div>
 
+            {isRecording && (
+              <div className="ai-candidate-recording-meter" aria-live="polite">
+                <div className="ai-candidate-recording-meter-track" aria-hidden="true">
+                  <span style={{ width: `${recordingAudioLevel}%` }} />
+                </div>
+                <b className={recordingVoiceDetected ? "voice-detected" : ""}>
+                  {recordingVoiceDetected
+                    ? tr("Voice is being received", "يتم استقبال صوتك")
+                    : tr("Speak now — no clear voice detected yet", "تحدث الآن — لم يتم اكتشاف صوت واضح بعد")}
+                </b>
+              </div>
+            )}
+
             {currentAudioUrl && (
               <div className="ai-candidate-audio-preview">
-                <span>{tr("Your saved answer", "إجابتك المحفوظة")}</span>
+                <span>{tr("Listen to your answer before continuing", "استمع إلى إجابتك قبل المتابعة")}</span>
                 {currentMediaType === "video"
                   ? <video controls playsInline src={currentAudioUrl} style={{ width: "100%", maxWidth: 640, borderRadius: 12, background: "#0f172a" }} />
                   : <audio controls src={currentAudioUrl} />}
@@ -3640,11 +3704,16 @@ function AIInterviewCandidatePortal({ accessToken }) {
                 </button>
               )}
               {!isRecording && currentAnswerSaved && (
-                <button className="ai-candidate-primary" disabled={savingAnswer} onClick={moveToNextQuestion}>
-                  {currentQuestionIndex >= questions.length - 1
-                    ? tr("Finish interview", "إنهاء المقابلة")
-                    : tr("Next question", "السؤال التالي")}
-                </button>
+                <>
+                  <button className="ai-candidate-primary" disabled={savingAnswer || !currentAudioUrl} onClick={moveToNextQuestion}>
+                    {currentQuestionIndex >= questions.length - 1
+                      ? tr("Approve answer and finish", "اعتماد الإجابة وإنهاء المقابلة")
+                      : tr("Approve answer and continue", "اعتماد الإجابة والمتابعة")}
+                  </button>
+                  <button className="ai-candidate-secondary" disabled={savingAnswer} onClick={startRecordingAnswer}>
+                    {tr("Record answer again", "إعادة تسجيل الإجابة")}
+                  </button>
+                </>
               )}
               {!isRecording && !currentAnswerSaved && (
                 <button className="ai-candidate-secondary" disabled={savingAnswer} onClick={skipCurrentQuestion}>
@@ -7165,6 +7234,10 @@ const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
 const [companyTalentMessage, setCompanyTalentMessage] = useState("");
 const [companyTalentSearch, setCompanyTalentSearch] = useState("");
+const [companyTalentTotal, setCompanyTalentTotal] = useState(0);
+const [companyTalentPage, setCompanyTalentPage] = useState(1);
+const [companyTalentCvBusyId, setCompanyTalentCvBusyId] = useState("");
+const companyTalentPageSize = 24;
 const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
 const [talentInterviewForm, setTalentInterviewForm] = useState({
   interview_type: "Online Video",
@@ -10335,10 +10408,11 @@ async function loadProfessionAliases() {
     return rows;
   }
 
-  async function loadCompanyTalentMarketplace() {
+  async function loadCompanyTalentMarketplace({ page = 1, query = companyTalentSearch } = {}) {
     if (!currentCompanyId || isCurrentPlatformUser || currentRole === "Agency") {
       setTalentEntitlement({ enabled: false, tier: "None", profile_limit: 0 });
       setCompanyTalentProfiles([]);
+      setCompanyTalentTotal(0);
       return [];
     }
 
@@ -10352,19 +10426,43 @@ async function loadProfessionAliases() {
       setTalentEntitlement(entitlement);
       if (!entitlement.enabled) {
         setCompanyTalentProfiles([]);
+        setCompanyTalentTotal(0);
         setCompanyTalentMessage("VisaFlow Talent is not included in this company subscription.");
         return [];
       }
 
-      const { data, error } = await supabase.rpc("list_company_talent_marketplace");
+      const safePage = Math.max(1, Number(page) || 1);
+      const normalizedQuery = String(query || "").trim();
+      let { data, error } = await supabase.rpc("list_company_talent_marketplace_page", {
+        p_query: normalizedQuery,
+        p_limit: companyTalentPageSize,
+        p_offset: (safePage - 1) * companyTalentPageSize,
+      });
+
+      // Keep the page usable while the pagination migration is being deployed.
+      if (error && /list_company_talent_marketplace_page|schema cache|function/i.test(String(error.message || ""))) {
+        const legacy = await supabase.rpc("list_company_talent_marketplace");
+        if (legacy.error) throw legacy.error;
+        const legacyRows = Array.isArray(legacy.data) ? legacy.data : [];
+        const filteredRows = normalizedQuery ? legacyRows.filter((candidate) => [candidate.full_name, candidate.public_reference, candidate.headline, candidate.profession, candidate.nationality, candidate.city, candidate.country_of_residence, ...(Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name) : [])].filter(Boolean).join(" ").toLowerCase().includes(normalizedQuery.toLowerCase())) : legacyRows;
+        data = { profiles: filteredRows.slice((safePage - 1) * companyTalentPageSize, safePage * companyTalentPageSize), total: filteredRows.length };
+        error = null;
+      }
       if (error) throw error;
-      setCompanyTalentProfiles(Array.isArray(data) ? data : []);
-      setCompanyTalentMessage(`Loaded ${Array.isArray(data) ? data.length : 0} approved talent profile(s). Contact details appear only with candidate consent.`);
-      return Array.isArray(data) ? data : [];
+
+      const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
+      const total = Math.max(0, Number(data?.total) || 0);
+      setCompanyTalentProfiles(profiles);
+      setCompanyTalentTotal(total);
+      setCompanyTalentPage(safePage);
+      setSelectedTalentCandidateId("");
+      setCompanyTalentMessage(`${total.toLocaleString()} approved talent profile(s) found. Contact details and CV access follow the candidate's consent.`);
+      return profiles;
     } catch (error) {
       console.warn("Talent marketplace:", error?.message || error);
       setTalentEntitlement({ enabled: false, tier: "None", profile_limit: 0 });
       setCompanyTalentProfiles([]);
+      setCompanyTalentTotal(0);
       setCompanyTalentMessage("Unable to load the Talent Marketplace entitlement.");
       return [];
     } finally {
@@ -10547,6 +10645,47 @@ async function loadProfessionAliases() {
       alert(`Talent review failed: ${error?.message || "Unknown error"}`);
     } finally {
       setOwnerTalentActionId("");
+    }
+  }
+
+  async function openCompanyTalentCv(candidate, { download = false } = {}) {
+    if (!candidate?.candidate_id) return;
+    const previewWindow = download ? null : window.open("", "_blank");
+    setCompanyTalentCvBusyId(candidate.candidate_id);
+    setCompanyTalentMessage("");
+    try {
+      const { data: document, error } = await supabase.rpc("get_company_talent_campaign_cv", {
+        p_candidate_id: candidate.candidate_id,
+      });
+      if (error) throw error;
+      if (!document?.bucket || !document?.path) {
+        throw new Error("This candidate has not shared a downloadable CV yet.");
+      }
+      const options = download ? { download: document.file_name || "candidate-cv" } : undefined;
+      const { data: signed, error: signedError } = await supabase.storage
+        .from(document.bucket)
+        .createSignedUrl(document.path, 300, options);
+      if (signedError) throw signedError;
+      if (download) {
+        const link = window.document.createElement("a");
+        link.href = signed.signedUrl;
+        link.download = document.file_name || "candidate-cv";
+        window.document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } else {
+        if (previewWindow) {
+          previewWindow.opener = null;
+          previewWindow.location.href = signed.signedUrl;
+        } else {
+          window.location.assign(signed.signedUrl);
+        }
+      }
+    } catch (error) {
+      previewWindow?.close();
+      setCompanyTalentMessage(error?.message || "Unable to open this CV. Ask the candidate to upload and share it.");
+    } finally {
+      setCompanyTalentCvBusyId("");
     }
   }
 
@@ -34868,47 +35007,67 @@ disabled={authorizationWorkflowBusy === "create"}
                     <p>Search approved profiles, view contact details shared by the candidate, and schedule interviews directly.</p>
                   </div>
                   <div className="hero-actions">
-                    <button onClick={loadCompanyTalentMarketplace} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
+                    <button onClick={() => loadCompanyTalentMarketplace({ page: companyTalentPage })} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
                   </div>
                 </div>
 
                 <div className="stats-grid">
                   <div className="stat-card"><h3>Package</h3><strong>{talentEntitlement.tier || "Standard"}</strong><span>Controlled by Platform Owner</span></div>
                   <div className="stat-card"><h3>Profile Limit</h3><strong>{formatTalentProfileLimit(talentEntitlement.profile_limit)}</strong><span>{isTalentProfileUnlimited(talentEntitlement.profile_limit) ? "All published profiles" : "Maximum available profiles"}</span></div>
-                  <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentProfiles.length}</strong><span>Approved and consented</span></div>
+                  <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentTotal.toLocaleString()}</strong><span>Approved and consented</span></div>
                 </div>
 
                 {companyTalentMessage && <div className="form-card"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
 
-                <div className="toolbar"><input placeholder="Search name, profession, nationality, location or skills" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} /></div>
-
-                <TableCard title="Approved Talent Profiles">
-                  <div className="table-wrap">
-                    <table>
-                      <thead><tr><th>Candidate</th><th>Profession</th><th>Nationality</th><th>Location</th><th>Experience</th><th>Skills</th><th>Contact</th><th>Interview</th></tr></thead>
-                      <tbody>
-                        {companyTalentProfiles.length === 0 ? (
-                          <tr><td colSpan="8">No published profiles are available in this package.</td></tr>
-                        ) : companyTalentProfiles.filter((candidate) => {
-                          const query = companyTalentSearch.trim().toLowerCase();
-                          if (!query) return true;
-                          return [candidate.full_name, candidate.public_reference, candidate.headline, candidate.profession, candidate.nationality, candidate.city, candidate.country_of_residence, ...(Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name) : [])].filter(Boolean).join(" ").toLowerCase().includes(query);
-                        }).map((candidate) => (
-                          <tr key={candidate.candidate_id}>
-                            <td><strong>{candidate.full_name || candidate.public_reference || "-"}</strong><div style={{ color: "#64748b", marginTop: 4 }}>{candidate.headline || candidate.public_reference || "-"}</div></td>
-                            <td>{candidate.profession || "-"}</td>
-                            <td>{candidate.nationality || "-"}</td>
-                            <td>{[candidate.city, candidate.country_of_residence].filter(Boolean).join(", ") || "-"}</td>
-                            <td>{candidate.years_experience == null ? "-" : `${candidate.years_experience} years`}</td>
-                            <td>{Array.isArray(candidate.skills) ? candidate.skills.slice(0, 4).map((skill) => skill?.name).filter(Boolean).join(", ") || "-" : "-"}</td>
-                            <td>{candidate.identity_shared ? <div><a href={`mailto:${candidate.email}`}>{candidate.email}</a><div>{candidate.phone || "-"}</div></div> : <span style={{ color: "#92400e" }}>Awaiting candidate consent</span>}</td>
-                            <td><button type="button" className="light-btn" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule"}</button>{candidate.latest_interview_status && <div style={{ marginTop: 7 }}><Badge value={candidate.latest_interview_status} /></div>}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                <div className="talent-marketplace-toolbar">
+                  <div className="talent-marketplace-search">
+                    <span aria-hidden="true">⌕</span>
+                    <input placeholder="Search by name, profession, nationality, location or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch }); }} />
                   </div>
-                </TableCard>
+                  <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch })}>Search Talent</button>
+                  {companyTalentSearch && <button type="button" className="light-btn" onClick={() => { setCompanyTalentSearch(""); loadCompanyTalentMarketplace({ page: 1, query: "" }); }}>Clear</button>}
+                </div>
+
+                <section className="talent-marketplace-section">
+                  <div className="talent-marketplace-heading">
+                    <div><p className="eyebrow">CURATED TALENT</p><h2>Approved Talent Profiles</h2><p>Showing {companyTalentProfiles.length} of {companyTalentTotal.toLocaleString()} matching candidates</p></div>
+                  </div>
+                  {companyTalentProfiles.length === 0 ? <div className="talent-marketplace-empty">No published profiles match your search.</div> : (
+                    <div className="talent-profile-grid">
+                      {companyTalentProfiles.map((candidate) => {
+                        const candidateName = candidate.full_name || candidate.public_reference || "Confidential candidate";
+                        const skills = Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name).filter(Boolean).slice(0, 5) : [];
+                        const initials = candidateName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+                        const cvBusy = companyTalentCvBusyId === candidate.candidate_id;
+                        return <article className="talent-profile-card" key={candidate.candidate_id}>
+                          <header>
+                            <div className="talent-profile-avatar">{initials || "VF"}</div>
+                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p></div>
+                            {candidate.latest_interview_status && <Badge value={candidate.latest_interview_status} />}
+                          </header>
+                          <div className="talent-profile-facts">
+                            <span><small>Profession</small><strong>{candidate.profession || "Not specified"}</strong></span>
+                            <span><small>Experience</small><strong>{candidate.years_experience == null ? "Not specified" : `${candidate.years_experience} years`}</strong></span>
+                            <span><small>Location</small><strong>{[candidate.city, candidate.country_of_residence].filter(Boolean).join(", ") || "Flexible"}</strong></span>
+                            <span><small>Nationality</small><strong>{candidate.nationality || "Not specified"}</strong></span>
+                          </div>
+                          <div className="talent-profile-skills">{skills.length ? skills.map((skill) => <span key={skill}>{skill}</span>) : <span>Skills available in CV</span>}</div>
+                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={`mailto:${candidate.email}`}>{candidate.email || "Email shared"}</a><span>{candidate.phone || "Phone not provided"}</span></> : <span>Contact details unlock after candidate consent</span>}</div>
+                          <footer>
+                            <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
+                            <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
+                            <button type="button" className="talent-schedule-button" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                          </footer>
+                        </article>;
+                      })}
+                    </div>
+                  )}
+                  {companyTalentTotal > companyTalentPageSize && <div className="talent-marketplace-pagination">
+                    <button type="button" className="light-btn" disabled={companyTalentLoading || companyTalentPage <= 1} onClick={() => loadCompanyTalentMarketplace({ page: companyTalentPage - 1 })}>Previous</button>
+                    <span>Page <strong>{companyTalentPage}</strong> of <strong>{Math.max(1, Math.ceil(companyTalentTotal / companyTalentPageSize)).toLocaleString()}</strong></span>
+                    <button type="button" className="light-btn" disabled={companyTalentLoading || companyTalentPage >= Math.ceil(companyTalentTotal / companyTalentPageSize)} onClick={() => loadCompanyTalentMarketplace({ page: companyTalentPage + 1 })}>Next</button>
+                  </div>}
+                </section>
 
                 {selectedTalentCandidateId && (() => {
                   const candidate = companyTalentProfiles.find((item) => item.candidate_id === selectedTalentCandidateId);
