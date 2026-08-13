@@ -46,6 +46,22 @@ test('housing subscriptions require owner approval and expose an isolated owner 
   assert.match(migration, /Owner approval and a valid housing invitation are required/)
 })
 
+test('housing management center provides dashboard tabs and secure direct company invitations', async () => {
+  const [owner, styles, migration] = await Promise.all([
+    readFile(new URL('./HousingOwnerApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./housingOwner.css', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/housing/migrations/0015_housing_management_center.sql', import.meta.url), 'utf8'),
+  ])
+  assert.match(owner, /مركز إدارة سكن/)
+  assert.match(owner, /لوحة التحكم/)
+  assert.match(owner, /دعوة شركة مباشرة/)
+  assert.match(owner, /housing_owner_create_direct_invitation/)
+  assert.match(styles, /housing-owner-quick-actions/)
+  assert.match(migration, /housing_owner_create_direct_invitation/)
+  assert.match(migration, /Housing Platform Owner access is required/)
+  assert.match(migration, /housing_notification_deliveries/)
+})
+
 test('live housing views are wired to database data and Google Maps', async () => {
   const [source, service, migration] = await Promise.all([
     readFile(new URL('./HousingLiveViews.jsx', import.meta.url), 'utf8'),
