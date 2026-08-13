@@ -39,6 +39,8 @@ import {
 } from "./publicNavigation.mjs";
 import {
   ENGINEERING_TALENT_CAMPAIGN_SLUG,
+  HR_TALENT_CAMPAIGN_SLUG,
+  getCampaignProfessionLabel,
   getCampaignReadiness,
   getTalentCampaignSlug,
 } from "./talentCampaign.mjs";
@@ -3776,7 +3778,6 @@ function TalentCandidatePortal({ onBack }) {
     } catch { return null; }
   }, [requestedCvBuilderImport]);
   const [campaignSlug, setCampaignSlug] = useState(requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG);
-  const isEngineeringTalentCampaign = campaignSlug === ENGINEERING_TALENT_CAMPAIGN_SLUG;
   const [portalLanguage, setPortalLanguage] = useState("AR");
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -3799,7 +3800,7 @@ function TalentCandidatePortal({ onBack }) {
   const [consents, setConsents] = useState({ ...EMPTY_TALENT_CONSENTS });
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
-  const [workspaceTab, setWorkspaceTab] = useState(requestedCampaignSlug ? "Engineering Campaign" : "Profile");
+  const [workspaceTab, setWorkspaceTab] = useState(requestedCampaignSlug ? "Campaigns" : "Profile");
   const [talentStats, setTalentStats] = useState({
     registered_candidates: 0,
     marketplace_ready: 0,
@@ -4375,7 +4376,7 @@ function TalentCandidatePortal({ onBack }) {
     setWorkspaceHydrated(false);
     setAutoSaveStatus("Idle");
     setCampaignSlug(requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG);
-    setWorkspaceTab(requestedCampaignSlug ? "Engineering Campaign" : "Profile");
+    setWorkspaceTab(requestedCampaignSlug ? "Campaigns" : "Profile");
     setAuthMode("signin");
   }
 
@@ -4730,19 +4731,27 @@ function TalentCandidatePortal({ onBack }) {
             <section style={{ color: "#fff", padding: "38px 12px 28px" }}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", background: "rgba(18,184,176,.16)", border: "1px solid rgba(45,212,191,.35)", borderRadius: "999px", padding: "8px 12px", fontWeight: 900, fontSize: "13px" }}>
                 ✦ {requestedCampaignSlug
-                  ? (isArabic ? "حملة VisaFlow للمواهب الهندسية" : "VisaFlow Engineering Talent Campaign")
+                  ? (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
+                    ? (isArabic ? "حملة VisaFlow لمواهب الموارد البشرية" : "VisaFlow Human Resources Talent Campaign")
+                    : (isArabic ? "حملة VisaFlow للمواهب الهندسية" : "VisaFlow Engineering Talent Campaign"))
                   : (isArabic ? "ابنِ ملفك المهني مرة واحدة" : "Build your professional profile once")}
               </div>
               <h1 style={{ fontSize: "clamp(38px, 6vw, 72px)", lineHeight: 1.02, margin: "22px 0 18px", letterSpacing: "-0.04em" }}>
                 {requestedCampaignSlug
-                  ? (isArabic ? "للمهندسين: سجّل، اختر تخصصك، واختبر جاهزيتك." : "Engineers: register, choose your profession, and test your readiness.")
+                  ? (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
+                    ? (isArabic ? "لمتخصصي HR: سجّل، اختر مسارك، واختبر جاهزيتك." : "HR professionals: register, choose your track, and test your readiness.")
+                    : (isArabic ? "للمهندسين: سجّل، اختر تخصصك، واختبر جاهزيتك." : "Engineers: register, choose your profession, and test your readiness."))
                   : (isArabic ? "قدّم سيرتك الذاتية. دع الفرص تصل إليك." : "Submit your CV. Let opportunities find you.")}
               </h1>
               <p style={{ maxWidth: "720px", fontSize: "18px", lineHeight: 1.8, color: "rgba(255,255,255,.8)", margin: 0 }}>
                 {requestedCampaignSlug
                   ? (isArabic
-                    ? "الحملة تشمل جميع التخصصات الهندسية التي لها قالب معتمد في منصة المالك. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك."
-                    : "The campaign includes every engineering profession with an approved Platform Owner template. CV sharing is required to enter the assessment; sharing the result is optional and remains under your control.")
+                    ? (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
+                      ? "الحملة تشمل مسارات الموارد البشرية المعتمدة. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك."
+                      : "الحملة تشمل جميع التخصصات الهندسية التي لها قالب معتمد في منصة المالك. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.")
+                    : (requestedCampaignSlug === HR_TALENT_CAMPAIGN_SLUG
+                      ? "The campaign includes approved HR specializations. CV sharing is required to enter the assessment; result sharing remains optional."
+                      : "The campaign includes every engineering profession with an approved Platform Owner template. CV sharing is required to enter the assessment; sharing the result is optional and remains under your control."))
                   : (isArabic
                     ? "سجّل ملفك، ارفع سيرتك، وافق على التحليل الذكي، ثم يظهر ملف مجهول الهوية للشركات المشتركة بعد المراجعة. بياناتك الكاملة لا تُشارك دون موافقتك."
                     : "Create your profile, upload your CV, consent to AI analysis, and become discoverable to subscribed employers after review. Your full identity is never shared without consent.")}
@@ -4981,7 +4990,7 @@ function TalentCandidatePortal({ onBack }) {
 
     setCampaignSlug(resolvedSlug);
     if (resolvedSlug !== ENGINEERING_TALENT_CAMPAIGN_SLUG) {
-      setWorkspaceTab("Engineering Campaign");
+      setWorkspaceTab("Campaigns");
     }
     return loadTalentCampaign(candidateUser, resolvedSlug);
   }
@@ -4993,6 +5002,7 @@ function TalentCandidatePortal({ onBack }) {
       const { data, error } = await supabase.rpc("get_public_talent_campaign", { p_slug: activeCampaignSlug });
       if (error) throw error;
       setTalentCampaign(data || null);
+      setCampaignApplication(null);
       const templates = Array.isArray(data?.templates) ? data.templates : [];
       setCampaignTemplateId((current) => current || templates[0]?.id || "");
       if (candidateUser?.id) {
@@ -5013,10 +5023,37 @@ function TalentCandidatePortal({ onBack }) {
   }
 
   const statusLabel = profile?.marketplace_status || "Draft";
+  const availableTalentCampaigns = [
+    {
+      slug: ENGINEERING_TALENT_CAMPAIGN_SLUG,
+      nameAr: "حملة المهندسين",
+      nameEn: "Engineering Campaign",
+      descriptionAr: "محاكاة مقابلات لجميع التخصصات الهندسية المعتمدة.",
+      descriptionEn: "Interview simulations for approved engineering professions.",
+    },
+    {
+      slug: HR_TALENT_CAMPAIGN_SLUG,
+      nameAr: "حملة الموارد البشرية",
+      nameEn: "Human Resources Campaign",
+      descriptionAr: "محاكاة مقابلات لمسارات وتخصصات الموارد البشرية.",
+      descriptionEn: "Interview simulations for Human Resources specializations.",
+    },
+  ];
+
+  function selectTalentCampaign(nextSlug) {
+    setCampaignSlug(nextSlug);
+    setCampaignTemplateId("");
+    setCampaignApplication(null);
+    setWorkspaceMessage("");
+    loadTalentCampaign(session?.user || null, nextSlug);
+    const url = new URL(window.location.href);
+    url.searchParams.set("talent", "1");
+    url.searchParams.set("talent_campaign", nextSlug);
+    window.history.replaceState({}, "", url);
+  }
+
   const tabItems = [
-    ["Engineering Campaign", isEngineeringTalentCampaign
-      ? (isArabic ? "حملة المهندسين" : "Engineering Campaign")
-      : (isArabic ? "الحملة المهنية" : "Professional Campaign")],
+    ["Campaigns", isArabic ? "محاكاة مقابلة وظيفية" : "Job Interview Simulation"],
     ["Dashboard", isArabic ? "لوحة التحكم" : "Dashboard"],
     ["Profile", isArabic ? "الملف المهني" : "Professional Profile"],
     ["CV", isArabic ? "السيرة الذاتية" : "CV Upload"],
@@ -5089,8 +5126,24 @@ function TalentCandidatePortal({ onBack }) {
               </div>
             )}
 
-            {workspaceTab === "Engineering Campaign" && (
+            {workspaceTab === "Campaigns" && (
               <>
+                <div style={{ marginBottom: "18px" }}>
+                  <h2 style={{ margin: "0 0 6px" }}>{isArabic ? "محاكاة مقابلة وظيفية" : "Job Interview Simulation"}</h2>
+                  <p style={{ margin: 0, color: palette.muted }}>{isArabic ? "اختر الحملة المناسبة لتخصصك، ثم ابدأ اختبار المقابلة." : "Choose the campaign matching your profession, then start the interview assessment."}</p>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "12px", marginBottom: "18px" }}>
+                  {availableTalentCampaigns.map((item) => {
+                    const selected = campaignSlug === item.slug;
+                    return (
+                      <button key={item.slug} type="button" onClick={() => selectTalentCampaign(item.slug)} style={{ border: `2px solid ${selected ? palette.cyan : palette.border}`, borderRadius: "16px", padding: "17px", background: selected ? "#ecfeff" : "#fff", color: palette.text, textAlign: isArabic ? "right" : "left", cursor: "pointer" }}>
+                        <strong style={{ display: "block", fontSize: "17px", marginBottom: "7px" }}>{isArabic ? item.nameAr : item.nameEn}</strong>
+                        <span style={{ display: "block", color: palette.muted, lineHeight: 1.6, fontSize: "13px" }}>{isArabic ? item.descriptionAr : item.descriptionEn}</span>
+                        <span style={{ display: "inline-block", marginTop: "10px", color: selected ? palette.success : palette.blue, fontWeight: 900 }}>{selected ? (isArabic ? "مختارة ✓" : "Selected ✓") : (isArabic ? "اختيار الحملة" : "Select campaign")}</span>
+                      </button>
+                    );
+                  })}
+                </div>
                 <div style={{ padding: "22px", borderRadius: "18px", color: "#fff", background: `linear-gradient(135deg, ${palette.navy}, ${palette.blue} 62%, ${palette.cyan})`, marginBottom: "18px" }}>
                   <div style={{ fontSize: "12px", fontWeight: 900, color: "#99f6e4", letterSpacing: ".08em", textTransform: "uppercase" }}>VisaFlow Talent 2026</div>
                   <h2 style={{ margin: "8px 0" }}>{isArabic ? (talentCampaign?.name_ar || "حملة المواهب الهندسية") : (talentCampaign?.name_en || "Engineering Talent Campaign")}</h2>
@@ -5122,13 +5175,13 @@ function TalentCandidatePortal({ onBack }) {
                   <div style={{ display: "grid", gap: "16px" }}>
                     <div style={{ border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px" }}>
                       <label style={{ display: "grid", gap: "8px", fontWeight: 900 }}>
-                        <span>{isArabic ? "اختر تخصصك الهندسي" : "Select your engineering profession"}</span>
+                        <span>{getCampaignProfessionLabel(campaignSlug, portalLanguage)}</span>
                         <select value={campaignTemplateId} onChange={(event) => setCampaignTemplateId(event.target.value)} style={{ minHeight: "48px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "10px", background: "#fff", fontWeight: 800 }}>
                           <option value="">{isArabic ? "اختر التخصص" : "Choose profession"}</option>
                           {(talentCampaign.templates || []).map((template) => <option key={template.id} value={template.id}>{template.profession} — {template.duration_minutes} min</option>)}
                         </select>
                       </label>
-                      {(talentCampaign.templates || []).length === 0 && <p style={{ color: palette.danger, fontWeight: 800 }}>{isArabic ? "لا توجد قوالب هندسية معتمدة ونشطة حاليًا في منصة المالك." : "No approved, active engineering templates are currently available in Platform Owner."}</p>}
+                      {(talentCampaign.templates || []).length === 0 && <p style={{ color: palette.danger, fontWeight: 800 }}>{isArabic ? "لا توجد قوالب معتمدة ونشطة لهذه الحملة حاليًا في منصة المالك." : "No approved, active templates are currently available for this campaign in Platform Owner."}</p>}
                     </div>
 
                     <div style={{ border: `1px solid ${palette.border}`, borderRadius: "16px", padding: "18px" }}>

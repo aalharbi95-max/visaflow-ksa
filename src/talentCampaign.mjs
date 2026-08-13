@@ -1,4 +1,5 @@
 export const ENGINEERING_TALENT_CAMPAIGN_SLUG = "saudi-engineers-2026";
+export const HR_TALENT_CAMPAIGN_SLUG = "saudi-hr-professionals-2026";
 
 export function getTalentCampaignSlug(locationLike = globalThis.location) {
   try {
@@ -39,6 +40,31 @@ export function buildLinkedInEngineeringCampaignDraft(campaignUrl) {
       "مشاركة السيرة الذاتية مع الشركات المشتركة شرط لدخول الاختبار، أما مشاركة نتيجة الاختبار فهي اختيارية بالكامل وتبقى تحت تحكمك.",
       `التسجيل: ${campaignUrl}`,
       "#Engineering #SaudiArabia #Jobs #مهندسين #وظائف_هندسية #VisaFlowTalent",
+    ].join("\n\n"),
+  };
+}
+
+export function getCampaignProfessionLabel(slug, language = "AR") {
+  const isArabic = String(language).toUpperCase() === "AR";
+  if (slug === ENGINEERING_TALENT_CAMPAIGN_SLUG) {
+    return isArabic ? "اختر تخصصك الهندسي" : "Select your engineering profession";
+  }
+  if (slug === HR_TALENT_CAMPAIGN_SLUG) {
+    return isArabic ? "اختر تخصصك في الموارد البشرية" : "Select your HR specialization";
+  }
+  return isArabic ? "اختر تخصصك المهني" : "Select your professional specialization";
+}
+
+export function buildLinkedInHrCampaignDraft(campaignUrl) {
+  return {
+    title: "دعوة لمتخصصي الموارد البشرية: اختبر جاهزيتك المهنية مع VisaFlow Talent",
+    body: [
+      "هل تعمل في الموارد البشرية وتبحث عن فرصة مهنية في المملكة العربية السعودية؟",
+      "سجّل في VisaFlow Talent، وارفع سيرتك الذاتية، واختر مسارك المهني لإجراء مقابلة مدعومة بالذكاء الاصطناعي.",
+      "تشمل الحملة: إدارة الموارد البشرية، الاستقطاب والتوظيف، العمليات، الرواتب، التعويضات والمزايا، التعلم والتطوير، علاقات الموظفين، شريك أعمال الموارد البشرية، والتحليلات والتطوير التنظيمي.",
+      "مشاركة السيرة وبيانات التواصل مع الشركات المشتركة شرط لدخول الاختبار، أما مشاركة نتيجة الاختبار فهي اختيارية بالكامل.",
+      `التسجيل: ${campaignUrl}`,
+      "#HumanResources #HRJobs #SaudiArabia #موارد_بشرية #وظائف #VisaFlowTalent",
     ].join("\n\n"),
   };
 }
