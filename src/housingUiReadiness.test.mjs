@@ -20,6 +20,12 @@ test('housing UI provides persisted Arabic and English modes', async () => {
   assert.doesNotMatch(styles, /var\(--housing-sidebar\)/)
 })
 
+test('housing email confirmation returns to the housing application', async () => {
+  const source = await readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8')
+  assert.match(source, /new URL\('\/housing', window\.location\.origin\)\.toString\(\)/)
+  assert.match(source, /emailRedirectTo/)
+})
+
 test('live housing views are wired to database data and Google Maps', async () => {
   const [source, service, migration] = await Promise.all([
     readFile(new URL('./HousingLiveViews.jsx', import.meta.url), 'utf8'),

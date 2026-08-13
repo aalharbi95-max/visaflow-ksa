@@ -548,7 +548,15 @@ function HousingBackendGate() {
 
   const register = async ({ email, password, fullName, companyName }) => {
     setState({ status: 'login', error: '', message: '', busy: true });
-    const { data, error } = await client.auth.signUp({ email, password, options: { data: { full_name: fullName, company_name: companyName } } });
+    const emailRedirectTo = new URL('/housing', window.location.origin).toString();
+    const { data, error } = await client.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: fullName, company_name: companyName },
+        emailRedirectTo,
+      },
+    });
     if (error) return setState({ status: 'login', error: error.message, message: '' });
     if (!data?.session) return setState({ status: 'login', error: '', message: t('accountCreated') });
     const setup = inviteToken
