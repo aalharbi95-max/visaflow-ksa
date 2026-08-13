@@ -52,6 +52,22 @@ test("recorded answers show a live sound meter and playback before approval", as
   assert.match(app, /disabled=\{savingAnswer \|\| !currentAudioUrl\}/);
 });
 
+test("completed interviews poll until the result is shown or analysis fails", async () => {
+  const app = await readFile(appUrl, "utf8");
+  assert.match(app, /async function refreshInterviewResult\(\)/);
+  assert.match(app, /window\.setTimeout\(refreshInterviewResult, 3000\)/);
+  assert.match(app, /Interview result/);
+  assert.match(app, /The result will appear here automatically/);
+  assert.match(app, /The result could not be calculated/);
+});
+
+test("CV download uses the signed attachment URL from the current page", async () => {
+  const app = await readFile(appUrl, "utf8");
+  assert.match(app, /const previewWindow = download \? null : window\.open\("", "_blank"\)/);
+  assert.match(app, /createSignedUrl\(document\.path, 300, options\)/);
+  assert.match(app, /if \(download\) \{\s*window\.location\.assign\(signed\.signedUrl\)/);
+});
+
 test("email recipient is resolved server-side from the authorized Talent candidate", async () => {
   const dispatcher = await readFile(dispatcherUrl, "utf8");
   assert.match(dispatcher, /TALENT_INTERVIEW_INVITATION:[\s\S]*?recipientSource: "talent_interview_invitations -> talent_candidates\.email"/);

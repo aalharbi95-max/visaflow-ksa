@@ -1760,6 +1760,42 @@ function AIInterviewCandidatePortal({ accessToken }) {
   }, [cameraReady, session?.status, currentQuestionIndex]);
 
   useEffect(() => {
+    if (!session?.id || session.status !== "Completed" || session.overall_score != null) return;
+
+    const terminalAnalysisStatuses = new Set(["Completed", "Failed", "Needs Review", "Needs Human Review", "Human Reviewed"]);
+    if (terminalAnalysisStatuses.has(session.analysis_status)) return;
+
+    let cancelled = false;
+    let pollTimer = null;
+
+    async function refreshInterviewResult() {
+      const { data, error } = await supabase
+        .from("ai_interview_sessions")
+        .select("*")
+        .eq("id", session.id)
+        .eq("access_token", accessToken)
+        .maybeSingle();
+
+      if (cancelled) return;
+      if (error || !data) {
+        pollTimer = window.setTimeout(refreshInterviewResult, 3000);
+        return;
+      }
+      setSession(data);
+
+      if (data.overall_score == null && !terminalAnalysisStatuses.has(data.analysis_status)) {
+        pollTimer = window.setTimeout(refreshInterviewResult, 3000);
+      }
+    }
+
+    refreshInterviewResult();
+    return () => {
+      cancelled = true;
+      if (pollTimer) window.clearTimeout(pollTimer);
+    };
+  }, [accessToken, session?.id, session?.status, session?.analysis_status, session?.overall_score]);
+
+  useEffect(() => {
     if (!currentQuestion || !session?.id) return;
 
     questionAskedAtRef.current = new Date().toISOString();
@@ -3255,6 +3291,34 @@ function AIInterviewCandidatePortal({ accessToken }) {
               <span>{tr("Skipped", "تم التخطي")}: <b>{session.skipped_questions || skippedCount}</b></span>
               <span>{tr("Total", "الإجمالي")}: <b>{session.total_questions || totalQuestions}</b></span>
             </div>
+            {session.overall_score != null ? (
+              <div className="ai-candidate-analysis-result" role="status">
+                <span>{tr("Interview result", "نتيجة المقابلة")}</span>
+                <strong>{Math.round(Number(session.overall_score))}%</strong>
+                {session.ai_recommendation && session.ai_recommendation !== "Pending Analysis" && (
+                  <p>{session.ai_recommendation}</p>
+                )}
+              </div>
+            ) : session.analysis_status === "Failed" ? (
+              <div className="ai-candidate-analysis-result is-failed" role="alert">
+                <strong>{tr("The result could not be calculated", "تعذر احتساب النتيجة")}</strong>
+                <p>{tr(
+                  "No clear recorded answer was available for analysis. Return to the campaigns list and start a new attempt after checking the microphone.",
+                  "لم يتوفر تسجيل صوتي واضح للتحليل. ارجع إلى قائمة المحاكاة وابدأ محاولة جديدة بعد فحص الميكروفون."
+                )}</p>
+              </div>
+            ) : (
+              <div className="ai-candidate-analysis-result is-pending" role="status" aria-live="polite">
+                <div className="ai-candidate-analysis-spinner" aria-hidden="true" />
+                <div>
+                  <strong>{tr("Analyzing your interview...", "جاري تحليل المقابلة...")}</strong>
+                  <p>{tr(
+                    "The result will appear here automatically; you do not need to refresh the page.",
+                    "ستظهر النتيجة هنا تلقائيًا، ولا تحتاج إلى تحديث الصفحة."
+                  )}</p>
+                </div>
+              </div>
+            )}
             <button type="button" className="ai-candidate-return-button" onClick={returnToTalentCampaigns}>
               {tr("Return to interview campaigns", "العودة إلى قائمة محاكاة المقابلات")}
             </button>
@@ -10667,19 +10731,13 @@ async function loadProfessionAliases() {
         .createSignedUrl(document.path, 300, options);
       if (signedError) throw signedError;
       if (download) {
-        const link = window.document.createElement("a");
-        link.href = signed.signedUrl;
-        link.download = document.file_name || "candidate-cv";
-        window.document.body.appendChild(link);
-        link.click();
-        link.remove();
+        window.location.assign(signed.signedUrl);
+        setCompanyTalentMessage("CV download started.");
+      } else if (previewWindow) {
+        previewWindow.opener = null;
+        previewWindow.location.href = signed.signedUrl;
       } else {
-        if (previewWindow) {
-          previewWindow.opener = null;
-          previewWindow.location.href = signed.signedUrl;
-        } else {
-          window.location.assign(signed.signedUrl);
-        }
+        window.location.assign(signed.signedUrl);
       }
     } catch (error) {
       previewWindow?.close();

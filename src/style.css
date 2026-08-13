@@ -2846,6 +2846,64 @@ main.ai-candidate-shell {
   font-size: 13px;
 }
 
+.ai-candidate-analysis-result {
+  width: min(520px, 100%);
+  margin: 22px auto 0;
+  padding: 18px 20px;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  border: 1px solid #b9ead5;
+  border-radius: 18px;
+  background: #effcf6;
+  color: #0b6b4b;
+}
+
+.ai-candidate-analysis-result > span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ai-candidate-analysis-result > strong {
+  font-size: clamp(25px, 5vw, 42px);
+  line-height: 1;
+}
+
+.ai-candidate-analysis-result p {
+  color: inherit;
+  font-size: 13px;
+}
+
+.ai-candidate-analysis-result.is-pending {
+  grid-template-columns: auto 1fr;
+  justify-items: start;
+  align-items: center;
+  text-align: start;
+  border-color: #cfe0f3;
+  background: #f4f8fc;
+  color: #36587d;
+}
+
+.ai-candidate-analysis-result.is-pending strong,
+.ai-candidate-analysis-result.is-failed strong {
+  font-size: 16px;
+}
+
+.ai-candidate-analysis-result.is-failed {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.ai-candidate-analysis-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #d4e2f1;
+  border-top-color: #0b63ce;
+  border-radius: 50%;
+  animation: ai-loader-spin 0.9s linear infinite;
+}
+
 .ai-candidate-loading-card {
   display: grid;
   place-items: center;
