@@ -2454,6 +2454,35 @@ main.ai-candidate-shell {
   line-height: 1.7;
 }
 
+.ai-candidate-microphone-meter {
+  display: grid;
+  gap: 8px;
+  margin: 15px 0;
+  color: #294563;
+  font-size: 13px;
+}
+
+.ai-candidate-microphone-meter-track {
+  height: 13px;
+  overflow: hidden;
+  border: 1px solid #cad8e7;
+  border-radius: 999px;
+  background: #e6edf5;
+}
+
+.ai-candidate-microphone-meter-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #e9a72f, #18aaa4);
+  transition: width 80ms linear;
+}
+
+.ai-candidate-microphone-meter-track span.is-ready {
+  background: #22a967;
+}
+
 .ai-candidate-checkbox-row {
   display: flex;
   align-items: flex-start;

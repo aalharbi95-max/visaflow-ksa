@@ -1654,6 +1654,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
   const [decliningParticipation, setDecliningParticipation] = useState(false);
   const [microphoneReady, setMicrophoneReady] = useState(false);
   const [microphoneTesting, setMicrophoneTesting] = useState(false);
+  const [microphoneLevel, setMicrophoneLevel] = useState(0);
+  const [microphoneHeard, setMicrophoneHeard] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraTesting, setCameraTesting] = useState(false);
   const [cameraSkipped, setCameraSkipped] = useState(false);
@@ -1673,6 +1675,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
   const mediaRecorderRef = useRef(null);
   const microphoneStreamRef = useRef(null);
+  const microphoneAudioContextRef = useRef(null);
+  const microphoneTestFrameRef = useRef(null);
   const cameraPreviewRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingTimerRef = useRef(null);
@@ -1738,6 +1742,8 @@ function AIInterviewCandidatePortal({ accessToken }) {
         try { mediaRecorderRef.current.stop(); } catch { /* no-op */ }
       }
       stopLiveConversation({ preserveStream: true, resetState: false });
+      if (microphoneTestFrameRef.current) window.cancelAnimationFrame(microphoneTestFrameRef.current);
+      microphoneAudioContextRef.current?.close?.().catch?.(() => {});
       stopCaptureStream();
       window.speechSynthesis?.cancel?.();
     };
@@ -1853,7 +1859,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
       setConsentChecked(Boolean(nextSession.consent_accepted));
       setEvaluationSummaryConsentChecked(Boolean(nextSession.evaluation_email_consent));
       setEmployerSharingConsentChecked(Boolean(nextSession.employer_sharing_consent));
-      setMicrophoneReady(Boolean(nextSession.microphone_test_passed));
+      // Require a fresh audible-signal check before a new interview starts.
+      const interviewAlreadyStarted = ["In Progress", "Completed"].includes(nextSession.status);
+      setMicrophoneReady(interviewAlreadyStarted && Boolean(nextSession.microphone_test_passed));
+      setMicrophoneHeard(interviewAlreadyStarted && Boolean(nextSession.microphone_test_passed));
+      setMicrophoneLevel(0);
       const nextQuestionIndex = firstUnansweredIndex >= 0 ? firstUnansweredIndex : Math.max(questionRows.length - 1, 0);
       setCurrentQuestionIndex(nextQuestionIndex);
       realtimeQuestionOrderRef.current = Number(questionRows[nextQuestionIndex]?.question_order || nextSession.current_question_order || 1);
@@ -2017,10 +2027,85 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
   async function testMicrophone() {
     setMicrophoneTesting(true);
+    setMicrophoneReady(false);
+    setMicrophoneHeard(false);
+    setMicrophoneLevel(0);
     setPortalMessage("");
 
     try {
-      await ensureCaptureStream({ withVideo: cameraReady });
+      const stream = await ensureCaptureStream({ withVideo: cameraReady });
+      const audioTrack = stream.getAudioTracks?.()[0];
+      if (!audioTrack || audioTrack.readyState !== "live" || audioTrack.muted || audioTrack.enabled === false) {
+        throw new Error(tr(
+          "The microphone is unavailable or muted. Select an active microphone and try again.",
+          "الميكروفون غير متاح أو مكتوم. اختر ميكروفونًا فعالًا ثم أعد المحاولة."
+        ));
+      }
+
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error(tr(
+          "This browser cannot measure the microphone signal. Use the latest Chrome, Edge, or Safari.",
+          "هذا المتصفح لا يستطيع قياس إشارة الميكروفون. استخدم أحدث إصدار من Chrome أو Edge أو Safari."
+        ));
+      }
+
+      if (microphoneTestFrameRef.current) window.cancelAnimationFrame(microphoneTestFrameRef.current);
+      await microphoneAudioContextRef.current?.close?.().catch?.(() => {});
+
+      const audioContext = new AudioContextClass();
+      microphoneAudioContextRef.current = audioContext;
+      await audioContext.resume?.();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.35;
+      source.connect(analyser);
+
+      const samples = new Uint8Array(analyser.fftSize);
+      const startedAt = performance.now();
+      let audibleFrames = 0;
+      let peakRms = 0;
+
+      setPortalMessage(tr(
+        "Speak clearly for a few seconds. The interview will remain locked until your voice is detected.",
+        "تحدث بوضوح لبضع ثوانٍ. ستبقى المقابلة مقفلة حتى يتم اكتشاف صوتك."
+      ));
+
+      await new Promise((resolve) => {
+        const measure = (now) => {
+          analyser.getByteTimeDomainData(samples);
+          let sumSquares = 0;
+          for (let index = 0; index < samples.length; index += 1) {
+            const normalizedSample = (samples[index] - 128) / 128;
+            sumSquares += normalizedSample * normalizedSample;
+          }
+          const rms = Math.sqrt(sumSquares / samples.length);
+          peakRms = Math.max(peakRms, rms);
+          if (rms >= 0.015) audibleFrames += 1;
+          setMicrophoneLevel(Math.min(100, Math.round(rms * 500)));
+
+          if (now - startedAt >= 4000) {
+            microphoneTestFrameRef.current = null;
+            resolve();
+            return;
+          }
+          microphoneTestFrameRef.current = window.requestAnimationFrame(measure);
+        };
+        microphoneTestFrameRef.current = window.requestAnimationFrame(measure);
+      });
+
+      source.disconnect();
+      await audioContext.close().catch(() => {});
+      microphoneAudioContextRef.current = null;
+
+      if (audibleFrames < 4 || peakRms < 0.025) {
+        throw new Error(tr(
+          "No clear voice was detected. Check the selected microphone, raise its volume, then test again while speaking.",
+          "لم يتم اكتشاف صوت واضح. تحقق من الميكروفون المختار وارفع مستوى صوته، ثم أعد الاختبار أثناء التحدث."
+        ));
+      }
+
       const now = new Date().toISOString();
       const nextStatus = session.consent_required !== false && !session.consent_accepted
         ? "Consent Pending"
@@ -2040,9 +2125,14 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
       if (error) throw error;
       setMicrophoneReady(true);
+      setMicrophoneHeard(true);
+      setMicrophoneLevel(100);
       setSession(data);
       setPortalMessage(tr("Microphone access is working.", "تم التحقق من عمل الميكروفون."));
     } catch (error) {
+      setMicrophoneReady(false);
+      setMicrophoneHeard(false);
+      setMicrophoneLevel(0);
       setPortalMessage(error?.message || tr("Microphone test failed.", "فشل اختبار الميكروفون."));
     } finally {
       setMicrophoneTesting(false);
@@ -2057,7 +2147,6 @@ function AIInterviewCandidatePortal({ accessToken }) {
       await ensureCaptureStream({ withVideo: true });
       setCameraReady(true);
       setCameraSkipped(false);
-      setMicrophoneReady(true);
       setPortalMessage(tr(
         "Camera and microphone are working. Check the live preview before continuing.",
         "تم التحقق من عمل الكاميرا والميكروفون. راجع المعاينة المباشرة قبل المتابعة."
@@ -3271,6 +3360,21 @@ function AIInterviewCandidatePortal({ accessToken }) {
                       ? "الميكروفون يعمل مع الكاميرا. لا يبدأ VisaFlow التسجيل إلا عند الضغط على بدء التسجيل."
                       : "سيطلب المتصفح الإذن باستخدام الميكروفون. لا يبدأ VisaFlow التسجيل إلا عند الضغط على بدء التسجيل."
                   )}</p>
+                  <div className="ai-candidate-microphone-meter" aria-live="polite">
+                    <div className="ai-candidate-microphone-meter-track" aria-hidden="true">
+                      <span
+                        className={microphoneHeard ? "is-ready" : ""}
+                        style={{ width: `${microphoneLevel}%` }}
+                      />
+                    </div>
+                    <b>
+                      {microphoneTesting
+                        ? tr("Speak now — listening for your voice...", "تحدث الآن — جارٍ الاستماع إلى صوتك...")
+                        : microphoneHeard
+                          ? tr("Voice detected clearly", "تم اكتشاف الصوت بوضوح")
+                          : tr("Press test, then speak clearly for 4 seconds", "اضغط اختبار ثم تحدث بوضوح لمدة 4 ثوانٍ")}
+                    </b>
+                  </div>
                   <button className={microphoneReady ? "ai-candidate-success" : "ai-candidate-secondary"} disabled={microphoneTesting} onClick={testMicrophone}>
                     {microphoneTesting
                       ? tr("Testing...", "جاري الاختبار...")

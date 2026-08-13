@@ -32,6 +32,16 @@ test("candidate and company portals expose the complete interview workflow", asy
   assert.match(app, /TALENT_INTERVIEW_INVITATION/);
 });
 
+test("AI interview start requires a fresh audible microphone signal", async () => {
+  const app = await readFile(appUrl, "utf8");
+  assert.match(app, /window\.AudioContext \|\| window\.webkitAudioContext/);
+  assert.match(app, /createMediaStreamSource\(stream\)/);
+  assert.match(app, /getByteTimeDomainData\(samples\)/);
+  assert.match(app, /audibleFrames < 4 \|\| peakRms < 0\.025/);
+  assert.match(app, /const interviewAlreadyStarted = \["In Progress", "Completed"\]\.includes\(nextSession\.status\)/);
+  assert.match(app, /Please test your microphone before starting\./);
+});
+
 test("email recipient is resolved server-side from the authorized Talent candidate", async () => {
   const dispatcher = await readFile(dispatcherUrl, "utf8");
   assert.match(dispatcher, /TALENT_INTERVIEW_INVITATION:[\s\S]*?recipientSource: "talent_interview_invitations -> talent_candidates\.email"/);
