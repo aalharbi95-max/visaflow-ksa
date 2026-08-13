@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const migrationUrl = new URL("../supabase/migrations/20260809000200_talent_interview_workflow.sql", import.meta.url);
+const talentCvAccessMigrationUrl = new URL("../supabase/migrations/20260813000300_fix_talent_cv_storage_access.sql", import.meta.url);
 const appUrl = new URL("./App.jsx", import.meta.url);
 const dispatcherUrl = new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url);
 
@@ -75,6 +76,16 @@ test("company interview scheduling opens in a visible modal instead of below the
   assert.match(app, /className="form-card talent-interview-modal"/);
   assert.match(app, /role="dialog" aria-modal="true"/);
   assert.match(app, /Send Interview Invitation/);
+});
+
+test("company CV storage access is checked by a narrow security-definer helper", async () => {
+  const sql = await readFile(talentCvAccessMigrationUrl, "utf8");
+  assert.match(sql, /function public\.can_current_company_read_talent_cv\(p_storage_path text\)/i);
+  assert.match(sql, /security definer[\s\S]*set search_path = ''/i);
+  assert.match(sql, /application\.cv_sharing_consent is true/i);
+  assert.match(sql, /candidate\.employer_contact_sharing_consent is true/i);
+  assert.match(sql, /public\.can_current_company_read_talent_cv\(name\)/i);
+  assert.doesNotMatch(sql, /grant select on (table )?public\.talent_public_campaign_applications to authenticated/i);
 });
 
 test("email recipient is resolved server-side from the authorized Talent candidate", async () => {
