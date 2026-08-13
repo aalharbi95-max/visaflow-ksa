@@ -79,3 +79,18 @@ test("HR campaign migration exposes HR templates through campaign-aware eligibil
   assert.match(sql, /talent_campaign_template_is_eligible/i);
   assert.match(sql, /Select an approved interview template for this campaign/i);
 });
+
+test("failed campaign interviews can be retried without overwriting history", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260813000200_talent_campaign_failed_interview_retry.sql", import.meta.url), "utf8");
+  const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+
+  assert.match(sql, /create or replace function public\.retry_my_talent_campaign_interview\(p_slug text\)/i);
+  assert.match(sql, /session\.overall_score is null/i);
+  assert.match(sql, /session\.analysis_status = 'Failed'/i);
+  assert.match(sql, /previous_session_ids = array_append\(previous_session_ids, v_previous_session\.id\)/i);
+  assert.match(sql, /v_application\.retry_count >= 2/i);
+  assert.match(sql, /A scored interview cannot be retried/i);
+  assert.match(app, /supabase\.rpc\("retry_my_talent_campaign_interview"/i);
+  assert.match(app, /campaignApplication\.can_retry/i);
+  assert.match(app, /Retry Interview/i);
+});

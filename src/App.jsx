@@ -5078,6 +5078,39 @@ function TalentCandidatePortal({ onBack }) {
     }
   }
 
+  async function handleTalentCampaignRetry() {
+    if (!campaignApplication?.can_retry || workspaceBusy) return;
+
+    setWorkspaceBusy(true);
+    setWorkspaceMessage("");
+    try {
+      const { data, error } = await supabase.rpc("retry_my_talent_campaign_interview", {
+        p_slug: campaignSlug,
+      });
+      if (error) throw error;
+      if (!data?.invitation_url) throw new Error("The new interview link was not created.");
+
+      await loadTalentCampaign(session.user, campaignSlug);
+      await logTalentEvent("TALENT_CAMPAIGN_INTERVIEW_RETRIED", {
+        campaign_slug: campaignSlug,
+        previous_session_id: campaignApplication.session_id,
+        new_session_id: data.session_id,
+        retry_count: data.retry_count,
+        reason: campaignApplication.analysis_error || "technical_analysis_failure",
+      });
+      setWorkspaceMessage(isArabic
+        ? "تم إنشاء محاولة جديدة مع الاحتفاظ بالمحاولة السابقة في السجل."
+        : "A new attempt was created and the previous attempt was preserved in history.");
+      openTalentCampaignInterview(data.invitation_url);
+    } catch (error) {
+      setWorkspaceMessage(error?.message || (isArabic
+        ? "تعذر إنشاء محاولة جديدة للمقابلة."
+        : "Unable to create a new interview attempt."));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
   async function updateTalentCampaignResultSharing(isGranted) {
     setCampaignResultSharing(isGranted);
     if (!campaignApplication?.id) return;
@@ -5287,6 +5320,28 @@ function TalentCandidatePortal({ onBack }) {
                       <input type="checkbox" checked={campaignResultSharing} onChange={(event) => updateTalentCampaignResultSharing(event.target.checked)} style={{ width: "19px", height: "19px", marginTop: "3px" }} />
                       <span><strong>{isArabic ? "مشاركة نتيجة الاختبار مع الشركات (اختياري)" : "Share my interview result with employers (optional)"}</strong><small style={{ display: "block", marginTop: "5px", color: palette.muted, lineHeight: 1.6 }}>{isArabic ? "يمكنك تغيير هذا الخيار في أي وقت. عدم الموافقة لا يمنع ظهور سيرتك وفق موافقة مشاركة السيرة." : "You can change this at any time. Declining does not cancel the separate CV-sharing consent."}</small></span>
                     </label>
+                    {campaignApplication.can_retry && (
+                      <div style={{ padding: "16px", borderRadius: "14px", border: "1px solid #fed7aa", background: "#fff7ed", color: "#9a3412" }}>
+                        <strong style={{ display: "block", marginBottom: "6px" }}>
+                          {isArabic ? "لم تكتمل معالجة المقابلة السابقة" : "The previous interview could not be processed"}
+                        </strong>
+                        <span style={{ display: "block", lineHeight: 1.7, marginBottom: "12px" }}>
+                          {isArabic
+                            ? "لم تُصدر نتيجة بسبب مشكلة فنية في التسجيل أو التحليل. يمكنك إنشاء محاولة جديدة، وستبقى المحاولة السابقة محفوظة في السجل."
+                            : "No score was produced because recording or analysis failed. You may create a new attempt while the previous attempt remains in history."}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={workspaceBusy}
+                          onClick={handleTalentCampaignRetry}
+                          style={{ border: 0, borderRadius: "12px", padding: "13px 17px", background: palette.blue, color: "#fff", fontWeight: 900, cursor: workspaceBusy ? "wait" : "pointer" }}
+                        >
+                          {workspaceBusy
+                            ? (isArabic ? "جارٍ إنشاء المحاولة..." : "Creating attempt...")
+                            : (isArabic ? "إعادة محاولة المقابلة" : "Retry Interview")}
+                        </button>
+                      </div>
+                    )}
                     {campaignApplication.invitation_url && campaignApplication.interview_status !== "Completed" && <button type="button" onClick={() => openTalentCampaignInterview(campaignApplication.invitation_url)} style={{ border: 0, borderRadius: "13px", padding: "14px 18px", background: palette.blue, color: "#fff", fontWeight: 900, cursor: "pointer" }}>{isArabic ? "متابعة اختبار المقابلة" : "Continue Interview Assessment"}</button>}
                   </div>
                 ) : (
