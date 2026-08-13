@@ -78,7 +78,6 @@ begin
       where id = v_template_id;
     end if;
 
-    delete from public.ai_interview_questions where template_id = v_template_id;
     insert into public.ai_interview_questions (
       company_id, template_id, question_order, question_text, question_text_ar,
       question_text_en, question_type, competency, difficulty_level, weight,
@@ -103,7 +102,11 @@ begin
       {"ord":8,"ar":"ما خطة أول 90 يوماً لك إذا انضممت إلى جهة جديدة في هذا الدور؟","en":"What would your first 90-day plan be if you joined a new organization in this role?","kind":"Strategic","competency":"Planning","difficulty":"Advanced","weight":10,"seconds":150,"keywords":["30 60 90","stakeholders","baseline","priorities"],"points":["Listen and assess","Prioritize","Deliver and measure"],"guide":{"excellent":"Practical phased plan with stakeholders and measures","acceptable":"Logical priorities and early wins","weak":"Unstructured activity list"},"ideal":"خطة 30-60-90 للاستماع وبناء خط أساس وتحديد الأولويات وتحقيق مكاسب قابلة للقياس.","notes":"Assess prioritization and realism."}
     ]'::jsonb) as q(ord integer, ar text, en text, kind text, competency text,
       difficulty text, weight numeric, seconds integer, keywords jsonb, points jsonb,
-      guide jsonb, ideal text, notes text);
+      guide jsonb, ideal text, notes text)
+    where not exists (
+      select 1 from public.ai_interview_questions existing
+      where existing.template_id = v_template_id
+    );
   end loop;
 
   update public.talent_public_campaigns
