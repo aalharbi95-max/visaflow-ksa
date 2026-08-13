@@ -3583,6 +3583,24 @@ body:has(.vf-public) {
   gap: 20px;
 }
 
+.ai-candidate-return-button {
+  margin-top: 24px;
+  padding: 13px 22px;
+  border: 0;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #0e3a75, #12b8b0);
+  color: #fff;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(14, 58, 117, 0.2);
+}
+
+.ai-candidate-return-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 13px 28px rgba(14, 58, 117, 0.26);
+}
+
 .vf-public-path-grid article {
   position: relative;
   min-height: 285px;

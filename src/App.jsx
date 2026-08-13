@@ -1702,6 +1702,13 @@ function AIInterviewCandidatePortal({ accessToken }) {
 
   const tr = (english, arabic) => portalLanguage === "AR" ? arabic : english;
 
+  function returnToTalentCampaigns() {
+    const url = new URL("/", window.location.origin);
+    url.searchParams.set("talent", "1");
+    url.searchParams.set("talent_section", "campaigns");
+    window.location.assign(url.toString());
+  }
+
   const engineeringProfession = ENGINEERING_AI_TEMPLATE_CATALOG.find(
     (item) => normalize(item.profession) === normalize(session?.profession)
   );
@@ -3108,6 +3115,9 @@ function AIInterviewCandidatePortal({ accessToken }) {
               <span>{tr("Skipped", "تم التخطي")}: <b>{session.skipped_questions || skippedCount}</b></span>
               <span>{tr("Total", "الإجمالي")}: <b>{session.total_questions || totalQuestions}</b></span>
             </div>
+            <button type="button" className="ai-candidate-return-button" onClick={returnToTalentCampaigns}>
+              {tr("Return to interview campaigns", "العودة إلى قائمة محاكاة المقابلات")}
+            </button>
           </div>
         )}
 
@@ -3766,6 +3776,10 @@ function TalentCandidatePortal({ onBack }) {
   const supabase = talentSupabase;
   const initialRecoveryState = useMemo(() => getTalentRecoveryUrlState(), []);
   const requestedCampaignSlug = useMemo(() => getTalentCampaignSlug(), []);
+  const requestedTalentSection = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("talent_section") || ""; }
+    catch { return ""; }
+  }, []);
   const requestedCvBuilderImport = useMemo(() => {
     try { return new URLSearchParams(window.location.search).get("cv_builder_import") === "1"; }
     catch { return false; }
@@ -3800,7 +3814,7 @@ function TalentCandidatePortal({ onBack }) {
   const [consents, setConsents] = useState({ ...EMPTY_TALENT_CONSENTS });
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
-  const [workspaceTab, setWorkspaceTab] = useState(requestedCampaignSlug ? "Campaigns" : "Profile");
+  const [workspaceTab, setWorkspaceTab] = useState(requestedCampaignSlug || requestedTalentSection === "campaigns" ? "Campaigns" : "Profile");
   const [talentStats, setTalentStats] = useState({
     registered_candidates: 0,
     marketplace_ready: 0,
@@ -4376,7 +4390,7 @@ function TalentCandidatePortal({ onBack }) {
     setWorkspaceHydrated(false);
     setAutoSaveStatus("Idle");
     setCampaignSlug(requestedCampaignSlug || ENGINEERING_TALENT_CAMPAIGN_SLUG);
-    setWorkspaceTab(requestedCampaignSlug ? "Campaigns" : "Profile");
+    setWorkspaceTab(requestedCampaignSlug || requestedTalentSection === "campaigns" ? "Campaigns" : "Profile");
     setAuthMode("signin");
   }
 
