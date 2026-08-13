@@ -7,8 +7,22 @@ const root = ReactDOM.createRoot(document.getElementById('root'))
 
 async function startApplication() {
   try {
+    const isHousingOwnerApplication = window.location.pathname.startsWith('/housing-owner')
     const isHousingApplication = window.location.pathname.startsWith('/housing')
       || new URLSearchParams(window.location.search).get('app') === 'housing'
+
+    if (isHousingOwnerApplication) {
+      const { default: HousingOwnerApp } = await import('./HousingOwnerApp.jsx')
+      document.documentElement.lang = 'ar'
+      document.documentElement.dir = 'rtl'
+      document.title = 'منصة مالك السكنات | VisaFlow KSA'
+      root.render(
+        <React.StrictMode>
+          <HousingOwnerApp />
+        </React.StrictMode>,
+      )
+      return
+    }
 
     if (isHousingApplication) {
       const { default: HousingApp } = await import('./HousingApp.jsx')

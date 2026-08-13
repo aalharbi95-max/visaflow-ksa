@@ -547,8 +547,11 @@ function HousingBackendGate() {
   };
 
   const register = async ({ email, password, fullName, companyName }) => {
+    if (!inviteToken) return setState({ status: 'login', error: 'Owner approval and a valid invitation are required.', message: '' });
     setState({ status: 'login', error: '', message: '', busy: true });
-    const emailRedirectTo = new URL('/housing', window.location.origin).toString();
+    const emailRedirectUrl = new URL('/housing', window.location.origin);
+    emailRedirectUrl.searchParams.set('invite', inviteToken);
+    const emailRedirectTo = emailRedirectUrl.toString();
     const { data, error } = await client.auth.signUp({
       email,
       password,
@@ -566,6 +569,22 @@ function HousingBackendGate() {
     await loadContext();
   };
 
+  const requestSubscription = async ({ companyName, fullName, email, phone, plan, expectedUsers, expectedSites, notes }) => {
+    setState({ status: 'login', error: '', message: '', busy: true });
+    const { error } = await client.rpc('housing_submit_subscription_request', {
+      p_company_name: companyName,
+      p_admin_name: fullName,
+      p_email: email,
+      p_phone: phone || null,
+      p_requested_plan: plan || 'Standard',
+      p_expected_users: Number(expectedUsers || 5),
+      p_expected_sites: Number(expectedSites || 1),
+      p_notes: notes || null,
+    });
+    if (error) return setState({ status: 'login', error: error.message, message: '' });
+    setState({ status: 'login', error: '', message: 'تم إرسال طلب الاشتراك إلى مالك المنصة. ستصلك دعوة إنشاء الحساب بعد اعتماد الطلب.', busy: false });
+  };
+
   const setupWorkspace = async ({ fullName, companyName }) => {
     setState({ status: 'setup', error: '', message: '', busy: true });
     const { error } = await client.rpc('housing_create_workspace', { p_company_name: companyName, p_full_name: fullName });
@@ -574,8 +593,8 @@ function HousingBackendGate() {
   };
 
   if (state.status === 'loading') return <div className="housing-app-loading" dir={dir}><LoaderCircle className="housing-spin" size={28} /><span>{t('loading')}</span></div>;
-  if (state.status === 'login') return <HousingAccess busy={state.busy} error={state.error} message={state.message} onLogin={login} onRegister={register} />;
-  if (state.status === 'setup') return <HousingAccess mode="setup" busy={state.busy} error={state.error} onSetup={setupWorkspace} />;
+  if (state.status === 'login') return <HousingAccess mode={inviteToken ? 'register' : 'login'} allowRegistration={Boolean(inviteToken)} busy={state.busy} error={state.error} message={state.message} onLogin={login} onRegister={register} onRequest={requestSubscription} />;
+  if (state.status === 'setup') return <HousingAccess mode={inviteToken ? 'register' : 'login'} allowRegistration={Boolean(inviteToken)} busy={state.busy} error={state.error || 'Owner approval and a valid invitation are required.'} onLogin={login} onRegister={register} onRequest={requestSubscription} />;
   return <HousingWorkspace backendContext={state.context} />;
 }
 

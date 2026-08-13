@@ -22,8 +22,28 @@ test('housing UI provides persisted Arabic and English modes', async () => {
 
 test('housing email confirmation returns to the housing application', async () => {
   const source = await readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8')
-  assert.match(source, /new URL\('\/housing', window\.location\.origin\)\.toString\(\)/)
+  assert.match(source, /new URL\('\/housing', window\.location\.origin\)/)
+  assert.match(source, /emailRedirectUrl\.searchParams\.set\('invite', inviteToken\)/)
   assert.match(source, /emailRedirectTo/)
+})
+
+test('housing subscriptions require owner approval and expose an isolated owner portal', async () => {
+  const [app, access, owner, main, migration] = await Promise.all([
+    readFile(new URL('./HousingApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./HousingAccess.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./HousingOwnerApp.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('./main.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/housing/migrations/0014_housing_owner_platform.sql', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /housing_submit_subscription_request/)
+  assert.match(app, /allowRegistration=\{Boolean\(inviteToken\)\}/)
+  assert.match(access, /طلب اشتراك جديد/)
+  assert.match(owner, /housing_owner_review_request/)
+  assert.match(owner, /housing_owner_set_company_status/)
+  assert.match(main, /\/housing-owner/)
+  assert.match(migration, /housing_subscription_requests/)
+  assert.match(migration, /housing_is_platform_owner/)
+  assert.match(migration, /Owner approval and a valid housing invitation are required/)
 })
 
 test('live housing views are wired to database data and Google Maps', async () => {
