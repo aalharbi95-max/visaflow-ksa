@@ -5227,7 +5227,7 @@ body:has(.vf-public) {
 
 .talent-profile-card > footer {
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: auto;
   padding-top: 15px;
@@ -5244,6 +5244,7 @@ body:has(.vf-public) {
 .talent-profile-card > footer button:disabled { cursor: not-allowed; opacity: .55; }
 .talent-cv-button { border: 1px solid #0f766e; background: #fff; color: #0f766e; }
 .talent-download-button { border: 1px solid #dbe5ef; background: #eef3f9; color: #17365f; }
+.talent-analysis-button { border: 1px solid #9ddbd2; background: #e9fbf7; color: #087c70; }
 .talent-schedule-button { border: 0; background: #0b2d62; color: #fff; }
 
 .talent-marketplace-feedback {
@@ -5289,6 +5290,57 @@ body:has(.vf-public) {
   margin-top: 18px;
 }
 
+.talent-analysis-modal { width: min(880px, calc(100vw - 32px)); }
+
+.talent-analysis-score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.talent-analysis-score-grid span {
+  padding: 16px;
+  border-radius: 14px;
+  background: #f1f6fb;
+  color: #52637c;
+}
+
+.talent-analysis-score-grid small { display: block; margin-bottom: 4px; }
+.talent-analysis-score-grid strong { color: #0b2d62; font-size: 24px; }
+
+.talent-analysis-section {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #dfe8f2;
+  border-radius: 14px;
+  background: #fff;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.talent-analysis-section h3 { margin: 0 0 8px; color: #0b2d62; }
+.talent-analysis-section ul { margin: 0; padding-left: 20px; }
+
+.talent-analysis-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.talent-analysis-role-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.talent-analysis-role-list span { padding: 7px 10px; border-radius: 999px; background: #e9fbf7; color: #087c70; font-weight: 700; }
+
+.talent-analysis-disclaimer {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-left: 4px solid #d6a43b;
+  border-radius: 8px;
+  background: #fff8e7;
+  color: #6b5320;
+  line-height: 1.6;
+}
+
 .talent-marketplace-pagination {
   display: flex;
   justify-content: center;
@@ -5311,6 +5363,7 @@ body:has(.vf-public) {
   .talent-marketplace-toolbar { align-items: stretch; flex-direction: column; }
   .talent-profile-grid { grid-template-columns: 1fr; }
   .talent-profile-card > footer { grid-template-columns: 1fr 1fr; }
-  .talent-schedule-button { grid-column: 1 / -1; }
+  .talent-analysis-score-grid { grid-template-columns: 1fr 1fr; }
+  .talent-analysis-columns { grid-template-columns: 1fr; }
   .talent-marketplace-pagination { gap: 8px; }
 }

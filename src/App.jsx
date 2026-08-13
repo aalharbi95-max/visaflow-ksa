@@ -7301,6 +7301,8 @@ const [companyTalentSearch, setCompanyTalentSearch] = useState("");
 const [companyTalentTotal, setCompanyTalentTotal] = useState(0);
 const [companyTalentPage, setCompanyTalentPage] = useState(1);
 const [companyTalentCvBusyId, setCompanyTalentCvBusyId] = useState("");
+const [companyTalentAnalysisBusyId, setCompanyTalentAnalysisBusyId] = useState("");
+const [selectedTalentAnalysis, setSelectedTalentAnalysis] = useState(null);
 const companyTalentPageSize = 24;
 const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
 const [talentInterviewForm, setTalentInterviewForm] = useState({
@@ -10760,6 +10762,24 @@ async function loadProfessionAliases() {
       setCompanyTalentMessage(error?.message || "Unable to open this CV. Ask the candidate to upload and share it.");
     } finally {
       setCompanyTalentCvBusyId("");
+    }
+  }
+
+  async function openCompanyTalentAnalysis(candidate) {
+    if (!candidate?.candidate_id || candidate.ai_cv_status !== "Completed") return;
+    setCompanyTalentAnalysisBusyId(candidate.candidate_id);
+    setCompanyTalentMessage("");
+    try {
+      const { data, error } = await supabase.rpc("get_company_talent_ai_analysis", {
+        p_candidate_id: candidate.candidate_id,
+      });
+      if (error) throw error;
+      if (!data) throw new Error("AI analysis is not available for this candidate.");
+      setSelectedTalentAnalysis({ candidate, analysis: data });
+    } catch (error) {
+      setCompanyTalentMessage(error?.message || "Unable to load the AI candidate analysis.");
+    } finally {
+      setCompanyTalentAnalysisBusyId("");
     }
   }
 
@@ -35113,6 +35133,7 @@ disabled={authorizationWorkflowBusy === "create"}
                         const skills = Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name).filter(Boolean).slice(0, 5) : [];
                         const initials = candidateName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
                         const cvBusy = companyTalentCvBusyId === candidate.candidate_id;
+                        const analysisBusy = companyTalentAnalysisBusyId === candidate.candidate_id;
                         return <article className="talent-profile-card" key={candidate.candidate_id}>
                           <header>
                             <div className="talent-profile-avatar">{initials || "VF"}</div>
@@ -35130,6 +35151,7 @@ disabled={authorizationWorkflowBusy === "create"}
                           <footer>
                             <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
                             <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
+                            <button type="button" className="talent-analysis-button" disabled={analysisBusy || candidate.ai_cv_status !== "Completed"} onClick={() => openCompanyTalentAnalysis(candidate)}>{candidate.ai_cv_status !== "Completed" ? "Analysis pending" : analysisBusy ? "Loading..." : "AI Analysis"}</button>
                             <button type="button" className="talent-schedule-button" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
                           </footer>
                         </article>;
@@ -35161,6 +35183,36 @@ disabled={authorizationWorkflowBusy === "create"}
                       <button type="button" className="light-btn" onClick={() => setSelectedTalentCandidateId("")}>Cancel</button>
                       <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate.candidate_id)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
                     </div>
+                  </div>;
+                })()}
+
+                {selectedTalentAnalysis && (() => {
+                  const { candidate, analysis } = selectedTalentAnalysis;
+                  const score = (value) => value == null ? "—" : `${value}%`;
+                  const strengths = Array.isArray(analysis.strengths) ? analysis.strengths : [];
+                  const developmentAreas = Array.isArray(analysis.development_areas) ? analysis.development_areas : [];
+                  const recommendedRoles = Array.isArray(analysis.recommended_roles) ? analysis.recommended_roles : [];
+                  return <div className="form-card talent-interview-modal talent-analysis-modal" role="dialog" aria-modal="true" aria-labelledby="talent-analysis-modal-title">
+                    <button type="button" className="talent-interview-modal-close" aria-label="Close AI analysis" onClick={() => setSelectedTalentAnalysis(null)}>×</button>
+                    <p className="eyebrow">CACHED AI CV REVIEW</p>
+                    <h2 id="talent-analysis-modal-title">AI Candidate Analysis — {candidate.full_name || candidate.public_reference}</h2>
+                    <div className="talent-analysis-score-grid">
+                      <span><small>Overall</small><strong>{score(analysis.overall_score)}</strong></span>
+                      <span><small>ATS Match</small><strong>{score(analysis.ats_score)}</strong></span>
+                      <span><small>Clarity</small><strong>{score(analysis.clarity_score)}</strong></span>
+                      <span><small>Impact</small><strong>{score(analysis.impact_score)}</strong></span>
+                    </div>
+                    <section className="talent-analysis-section">
+                      <h3>Executive Summary</h3>
+                      <p>{analysis.executive_summary || "No executive summary was returned."}</p>
+                    </section>
+                    <div className="talent-analysis-columns">
+                      <section className="talent-analysis-section"><h3>Candidate Strengths</h3>{strengths.length ? <ul>{strengths.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p>No strengths were listed.</p>}</section>
+                      <section className="talent-analysis-section"><h3>Development Areas</h3>{developmentAreas.length ? <ul>{developmentAreas.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p>No development areas were listed.</p>}</section>
+                    </div>
+                    <section className="talent-analysis-section"><h3>Recommended Roles</h3><div className="talent-analysis-role-list">{recommendedRoles.length ? recommendedRoles.map((item, index) => <span key={`${item}-${index}`}>{item}</span>) : <p>No roles were listed.</p>}</div></section>
+                    <p className="talent-analysis-disclaimer">Decision-support summary based only on the candidate-provided CV. Verify important claims during the interview; this is not an automated hiring decision.</p>
+                    <div className="talent-interview-modal-actions"><button type="button" className="new-btn" onClick={() => setSelectedTalentAnalysis(null)}>Close</button></div>
                   </div>;
                 })()}
               </div>

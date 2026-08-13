@@ -4,8 +4,24 @@ import { readFile } from "node:fs/promises";
 
 const migrationUrl = new URL("../supabase/migrations/20260809000200_talent_interview_workflow.sql", import.meta.url);
 const talentCvAccessMigrationUrl = new URL("../supabase/migrations/20260813000300_fix_talent_cv_storage_access.sql", import.meta.url);
+const companyTalentAnalysisMigrationUrl = new URL("../supabase/migrations/20260813000400_company_talent_ai_analysis.sql", import.meta.url);
 const appUrl = new URL("./App.jsx", import.meta.url);
 const dispatcherUrl = new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url);
+
+test("company AI analysis is cached, consent-gated and available from marketplace cards", async () => {
+  const [sql, app] = await Promise.all([
+    readFile(companyTalentAnalysisMigrationUrl, "utf8"),
+    readFile(appUrl, "utf8"),
+  ]);
+  assert.match(sql, /get_company_talent_ai_analysis/);
+  assert.match(sql, /candidate\.ai_cv_status = 'Completed'/);
+  assert.match(sql, /consent\.consent_type = 'AI CV Analysis'/);
+  assert.match(sql, /consent\.consent_type = 'Employer Sharing'/);
+  assert.match(app, /supabase\.rpc\("get_company_talent_ai_analysis"/);
+  assert.match(app, /AI Analysis/);
+  assert.match(app, /Candidate Strengths/);
+  assert.match(app, /not an automated hiring decision/);
+});
 
 test("identity stays private until the candidate grants the new explicit consent", async () => {
   const sql = await readFile(migrationUrl, "utf8");
