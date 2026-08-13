@@ -10725,15 +10725,31 @@ async function loadProfessionAliases() {
       if (!document?.bucket || !document?.path) {
         throw new Error("This candidate has not shared a downloadable CV yet.");
       }
-      const options = download ? { download: document.file_name || "candidate-cv" } : undefined;
+      if (download) {
+        const { data: fileBlob, error: downloadError } = await supabase.storage
+          .from(document.bucket)
+          .download(document.path);
+        if (downloadError) throw downloadError;
+        if (!fileBlob) throw new Error("The CV file could not be downloaded.");
+
+        const blobUrl = window.URL.createObjectURL(fileBlob);
+        const link = window.document.createElement("a");
+        link.href = blobUrl;
+        link.download = document.file_name || "candidate-cv.pdf";
+        link.style.display = "none";
+        window.document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+        setCompanyTalentMessage(`Downloaded ${document.file_name || "candidate CV"} successfully.`);
+        return;
+      }
+
       const { data: signed, error: signedError } = await supabase.storage
         .from(document.bucket)
-        .createSignedUrl(document.path, 300, options);
+        .createSignedUrl(document.path, 300);
       if (signedError) throw signedError;
-      if (download) {
-        window.location.assign(signed.signedUrl);
-        setCompanyTalentMessage("CV download started.");
-      } else if (previewWindow) {
+      if (previewWindow) {
         previewWindow.opener = null;
         previewWindow.location.href = signed.signedUrl;
       } else {
@@ -35075,7 +35091,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentTotal.toLocaleString()}</strong><span>Approved and consented</span></div>
                 </div>
 
-                {companyTalentMessage && <div className="form-card"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
+                {companyTalentMessage && <div className="form-card talent-marketplace-feedback" role="status"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
 
                 <div className="talent-marketplace-toolbar">
                   <div className="talent-marketplace-search">
@@ -35130,8 +35146,9 @@ disabled={authorizationWorkflowBusy === "create"}
                 {selectedTalentCandidateId && (() => {
                   const candidate = companyTalentProfiles.find((item) => item.candidate_id === selectedTalentCandidateId);
                   if (!candidate) return null;
-                  return <div className="form-card">
-                    <h2>Schedule Interview — {candidate.full_name || candidate.public_reference}</h2>
+                  return <div className="form-card talent-interview-modal" role="dialog" aria-modal="true" aria-labelledby="talent-interview-modal-title">
+                    <button type="button" className="talent-interview-modal-close" aria-label="Close interview form" onClick={() => setSelectedTalentCandidateId("")}>×</button>
+                    <h2 id="talent-interview-modal-title">Schedule Interview — {candidate.full_name || candidate.public_reference}</h2>
                     {candidate.professional_summary && <p style={{ color: "#475569", lineHeight: 1.7 }}>{candidate.professional_summary}</p>}
                     <div className="form-grid">
                       <label><span>Interview Type</span><select value={talentInterviewForm.interview_type} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, interview_type: event.target.value }))}><option>Online Video</option><option>Phone</option><option>In Person</option></select></label>
@@ -35140,7 +35157,10 @@ disabled={authorizationWorkflowBusy === "create"}
                       {talentInterviewForm.interview_type === "In Person" && <label><span>Location</span><input value={talentInterviewForm.location} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, location: event.target.value }))} /></label>}
                       <label><span>Notes</span><textarea rows="3" value={talentInterviewForm.notes} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, notes: event.target.value }))} /></label>
                     </div>
-                    <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate.candidate_id)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
+                    <div className="talent-interview-modal-actions">
+                      <button type="button" className="light-btn" onClick={() => setSelectedTalentCandidateId("")}>Cancel</button>
+                      <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate.candidate_id)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
+                    </div>
                   </div>;
                 })()}
               </div>

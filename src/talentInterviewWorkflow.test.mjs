@@ -61,11 +61,20 @@ test("completed interviews poll until the result is shown or analysis fails", as
   assert.match(app, /The result could not be calculated/);
 });
 
-test("CV download uses the signed attachment URL from the current page", async () => {
+test("CV download retrieves an authenticated blob and saves it with the real filename", async () => {
   const app = await readFile(appUrl, "utf8");
   assert.match(app, /const previewWindow = download \? null : window\.open\("", "_blank"\)/);
-  assert.match(app, /createSignedUrl\(document\.path, 300, options\)/);
-  assert.match(app, /if \(download\) \{\s*window\.location\.assign\(signed\.signedUrl\)/);
+  assert.match(app, /\.download\(document\.path\)/);
+  assert.match(app, /window\.URL\.createObjectURL\(fileBlob\)/);
+  assert.match(app, /link\.download = document\.file_name/);
+  assert.match(app, /window\.URL\.revokeObjectURL\(blobUrl\)/);
+});
+
+test("company interview scheduling opens in a visible modal instead of below the profile grid", async () => {
+  const app = await readFile(appUrl, "utf8");
+  assert.match(app, /className="form-card talent-interview-modal"/);
+  assert.match(app, /role="dialog" aria-modal="true"/);
+  assert.match(app, /Send Interview Invitation/);
 });
 
 test("email recipient is resolved server-side from the authorized Talent candidate", async () => {
