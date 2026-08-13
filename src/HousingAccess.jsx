@@ -46,7 +46,7 @@ export default function HousingAccess({ mode = 'login', busy, error, message, on
       {error && <div className="housing-access-message error">{error}</div>}{message && <div className="housing-access-message">{message}</div>}
       <button className="housing-access-submit" disabled={busy}>{busy ? <LoaderCircle className="housing-spin" size={18} /> : null}{isSetup ? t('createWorkspace') : isRegister ? t('createAccount') : isRequest ? (language === 'ar' ? 'إرسال الطلب للمالك' : 'Send Request to Owner') : t('signIn')}</button>
       {!isSetup && <p className="housing-access-switch">{(isRegister || isRequest) ? t('haveAccount') : t('noAccount')}<button type="button" onClick={() => setFormMode((isRegister || isRequest) ? 'login' : enrollmentMode)}>{(isRegister || isRequest) ? t('signIn') : allowRegistration ? t('createAccount') : (language === 'ar' ? 'طلب اشتراك' : 'Request Subscription')}</button></p>}
-      {!isSetup && <a className="housing-owner-link" href="/housing-owner">{language === 'ar' ? 'دخول مالك منصة السكنات' : 'Housing Platform Owner'}</a>}
+      {!isSetup && <a className="housing-owner-link" href="/housing-owner">{language === 'ar' ? 'دخول مركز إدارة سكن' : 'Sakan Management Center Login'}</a>}
     </form></section>
   </main>
 }

@@ -38,6 +38,8 @@ test('housing subscriptions require owner approval and expose an isolated owner 
   assert.match(app, /housing_submit_subscription_request/)
   assert.match(app, /allowRegistration=\{Boolean\(inviteToken\)\}/)
   assert.match(access, /طلب اشتراك جديد/)
+  assert.match(access, /دخول مركز إدارة سكن/)
+  assert.match(access, /Sakan Management Center Login/)
   assert.match(owner, /housing_owner_review_request/)
   assert.match(owner, /housing_owner_set_company_status/)
   assert.match(main, /\/housing-owner/)
