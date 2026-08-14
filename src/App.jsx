@@ -10518,7 +10518,8 @@ async function loadProfessionAliases() {
     }
   }
 
-  async function scheduleCompanyTalentInterview(candidateId) {
+  async function scheduleCompanyTalentInterview(candidate) {
+    const candidateId = candidate?.candidate_id;
     if (!talentInterviewForm.scheduled_at) {
       setCompanyTalentMessage("Choose the interview date and time.");
       return;
@@ -10539,6 +10540,42 @@ async function loadProfessionAliases() {
     setCompanyTalentLoading(true);
     setCompanyTalentMessage("");
     try {
+      const isImportedProfile = candidate?.is_imported === true || candidate?.profile_source === "Imported Excel";
+      if (isImportedProfile) {
+        if (!candidate?.email) throw new Error("This imported candidate does not have an email address.");
+
+        const candidateName = candidate.full_name || candidate.public_reference || "Candidate";
+        const scheduledAt = new Date(talentInterviewForm.scheduled_at).toLocaleString("en-GB", {
+          dateStyle: "full",
+          timeStyle: "short",
+          timeZone: "Asia/Riyadh",
+        });
+        const destination = talentInterviewForm.interview_type === "Online Video"
+          ? talentInterviewForm.meeting_url.trim()
+          : talentInterviewForm.interview_type === "In Person"
+            ? talentInterviewForm.location.trim()
+            : candidate.phone || "Phone interview";
+        const subject = `Interview Invitation — ${candidateName}`;
+        const body = [
+          `Dear ${candidateName},`,
+          "",
+          "You are invited to an interview through VisaFlow Talent.",
+          `Interview type: ${talentInterviewForm.interview_type}`,
+          `Date and time (Riyadh): ${scheduledAt}`,
+          `Meeting details: ${destination}`,
+          talentInterviewForm.notes.trim() ? `Notes: ${talentInterviewForm.notes.trim()}` : "",
+          "",
+          "Best regards,",
+          "Recruitment Team",
+        ].filter(Boolean).join("\n");
+
+        window.location.href = `mailto:${candidate.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        setTalentInterviewForm({ interview_type: "Online Video", scheduled_at: "", meeting_url: "", location: "", notes: "" });
+        setSelectedTalentCandidateId("");
+        setCompanyTalentMessage("Interview invitation email draft opened for the imported candidate.");
+        return;
+      }
+
       const { data: invitationId, error } = await supabase.rpc("schedule_talent_interview", {
         p_candidate_id: candidateId,
         p_interview_type: talentInterviewForm.interview_type,
@@ -35140,7 +35177,7 @@ disabled={authorizationWorkflowBusy === "create"}
                           <footer>
                             {isImportedProfile ? <>
                               <a className="talent-card-contact-action" href={candidate.email ? `mailto:${candidate.email}` : undefined} aria-disabled={!candidate.email}>Email Candidate</a>
-                              <a className="talent-card-contact-action talent-card-call-action" href={candidate.phone ? `tel:${candidate.phone}` : undefined} aria-disabled={!candidate.phone}>Call Candidate</a>
+                              <button type="button" className="talent-schedule-button" disabled={!candidate.email} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
                             </> : <>
                               <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
                               <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
@@ -35175,7 +35212,7 @@ disabled={authorizationWorkflowBusy === "create"}
                     </div>
                     <div className="talent-interview-modal-actions">
                       <button type="button" className="light-btn" onClick={() => setSelectedTalentCandidateId("")}>Cancel</button>
-                      <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate.candidate_id)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
+                      <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => scheduleCompanyTalentInterview(candidate)}>{companyTalentLoading ? "Scheduling..." : "Send Interview Invitation"}</button>
                     </div>
                   </div>;
                 })()}

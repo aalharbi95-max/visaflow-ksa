@@ -68,7 +68,8 @@ test("only imported applicants with a documented sharing basis reach company car
   assert.match(migration, /auth\.uid\(\) is null or v_company_id is null/i);
   assert.match(app, /Experience Summary/);
   assert.match(app, /Email Candidate/);
-  assert.match(app, /Call Candidate/);
+  assert.match(app, /Schedule Interview/);
+  assert.match(app, /Interview invitation email draft opened for the imported candidate/);
 });
 
 test("Marketplace Ready public counter includes consented imported cards", async () => {
