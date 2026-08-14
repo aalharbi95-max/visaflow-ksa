@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 const migrationUrl = new URL("../supabase/migrations/20260812000300_talent_imported_prospects.sql", import.meta.url);
 const publicCounterMigrationUrl = new URL("../supabase/migrations/20260812000400_talent_public_imported_counter.sql", import.meta.url);
 const consentedMarketplaceMigrationUrl = new URL("../supabase/migrations/20260814000100_publish_consented_imported_talent.sql", import.meta.url);
+const marketplaceReadyTotalMigrationUrl = new URL("../supabase/migrations/20260814000200_talent_marketplace_ready_total.sql", import.meta.url);
 const appUrl = new URL("./App.jsx", import.meta.url);
 
 test("imported Talent prospects remain private and require a candidate claim", async () => {
@@ -68,4 +69,13 @@ test("only imported applicants with a documented sharing basis reach company car
   assert.match(app, /Experience Summary/);
   assert.match(app, /Email Candidate/);
   assert.match(app, /Call Candidate/);
+});
+
+test("Marketplace Ready public counter includes consented imported cards", async () => {
+  const migration = await readFile(marketplaceReadyTotalMigrationUrl, "utf8");
+  assert.match(migration, /marketplace_ready bigint/i);
+  assert.match(migration, /candidate\.marketplace_status = 'Approved'/i);
+  assert.match(migration, /prospect\.employer_contact_sharing_consent is true/i);
+  assert.match(migration, /prospect\.status <> 'Archived'/i);
+  assert.match(migration, /grant execute on function public\.get_talent_public_stats\(\) to anon, authenticated, service_role/i);
 });
