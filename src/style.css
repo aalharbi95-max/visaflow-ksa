@@ -5174,6 +5174,15 @@ body:has(.vf-public) {
 .talent-profile-identity { min-width: 0; flex: 1; }
 .talent-profile-identity h3 { margin: 2px 0 5px; color: #092758; font-size: 18px; }
 .talent-profile-identity p { margin: 0; color: #64748b; line-height: 1.45; }
+.talent-profile-source {
+  display: inline-block;
+  margin-top: 7px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eefbf8;
+  color: #087c70;
+  font-weight: 800;
+}
 
 .talent-profile-facts {
   display: grid;
@@ -5193,6 +5202,33 @@ body:has(.vf-public) {
 .talent-profile-facts strong { display: block; }
 .talent-profile-facts small { margin-bottom: 4px; color: #7b8ca5; }
 .talent-profile-facts strong { color: #1e365c; overflow-wrap: anywhere; }
+
+.talent-profile-summary {
+  margin-bottom: 13px;
+  padding: 12px 13px;
+  border-left: 3px solid #17b8aa;
+  border-radius: 10px;
+  background: #f7fafc;
+}
+
+.talent-profile-summary small {
+  display: block;
+  margin-bottom: 5px;
+  color: #087c70;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
+.talent-profile-summary p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #405777;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
 
 .talent-profile-skills {
   display: flex;
@@ -5246,6 +5282,19 @@ body:has(.vf-public) {
 .talent-download-button { border: 1px solid #dbe5ef; background: #eef3f9; color: #17365f; }
 .talent-analysis-button { border: 1px solid #9ddbd2; background: #e9fbf7; color: #087c70; }
 .talent-schedule-button { border: 0; background: #0b2d62; color: #fff; }
+.talent-card-contact-action {
+  min-height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: #0b2d62;
+  color: #fff;
+  font-weight: 800;
+  text-decoration: none;
+}
+.talent-card-call-action { background: #0f766e; }
+.talent-card-contact-action[aria-disabled="true"] { pointer-events: none; opacity: .55; }
 
 .talent-marketplace-feedback {
   position: sticky;

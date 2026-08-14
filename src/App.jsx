@@ -10504,7 +10504,7 @@ async function loadProfessionAliases() {
       setCompanyTalentTotal(total);
       setCompanyTalentPage(safePage);
       setSelectedTalentCandidateId("");
-      setCompanyTalentMessage(`${total.toLocaleString()} approved talent profile(s) found. Contact details and CV access follow the candidate's consent.`);
+      setCompanyTalentMessage(`${total.toLocaleString()} consented talent profile(s) found. Full email and mobile details are shown when available.`);
       return profiles;
     } catch (error) {
       console.warn("Talent marketplace:", error?.message || error);
@@ -35116,27 +35116,37 @@ disabled={authorizationWorkflowBusy === "create"}
                         const candidateName = candidate.full_name || candidate.public_reference || "Confidential candidate";
                         const skills = Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name).filter(Boolean).slice(0, 5) : [];
                         const initials = candidateName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+                        const isImportedProfile = candidate.is_imported === true || candidate.profile_source === "Imported Excel";
+                        const candidateLocation = candidate.city && candidate.country_of_residence && candidate.city !== candidate.country_of_residence
+                          ? `${candidate.city}, ${candidate.country_of_residence}`
+                          : candidate.city || candidate.country_of_residence || "Flexible";
                         const cvBusy = companyTalentCvBusyId === candidate.candidate_id;
                         const analysisBusy = companyTalentAnalysisBusyId === candidate.candidate_id;
-                        return <article className="talent-profile-card" key={candidate.candidate_id}>
+                        return <article className="talent-profile-card" key={`${candidate.profile_source || "candidate"}-${candidate.candidate_id}`}>
                           <header>
                             <div className="talent-profile-avatar">{initials || "VF"}</div>
-                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p></div>
+                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p>{isImportedProfile && <small className="talent-profile-source">Imported applicant · Consented contact sharing</small>}</div>
                             {candidate.latest_interview_status && <Badge value={candidate.latest_interview_status} />}
                           </header>
                           <div className="talent-profile-facts">
                             <span><small>Profession</small><strong>{candidate.profession || "Not specified"}</strong></span>
-                            <span><small>Experience</small><strong>{candidate.years_experience == null ? "Not specified" : `${candidate.years_experience} years`}</strong></span>
-                            <span><small>Location</small><strong>{[candidate.city, candidate.country_of_residence].filter(Boolean).join(", ") || "Flexible"}</strong></span>
-                            <span><small>Nationality</small><strong>{candidate.nationality || "Not specified"}</strong></span>
+                            <span><small>{candidate.years_experience == null ? "Current Employer" : "Experience"}</small><strong>{candidate.years_experience == null ? (candidate.current_company || "Not specified") : `${candidate.years_experience} years`}</strong></span>
+                            <span><small>Location</small><strong>{candidateLocation}</strong></span>
+                            <span><small>{isImportedProfile ? "Education" : "Nationality"}</small><strong>{isImportedProfile ? ([candidate.education_degree, candidate.education_institution].filter(Boolean).join(" · ") || "Not specified") : (candidate.nationality || "Not specified")}</strong></span>
                           </div>
-                          <div className="talent-profile-skills">{skills.length ? skills.map((skill) => <span key={skill}>{skill}</span>) : <span>Skills available in CV</span>}</div>
-                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={`mailto:${candidate.email}`}>{candidate.email || "Email shared"}</a><span>{candidate.phone || "Phone not provided"}</span></> : <span>Contact details unlock after candidate consent</span>}</div>
+                          {candidate.professional_summary && <div className="talent-profile-summary"><small>Experience Summary</small><p>{candidate.professional_summary}</p></div>}
+                          <div className="talent-profile-skills">{skills.length ? skills.map((skill) => <span key={skill}>{skill}</span>) : isImportedProfile && candidate.source_job_title ? <span>Applied for: {candidate.source_job_title}</span> : <span>Skills available in CV</span>}</div>
+                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={candidate.email ? `mailto:${candidate.email}` : undefined}>{candidate.email || "Email not provided"}</a><a href={candidate.phone ? `tel:${candidate.phone}` : undefined}>{candidate.phone || "Phone not provided"}</a></> : <span>Contact details unlock after candidate consent</span>}</div>
                           <footer>
-                            <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
-                            <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
-                            <button type="button" className="talent-analysis-button" disabled={analysisBusy || candidate.ai_cv_status !== "Completed"} onClick={() => openCompanyTalentAnalysis(candidate)}>{candidate.ai_cv_status !== "Completed" ? "Analysis pending" : analysisBusy ? "Loading..." : "AI Analysis"}</button>
-                            <button type="button" className="talent-schedule-button" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                            {isImportedProfile ? <>
+                              <a className="talent-card-contact-action" href={candidate.email ? `mailto:${candidate.email}` : undefined} aria-disabled={!candidate.email}>Email Candidate</a>
+                              <a className="talent-card-contact-action talent-card-call-action" href={candidate.phone ? `tel:${candidate.phone}` : undefined} aria-disabled={!candidate.phone}>Call Candidate</a>
+                            </> : <>
+                              <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
+                              <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
+                              <button type="button" className="talent-analysis-button" disabled={analysisBusy || candidate.ai_cv_status !== "Completed"} onClick={() => openCompanyTalentAnalysis(candidate)}>{candidate.ai_cv_status !== "Completed" ? "Analysis pending" : analysisBusy ? "Loading..." : "AI Analysis"}</button>
+                              <button type="button" className="talent-schedule-button" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                            </>}
                           </footer>
                         </article>;
                       })}
