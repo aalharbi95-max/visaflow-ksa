@@ -38,7 +38,7 @@ test("generated templates remain inactive until mandatory human approval", () =>
 
 test("browser generation path no longer silently substitutes fixed fallback questions", () => {
   const start = appSource.indexOf("async function generateAIInterviewTemplateFromJobDescription");
-  const end = appSource.indexOf("async function generateAllRemainingEngineeringTemplates", start);
+  const end = appSource.indexOf("async function generateAllRemainingReadyMadeTemplates", start);
   assert.ok(start >= 0 && end > start);
   const generationPath = appSource.slice(start, end);
   assert.doesNotMatch(generationPath, /saveGuardedAIInterviewTemplateFallback/);

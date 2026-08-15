@@ -60,6 +60,9 @@ import {
   validateCompanyTrialForm,
 } from "./aiAgentProfessional.mjs";
 import {
+  SPECIALIZED_AI_TEMPLATE_CATALOG,
+} from "./aiInterviewTemplateCatalog.mjs";
+import {
   calculateAgencyMobilizationScore,
   calculateApplicableWeightedScore,
   calculateInterviewQuality,
@@ -1000,6 +1003,22 @@ const ENGINEERING_AI_TEMPLATE_CATALOG = [
   },
 ];
 
+const READY_MADE_AI_TEMPLATE_CATALOG = [
+  ...ENGINEERING_AI_TEMPLATE_CATALOG.map((item) => ({
+    ...item,
+    category: "Engineering",
+    library: "Engineering",
+    years_experience: "5+ years",
+    qualifications: `Bachelor's degree in ${String(item.profession || "Engineering").replace(" Engineer", " Engineering")} or a closely related engineering discipline`,
+    certifications: "Relevant professional certifications are preferred only when required by the company or project.",
+    difficulty: "Advanced",
+    question_count: 15,
+    passing_score: 75,
+    source_type: "Engineering Master Framework",
+  })),
+  ...SPECIALIZED_AI_TEMPLATE_CATALOG,
+];
+
 const AI_INTERVIEW_INTERACTION_MODES = ["Recorded", "Live Conversational"];
 const AI_INTERVIEW_MEDIA_MODES = ["Voice", "Video"];
 const AI_INTERVIEW_CAMERA_MODES = ["Off", "Optional", "Required"];
@@ -1720,11 +1739,11 @@ function AIInterviewCandidatePortal({ accessToken }) {
     window.location.assign(url.toString());
   }
 
-  const engineeringProfession = ENGINEERING_AI_TEMPLATE_CATALOG.find(
+  const readyMadeProfession = READY_MADE_AI_TEMPLATE_CATALOG.find(
     (item) => normalize(item.profession) === normalize(session?.profession)
   );
   const portalProfessionLabel = portalLanguage === "AR"
-    ? (engineeringProfession?.profession_ar || session?.profession || "-")
+    ? (readyMadeProfession?.profession_ar || session?.profession || "-")
     : (session?.profession || "-");
   const portalInterviewTitle = portalLanguage === "AR"
     ? `تجربة المقابلة الذكية المتقدمة — ${portalProfessionLabel}`
@@ -4012,6 +4031,80 @@ function clearTalentAuthCallbackUrl() {
   }
 }
 
+function getTalentContactConsentUrlState() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("talent_contact_token") || "";
+    const response = params.get("talent_contact_response") || "";
+    return {
+      requested: Boolean(token && ["Approved", "Declined"].includes(response)),
+      token,
+      response,
+    };
+  } catch {
+    return { requested: false, token: "", response: "" };
+  }
+}
+
+function TalentContactConsentPage({ requestState }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const isApproval = requestState.response === "Approved";
+
+  async function confirmResponse() {
+    if (busy || result) return;
+    setBusy(true);
+    try {
+      const { data, error } = await talentSupabase.rpc("respond_imported_talent_contact", {
+        p_token: requestState.token,
+        p_response: requestState.response,
+      });
+      if (error) throw error;
+      setResult({ ok: true, status: data?.status || requestState.response, companyName: data?.company_name || "the requesting company" });
+    } catch (error) {
+      setResult({ ok: false, message: error?.message || "Unable to record your response." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="vf-login-shell" dir="rtl" lang="ar">
+    <section className="vf-login-right" style={{ width: "100%" }}>
+      <div className="vf-login-card" style={{ maxWidth: 640, textAlign: "center" }}>
+        <img src="/visaflow-logo-transparent.png" alt="VisaFlow" style={{ width: 150, margin: "0 auto 16px" }} />
+        {!result ? <>
+          <h2>{isApproval ? "الموافقة على مشاركة بيانات التواصل" : "رفض طلب التواصل"}</h2>
+          <p style={{ lineHeight: 1.9 }}>
+            {isApproval
+              ? "بعد التأكيد ستظهر بيانات التواصل الخاصة بك للشركة التي أرسلت الطلب فقط. لن تظهر بياناتك لبقية الشركات، وستبقى أسماء جهات عملك السابقة مخفية في بطاقة العرض العامة."
+              : "بعد التأكيد ستبقى بيانات التواصل وأسماء جهات عملك السابقة مخفية عن الشركة."}
+          </p>
+          <p style={{ lineHeight: 1.7, color: "#64748b" }}>
+            {isApproval
+              ? "After confirmation, your contact details will be visible only to the requesting company."
+              : "After confirmation, your contact details will remain hidden from the requesting company."}
+          </p>
+          <button type="button" className={isApproval ? "save-btn" : "light-btn"} disabled={busy} onClick={confirmResponse}>
+            {busy ? "جاري الحفظ..." : isApproval ? "تأكيد الموافقة / Confirm Approval" : "تأكيد الرفض / Confirm Decline"}
+          </button>
+        </> : result.ok ? <>
+          <h2>{result.status === "Approved" ? "تمت الموافقة بنجاح" : "تم تسجيل الرفض"}</h2>
+          <p style={{ lineHeight: 1.9 }}>
+            {result.status === "Approved"
+              ? `أصبحت بيانات التواصل متاحة الآن لشركة ${result.companyName} فقط.`
+              : `ستبقى بياناتك مخفية عن شركة ${result.companyName}.`}
+          </p>
+          <p>{result.status === "Approved" ? "Your contact details are now available only to this company." : "Your contact details remain private."}</p>
+        </> : <>
+          <h2>تعذر تسجيل الرد</h2>
+          <p>{result.message}</p>
+          <p>قد يكون الرابط منتهي الصلاحية أو سبق استخدامه. تواصل مع support@visaflowksa.com عند الحاجة.</p>
+        </>}
+      </div>
+    </section>
+  </main>;
+}
+
 function TalentCandidatePortal({ onBack }) {
   const supabase = talentSupabase;
   const initialRecoveryState = useMemo(() => getTalentRecoveryUrlState(), []);
@@ -4047,6 +4140,7 @@ function TalentCandidatePortal({ onBack }) {
     email: cvBuilderImport?.email || "",
     password: "",
     confirm_password: "",
+    company_data_sharing_consent: false,
   });
   const [profile, setProfile] = useState(null);
   const [profileForm, setProfileForm] = useState({ ...EMPTY_TALENT_PROFILE_FORM });
@@ -4156,6 +4250,25 @@ function TalentCandidatePortal({ onBack }) {
     ]));
   }
 
+  async function finalizeTalentRegistrationConsent(user, candidateRow) {
+    if (!user?.id || !candidateRow?.id || user.user_metadata?.company_data_sharing_consent !== true) return candidateRow;
+    if (candidateRow.registration_company_data_consent_at) return candidateRow;
+
+    const { error: consentError } = await supabase.rpc("complete_my_talent_registration", {
+      p_consent_version: String(user.user_metadata?.company_data_sharing_consent_version || "1.0"),
+      p_language: String(user.user_metadata?.company_data_sharing_consent_language || portalLanguage || "AR"),
+    });
+    if (consentError) throw consentError;
+
+    const { data: refreshed, error: refreshError } = await supabase
+      .from("talent_candidates")
+      .select("*")
+      .eq("auth_user_id", user.id)
+      .single();
+    if (refreshError) throw refreshError;
+    return refreshed || candidateRow;
+  }
+
   async function ensureTalentProfile(user) {
     if (!user?.id) return null;
 
@@ -4167,7 +4280,7 @@ function TalentCandidatePortal({ onBack }) {
         .maybeSingle();
 
       if (error) throw error;
-      if (data) return data;
+      if (data) return finalizeTalentRegistrationConsent(user, data);
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
 
@@ -4184,7 +4297,7 @@ function TalentCandidatePortal({ onBack }) {
       .single();
 
     if (error) throw error;
-    return data;
+    return finalizeTalentRegistrationConsent(user, data);
   }
 
   async function loadCandidateWorkspace(user, { force = false } = {}) {
@@ -4429,6 +4542,12 @@ function TalentCandidatePortal({ onBack }) {
       setAuthMessage(isArabic ? "كلمتا المرور غير متطابقتين." : "Passwords do not match.");
       return;
     }
+    if (authForm.company_data_sharing_consent !== true) {
+      setAuthMessage(isArabic
+        ? "يجب الموافقة على عرض بياناتك المهنية وبيانات التواصل للشركات لإكمال التسجيل."
+        : "You must consent to sharing your professional and contact information with companies to register.");
+      return;
+    }
 
     setAuthBusy(true);
     setAuthMessage("");
@@ -4444,6 +4563,10 @@ function TalentCandidatePortal({ onBack }) {
             full_name: fullName,
             phone,
             registration_campaign: requestedCampaignSlug || null,
+            company_data_sharing_consent: true,
+            company_data_sharing_consent_version: "1.0",
+            company_data_sharing_consent_language: portalLanguage,
+            company_data_sharing_consent_at: new Date().toISOString(),
           },
         },
       });
@@ -5084,14 +5207,25 @@ function TalentCandidatePortal({ onBack }) {
                     {authMode !== "forgot" && (
                       <TalentField label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" autoComplete={authMode === "signup" ? "new-password" : "current-password"} showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
                     )}
-                    {authMode === "signup" && <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />}
+                    {authMode === "signup" && <>
+                      <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "13px", background: "#f8fafc", cursor: "pointer", lineHeight: 1.65 }}>
+                        <input type="checkbox" checked={authForm.company_data_sharing_consent === true} onChange={(event) => setAuthForm((prev) => ({ ...prev, company_data_sharing_consent: event.target.checked }))} style={{ marginTop: "5px", width: "18px", height: "18px", flex: "0 0 auto" }} />
+                        <span>
+                          <strong style={{ display: "block", color: palette.navy }}>{isArabic ? "موافقة عرض بياناتي للشركات" : "Consent to share my information with companies"}</strong>
+                          <small style={{ color: palette.muted }}>{isArabic
+                            ? "أوافق على عرض ملفي المهني واسمي وبريدي وجوالي وجهات عملي للشركات المشتركة بعد اعتماد الملف، ويمكنني سحب الموافقة لاحقًا من إعدادات ملفي."
+                            : "I agree that my professional profile, name, email, phone number, and employment history may be shown to subscribed companies after profile approval. I can withdraw this consent later from my profile settings."}</small>
+                        </span>
+                      </label>
+                    </>}
                   </>
                 ) : null}
               </div>
 
               {authMessage && !(authMode === "recovery" && !recoveryReady) && <div style={{ marginTop: "14px", padding: "12px", borderRadius: "12px", background: authMessageIsSuccess ? "#ecfdf5" : "#fff7ed", color: authMessageIsSuccess ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{authMessage}</div>}
 
-              {!(authMode === "recovery" && !recoveryReady) && <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : authMode === "forgot" ? handleTalentForgotPassword : authMode === "recovery" ? handleTalentPasswordUpdate : handleTalentSignIn} disabled={authBusy} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy ? "wait" : "pointer", fontWeight: 900, fontSize: "16px" }}>
+              {!(authMode === "recovery" && !recoveryReady) && <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : authMode === "forgot" ? handleTalentForgotPassword : authMode === "recovery" ? handleTalentPasswordUpdate : handleTalentSignIn} disabled={authBusy || (authMode === "signup" && authForm.company_data_sharing_consent !== true)} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy || (authMode === "signup" && authForm.company_data_sharing_consent !== true) ? "not-allowed" : "pointer", opacity: authMode === "signup" && authForm.company_data_sharing_consent !== true ? 0.6 : 1, fontWeight: 900, fontSize: "16px" }}>
                 {authBusy
                   ? (isArabic ? "جاري التنفيذ..." : "Please wait...")
                   : authMode === "signup"
@@ -7004,7 +7138,7 @@ const [aiInterviewQuestionForm, setAIInterviewQuestionForm] = useState({
   key_points_text: "",
   recruiter_notes: "",
 });
-const [aiInterviewWorkspaceTab, setAIInterviewWorkspaceTab] = useState("Engineering Templates");
+const [aiInterviewWorkspaceTab, setAIInterviewWorkspaceTab] = useState("Ready-made Templates");
 const [aiInterviewGenerationForm, setAIInterviewGenerationForm] = useState({ ...EMPTY_AI_INTERVIEW_GENERATION_FORM });
 const [aiInterviewGenerationLoading, setAIInterviewGenerationLoading] = useState(false);
 const [aiInterviewGenerationResult, setAIInterviewGenerationResult] = useState(null);
@@ -7284,6 +7418,7 @@ const [companyTalentTotal, setCompanyTalentTotal] = useState(0);
 const [companyTalentPage, setCompanyTalentPage] = useState(1);
 const [companyTalentCvBusyId, setCompanyTalentCvBusyId] = useState("");
 const [companyTalentAnalysisBusyId, setCompanyTalentAnalysisBusyId] = useState("");
+const [companyTalentContactBusyId, setCompanyTalentContactBusyId] = useState("");
 const [selectedTalentAnalysis, setSelectedTalentAnalysis] = useState(null);
 const companyTalentPageSize = 24;
 const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
@@ -9919,9 +10054,17 @@ async function loadProfessionAliases() {
       .range(0, 2000);
 
     if (isPlatformOwner) {
-      // Central platform library: review engineering masters and centrally
-      // managed security/safety templates under the library owner company.
-      query = query.in("profession_category", ["Engineering", "Security & Safety"]);
+      // Central platform library: review all centrally managed ready-made
+      // interview templates under the library owner company.
+      query = query.in("profession_category", [
+        "Engineering",
+        "Security & Safety",
+        "Technical / Skilled",
+        "Operations",
+        "Finance & Accounting",
+        "HR & Recruitment",
+        "IT",
+      ]);
     } else if (isCurrentPlatformUser || !currentCompanyId) {
       setAIInterviewTemplates([]);
       return [];
@@ -9939,7 +10082,17 @@ async function loadProfessionAliases() {
     }
 
     const rows = (data || []).filter((template) => {
-      if (isPlatformOwner) return ["engineering", "security & safety"].includes(normalize(template.profession_category));
+      if (isPlatformOwner) {
+        return [
+          "engineering",
+          "security & safety",
+          "technical / skilled",
+          "operations",
+          "finance & accounting",
+          "hr & recruitment",
+          "it",
+        ].includes(normalize(template.profession_category));
+      }
       if (String(template.company_id || "") === String(currentCompanyId || "")) return true;
       return template.is_global === true && template.approval_status === "Approved" && template.is_active === true;
     });
@@ -10487,15 +10640,6 @@ async function loadProfessionAliases() {
         p_offset: (safePage - 1) * companyTalentPageSize,
       });
 
-      // Keep the page usable while the pagination migration is being deployed.
-      if (error && /list_company_talent_marketplace_page|schema cache|function/i.test(String(error.message || ""))) {
-        const legacy = await supabase.rpc("list_company_talent_marketplace");
-        if (legacy.error) throw legacy.error;
-        const legacyRows = Array.isArray(legacy.data) ? legacy.data : [];
-        const filteredRows = normalizedQuery ? legacyRows.filter((candidate) => [candidate.full_name, candidate.public_reference, candidate.headline, candidate.profession, candidate.nationality, candidate.city, candidate.country_of_residence, ...(Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name) : [])].filter(Boolean).join(" ").toLowerCase().includes(normalizedQuery.toLowerCase())) : legacyRows;
-        data = { profiles: filteredRows.slice((safePage - 1) * companyTalentPageSize, safePage * companyTalentPageSize), total: filteredRows.length };
-        error = null;
-      }
       if (error) throw error;
 
       const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
@@ -10504,7 +10648,7 @@ async function loadProfessionAliases() {
       setCompanyTalentTotal(total);
       setCompanyTalentPage(safePage);
       setSelectedTalentCandidateId("");
-      setCompanyTalentMessage(`${total.toLocaleString()} consented talent profile(s) found. Full email and mobile details are shown when available.`);
+      setCompanyTalentMessage(`${total.toLocaleString()} talent card(s) found. Imported contact details remain private until the candidate approves this company.`);
       return profiles;
     } catch (error) {
       console.warn("Talent marketplace:", error?.message || error);
@@ -10515,6 +10659,28 @@ async function loadProfessionAliases() {
       return [];
     } finally {
       setCompanyTalentLoading(false);
+    }
+  }
+
+  async function requestImportedTalentContact(candidate) {
+    if (!candidate?.candidate_id || companyTalentContactBusyId) return;
+    setCompanyTalentContactBusyId(candidate.candidate_id);
+    setCompanyTalentMessage("");
+    try {
+      const { data, error } = await supabase.rpc("request_imported_talent_contact", {
+        p_prospect_id: candidate.candidate_id,
+      });
+      if (error) throw error;
+      await loadCompanyTalentMarketplace({ page: companyTalentPage, query: companyTalentSearch });
+      setCompanyTalentMessage(data?.already_pending
+        ? "A contact approval request is already awaiting the candidate's response."
+        : data?.already_approved
+          ? "The candidate has already approved contact sharing for this company."
+          : "The candidate was notified by VisaFlow email. Contact details will unlock only if they approve this company.");
+    } catch (error) {
+      setCompanyTalentMessage(error?.message || "Unable to send the candidate contact approval request.");
+    } finally {
+      setCompanyTalentContactBusyId("");
     }
   }
 
@@ -10542,6 +10708,7 @@ async function loadProfessionAliases() {
     try {
       const isImportedProfile = candidate?.is_imported === true || candidate?.profile_source === "Imported Excel";
       if (isImportedProfile) {
+        if (!candidate?.identity_shared) throw new Error("The candidate must approve contact sharing for this company first.");
         if (!candidate?.email) throw new Error("This imported candidate does not have an email address.");
 
         const candidateName = candidate.full_name || candidate.public_reference || "Candidate";
@@ -11740,7 +11907,7 @@ useEffect(() => {
 
 useEffect(() => {
   if (!currentUser || activePage !== "Global Engineering Templates" || !isPlatformOwner) return;
-  setAIInterviewWorkspaceTab("Engineering Templates");
+  setAIInterviewWorkspaceTab("Ready-made Templates");
   Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
 }, [activePage, currentUser?.id, isPlatformOwner]);
 
@@ -17341,7 +17508,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     setAIInterviewMessage("");
   }
 
-  function getEngineeringTemplateStatus(item = {}) {
+  function getReadyMadeTemplateStatus(item = {}) {
     const matches = aiInterviewTemplates
       .filter((template) =>
         normalizeMatchText(template.profession) === normalizeMatchText(item.profession)
@@ -17371,31 +17538,31 @@ ${errors.slice(0, 10).join("\n")}` : "")
     return { label: "Not Created", className: "", template: matches[0] || null };
   }
 
-  function buildEngineeringAIInterviewGenerationForm(item = {}) {
+  function buildReadyMadeAIInterviewGenerationForm(item = {}) {
     return {
       ...EMPTY_AI_INTERVIEW_GENERATION_FORM,
-      template_name: `${item.profession || "Engineering"} Advanced AI Interview`,
+      template_name: `${item.profession || "Role"} Advanced AI Interview`,
       profession: item.profession || "",
-      profession_category: "Engineering",
+      profession_category: item.category || "Other",
       job_description: item.job_description || "",
-      years_experience: "5+ years",
-      qualifications: `Bachelor's degree in ${String(item.profession || "Engineering").replace(" Engineer", " Engineering")} or a closely related engineering discipline`,
-      certifications: "Relevant professional certifications are preferred only when required by the company or project.",
+      years_experience: item.years_experience || "3+ years",
+      qualifications: item.qualifications || "Role-relevant qualification or verified equivalent experience.",
+      certifications: item.certifications || "Role-relevant certificates are preferred only when required by the employer.",
       language: "Bilingual",
-      difficulty: "Advanced",
-      question_count: 15,
-      passing_score: 75,
+      difficulty: item.difficulty || "Medium",
+      question_count: Number(item.question_count || 12),
+      passing_score: Number(item.passing_score || 75),
     };
   }
 
-  function prepareEngineeringAIInterviewTemplate(item = {}) {
+  function prepareReadyMadeAIInterviewTemplate(item = {}) {
     if (!item?.profession) return;
 
-    setAIInterviewGenerationForm(buildEngineeringAIInterviewGenerationForm(item));
+    setAIInterviewGenerationForm(buildReadyMadeAIInterviewGenerationForm(item));
     setAIInterviewWorkspaceTab("Generate from Job Description");
     setAIInterviewGenerationResult(null);
     setAIInterviewMessage(
-      `${item.profession} advanced engineering framework is ready. Review the job description, then generate the questions.`
+      `${item.profession} ${item.library || "specialized"} framework is ready. Review the job description, then generate the questions.`
     );
   }
 
@@ -17644,11 +17811,9 @@ ${errors.slice(0, 10).join("\n")}` : "")
       return alert("Job description must contain at least 30 characters.");
     }
 
-    const isEngineeringCatalogRole = ENGINEERING_AI_TEMPLATE_CATALOG.some(
-      (item) => normalize(item.profession) === normalize(profession)
-    );
+    const readyMadeCatalogItem = getReadyMadeCatalogItem(profession);
     const professionCategory = String(aiInterviewGenerationForm.profession_category || "").trim() ||
-      (isEngineeringCatalogRole ? "Engineering" : "Other");
+      readyMadeCatalogItem?.category || "Other";
 
     setAIInterviewGenerationLoading(true);
     setAIInterviewGenerationResult(null);
@@ -17705,8 +17870,8 @@ ${errors.slice(0, 10).join("\n")}` : "")
       // Delivery is intentionally not saved on the template.
       // The campaign copies its own delivery settings into each candidate session at launch.
 
-      const preparedCatalogItem = getEngineeringCatalogItem(profession);
-      const isPreparedEngineeringMaster = Boolean(
+      const preparedCatalogItem = getReadyMadeCatalogItem(profession);
+      const isPreparedReadyMadeMaster = Boolean(
         preparedCatalogItem &&
         !String(aiInterviewGenerationForm.request_no || "").trim() &&
         !String(aiInterviewGenerationForm.request_line_id || "").trim() &&
@@ -17714,11 +17879,11 @@ ${errors.slice(0, 10).join("\n")}` : "")
         normalizeMatchText(jobDescription) === normalizeMatchText(preparedCatalogItem.job_description)
       );
 
-      if (isPreparedEngineeringMaster && generationData.template_id && !generationData.used_guarded_fallback) {
+      if (isPreparedReadyMadeMaster && generationData.template_id && !generationData.used_guarded_fallback) {
         const { error: markerError } = await supabase
           .from("ai_interview_templates")
           .update({
-            source_type: "Engineering Master Framework",
+            source_type: preparedCatalogItem.source_type,
             updated_by: getAIInterviewActorName(),
             updated_at: new Date().toISOString(),
           })
@@ -17726,7 +17891,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
           .eq("company_id", targetCompanyId);
 
         if (markerError) {
-          console.warn("Engineering master marker failed:", markerError.message);
+          console.warn("Ready-made master marker failed:", markerError.message);
         }
       }
 
@@ -17746,32 +17911,32 @@ ${errors.slice(0, 10).join("\n")}` : "")
     }
   }
 
-  async function generateAllRemainingEngineeringTemplates() {
+  async function generateAllRemainingReadyMadeTemplates() {
     if (!isPlatformOwner) {
-      return alert("Only the Platform Owner can generate global engineering templates.");
+      return alert("Only the Platform Owner can generate global ready-made templates.");
     }
     const targetCompanyId = GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID;
     if (engineeringBulkGenerationLoading) return;
 
-    const remainingItems = ENGINEERING_AI_TEMPLATE_CATALOG.filter(
-      (item) => !getEngineeringTemplateStatus(item).template
+    const remainingItems = READY_MADE_AI_TEMPLATE_CATALOG.filter(
+      (item) => !getReadyMadeTemplateStatus(item).template
     );
 
     if (remainingItems.length === 0) {
-      setEngineeringBulkGenerationSummary("All engineering templates have already been created.");
-      return alert("All engineering templates have already been created.");
+      setEngineeringBulkGenerationSummary("All ready-made templates have already been created.");
+      return alert("All ready-made templates have already been created.");
     }
 
     const confirmed = window.confirm(
-      `Generate ${remainingItems.length} remaining engineering templates?
+      `Generate ${remainingItems.length} remaining ready-made templates?
 
 ` +
       "They will be generated one by one and saved as Pending Review. Keep this page open until the process finishes."
     );
     if (!confirmed) return;
 
-    const initialProgress = ENGINEERING_AI_TEMPLATE_CATALOG.map((item) => {
-      const existingStatus = getEngineeringTemplateStatus(item);
+    const initialProgress = READY_MADE_AI_TEMPLATE_CATALOG.map((item) => {
+      const existingStatus = getReadyMadeTemplateStatus(item);
       return {
         profession: item.profession,
         profession_ar: item.profession_ar,
@@ -17796,7 +17961,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
     setEngineeringBulkGenerationProgress(initialProgress);
     setEngineeringBulkGenerationSummary(
-      `Starting generation of ${remainingItems.length} engineering templates. Keep this page open.`
+      `Starting generation of ${remainingItems.length} ready-made templates. Keep this page open.`
     );
     setEngineeringBulkGenerationLoading(true);
     setAIInterviewGenerationResult(null);
@@ -17807,7 +17972,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     try {
       for (let index = 0; index < remainingItems.length; index += 1) {
         const item = remainingItems[index];
-        const form = buildEngineeringAIInterviewGenerationForm(item);
+        const form = buildReadyMadeAIInterviewGenerationForm(item);
 
         updateProgress(item.profession, {
           state: "Generating",
@@ -17825,15 +17990,15 @@ ${errors.slice(0, 10).join("\n")}` : "")
                 company_id: targetCompanyId,
                 template_name: form.template_name,
                 profession: form.profession,
-                profession_category: "Engineering",
+                profession_category: form.profession_category,
                 job_description: form.job_description,
                 language: "Bilingual",
-                difficulty: "Advanced",
-                years_experience: "5+ years",
+                difficulty: form.difficulty,
+                years_experience: form.years_experience,
                 qualifications: form.qualifications,
                 certifications: form.certifications,
-                question_count: 15,
-                passing_score: 75,
+                question_count: form.question_count,
+                passing_score: form.passing_score,
                 request_no: "",
                 request_line_id: "",
                 created_by: getAIInterviewActorName(),
@@ -17853,7 +18018,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
             const { error: markerError } = await supabase
               .from("ai_interview_templates")
               .update({
-                source_type: "Engineering Master Framework",
+                source_type: item.source_type,
                 updated_by: getAIInterviewActorName(),
                 updated_at: new Date().toISOString(),
               })
@@ -17861,22 +18026,22 @@ ${errors.slice(0, 10).join("\n")}` : "")
               .eq("company_id", targetCompanyId);
 
             if (markerError) {
-              console.warn(`Engineering master marker failed for ${item.profession}:`, markerError.message);
+              console.warn(`Ready-made master marker failed for ${item.profession}:`, markerError.message);
             }
           }
 
           completedCount += 1;
           updateProgress(item.profession, {
             state: "Completed",
-            detail: `${data.generated_question_count || 15} questions • Pending Review`,
+            detail: `${data.generated_question_count || form.question_count} questions • Pending Review`,
             template_id: data.template_id || "",
-            generated_question_count: Number(data.generated_question_count || 15),
+            generated_question_count: Number(data.generated_question_count || form.question_count),
           });
         } catch (error) {
           failedCount += 1;
           const message = error?.message || String(error);
           console.warn(
-            `Bulk engineering template generation failed for ${item.profession}:`,
+            `Bulk ready-made template generation failed for ${item.profession}:`,
             message
           );
           updateProgress(item.profession, {
@@ -17893,7 +18058,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
       await Promise.all([loadAIInterviewTemplates(), loadAIInterviewQuestions()]);
 
       const summary =
-        `Engineering template generation finished. Completed: ${completedCount}. ` +
+        `Ready-made template generation finished. Completed: ${completedCount}. ` +
         `Failed: ${failedCount}. Every completed template is Pending Review and inactive until you approve it.`;
 
       setEngineeringBulkGenerationSummary(summary);
@@ -17935,7 +18100,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
 
   function canManageAIInterviewTemplate(template = {}) {
     if (!template?.id || isGlobalAIInterviewTemplate(template)) return false;
-    if (isPlatformOwner) return isEngineeringMasterTemplate(template);
+    if (isPlatformOwner) return isReadyMadeMasterTemplate(template);
     return canManageInterviewResults && String(template.company_id || "") === String(currentCompanyId || "");
   }
 
@@ -18024,24 +18189,32 @@ ${errors.slice(0, 10).join("\n")}` : "")
     }
   }
 
-  function getEngineeringCatalogItem(profession = "") {
-    return ENGINEERING_AI_TEMPLATE_CATALOG.find(
+  function getReadyMadeCatalogItem(profession = "") {
+    return READY_MADE_AI_TEMPLATE_CATALOG.find(
       (item) => normalizeMatchText(item.profession) === normalizeMatchText(profession)
     ) || null;
   }
 
-  function isEngineeringMasterTemplate(template = {}) {
+  function isReadyMadeMasterTemplate(template = {}) {
     if (!template?.id) return false;
-    const catalogItem = getEngineeringCatalogItem(template.profession);
+    const catalogItem = getReadyMadeCatalogItem(template.profession);
     if (!catalogItem) return false;
 
     const source = normalize(template.source_type);
-    if (["engineering master framework", "visaflow global engineering template"].includes(source)) {
+    if ([
+      "engineering master framework",
+      "visaflow global engineering template",
+      "visaflow technician master framework",
+      "visaflow finance master framework",
+      "visaflow hr master framework",
+      "visaflow it master framework",
+      "visaflow operations management master framework",
+    ].includes(source)) {
       return true;
     }
 
     return (
-      normalize(template.profession_category) === "engineering" &&
+      normalize(template.profession_category) === normalize(catalogItem.category) &&
       !String(template.request_no || "").trim() &&
       !String(template.request_line_id || "").trim() &&
       normalizeMatchText(template.template_name) === normalizeMatchText(`${catalogItem.profession} Advanced AI Interview`) &&
@@ -18143,7 +18316,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
       (item) => String(item.id || "") === String(question.template_id || "")
     );
     if (isGlobalAIInterviewTemplate(template)) {
-      return alert("VisaFlow global engineering templates are read-only. Create a company copy before editing.");
+      return alert("VisaFlow global ready-made templates are read-only. Create a company copy before editing.");
     }
     if (template?.approval_status === "Approved" || template?.is_locked) {
       return alert("Approved templates are locked and cannot be edited.");
@@ -18246,7 +18419,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     }
     if (!question?.id || !template?.id) return;
     if (isGlobalAIInterviewTemplate(template)) {
-      return alert("VisaFlow global engineering templates are read-only.");
+      return alert("VisaFlow global ready-made templates are read-only.");
     }
     if (template.approval_status === "Approved" || template.is_locked) {
       return alert("Approved templates are locked and cannot be changed.");
@@ -18336,7 +18509,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
         return alert("This VisaFlow global engineering template is already centrally approved and active.");
       }
 
-      const promoteToGlobalLibrary = isPlatformOwner && isEngineeringMasterTemplate(template);
+      const promoteToGlobalLibrary = isPlatformOwner && isReadyMadeMasterTemplate(template);
 
       // Questions are promoted first so the full approved master remains complete.
       const { error: questionsError } = await supabase
@@ -18450,7 +18623,7 @@ ${errors.slice(0, 10).join("\n")}` : "")
     }
     if (!template?.id) return;
     if (isGlobalAIInterviewTemplate(template)) {
-      return alert("VisaFlow global engineering templates cannot be rejected or changed by a company.");
+      return alert("VisaFlow global ready-made templates cannot be rejected or changed by a company.");
     }
 
     const reason = String(
@@ -31108,6 +31281,7 @@ async function completeAcceptedAgencyInvitation({ request, session }) {
 }
 
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+const talentContactConsentState = getTalentContactConsentUrlState();
 if (agencyInvitationRequested) {
   return (
     <AgencyInvitationPasswordScreen
@@ -31121,6 +31295,10 @@ if (workspaceRecoveryRequested) {
 }
 if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
+}
+
+if (talentContactConsentState.requested) {
+  return <TalentContactConsentPage requestState={talentContactConsentState} />;
 }
 
 if (publicView === PUBLIC_VIEW.CV_BUILDER) {
@@ -35119,7 +35297,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div>
                     <p className="eyebrow">VisaFlow Talent</p>
                     <h1>Talent Marketplace</h1>
-                    <p>Search approved profiles, view contact details shared by the candidate, and schedule interviews directly.</p>
+                    <p>Browse all available Talent cards. Imported profiles stay anonymous until the candidate approves contact for your company.</p>
                   </div>
                   <div className="hero-actions">
                     <button onClick={() => loadCompanyTalentMarketplace({ page: companyTalentPage })} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
@@ -35129,7 +35307,7 @@ disabled={authorizationWorkflowBusy === "create"}
                 <div className="stats-grid">
                   <div className="stat-card"><h3>Package</h3><strong>{talentEntitlement.tier || "Standard"}</strong><span>Controlled by Platform Owner</span></div>
                   <div className="stat-card"><h3>Profile Limit</h3><strong>{formatTalentProfileLimit(talentEntitlement.profile_limit)}</strong><span>{isTalentProfileUnlimited(talentEntitlement.profile_limit) ? "All published profiles" : "Maximum available profiles"}</span></div>
-                  <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentTotal.toLocaleString()}</strong><span>Approved and consented</span></div>
+                  <div className="stat-card"><h3>Talent Cards</h3><strong>{companyTalentTotal.toLocaleString()}</strong><span>Self-registered and imported profiles</span></div>
                 </div>
 
                 {companyTalentMessage && <div className="form-card talent-marketplace-feedback" role="status"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
@@ -35137,7 +35315,7 @@ disabled={authorizationWorkflowBusy === "create"}
                 <div className="talent-marketplace-toolbar">
                   <div className="talent-marketplace-search">
                     <span aria-hidden="true">⌕</span>
-                    <input placeholder="Search by name, profession, nationality, location or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch }); }} />
+                    <input placeholder="Search by profession, location, education or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch }); }} />
                   </div>
                   <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch })}>Search Talent</button>
                   {companyTalentSearch && <button type="button" className="light-btn" onClick={() => { setCompanyTalentSearch(""); loadCompanyTalentMarketplace({ page: 1, query: "" }); }}>Clear</button>}
@@ -35162,22 +35340,24 @@ disabled={authorizationWorkflowBusy === "create"}
                         return <article className="talent-profile-card" key={`${candidate.profile_source || "candidate"}-${candidate.candidate_id}`}>
                           <header>
                             <div className="talent-profile-avatar">{initials || "VF"}</div>
-                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p>{isImportedProfile && <small className="talent-profile-source">Imported applicant · Consented contact sharing</small>}</div>
+                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p>{isImportedProfile && <small className="talent-profile-source">Imported applicant · Anonymous profile</small>}</div>
                             {candidate.latest_interview_status && <Badge value={candidate.latest_interview_status} />}
                           </header>
                           <div className="talent-profile-facts">
                             <span><small>Profession</small><strong>{candidate.profession || "Not specified"}</strong></span>
-                            <span><small>{candidate.years_experience == null ? "Current Employer" : "Experience"}</small><strong>{candidate.years_experience == null ? (candidate.current_company || "Not specified") : `${candidate.years_experience} years`}</strong></span>
+                            <span><small>{isImportedProfile ? "Current Role" : candidate.years_experience == null ? "Current Employer" : "Experience"}</small><strong>{isImportedProfile ? (candidate.current_title || candidate.profession || "Not specified") : candidate.years_experience == null ? (candidate.current_company || "Not specified") : `${candidate.years_experience} years`}</strong></span>
                             <span><small>Location</small><strong>{candidateLocation}</strong></span>
                             <span><small>{isImportedProfile ? "Education" : "Nationality"}</small><strong>{isImportedProfile ? ([candidate.education_degree, candidate.education_institution].filter(Boolean).join(" · ") || "Not specified") : (candidate.nationality || "Not specified")}</strong></span>
                           </div>
                           {candidate.professional_summary && <div className="talent-profile-summary"><small>Experience Summary</small><p>{candidate.professional_summary}</p></div>}
                           <div className="talent-profile-skills">{skills.length ? skills.map((skill) => <span key={skill}>{skill}</span>) : isImportedProfile && candidate.source_job_title ? <span>Applied for: {candidate.source_job_title}</span> : <span>Skills available in CV</span>}</div>
-                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={candidate.email ? `mailto:${candidate.email}` : undefined}>{candidate.email || "Email not provided"}</a><a href={candidate.phone ? `tel:${candidate.phone}` : undefined}>{candidate.phone || "Phone not provided"}</a></> : <span>Contact details unlock after candidate consent</span>}</div>
+                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={candidate.email ? `mailto:${candidate.email}` : undefined}>{candidate.email || "Email not provided"}</a><a href={candidate.phone ? `tel:${candidate.phone}` : undefined}>{candidate.phone || "Phone not provided"}</a></> : <span>{isImportedProfile && candidate.contact_request_email_status === "Failed" ? "Email delivery failed · Request can be retried" : isImportedProfile && candidate.contact_request_status === "Pending" ? "Approval request sent · Awaiting candidate response" : isImportedProfile && candidate.contact_request_status === "Declined" ? "Candidate declined contact sharing" : "Contact details are private"}</span>}</div>
                           <footer>
                             {isImportedProfile ? <>
-                              <a className="talent-card-contact-action" href={candidate.email ? `mailto:${candidate.email}` : undefined} aria-disabled={!candidate.email}>Email Candidate</a>
-                              <button type="button" className="talent-schedule-button" disabled={!candidate.email} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                              {candidate.identity_shared ? <>
+                                <a className="talent-card-contact-action" href={candidate.email ? `mailto:${candidate.email}` : undefined} aria-disabled={!candidate.email}>Email Candidate</a>
+                                <button type="button" className="talent-schedule-button" disabled={!candidate.email} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                              </> : <button type="button" className="talent-schedule-button" disabled={companyTalentContactBusyId === candidate.candidate_id || (candidate.contact_request_status === "Pending" && candidate.contact_request_email_status !== "Failed") || candidate.contact_request_status === "Declined"} onClick={() => requestImportedTalentContact(candidate)}>{companyTalentContactBusyId === candidate.candidate_id ? "Sending..." : candidate.contact_request_email_status === "Failed" ? "Retry Approval Email" : candidate.contact_request_status === "Pending" ? "Awaiting Candidate" : candidate.contact_request_status === "Declined" ? "Request Declined" : "Request Contact Approval"}</button>}
                             </> : <>
                               <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
                               <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
@@ -35661,7 +35841,7 @@ disabled={authorizationWorkflowBusy === "create"}
             </FormCard>
             )}
             {(isGlobalEngineeringAdminPage || (activePage === "AI Interview Center" && aiInterviewCampaignTab === "Templates")) && (<>
-            <FormCard title={isGlobalEngineeringAdminPage ? "Global Engineering Template Administration" : "AI Interview Templates"}>
+            <FormCard title={isGlobalEngineeringAdminPage ? "Global Ready-made Template Administration" : "AI Interview Templates"}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>Templates define questions and evaluation standards only.</div>
@@ -35670,8 +35850,8 @@ disabled={authorizationWorkflowBusy === "create"}
                   </div>
                 </div>
                 <div className="actions-line" style={{ margin: 0 }}>
-                  <button className="save-btn" onClick={() => setAIInterviewWorkspaceTab("Engineering Templates")}>
-                    {isGlobalEngineeringAdminPage ? "Global Engineering Templates" : "Engineering Templates"}
+                  <button className="save-btn" onClick={() => setAIInterviewWorkspaceTab("Ready-made Templates")}>
+                    {isGlobalEngineeringAdminPage ? "Global Ready-made Templates" : "Ready-made Templates"}
                   </button>
                   {!isGlobalEngineeringAdminPage && (
                     <button className="light-btn" onClick={() => setAIInterviewWorkspaceTab("Generate from Job Description")}>
@@ -35685,13 +35865,13 @@ disabled={authorizationWorkflowBusy === "create"}
               </div>
 
               <div className="dashboard-grid" style={{ marginTop: 16 }}>
-                <Stat title={isGlobalEngineeringAdminPage ? "Engineering Templates" : "AI Templates"} value={aiInterviewTemplates.length} />
+                <Stat title={isGlobalEngineeringAdminPage ? "Ready-made Templates" : "AI Templates"} value={aiInterviewTemplates.length} />
                 <Stat title="AI Questions" value={aiInterviewQuestions.length} />
                 {isGlobalEngineeringAdminPage ? (
                   <>
                     <Stat title="Global & Active" value={aiInterviewTemplates.filter((template) => template.is_global === true && template.is_active === true).length} className="passed" />
                     <Stat title="Pending Review" value={aiInterviewTemplates.filter((template) => template.approval_status === "Pending Review").length} className="warning" />
-                    <Stat title="Remaining Catalog" value={ENGINEERING_AI_TEMPLATE_CATALOG.filter((item) => !getEngineeringTemplateStatus(item).template).length} />
+                    <Stat title="Remaining Catalog" value={READY_MADE_AI_TEMPLATE_CATALOG.filter((item) => !getReadyMadeTemplateStatus(item).template).length} />
                   </>
                 ) : (
                   <>
@@ -35711,7 +35891,7 @@ disabled={authorizationWorkflowBusy === "create"}
 
             <FormCard title="AI Interview Template Builder">
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
-                {["Engineering Templates", "Generate from Job Description"].map((tab) => (
+                {["Ready-made Templates", "Generate from Job Description"].map((tab) => (
                   <button
                     key={tab}
                     className={aiInterviewWorkspaceTab === tab ? "save-btn" : "light-btn"}
@@ -35724,30 +35904,30 @@ disabled={authorizationWorkflowBusy === "create"}
                 ))}
               </div>
 
-              {aiInterviewWorkspaceTab === "Engineering Templates" && (
+              {aiInterviewWorkspaceTab === "Ready-made Templates" && (
                 <div>
                   <div style={{ padding: 14, borderRadius: 14, background: "#eff6ff", color: "#1e3a8a", marginBottom: 16, lineHeight: 1.65 }}>
-                    <b>VisaFlow Global Engineering Library.</b> Approved engineering master templates are shared with every client company and remain read-only. Non-engineering professions and company-specific engineering roles are generated from the company's actual job description.
+                    <b>VisaFlow Global Interview Library.</b> Approved engineering, technician, finance, HR, IT and operations-management master templates are shared with every client company and remain read-only. Company-specific roles can still be generated from the employer's actual job description.
                   </div>
 
                   {isPlatformOwner && (
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", padding: 14, border: "1px solid #dbeafe", borderRadius: 14, background: "#ffffff", marginBottom: 16 }}>
                     <div>
-                      <div style={{ fontWeight: 900, color: "#0f172a" }}>Bulk Engineering Template Generator</div>
+                      <div style={{ fontWeight: 900, color: "#0f172a" }}>Bulk Ready-made Template Generator</div>
                       <div style={{ color: "#64748b", fontSize: 13, marginTop: 4, lineHeight: 1.55 }}>
-                        {ENGINEERING_AI_TEMPLATE_CATALOG.filter((item) => !getEngineeringTemplateStatus(item).template).length} template(s) remaining. Templates are generated one by one and saved as Pending Review. You will review and approve each template separately.
+                        {READY_MADE_AI_TEMPLATE_CATALOG.filter((item) => !getReadyMadeTemplateStatus(item).template).length} template(s) remaining. Templates are generated one by one and saved as Pending Review. You will review and approve each template separately.
                       </div>
                     </div>
                     <button
                       className="save-btn"
                       disabled={
                         engineeringBulkGenerationLoading ||
-                        ENGINEERING_AI_TEMPLATE_CATALOG.every((item) => getEngineeringTemplateStatus(item).template)
+                        READY_MADE_AI_TEMPLATE_CATALOG.every((item) => getReadyMadeTemplateStatus(item).template)
                       }
-                      onClick={generateAllRemainingEngineeringTemplates}
+                      onClick={generateAllRemainingReadyMadeTemplates}
                     >
                       {engineeringBulkGenerationLoading
-                        ? "Generating Engineering Templates..."
+                        ? "Generating Ready-made Templates..."
                         : "Generate All Remaining Templates"}
                     </button>
                   </div>
@@ -35796,20 +35976,21 @@ disabled={authorizationWorkflowBusy === "create"}
                   )}
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
-                    {ENGINEERING_AI_TEMPLATE_CATALOG.map((item) => {
-                      const status = getEngineeringTemplateStatus(item);
+                    {READY_MADE_AI_TEMPLATE_CATALOG.map((item) => {
+                      const status = getReadyMadeTemplateStatus(item);
                       return (
                         <div key={item.profession} style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 16, background: "#ffffff", display: "grid", gap: 10 }}>
                           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
                             <div>
                               <div style={{ fontWeight: 900, color: "#0f172a" }}>{item.profession}</div>
                               <div dir="rtl" style={{ color: "#475569", marginTop: 3 }}>{item.profession_ar}</div>
+                              <div style={{ color: "#7c3aed", fontSize: 11, fontWeight: 900, marginTop: 5 }}>{item.library}</div>
                             </div>
                             <Badge value={status.label} />
                           </div>
                           <div style={{ color: "#64748b", fontSize: 13, lineHeight: 1.55 }}>{item.focus}</div>
                           <div style={{ fontSize: 12, color: "#7c3aed", fontWeight: 800 }}>
-                            Advanced scenarios • Technical judgment • Safety • Root-cause analysis
+                            {item.question_count || 15} questions • {item.difficulty || "Advanced"} • Passing score {item.passing_score || 75}%
                           </div>
                           <div className="actions-line" style={{ margin: 0 }}>
                             {status.template ? (
@@ -35820,7 +36001,7 @@ disabled={authorizationWorkflowBusy === "create"}
                               <button
                                 className="save-btn"
                                 disabled={engineeringBulkGenerationLoading}
-                                onClick={() => prepareEngineeringAIInterviewTemplate(item)}
+                                onClick={() => prepareReadyMadeAIInterviewTemplate(item)}
                               >
                                 Prepare Advanced Template
                               </button>
@@ -35842,7 +36023,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div style={{ padding: 14, borderRadius: 14, background: "#f8fafc", color: "#334155", marginBottom: 16, lineHeight: 1.65 }}>
                     {isGlobalEngineeringAdminPage ? (
                       <>
-                        Create a missing <b>engineering master template</b> for the VisaFlow global library. The template remains Pending Review until you approve and publish it.
+                        Create a missing <b>ready-made master template</b> for the VisaFlow global library. The template remains Pending Review until you approve and publish it.
                       </>
                     ) : (
                       <>
@@ -36181,7 +36362,7 @@ disabled={authorizationWorkflowBusy === "create"}
 
                   {globalTemplate && (
                     <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: "#ecfdf5", color: "#166534", fontWeight: 800 }}>
-                      VisaFlow Global Engineering Template — available to every company and locked against company-level changes.
+                      VisaFlow Global Ready-made Template — available to every company and locked against company-level changes.
                     </div>
                   )}
 
@@ -36195,7 +36376,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div className="actions-line" style={{ marginBottom: 16 }}>
                     {!templateLocked && canManageAIInterviewTemplate(selectedTemplate) && (
                       <button className="save-btn" disabled={aiInterviewLoading} onClick={() => approveAndActivateAIInterviewTemplate(selectedTemplate)}>
-                        {isPlatformOwner && isEngineeringMasterTemplate(selectedTemplate) ? "Approve & Publish Globally" : "Publish Version"}
+                        {isPlatformOwner && isReadyMadeMasterTemplate(selectedTemplate) ? "Approve & Publish Globally" : "Publish Version"}
                       </button>
                     )}
                     {canManageAIInterviewTemplate(selectedTemplate) && selectedTemplate.approval_status !== "Rejected" && (
@@ -40125,7 +40306,7 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="section-title-row">
         <div>
           <h2>Engineering Talent Campaign / حملة المواهب الهندسية</h2>
-          <p>All approved, active engineering templates in Platform Owner are offered automatically.</p>
+          <p>All approved, active ready-made templates in Platform Owner are offered automatically.</p>
         </div>
         <button type="button" onClick={async () => {
           const url = `${window.location.origin}/?talent=1&talent_campaign=${ENGINEERING_TALENT_CAMPAIGN_SLUG}&utm_source=linkedin&utm_medium=social&utm_campaign=saudi_engineers_2026`;
