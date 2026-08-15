@@ -7,6 +7,7 @@ const publicCounterMigrationUrl = new URL("../supabase/migrations/20260812000400
 const consentedMarketplaceMigrationUrl = new URL("../supabase/migrations/20260814000100_publish_consented_imported_talent.sql", import.meta.url);
 const marketplaceReadyTotalMigrationUrl = new URL("../supabase/migrations/20260814000200_talent_marketplace_ready_total.sql", import.meta.url);
 const companyContactConsentMigrationUrl = new URL("../supabase/migrations/20260815000100_imported_talent_company_contact_consent.sql", import.meta.url);
+const registrationConsentMigrationUrl = new URL("../supabase/migrations/20260815000300_talent_registration_company_data_consent.sql", import.meta.url);
 const prospectEmailWorkerUrl = new URL("../supabase/functions/talent-prospect-email-worker/index.ts", import.meta.url);
 const appUrl = new URL("./App.jsx", import.meta.url);
 
@@ -112,4 +113,21 @@ test("company request and candidate approve or decline flow is email-backed", as
   assert.match(app, /TalentContactConsentPage/);
   assert.match(app, /respond_imported_talent_contact/);
   assert.doesNotMatch(app, /const legacy = await supabase\.rpc\("list_company_talent_marketplace"\)/i);
+});
+
+test("candidate signup requires explicit company data sharing consent and claims a matching import", async () => {
+  const migration = await readFile(registrationConsentMigrationUrl, "utf8");
+  const app = await readFile(appUrl, "utf8");
+  assert.match(app, /company_data_sharing_consent:\s*false/i);
+  assert.match(app, /Consent to share my information with companies/i);
+  assert.match(app, /name, email, phone number, and employment history may be shown/i);
+  assert.match(app, /complete_my_talent_registration/i);
+  assert.match(app, /company_data_sharing_consent_at:\s*new Date\(\)\.toISOString\(\)/i);
+  assert.match(migration, /registration_company_data_consent boolean not null default false/i);
+  assert.match(migration, /Employer Contact Sharing/i);
+  assert.match(migration, /auth_user\.email_confirmed_at is not null/i);
+  assert.match(migration, /prospect\.email_normalized = lower\(btrim\(coalesce\(v_candidate\.email, ''\)\)\)/i);
+  assert.match(migration, /claimed_candidate_id = v_candidate\.id/i);
+  assert.match(migration, /marketplace_status = 'Approved'/i);
+  assert.match(migration, /profile_visibility = 'Public'/i);
 });

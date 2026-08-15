@@ -4121,6 +4121,7 @@ function TalentCandidatePortal({ onBack }) {
     email: cvBuilderImport?.email || "",
     password: "",
     confirm_password: "",
+    company_data_sharing_consent: false,
   });
   const [profile, setProfile] = useState(null);
   const [profileForm, setProfileForm] = useState({ ...EMPTY_TALENT_PROFILE_FORM });
@@ -4230,6 +4231,25 @@ function TalentCandidatePortal({ onBack }) {
     ]));
   }
 
+  async function finalizeTalentRegistrationConsent(user, candidateRow) {
+    if (!user?.id || !candidateRow?.id || user.user_metadata?.company_data_sharing_consent !== true) return candidateRow;
+    if (candidateRow.registration_company_data_consent_at) return candidateRow;
+
+    const { error: consentError } = await supabase.rpc("complete_my_talent_registration", {
+      p_consent_version: String(user.user_metadata?.company_data_sharing_consent_version || "1.0"),
+      p_language: String(user.user_metadata?.company_data_sharing_consent_language || portalLanguage || "AR"),
+    });
+    if (consentError) throw consentError;
+
+    const { data: refreshed, error: refreshError } = await supabase
+      .from("talent_candidates")
+      .select("*")
+      .eq("auth_user_id", user.id)
+      .single();
+    if (refreshError) throw refreshError;
+    return refreshed || candidateRow;
+  }
+
   async function ensureTalentProfile(user) {
     if (!user?.id) return null;
 
@@ -4241,7 +4261,7 @@ function TalentCandidatePortal({ onBack }) {
         .maybeSingle();
 
       if (error) throw error;
-      if (data) return data;
+      if (data) return finalizeTalentRegistrationConsent(user, data);
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
 
@@ -4258,7 +4278,7 @@ function TalentCandidatePortal({ onBack }) {
       .single();
 
     if (error) throw error;
-    return data;
+    return finalizeTalentRegistrationConsent(user, data);
   }
 
   async function loadCandidateWorkspace(user, { force = false } = {}) {
@@ -4503,6 +4523,12 @@ function TalentCandidatePortal({ onBack }) {
       setAuthMessage(isArabic ? "كلمتا المرور غير متطابقتين." : "Passwords do not match.");
       return;
     }
+    if (authForm.company_data_sharing_consent !== true) {
+      setAuthMessage(isArabic
+        ? "يجب الموافقة على عرض بياناتك المهنية وبيانات التواصل للشركات لإكمال التسجيل."
+        : "You must consent to sharing your professional and contact information with companies to register.");
+      return;
+    }
 
     setAuthBusy(true);
     setAuthMessage("");
@@ -4518,6 +4544,10 @@ function TalentCandidatePortal({ onBack }) {
             full_name: fullName,
             phone,
             registration_campaign: requestedCampaignSlug || null,
+            company_data_sharing_consent: true,
+            company_data_sharing_consent_version: "1.0",
+            company_data_sharing_consent_language: portalLanguage,
+            company_data_sharing_consent_at: new Date().toISOString(),
           },
         },
       });
@@ -5158,14 +5188,25 @@ function TalentCandidatePortal({ onBack }) {
                     {authMode !== "forgot" && (
                       <TalentField label={isArabic ? "كلمة المرور" : "Password"} type="password" value={authForm.password} onChange={(value) => setAuthForm((prev) => ({ ...prev, password: value }))} dir="ltr" autoComplete={authMode === "signup" ? "new-password" : "current-password"} showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
                     )}
-                    {authMode === "signup" && <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />}
+                    {authMode === "signup" && <>
+                      <TalentField label={isArabic ? "تأكيد كلمة المرور" : "Confirm Password"} type="password" value={authForm.confirm_password} onChange={(value) => setAuthForm((prev) => ({ ...prev, confirm_password: value }))} dir="ltr" autoComplete="new-password" showPasswordLabel={isArabic ? "إظهار كلمة المرور" : "Show password"} hidePasswordLabel={isArabic ? "إخفاء كلمة المرور" : "Hide password"} />
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", border: `1px solid ${palette.border}`, borderRadius: "12px", padding: "13px", background: "#f8fafc", cursor: "pointer", lineHeight: 1.65 }}>
+                        <input type="checkbox" checked={authForm.company_data_sharing_consent === true} onChange={(event) => setAuthForm((prev) => ({ ...prev, company_data_sharing_consent: event.target.checked }))} style={{ marginTop: "5px", width: "18px", height: "18px", flex: "0 0 auto" }} />
+                        <span>
+                          <strong style={{ display: "block", color: palette.navy }}>{isArabic ? "موافقة عرض بياناتي للشركات" : "Consent to share my information with companies"}</strong>
+                          <small style={{ color: palette.muted }}>{isArabic
+                            ? "أوافق على عرض ملفي المهني واسمي وبريدي وجوالي وجهات عملي للشركات المشتركة بعد اعتماد الملف، ويمكنني سحب الموافقة لاحقًا من إعدادات ملفي."
+                            : "I agree that my professional profile, name, email, phone number, and employment history may be shown to subscribed companies after profile approval. I can withdraw this consent later from my profile settings."}</small>
+                        </span>
+                      </label>
+                    </>}
                   </>
                 ) : null}
               </div>
 
               {authMessage && !(authMode === "recovery" && !recoveryReady) && <div style={{ marginTop: "14px", padding: "12px", borderRadius: "12px", background: authMessageIsSuccess ? "#ecfdf5" : "#fff7ed", color: authMessageIsSuccess ? palette.success : "#9a3412", fontWeight: 800, lineHeight: 1.6 }}>{authMessage}</div>}
 
-              {!(authMode === "recovery" && !recoveryReady) && <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : authMode === "forgot" ? handleTalentForgotPassword : authMode === "recovery" ? handleTalentPasswordUpdate : handleTalentSignIn} disabled={authBusy} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy ? "wait" : "pointer", fontWeight: 900, fontSize: "16px" }}>
+              {!(authMode === "recovery" && !recoveryReady) && <button type="button" onClick={authMode === "signup" ? handleTalentSignUp : authMode === "forgot" ? handleTalentForgotPassword : authMode === "recovery" ? handleTalentPasswordUpdate : handleTalentSignIn} disabled={authBusy || (authMode === "signup" && authForm.company_data_sharing_consent !== true)} style={{ width: "100%", border: 0, borderRadius: "13px", background: `linear-gradient(135deg, ${palette.blue}, ${palette.cyan})`, color: "#fff", padding: "14px", marginTop: "18px", cursor: authBusy || (authMode === "signup" && authForm.company_data_sharing_consent !== true) ? "not-allowed" : "pointer", opacity: authMode === "signup" && authForm.company_data_sharing_consent !== true ? 0.6 : 1, fontWeight: 900, fontSize: "16px" }}>
                 {authBusy
                   ? (isArabic ? "جاري التنفيذ..." : "Please wait...")
                   : authMode === "signup"
