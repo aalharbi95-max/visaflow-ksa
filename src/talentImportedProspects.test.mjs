@@ -6,6 +6,8 @@ const migrationUrl = new URL("../supabase/migrations/20260812000300_talent_impor
 const publicCounterMigrationUrl = new URL("../supabase/migrations/20260812000400_talent_public_imported_counter.sql", import.meta.url);
 const consentedMarketplaceMigrationUrl = new URL("../supabase/migrations/20260814000100_publish_consented_imported_talent.sql", import.meta.url);
 const marketplaceReadyTotalMigrationUrl = new URL("../supabase/migrations/20260814000200_talent_marketplace_ready_total.sql", import.meta.url);
+const companyContactConsentMigrationUrl = new URL("../supabase/migrations/20260815000100_imported_talent_company_contact_consent.sql", import.meta.url);
+const prospectEmailWorkerUrl = new URL("../supabase/functions/talent-prospect-email-worker/index.ts", import.meta.url);
 const appUrl = new URL("./App.jsx", import.meta.url);
 
 test("imported Talent prospects remain private and require a candidate claim", async () => {
@@ -79,4 +81,35 @@ test("Marketplace Ready public counter includes consented imported cards", async
   assert.match(migration, /prospect\.employer_contact_sharing_consent is true/i);
   assert.match(migration, /prospect\.status <> 'Archived'/i);
   assert.match(migration, /grant execute on function public\.get_talent_public_stats\(\) to anon, authenticated, service_role/i);
+});
+
+test("all approved imported profiles become anonymous cards and identity unlock is company-scoped", async () => {
+  const migration = await readFile(companyContactConsentMigrationUrl, "utf8");
+  assert.match(migration, /marketplace_profile_consent boolean not null default false/i);
+  assert.match(migration, /import_talent_prospects_with_marketplace_consent/i);
+  assert.match(migration, /update public\.talent_imported_prospects[\s\S]*marketplace_profile_consent = true/i);
+  assert.match(migration, /unique \(company_id, prospect_id\)/i);
+  assert.match(migration, /contact_request\.company_id = v_company_id/i);
+  assert.match(migration, /'identity_shared', coalesce\(contact_request\.status = 'Approved', false\)/i);
+  assert.match(migration, /'full_name', case when contact_request\.status = 'Approved' then prospect\.full_name else null end/i);
+  assert.match(migration, /'current_company', null/i);
+  assert.doesNotMatch(migration, /concat_ws\(' at ', prospect\.current_title, prospect\.current_company\)/i);
+  assert.match(migration, /where prospect\.marketplace_profile_consent is true and prospect\.claimed_candidate_id is null/i);
+});
+
+test("company request and candidate approve or decline flow is email-backed", async () => {
+  const migration = await readFile(companyContactConsentMigrationUrl, "utf8");
+  const worker = await readFile(prospectEmailWorkerUrl, "utf8");
+  const app = await readFile(appUrl, "utf8");
+  assert.match(migration, /request_imported_talent_contact/i);
+  assert.match(migration, /respond_imported_talent_contact/i);
+  assert.match(migration, /grant execute on function public\.respond_imported_talent_contact\(text, text\) to anon, authenticated/i);
+  assert.match(worker, /claim_talent_company_contact_email_job/i);
+  assert.match(worker, /talent_contact_response=Approved/i);
+  assert.match(worker, /talent_contact_response=Declined/i);
+  assert.match(worker, /previous employer names are currently hidden/i);
+  assert.match(app, /Request Contact Approval/);
+  assert.match(app, /TalentContactConsentPage/);
+  assert.match(app, /respond_imported_talent_contact/);
+  assert.doesNotMatch(app, /const legacy = await supabase\.rpc\("list_company_talent_marketplace"\)/i);
 });

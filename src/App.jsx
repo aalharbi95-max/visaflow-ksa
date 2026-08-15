@@ -4012,6 +4012,80 @@ function clearTalentAuthCallbackUrl() {
   }
 }
 
+function getTalentContactConsentUrlState() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("talent_contact_token") || "";
+    const response = params.get("talent_contact_response") || "";
+    return {
+      requested: Boolean(token && ["Approved", "Declined"].includes(response)),
+      token,
+      response,
+    };
+  } catch {
+    return { requested: false, token: "", response: "" };
+  }
+}
+
+function TalentContactConsentPage({ requestState }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const isApproval = requestState.response === "Approved";
+
+  async function confirmResponse() {
+    if (busy || result) return;
+    setBusy(true);
+    try {
+      const { data, error } = await talentSupabase.rpc("respond_imported_talent_contact", {
+        p_token: requestState.token,
+        p_response: requestState.response,
+      });
+      if (error) throw error;
+      setResult({ ok: true, status: data?.status || requestState.response, companyName: data?.company_name || "the requesting company" });
+    } catch (error) {
+      setResult({ ok: false, message: error?.message || "Unable to record your response." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="vf-login-shell" dir="rtl" lang="ar">
+    <section className="vf-login-right" style={{ width: "100%" }}>
+      <div className="vf-login-card" style={{ maxWidth: 640, textAlign: "center" }}>
+        <img src="/visaflow-logo-transparent.png" alt="VisaFlow" style={{ width: 150, margin: "0 auto 16px" }} />
+        {!result ? <>
+          <h2>{isApproval ? "الموافقة على مشاركة بيانات التواصل" : "رفض طلب التواصل"}</h2>
+          <p style={{ lineHeight: 1.9 }}>
+            {isApproval
+              ? "بعد التأكيد ستظهر بيانات التواصل الخاصة بك للشركة التي أرسلت الطلب فقط. لن تظهر بياناتك لبقية الشركات، وستبقى أسماء جهات عملك السابقة مخفية في بطاقة العرض العامة."
+              : "بعد التأكيد ستبقى بيانات التواصل وأسماء جهات عملك السابقة مخفية عن الشركة."}
+          </p>
+          <p style={{ lineHeight: 1.7, color: "#64748b" }}>
+            {isApproval
+              ? "After confirmation, your contact details will be visible only to the requesting company."
+              : "After confirmation, your contact details will remain hidden from the requesting company."}
+          </p>
+          <button type="button" className={isApproval ? "save-btn" : "light-btn"} disabled={busy} onClick={confirmResponse}>
+            {busy ? "جاري الحفظ..." : isApproval ? "تأكيد الموافقة / Confirm Approval" : "تأكيد الرفض / Confirm Decline"}
+          </button>
+        </> : result.ok ? <>
+          <h2>{result.status === "Approved" ? "تمت الموافقة بنجاح" : "تم تسجيل الرفض"}</h2>
+          <p style={{ lineHeight: 1.9 }}>
+            {result.status === "Approved"
+              ? `أصبحت بيانات التواصل متاحة الآن لشركة ${result.companyName} فقط.`
+              : `ستبقى بياناتك مخفية عن شركة ${result.companyName}.`}
+          </p>
+          <p>{result.status === "Approved" ? "Your contact details are now available only to this company." : "Your contact details remain private."}</p>
+        </> : <>
+          <h2>تعذر تسجيل الرد</h2>
+          <p>{result.message}</p>
+          <p>قد يكون الرابط منتهي الصلاحية أو سبق استخدامه. تواصل مع support@visaflowksa.com عند الحاجة.</p>
+        </>}
+      </div>
+    </section>
+  </main>;
+}
+
 function TalentCandidatePortal({ onBack }) {
   const supabase = talentSupabase;
   const initialRecoveryState = useMemo(() => getTalentRecoveryUrlState(), []);
@@ -7284,6 +7358,7 @@ const [companyTalentTotal, setCompanyTalentTotal] = useState(0);
 const [companyTalentPage, setCompanyTalentPage] = useState(1);
 const [companyTalentCvBusyId, setCompanyTalentCvBusyId] = useState("");
 const [companyTalentAnalysisBusyId, setCompanyTalentAnalysisBusyId] = useState("");
+const [companyTalentContactBusyId, setCompanyTalentContactBusyId] = useState("");
 const [selectedTalentAnalysis, setSelectedTalentAnalysis] = useState(null);
 const companyTalentPageSize = 24;
 const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
@@ -10487,15 +10562,6 @@ async function loadProfessionAliases() {
         p_offset: (safePage - 1) * companyTalentPageSize,
       });
 
-      // Keep the page usable while the pagination migration is being deployed.
-      if (error && /list_company_talent_marketplace_page|schema cache|function/i.test(String(error.message || ""))) {
-        const legacy = await supabase.rpc("list_company_talent_marketplace");
-        if (legacy.error) throw legacy.error;
-        const legacyRows = Array.isArray(legacy.data) ? legacy.data : [];
-        const filteredRows = normalizedQuery ? legacyRows.filter((candidate) => [candidate.full_name, candidate.public_reference, candidate.headline, candidate.profession, candidate.nationality, candidate.city, candidate.country_of_residence, ...(Array.isArray(candidate.skills) ? candidate.skills.map((skill) => skill?.name) : [])].filter(Boolean).join(" ").toLowerCase().includes(normalizedQuery.toLowerCase())) : legacyRows;
-        data = { profiles: filteredRows.slice((safePage - 1) * companyTalentPageSize, safePage * companyTalentPageSize), total: filteredRows.length };
-        error = null;
-      }
       if (error) throw error;
 
       const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
@@ -10504,7 +10570,7 @@ async function loadProfessionAliases() {
       setCompanyTalentTotal(total);
       setCompanyTalentPage(safePage);
       setSelectedTalentCandidateId("");
-      setCompanyTalentMessage(`${total.toLocaleString()} consented talent profile(s) found. Full email and mobile details are shown when available.`);
+      setCompanyTalentMessage(`${total.toLocaleString()} talent card(s) found. Imported contact details remain private until the candidate approves this company.`);
       return profiles;
     } catch (error) {
       console.warn("Talent marketplace:", error?.message || error);
@@ -10515,6 +10581,28 @@ async function loadProfessionAliases() {
       return [];
     } finally {
       setCompanyTalentLoading(false);
+    }
+  }
+
+  async function requestImportedTalentContact(candidate) {
+    if (!candidate?.candidate_id || companyTalentContactBusyId) return;
+    setCompanyTalentContactBusyId(candidate.candidate_id);
+    setCompanyTalentMessage("");
+    try {
+      const { data, error } = await supabase.rpc("request_imported_talent_contact", {
+        p_prospect_id: candidate.candidate_id,
+      });
+      if (error) throw error;
+      await loadCompanyTalentMarketplace({ page: companyTalentPage, query: companyTalentSearch });
+      setCompanyTalentMessage(data?.already_pending
+        ? "A contact approval request is already awaiting the candidate's response."
+        : data?.already_approved
+          ? "The candidate has already approved contact sharing for this company."
+          : "The candidate was notified by VisaFlow email. Contact details will unlock only if they approve this company.");
+    } catch (error) {
+      setCompanyTalentMessage(error?.message || "Unable to send the candidate contact approval request.");
+    } finally {
+      setCompanyTalentContactBusyId("");
     }
   }
 
@@ -10542,6 +10630,7 @@ async function loadProfessionAliases() {
     try {
       const isImportedProfile = candidate?.is_imported === true || candidate?.profile_source === "Imported Excel";
       if (isImportedProfile) {
+        if (!candidate?.identity_shared) throw new Error("The candidate must approve contact sharing for this company first.");
         if (!candidate?.email) throw new Error("This imported candidate does not have an email address.");
 
         const candidateName = candidate.full_name || candidate.public_reference || "Candidate";
@@ -31108,6 +31197,7 @@ async function completeAcceptedAgencyInvitation({ request, session }) {
 }
 
 const aiInterviewAccessToken = getAIInterviewAccessToken();
+const talentContactConsentState = getTalentContactConsentUrlState();
 if (agencyInvitationRequested) {
   return (
     <AgencyInvitationPasswordScreen
@@ -31121,6 +31211,10 @@ if (workspaceRecoveryRequested) {
 }
 if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
+}
+
+if (talentContactConsentState.requested) {
+  return <TalentContactConsentPage requestState={talentContactConsentState} />;
 }
 
 if (publicView === PUBLIC_VIEW.CV_BUILDER) {
@@ -35119,7 +35213,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <div>
                     <p className="eyebrow">VisaFlow Talent</p>
                     <h1>Talent Marketplace</h1>
-                    <p>Search approved profiles, view contact details shared by the candidate, and schedule interviews directly.</p>
+                    <p>Browse all available Talent cards. Imported profiles stay anonymous until the candidate approves contact for your company.</p>
                   </div>
                   <div className="hero-actions">
                     <button onClick={() => loadCompanyTalentMarketplace({ page: companyTalentPage })} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
@@ -35129,7 +35223,7 @@ disabled={authorizationWorkflowBusy === "create"}
                 <div className="stats-grid">
                   <div className="stat-card"><h3>Package</h3><strong>{talentEntitlement.tier || "Standard"}</strong><span>Controlled by Platform Owner</span></div>
                   <div className="stat-card"><h3>Profile Limit</h3><strong>{formatTalentProfileLimit(talentEntitlement.profile_limit)}</strong><span>{isTalentProfileUnlimited(talentEntitlement.profile_limit) ? "All published profiles" : "Maximum available profiles"}</span></div>
-                  <div className="stat-card"><h3>Published Profiles</h3><strong>{companyTalentTotal.toLocaleString()}</strong><span>Approved and consented</span></div>
+                  <div className="stat-card"><h3>Talent Cards</h3><strong>{companyTalentTotal.toLocaleString()}</strong><span>Self-registered and imported profiles</span></div>
                 </div>
 
                 {companyTalentMessage && <div className="form-card talent-marketplace-feedback" role="status"><p style={{ margin: 0 }}>{companyTalentMessage}</p></div>}
@@ -35137,7 +35231,7 @@ disabled={authorizationWorkflowBusy === "create"}
                 <div className="talent-marketplace-toolbar">
                   <div className="talent-marketplace-search">
                     <span aria-hidden="true">⌕</span>
-                    <input placeholder="Search by name, profession, nationality, location or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch }); }} />
+                    <input placeholder="Search by profession, location, education or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch }); }} />
                   </div>
                   <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch })}>Search Talent</button>
                   {companyTalentSearch && <button type="button" className="light-btn" onClick={() => { setCompanyTalentSearch(""); loadCompanyTalentMarketplace({ page: 1, query: "" }); }}>Clear</button>}
@@ -35162,22 +35256,24 @@ disabled={authorizationWorkflowBusy === "create"}
                         return <article className="talent-profile-card" key={`${candidate.profile_source || "candidate"}-${candidate.candidate_id}`}>
                           <header>
                             <div className="talent-profile-avatar">{initials || "VF"}</div>
-                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p>{isImportedProfile && <small className="talent-profile-source">Imported applicant · Consented contact sharing</small>}</div>
+                            <div className="talent-profile-identity"><h3>{candidateName}</h3><p>{candidate.headline || candidate.profession || candidate.public_reference || "Professional candidate"}</p>{isImportedProfile && <small className="talent-profile-source">Imported applicant · Anonymous profile</small>}</div>
                             {candidate.latest_interview_status && <Badge value={candidate.latest_interview_status} />}
                           </header>
                           <div className="talent-profile-facts">
                             <span><small>Profession</small><strong>{candidate.profession || "Not specified"}</strong></span>
-                            <span><small>{candidate.years_experience == null ? "Current Employer" : "Experience"}</small><strong>{candidate.years_experience == null ? (candidate.current_company || "Not specified") : `${candidate.years_experience} years`}</strong></span>
+                            <span><small>{isImportedProfile ? "Current Role" : candidate.years_experience == null ? "Current Employer" : "Experience"}</small><strong>{isImportedProfile ? (candidate.current_title || candidate.profession || "Not specified") : candidate.years_experience == null ? (candidate.current_company || "Not specified") : `${candidate.years_experience} years`}</strong></span>
                             <span><small>Location</small><strong>{candidateLocation}</strong></span>
                             <span><small>{isImportedProfile ? "Education" : "Nationality"}</small><strong>{isImportedProfile ? ([candidate.education_degree, candidate.education_institution].filter(Boolean).join(" · ") || "Not specified") : (candidate.nationality || "Not specified")}</strong></span>
                           </div>
                           {candidate.professional_summary && <div className="talent-profile-summary"><small>Experience Summary</small><p>{candidate.professional_summary}</p></div>}
                           <div className="talent-profile-skills">{skills.length ? skills.map((skill) => <span key={skill}>{skill}</span>) : isImportedProfile && candidate.source_job_title ? <span>Applied for: {candidate.source_job_title}</span> : <span>Skills available in CV</span>}</div>
-                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={candidate.email ? `mailto:${candidate.email}` : undefined}>{candidate.email || "Email not provided"}</a><a href={candidate.phone ? `tel:${candidate.phone}` : undefined}>{candidate.phone || "Phone not provided"}</a></> : <span>Contact details unlock after candidate consent</span>}</div>
+                          <div className="talent-profile-contact">{candidate.identity_shared ? <><a href={candidate.email ? `mailto:${candidate.email}` : undefined}>{candidate.email || "Email not provided"}</a><a href={candidate.phone ? `tel:${candidate.phone}` : undefined}>{candidate.phone || "Phone not provided"}</a></> : <span>{isImportedProfile && candidate.contact_request_email_status === "Failed" ? "Email delivery failed · Request can be retried" : isImportedProfile && candidate.contact_request_status === "Pending" ? "Approval request sent · Awaiting candidate response" : isImportedProfile && candidate.contact_request_status === "Declined" ? "Candidate declined contact sharing" : "Contact details are private"}</span>}</div>
                           <footer>
                             {isImportedProfile ? <>
-                              <a className="talent-card-contact-action" href={candidate.email ? `mailto:${candidate.email}` : undefined} aria-disabled={!candidate.email}>Email Candidate</a>
-                              <button type="button" className="talent-schedule-button" disabled={!candidate.email} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                              {candidate.identity_shared ? <>
+                                <a className="talent-card-contact-action" href={candidate.email ? `mailto:${candidate.email}` : undefined} aria-disabled={!candidate.email}>Email Candidate</a>
+                                <button type="button" className="talent-schedule-button" disabled={!candidate.email} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
+                              </> : <button type="button" className="talent-schedule-button" disabled={companyTalentContactBusyId === candidate.candidate_id || (candidate.contact_request_status === "Pending" && candidate.contact_request_email_status !== "Failed") || candidate.contact_request_status === "Declined"} onClick={() => requestImportedTalentContact(candidate)}>{companyTalentContactBusyId === candidate.candidate_id ? "Sending..." : candidate.contact_request_email_status === "Failed" ? "Retry Approval Email" : candidate.contact_request_status === "Pending" ? "Awaiting Candidate" : candidate.contact_request_status === "Declined" ? "Request Declined" : "Request Contact Approval"}</button>}
                             </> : <>
                               <button type="button" className="talent-cv-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate)}>{candidate.cv_available === false ? "CV not shared" : cvBusy ? "Opening..." : "View CV"}</button>
                               <button type="button" className="talent-download-button" disabled={cvBusy || candidate.cv_available === false} onClick={() => openCompanyTalentCv(candidate, { download: true })}>Download CV</button>
