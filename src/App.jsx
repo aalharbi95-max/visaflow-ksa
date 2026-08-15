@@ -10064,6 +10064,10 @@ async function loadProfessionAliases() {
         "Finance & Accounting",
         "HR & Recruitment",
         "IT",
+        "Sales & Business Development",
+        "Procurement & Supply Chain",
+        "Facilities Management",
+        "Quality & Compliance",
       ]);
     } else if (isCurrentPlatformUser || !currentCompanyId) {
       setAIInterviewTemplates([]);
@@ -10091,6 +10095,10 @@ async function loadProfessionAliases() {
           "finance & accounting",
           "hr & recruitment",
           "it",
+          "sales & business development",
+          "procurement & supply chain",
+          "facilities management",
+          "quality & compliance",
         ].includes(normalize(template.profession_category));
       }
       if (String(template.company_id || "") === String(currentCompanyId || "")) return true;
@@ -18209,6 +18217,9 @@ ${errors.slice(0, 10).join("\n")}` : "")
       "visaflow hr master framework",
       "visaflow it master framework",
       "visaflow operations management master framework",
+      "visaflow sales & business development master framework",
+      "visaflow procurement & supply chain master framework",
+      "visaflow facilities, quality & safety master framework",
     ].includes(source)) {
       return true;
     }
