@@ -43,7 +43,7 @@ Deno.serve(async (request) => {
       variables: {},
     };
     try {
-      const response = await fetch(`${url}/functions/v1/visaflow-email-dispatcher`, {
+      const response = await fetch(`${url}/functions/v1/visaflow-email-dispatcher-v2`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-visaflow-email-secret": dispatcherSecret },
         body: JSON.stringify(payload),

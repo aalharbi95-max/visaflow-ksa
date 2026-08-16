@@ -25,7 +25,7 @@ test("contact approval worker has open tracking, fallback SMTP and automatic ret
   assert.match(worker, /غير موافق \/ Decline/);
   const retryWorker = await readFile(retryWorkerUrl, "utf8");
   assert.match(retryWorker, /claim_email_retry_jobs/);
-  assert.match(retryWorker, /visaflow-email-dispatcher/);
+  assert.match(retryWorker, /visaflow-email-dispatcher-v2/);
   assert.doesNotMatch(retryWorker, /SMTP_PASSWORD/);
 });
 

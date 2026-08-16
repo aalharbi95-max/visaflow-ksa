@@ -14834,7 +14834,7 @@ async function dispatchVisaFlowEmail({ type, identifiers = {}, variables = {} })
       );
     }
 
-    const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher", {
+    const { data, error } = await supabase.functions.invoke("visaflow-email-dispatcher-v2", {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
