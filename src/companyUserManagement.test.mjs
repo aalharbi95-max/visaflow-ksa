@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildCompanyUserMutation,
+  buildPlatformUserMutation,
   COMPANY_USER_ROLES,
+  PLATFORM_USER_ROLES,
   getCompanyUserManagerError,
   sendCompanyUserSetupEmail,
 } from "./companyUserManagement.mjs";
@@ -12,6 +14,15 @@ test("new company users are normalized into invitation payloads", () => {
     buildCompanyUserMutation({ name: "  Sara Ali ", email: " SARA@EXAMPLE.COM ", role: "Recruitment Manager", status: "Active" }),
     { action: "invite_user", name: "Sara Ali", email: "sara@example.com", role: "Recruitment Manager" }
   );
+});
+
+test("platform owner can create an isolated marketing representative payload", () => {
+  assert.equal(PLATFORM_USER_ROLES.includes("Platform Marketing User"), true);
+  assert.deepEqual(
+    buildPlatformUserMutation({ name: "  Sales Rep ", email: " REP@EXAMPLE.COM ", role: "Platform Marketing User", status: "Active" }),
+    { action: "invite_platform_user", name: "Sales Rep", email: "rep@example.com", role: "Platform Marketing User" }
+  );
+  assert.throws(() => buildPlatformUserMutation({ name: "Bad", email: "bad@example.com", role: "Admin" }), /valid platform role/);
 });
 
 test("platform and agency roles cannot use the company invitation route", () => {

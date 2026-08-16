@@ -14,6 +14,27 @@ export const COMPANY_USER_ROLES = Object.freeze([
   "Viewer",
 ]);
 
+export const PLATFORM_USER_ROLES = Object.freeze([
+  "Platform Owner",
+  "Platform Accounts User",
+  "Platform Support User",
+  "Platform Marketing User",
+]);
+
+export function buildPlatformUserMutation(form, editingId = null) {
+  const name = String(form?.name || "").trim();
+  const email = String(form?.email || "").trim().toLowerCase();
+  const role = String(form?.role || "Platform Marketing User").trim();
+  const status = String(form?.status || "Active").trim();
+  if (!name) throw new Error("User name is required.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("A valid email address is required.");
+  if (!PLATFORM_USER_ROLES.includes(role)) throw new Error("Select a valid platform role.");
+  if (!["Active", "Inactive"].includes(status)) throw new Error("Select a valid user status.");
+  return editingId
+    ? { action: "update_platform_user", user_id: String(editingId), name, email, role, status }
+    : { action: "invite_platform_user", name, email, role };
+}
+
 export function buildCompanyUserMutation(form, editingId = null) {
   const name = String(form?.name || "").trim();
   const email = String(form?.email || "").trim().toLowerCase();
