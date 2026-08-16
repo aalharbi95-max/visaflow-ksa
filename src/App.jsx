@@ -48,6 +48,11 @@ import {
   getTalentCampaignSlug,
 } from "./talentCampaign.mjs";
 import {
+  DEFAULT_TALENT_MARKETPLACE_FILTERS,
+  countActiveTalentMarketplaceFilters,
+  normalizeTalentMarketplaceFilters,
+} from "./talentMarketplaceFilters.mjs";
+import {
   getUiDirection,
   resolveUiLanguage,
   shouldShowLanguageToggle,
@@ -7414,6 +7419,8 @@ const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
 const [companyTalentMessage, setCompanyTalentMessage] = useState("");
 const [companyTalentSearch, setCompanyTalentSearch] = useState("");
+const [companyTalentFilters, setCompanyTalentFilters] = useState(() => ({ ...DEFAULT_TALENT_MARKETPLACE_FILTERS }));
+const [companyTalentFacets, setCompanyTalentFacets] = useState({ professions: [], locations: [], availability: [] });
 const [companyTalentTotal, setCompanyTalentTotal] = useState(0);
 const [companyTalentPage, setCompanyTalentPage] = useState(1);
 const [companyTalentCvBusyId, setCompanyTalentCvBusyId] = useState("");
@@ -10617,7 +10624,7 @@ async function loadProfessionAliases() {
     return rows;
   }
 
-  async function loadCompanyTalentMarketplace({ page = 1, query = companyTalentSearch } = {}) {
+  async function loadCompanyTalentMarketplace({ page = 1, query = companyTalentSearch, filters = companyTalentFilters } = {}) {
     if (!currentCompanyId || isCurrentPlatformUser || currentRole === "Agency") {
       setTalentEntitlement({ enabled: false, tier: "None", profile_limit: 0 });
       setCompanyTalentProfiles([]);
@@ -10642,17 +10649,32 @@ async function loadProfessionAliases() {
 
       const safePage = Math.max(1, Number(page) || 1);
       const normalizedQuery = String(query || "").trim();
-      let { data, error } = await supabase.rpc("list_company_talent_marketplace_page", {
+      const normalizedFilters = normalizeTalentMarketplaceFilters(filters);
+      let { data, error } = await supabase.rpc("list_company_talent_marketplace_filtered_page", {
         p_query: normalizedQuery,
         p_limit: companyTalentPageSize,
         p_offset: (safePage - 1) * companyTalentPageSize,
+        p_profession: normalizedFilters.profession,
+        p_location: normalizedFilters.location,
+        p_min_experience: normalizedFilters.minExperience,
+        p_max_experience: normalizedFilters.maxExperience,
+        p_availability: normalizedFilters.availability,
+        p_profile_source: normalizedFilters.profileSource,
+        p_contact_access: normalizedFilters.contactAccess,
+        p_sort: normalizedFilters.sort,
       });
 
       if (error) throw error;
 
       const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
       const total = Math.max(0, Number(data?.total) || 0);
+      const facets = data?.facets && typeof data.facets === "object" ? data.facets : {};
       setCompanyTalentProfiles(profiles);
+      setCompanyTalentFacets({
+        professions: Array.isArray(facets.professions) ? facets.professions : [],
+        locations: Array.isArray(facets.locations) ? facets.locations : [],
+        availability: Array.isArray(facets.availability) ? facets.availability : [],
+      });
       setCompanyTalentTotal(total);
       setCompanyTalentPage(safePage);
       setSelectedTalentCandidateId("");
@@ -35326,10 +35348,24 @@ disabled={authorizationWorkflowBusy === "create"}
                 <div className="talent-marketplace-toolbar">
                   <div className="talent-marketplace-search">
                     <span aria-hidden="true">⌕</span>
-                    <input placeholder="Search by profession, location, education or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch }); }} />
+                    <input placeholder="Search by profession, location, education or skill" value={companyTalentSearch} onChange={(event) => setCompanyTalentSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch, filters: companyTalentFilters }); }} />
                   </div>
-                  <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch })}>Search Talent</button>
-                  {companyTalentSearch && <button type="button" className="light-btn" onClick={() => { setCompanyTalentSearch(""); loadCompanyTalentMarketplace({ page: 1, query: "" }); }}>Clear</button>}
+                  <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch, filters: companyTalentFilters })}>Search Talent</button>
+                </div>
+
+                <div className="talent-marketplace-filters" aria-label="Talent filters">
+                  <label><span>Profession</span><select value={companyTalentFilters.profession} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, profession: event.target.value }))}><option>All</option>{companyTalentFacets.professions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+                  <label><span>Location</span><select value={companyTalentFilters.location} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, location: event.target.value }))}><option>All</option>{companyTalentFacets.locations.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+                  <label><span>Minimum experience</span><input type="number" min="0" max="60" placeholder="Years" value={companyTalentFilters.minExperience} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, minExperience: event.target.value }))} /></label>
+                  <label><span>Maximum experience</span><input type="number" min="0" max="60" placeholder="Years" value={companyTalentFilters.maxExperience} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, maxExperience: event.target.value }))} /></label>
+                  <label><span>Availability</span><select value={companyTalentFilters.availability} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, availability: event.target.value }))}><option>All</option>{companyTalentFacets.availability.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+                  <label><span>Profile source</span><select value={companyTalentFilters.profileSource} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, profileSource: event.target.value }))}><option>All</option><option value="Registered">Registered candidates</option><option value="Imported">Imported CVs</option></select></label>
+                  <label><span>Contact access</span><select value={companyTalentFilters.contactAccess} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, contactAccess: event.target.value }))}><option>All</option><option value="Shared">Contact shared</option><option value="Pending">Approval pending</option><option value="Private">Private</option><option value="Declined">Declined</option></select></label>
+                  <label><span>Sort results</span><select value={companyTalentFilters.sort} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, sort: event.target.value }))}><option>Newest</option><option>Experience: high to low</option><option>Profile completeness</option></select></label>
+                  <div className="talent-marketplace-filter-actions">
+                    <button type="button" className="new-btn" disabled={companyTalentLoading} onClick={() => loadCompanyTalentMarketplace({ page: 1, query: companyTalentSearch, filters: companyTalentFilters })}>Apply Filters{countActiveTalentMarketplaceFilters(companyTalentFilters) ? ` (${countActiveTalentMarketplaceFilters(companyTalentFilters)})` : ""}</button>
+                    {(companyTalentSearch || countActiveTalentMarketplaceFilters(companyTalentFilters)) ? <button type="button" className="light-btn" onClick={() => { const cleared = { ...DEFAULT_TALENT_MARKETPLACE_FILTERS }; setCompanyTalentSearch(""); setCompanyTalentFilters(cleared); loadCompanyTalentMarketplace({ page: 1, query: "", filters: cleared }); }}>Clear All</button> : null}
+                  </div>
                 </div>
 
                 <section className="talent-marketplace-section">

@@ -3,7 +3,7 @@
     "test:housing": "node --test src/housingService.test.mjs src/housingSupabaseConfig.test.mjs src/housingCompliance.test.mjs src/housingCostReport.test.mjs src/housingCostAllocation.test.mjs src/housingExcelExport.test.mjs src/housingUiReadiness.test.mjs src/housingSubscriptionIntegration.test.mjs src/housingReconciliation.test.mjs src/housingEmployeeStatus.test.mjs src/housingNotifications.test.mjs src/housingNotificationCore.test.mjs src/housingOffline.test.mjs",
     "test:housing-db": "node --test src/housingDatabase.postgres.test.mjs",
     "test:company-users": "node --test src/companyUserManagement.test.mjs",
-    "test:talent-access": "node --test src/talentAccess.test.mjs src/talentCampaign.test.mjs src/aiInterviewAnalysisWorker.test.mjs src/talentImportedProspects.test.mjs",
+    "test:talent-access": "node --test src/talentAccess.test.mjs src/talentCampaign.test.mjs src/aiInterviewAnalysisWorker.test.mjs src/talentImportedProspects.test.mjs src/talentMarketplaceFilters.test.mjs src/talentMarketplaceFilters.postgres.test.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
