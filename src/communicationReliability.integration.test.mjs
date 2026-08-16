@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 const migrationUrl = new URL("../supabase/migrations/20260816000100_communication_reliability_hiring_pipeline.sql", import.meta.url);
 const pipelineDecisionSyncUrl = new URL("../supabase/migrations/20260816000300_pipeline_contact_decision_sync.sql", import.meta.url);
 const pipelineActionsUrl = new URL("../supabase/migrations/20260816000500_hiring_pipeline_interview_offer_actions.sql", import.meta.url);
+const offerDecisionUrl = new URL("../supabase/migrations/20260817000100_hiring_offer_candidate_decision.sql", import.meta.url);
 const contactWorkerUrl = new URL("../supabase/functions/talent-prospect-email-worker/index.ts", import.meta.url);
 const retryWorkerUrl = new URL("../supabase/functions/visaflow-email-retry-worker/index.ts", import.meta.url);
 
@@ -49,6 +50,20 @@ test("pipeline offers are stored, emailed and only then move to Offer", async ()
   assert.match(migration, /set stage = 'Offer'/i);
   assert.match(dispatcher, /HIRING_PIPELINE_OFFER/);
   assert.match(dispatcher, /company_hiring_offers/);
+});
+
+test("candidate offer decisions are tokenized, idempotent and visible in Pipeline notifications", async () => {
+  const migration = await readFile(offerDecisionUrl, "utf8");
+  const dispatcher = await readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8");
+  assert.match(migration, /decision_token uuid not null default gen_random_uuid\(\)/i);
+  assert.match(migration, /respond_company_hiring_offer/i);
+  assert.match(migration, /status in \('Accepted','Declined'\)/i);
+  assert.match(migration, /HIRING_OFFER_ACCEPTED/);
+  assert.match(migration, /HIRING_OFFER_DECLINED/);
+  assert.match(migration, /'offer_status',latest_offer\.status/i);
+  assert.match(dispatcher, /Accept Offer \/ موافق/);
+  assert.match(dispatcher, /Decline Offer \/ غير موافق/);
+  assert.match(dispatcher, /hiring_offer_token/);
 });
 test("pipeline keeps private candidates and synchronizes contact decisions", async () => {
   const migration = await readFile(pipelineDecisionSyncUrl, "utf8");
