@@ -50,6 +50,20 @@ test("IT campaign is nationality-neutral and has dedicated registration copy", (
   assert.equal(campaign?.name, "حملة كفاءات تقنية المعلومات");
 });
 
+test("campaign analytics counts privacy-safe unique visits and exposes owner conversion metrics", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260816000200_talent_campaign_analytics.sql", import.meta.url), "utf8");
+  const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+  assert.match(sql, /create table if not exists public\.talent_campaign_events/i);
+  assert.match(sql, /digest\(p_visitor_id/i);
+  assert.match(sql, /unique \(campaign_id, event_type, visitor_hash, event_date\)/i);
+  assert.match(sql, /track_public_talent_campaign_event/i);
+  assert.match(sql, /'unique_visitors'/i);
+  assert.match(sql, /'sources'/i);
+  assert.match(app, /track_public_talent_campaign_event/i);
+  assert.match(app, /Campaign Performance/i);
+  assert.match(app, /ownerHrTalentCampaign/i);
+});
+
 test("CV and employer sharing are required while result sharing is not", () => {
   const result = getCampaignReadiness({
     profile: { full_name: "Engineer", phone: "+966500000000" },

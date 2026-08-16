@@ -5429,6 +5429,25 @@ function TalentCandidatePortal({ onBack }) {
       const { data, error } = await supabase.rpc("get_public_talent_campaign", { p_slug: activeCampaignSlug });
       if (error) throw error;
       setTalentCampaign(data || null);
+      if (data?.id && typeof window !== "undefined") {
+        const visitorStorageKey = "visaflow_talent_campaign_visitor";
+        let visitorId = window.localStorage.getItem(visitorStorageKey);
+        if (!visitorId) {
+          visitorId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+          window.localStorage.setItem(visitorStorageKey, visitorId);
+        }
+        const params = new URLSearchParams(window.location.search);
+        supabase.rpc("track_public_talent_campaign_event", {
+          p_slug: activeCampaignSlug,
+          p_event_type: "page_view",
+          p_visitor_id: visitorId,
+          p_source: params.get("utm_source"),
+          p_medium: params.get("utm_medium"),
+          p_utm_campaign: params.get("utm_campaign"),
+        }).then(({ error: trackingError }) => {
+          if (trackingError) console.warn("Campaign analytics unavailable", trackingError.message);
+        });
+      }
       setCampaignApplication(null);
       const templates = Array.isArray(data?.templates) ? data.templates : [];
       setCampaignTemplateId((current) => current || templates[0]?.id || "");
@@ -7419,6 +7438,7 @@ const [ownerTalentLoading, setOwnerTalentLoading] = useState(false);
 const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
 const [ownerTalentCampaign, setOwnerTalentCampaign] = useState(null);
+const [ownerHrTalentCampaign, setOwnerHrTalentCampaign] = useState(null);
 const [ownerFinanceTalentCampaign, setOwnerFinanceTalentCampaign] = useState(null);
 const [ownerItTalentCampaign, setOwnerItTalentCampaign] = useState(null);
 const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
@@ -10936,10 +10956,11 @@ async function loadProfessionAliases() {
       : Number(value);
 
     try {
-      const [ownerResult, publicStatsResult, campaignResult, financeCampaignResult, itCampaignResult, prospectsResult] = await Promise.all([
+      const [ownerResult, publicStatsResult, campaignResult, hrCampaignResult, financeCampaignResult, itCampaignResult, prospectsResult] = await Promise.all([
         supabase.rpc("get_owner_talent_dashboard"),
         supabase.rpc("get_talent_public_stats"),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: ENGINEERING_TALENT_CAMPAIGN_SLUG }),
+        supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: HR_TALENT_CAMPAIGN_SLUG }),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: FINANCE_TALENT_CAMPAIGN_SLUG }),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: IT_TALENT_CAMPAIGN_SLUG }),
         supabase.rpc("list_owner_talent_prospects", { p_limit: 500 }),
@@ -10968,6 +10989,7 @@ async function loadProfessionAliases() {
       });
       setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
       setOwnerTalentCampaign(campaignResult.error ? null : campaignResult.data);
+      setOwnerHrTalentCampaign(hrCampaignResult.error ? null : hrCampaignResult.data);
       setOwnerFinanceTalentCampaign(financeCampaignResult.error ? null : financeCampaignResult.data);
       setOwnerItTalentCampaign(itCampaignResult.error ? null : itCampaignResult.data);
       const prospectData = prospectsResult.error ? null : prospectsResult.data;
@@ -10997,6 +11019,7 @@ async function loadProfessionAliases() {
       setOwnerTalentStats(unavailableStats);
       setOwnerTalentRecent([]);
       setOwnerTalentCampaign(null);
+      setOwnerHrTalentCampaign(null);
       setOwnerFinanceTalentCampaign(null);
       setOwnerItTalentCampaign(null);
       setOwnerTalentProspectStats({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
@@ -40474,6 +40497,36 @@ onClick={() => setActiveReport("activityLog")}>
           <span>{card.labelAr}</span>
         </div>
       ))}
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <div className="section-title-row">
+        <div>
+          <h2>Campaign Performance / أداء الحملات</h2>
+          <p>Unique daily visitors are counted once per device. Conversion is calculated from unique visitors to registrations and completed interviews.</p>
+        </div>
+        <button type="button" onClick={loadOwnerTalentDashboard} disabled={ownerTalentLoading}>{ownerTalentLoading ? "Refreshing..." : "Refresh Counters"}</button>
+      </div>
+      <div className="table-card" style={{ marginTop: 14 }}>
+        <table>
+          <thead><tr><th>Campaign</th><th>Unique Visitors</th><th>Registered</th><th>Started</th><th>Completed</th><th>Visit → Registration</th><th>Registration → Completion</th><th>Top Source</th></tr></thead>
+          <tbody>{[
+            ["Engineering / الهندسة", ownerTalentCampaign],
+            ["Human Resources / الموارد البشرية", ownerHrTalentCampaign],
+            ["Finance & Accounting / المالية والمحاسبة", ownerFinanceTalentCampaign],
+            ["IT & Digital / تقنية المعلومات", ownerItTalentCampaign],
+          ].map(([label, campaign]) => {
+            const visitors = Number(campaign?.unique_visitors || 0);
+            const registered = Number(campaign?.registered || 0);
+            const completed = Number(campaign?.completed || 0);
+            const visitConversion = visitors > 0 ? `${Math.round((registered / visitors) * 100)}%` : "-";
+            const completionConversion = registered > 0 ? `${Math.round((completed / registered) * 100)}%` : "-";
+            const topSource = campaign?.sources?.[0];
+            return <tr key={label}><td><strong>{label}</strong></td><td>{visitors.toLocaleString()}</td><td>{registered.toLocaleString()}</td><td>{Number(campaign?.started || 0).toLocaleString()}</td><td>{completed.toLocaleString()}</td><td>{visitConversion}</td><td>{completionConversion}</td><td>{topSource ? `${topSource.source} / ${topSource.medium} (${topSource.visitors})` : "-"}</td></tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <small style={{ display: "block", marginTop: 10, color: "#64748b" }}>Tracking begins after this release; historical link visits cannot be reconstructed. Existing registrations and interview results remain included.</small>
     </div>
 
     <div className="form-card" style={{ marginTop: 16 }}>
