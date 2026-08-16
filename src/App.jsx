@@ -15227,7 +15227,13 @@ async function saveUser() {
   if (activePage === "Platform Users") {
     if (!isPlatformOwner) return alert("Only the Platform Owner can manage platform users.");
     let platformPayload;
-    try { platformPayload = buildPlatformUserMutation(userForm, userEditingId); }
+    try {
+      const platformForm = {
+        ...userForm,
+        role: isPlatformRole(userForm.role) ? userForm.role : "Platform Marketing User",
+      };
+      platformPayload = buildPlatformUserMutation(platformForm, userEditingId);
+    }
     catch (error) { return alert(error.message); }
     setUserManagementLoading(true);
     try {
