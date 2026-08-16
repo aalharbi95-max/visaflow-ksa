@@ -37,6 +37,10 @@ const ALLOWED_ORIGINS = new Set([
   "https://visaflow-ksa-gc5t.vercel.app",
 ]);
 const ADMIN_ROLES = new Set(["Admin", "Company Admin"]);
+const PLATFORM_OWNER_ROLE = "Platform Owner";
+const PLATFORM_ROLES = new Set([
+  "Platform Owner", "Platform Accounts User", "Platform Support User", "Platform Marketing User",
+]);
 const ALLOWED_ROLES = new Set([
   "Admin", "CEO", "Operations Manager", "Project Manager", "Recruitment Director",
   "Recruitment Manager", "Recruitment Officer", "Visa Team", "Viewer",
@@ -75,6 +79,12 @@ function cleanRole(value: unknown) {
   return normalized;
 }
 
+function cleanPlatformRole(value: unknown) {
+  const normalized = cleanText(value, 80);
+  if (!PLATFORM_ROLES.has(normalized)) throw new RequestError("PLATFORM_USER_INVALID_ROLE");
+  return normalized;
+}
+
 async function exactlyOne(query: any, code: string) {
   const { data, error } = await query.limit(2);
   if (error) throw error;
@@ -105,10 +115,71 @@ Deno.serve(async (request) => {
     const { data: authData, error: authError } = await admin.auth.getUser(token);
     if (authError || !authData.user?.id) throw new RequestError("COMPANY_USER_UNAUTHORIZED", 401);
     const actor = await exactlyOne(admin.from("users").select("id,auth_user_id,company_id,role,status,is_active").eq("auth_user_id", authData.user.id), "COMPANY_USER_UNAUTHORIZED");
+    const action = cleanText(body.action, 40);
+    const isPlatformOwner = actor.company_id == null && actor.role === PLATFORM_OWNER_ROLE && actor.status === "Active" && actor.is_active === true;
+
+    if (["invite_platform_user", "update_platform_user", "deactivate_platform_user"].includes(action)) {
+      if (!isPlatformOwner) throw new RequestError("PLATFORM_USER_FORBIDDEN", 403);
+      if (action === "invite_platform_user") {
+        const userName = cleanText(body.name);
+        const userEmail = cleanEmail(body.email);
+        const userRole = cleanPlatformRole(body.role);
+        if (!userName) throw new RequestError("COMPANY_USER_NAME_REQUIRED");
+        const { data: existingRows, error: existingError } = await admin.from("users").select("id").ilike("email", userEmail).limit(2);
+        if (existingError) throw existingError;
+        if ((existingRows || []).length) throw new RequestError("COMPANY_USER_EMAIL_ALREADY_ASSIGNED", 409);
+        const { data: createdAuth, error: createAuthError } = await admin.auth.admin.createUser({
+          email: userEmail,
+          email_confirm: true,
+          user_metadata: { account_type: "platform", role: userRole },
+        });
+        if (createAuthError || !createdAuth.user?.id) {
+          const detail = String(createAuthError?.message || "").toLowerCase();
+          throw new RequestError(detail.includes("already") ? "COMPANY_USER_EMAIL_ALREADY_ASSIGNED" : "COMPANY_USER_AUTH_CREATE_FAILED", detail.includes("already") ? 409 : 502);
+        }
+        const authUserId = createdAuth.user.id;
+        const { data: createdUser, error: insertError } = await admin.from("users").insert({
+          auth_user_id: authUserId, company_id: null, agency_id: null, agency_name: null,
+          name: userName, email: userEmail, role: userRole, status: "Active", is_active: true, password: null,
+        }).select("id,name,email,role,status,company_id,auth_user_id,created_at").single();
+        if (insertError) {
+          await admin.auth.admin.deleteUser(authUserId).catch(() => undefined);
+          throw insertError;
+        }
+        return respond(origin, 200, { ok: true, action, user: createdUser });
+      }
+
+      const targetId = cleanText(body.user_id, 128);
+      const target = await exactlyOne(admin.from("users").select("id,auth_user_id,email,role,status,is_active,company_id").eq("id", targetId).is("company_id", null), "COMPANY_USER_NOT_FOUND");
+      if (!PLATFORM_ROLES.has(target.role)) throw new RequestError("PLATFORM_USER_FORBIDDEN", 403);
+      const nextStatus = action === "deactivate_platform_user" ? "Inactive" : cleanText(body.status, 20);
+      const nextRole = action === "deactivate_platform_user" ? target.role : cleanPlatformRole(body.role);
+      if (!["Active", "Inactive"].includes(nextStatus)) throw new RequestError("COMPANY_USER_INVALID_STATUS");
+      if (String(target.id) === String(actor.id) && (nextStatus !== "Active" || nextRole !== PLATFORM_OWNER_ROLE)) throw new RequestError("COMPANY_USER_SELF_DEACTIVATION", 409);
+      if (target.role === PLATFORM_OWNER_ROLE && (nextStatus !== "Active" || nextRole !== PLATFORM_OWNER_ROLE)) {
+        const { count, error } = await admin.from("users").select("id", { count: "exact", head: true }).is("company_id", null).eq("role", PLATFORM_OWNER_ROLE).eq("status", "Active").eq("is_active", true);
+        if (error) throw error;
+        if (Number(count || 0) <= 1) throw new RequestError("PLATFORM_USER_LAST_OWNER", 409);
+      }
+      const updates: Record<string, unknown> = { role: nextRole, status: nextStatus, is_active: nextStatus === "Active" };
+      if (action === "update_platform_user") {
+        const requestedEmail = cleanEmail(body.email);
+        if (requestedEmail !== String(target.email || "").toLowerCase()) throw new RequestError("COMPANY_USER_EMAIL_IMMUTABLE", 409);
+        const userName = cleanText(body.name);
+        if (!userName) throw new RequestError("COMPANY_USER_NAME_REQUIRED");
+        updates.name = userName;
+      }
+      if (target.auth_user_id && nextStatus !== target.status) {
+        const { error: authStatusError } = await admin.auth.admin.updateUserById(target.auth_user_id, { ban_duration: nextStatus === "Active" ? "none" : "876000h" });
+        if (authStatusError) throw new RequestError("COMPANY_USER_AUTH_STATUS_FAILED", 502);
+      }
+      const { data: updated, error } = await admin.from("users").update(updates).eq("id", target.id).select("id,name,email,role,status,company_id,auth_user_id,created_at").single();
+      if (error) throw error;
+      return respond(origin, 200, { ok: true, action, user: updated });
+    }
+
     if (!actor.company_id || actor.status !== "Active" || actor.is_active !== true || !ADMIN_ROLES.has(actor.role)) throw new RequestError("COMPANY_USER_FORBIDDEN", 403);
     const company = await exactlyOne(admin.from("companies").select("id,status,max_users").eq("id", actor.company_id).eq("status", "Active"), "COMPANY_USER_COMPANY_NOT_FOUND");
-
-    const action = cleanText(body.action, 40);
     if (action === "invite_user") {
       const userName = cleanText(body.name);
       const userEmail = cleanEmail(body.email);

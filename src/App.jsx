@@ -22,6 +22,7 @@ import {
 } from "./workspaceContext.mjs";
 import {
   buildCompanyUserMutation,
+  buildPlatformUserMutation,
   COMPANY_USER_ROLES,
   getCompanyUserManagerError,
   invokeCompanyUserManager,
@@ -241,6 +242,7 @@ const PAGES = [
   "Backup Center",
   "Central Support",
   "Global Engineering Templates",
+  "Marketing Sales",
 ];
 
 const SIDEBAR_GROUPS = [
@@ -299,6 +301,7 @@ const SIDEBAR_GROUPS = [
   "Backup Center",
   "Central Support",
   "Global Engineering Templates",
+  "Marketing Sales",
 ],
   },
   {
@@ -334,6 +337,7 @@ const ROLE_OPTIONS = [
  "Platform Owner",
 "Platform Accounts User",
 "Platform Support User",
+"Platform Marketing User",
 "Admin",
   "CEO",
   "Operations Manager",
@@ -347,7 +351,7 @@ const ROLE_OPTIONS = [
 ];
 
 // Client-facing roles only. Platform roles must never appear inside company Users Management.
-const PLATFORM_ROLE_OPTIONS = ["Platform Owner", "Platform Accounts User", "Platform Support User"];
+const PLATFORM_ROLE_OPTIONS = ["Platform Owner", "Platform Accounts User", "Platform Support User", "Platform Marketing User"];
 const CLIENT_ROLE_OPTIONS = ROLE_OPTIONS.filter((role) => !PLATFORM_ROLE_OPTIONS.includes(role));
 const RECRUITMENT_PERFORMANCE_ROLES = [
   "Recruitment Manager",
@@ -7462,6 +7466,9 @@ const [reportStudioLastRun, setReportStudioLastRun] = useState("");
 const [platformClients, setPlatformClients] = useState([]);
 const [companyTrialRequests, setCompanyTrialRequests] = useState([]);
 const [subscriptionInvoices, setSubscriptionInvoices] = useState([]);
+const [marketingProfiles, setMarketingProfiles] = useState([]);
+const [marketingRequests, setMarketingRequests] = useState([]);
+const [marketingCommissions, setMarketingCommissions] = useState([]);
 const [supportTickets, setSupportTickets] = useState([]);
 const [systemBackups, setSystemBackups] = useState([]);
 const [systemRestoreRequests, setSystemRestoreRequests] = useState([]);
@@ -7634,6 +7641,8 @@ const emptySupportTicket = {
 const [platformClientForm, setPlatformClientForm] = useState(emptyPlatformClient);
 const [subscriptionInvoiceForm, setSubscriptionInvoiceForm] = useState(emptySubscriptionInvoice);
 const [supportTicketForm, setSupportTicketForm] = useState(emptySupportTicket);
+const [marketingProfileForm, setMarketingProfileForm] = useState({ phone: "", identity_reference: "", bank_name: "", account_holder_name: "", iban: "" });
+const [marketingRequestForm, setMarketingRequestForm] = useState({ company_name: "", commercial_registration: "", contact_name: "", contact_email: "", contact_phone: "", requested_product: "Recruitment", billing_cycle_months: 1, quoted_amount: "", notes: "" });
 
 function normalizeUserRole(role) {
   return normalizeWorkspaceRole(role, ROLE_OPTIONS);
@@ -7646,6 +7655,7 @@ function isPlatformRole(role) {
     "Platform Owner",
     "Platform Accounts User",
     "Platform Support User",
+    "Platform Marketing User",
   ].includes(normalizeUserRole(role));
 }
 
@@ -7662,6 +7672,7 @@ const PLATFORM_PAGES = [
   "Backup Center",
   "Central Support",
   "Global Engineering Templates",
+  "Marketing Sales",
 ];
 
 const PLATFORM_ACCOUNT_PAGES = [
@@ -7681,12 +7692,15 @@ const PLATFORM_SUPPORT_PAGES = [
   "Central Support",
 ];
 
+const PLATFORM_MARKETING_PAGES = ["Marketing Sales"];
+
 const ROLE_PAGES = {
   // SaaS owner only. This role manages the platform, not client operations.
   "Platform Owner": PLATFORM_PAGES,
   "Platform Accounts User": PLATFORM_ACCOUNT_PAGES,
 
 "Platform Support User": PLATFORM_SUPPORT_PAGES,
+"Platform Marketing User": PLATFORM_MARKETING_PAGES,
 
   // Company Admin: full tenant administration and all company operations, excluding SaaS platform screens.
   Admin: getCompanyAdminPages(PAGES, PLATFORM_PAGES),
@@ -7863,6 +7877,7 @@ const hasAction = (action) => roleActions.includes(action);
 const isPlatformOwner = currentRole === "Platform Owner";
 const isPlatformAccountsUser = currentRole === "Platform Accounts User";
 const isPlatformSupportUser = currentRole === "Platform Support User";
+const isPlatformMarketingUser = currentRole === "Platform Marketing User";
 
 const canManagePlatform = [
   "Platform Owner",
@@ -7931,14 +7946,14 @@ const canViewLocalContent = ["Admin", "CEO", "Operations Manager", "Project Mana
 const canManageLocalContent = ["Admin", "Operations Manager", "Recruitment Manager"].includes(currentRole);
 const canManageMasterData = currentRole === "Admin" || isPlatformOwner;
 
-const canEditPlatformUsers = canManagePlatformAccounts;
+const canEditPlatformUsers = isPlatformOwner;
 
 function getDefaultUserForm() {
   return {
     name: "",
     email: "",
     password: "",
-    role: canEditPlatformUsers && activePage === "Platform Users" ? "Platform Accounts User" : "Viewer",
+    role: canEditPlatformUsers && activePage === "Platform Users" ? "Platform Marketing User" : "Viewer",
     status: "Active",
     agency_id: "",
     agency_name: "",
@@ -9336,6 +9351,9 @@ Cancel = إضافتها كوظيفة مستقلة`
     setAuditLogs([]);
     setPlatformClients([]);
     setSubscriptionInvoices([]);
+    setMarketingProfiles([]);
+    setMarketingRequests([]);
+    setMarketingCommissions([]);
     setSupportTickets([]);
     setSystemBackups([]);
     setSystemRestoreRequests([]);
@@ -9474,6 +9492,9 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadPlatformClients(),
       loadCompanyTrialRequests(),
       loadSubscriptionInvoices(),
+      loadMarketingProfiles(),
+      loadMarketingRequests(),
+      loadMarketingCommissions(),
       loadSupportTickets(),
       loadSystemBackups(),
       loadSystemRestoreRequests(),
@@ -10442,7 +10463,7 @@ async function loadProfessionAliases() {
     const requestGeneration = workspaceDataGenerationRef.current;
     const requestWorkspaceKey = getWorkspaceIdentityKey(currentUser);
     if (
-      !canManagePlatform ||
+      (!canManagePlatform && !isPlatformMarketingUser) ||
       !workspaceAuthReady ||
       validatedWorkspaceKey !== requestWorkspaceKey
     ) {
@@ -10474,6 +10495,9 @@ async function loadProfessionAliases() {
   const loadPlatformClients = () => loadPlatformTable("platform_clients", setPlatformClients);
   const loadCompanyTrialRequests = () => loadPlatformTable("company_trial_requests", setCompanyTrialRequests, "id,company_name,admin_name,email,phone,job_title,team_size,status,operational_company_id,platform_client_id,provisioned_at,created_at");
   const loadSubscriptionInvoices = () => loadPlatformTable("subscription_invoices", setSubscriptionInvoices);
+  const loadMarketingProfiles = () => loadPlatformTable("platform_marketing_profiles", setMarketingProfiles);
+  const loadMarketingRequests = () => loadPlatformTable("marketing_company_requests", setMarketingRequests);
+  const loadMarketingCommissions = () => loadPlatformTable("marketing_commission_entries", setMarketingCommissions);
   const loadSupportTickets = () => loadPlatformTable(
     "support_tickets",
     setSupportTickets,
@@ -15201,7 +15225,24 @@ function cancelCompanyEdit() {
 }
 async function saveUser() {
   if (activePage === "Platform Users") {
-    return alert("Platform user management remains restricted. Company invitations are available from Users Management.");
+    if (!isPlatformOwner) return alert("Only the Platform Owner can manage platform users.");
+    let platformPayload;
+    try { platformPayload = buildPlatformUserMutation(userForm, userEditingId); }
+    catch (error) { return alert(error.message); }
+    setUserManagementLoading(true);
+    try {
+      const result = await invokeCompanyUserManager(supabase, platformPayload);
+      const invitedEmail = result?.user?.email || platformPayload.email;
+      const wasInvitation = platformPayload.action === "invite_platform_user";
+      resetUserEditingState();
+      await loadUsers();
+      if (wasInvitation) {
+        await sendCompanyUserSetupEmail(supabase, invitedEmail);
+        alert(`Platform user created. A secure setup link was sent to ${invitedEmail}.`);
+      } else alert("Platform user updated successfully.");
+    } catch (error) { alert(getCompanyUserManagerError(error)); }
+    finally { setUserManagementLoading(false); }
+    return;
   }
   if (!["Admin", "Company Admin"].includes(currentRole)) {
     return alert("You do not have permission to manage company users.");
@@ -15506,7 +15547,18 @@ async function unlinkExistingAgency(item) {
 async function deleteUser(id) {
   if (userManagementLoading) return;
   const target = users.find((user) => String(user.id) === String(id));
-  if (!target || isPlatformRole(target.role) || target.role === "Agency") return;
+  if (!target || target.role === "Agency") return;
+  if (isPlatformRole(target.role)) {
+    if (!isPlatformOwner) return;
+    if (!window.confirm(`Deactivate ${target.name || target.email}?`)) return;
+    setUserManagementLoading(true);
+    try {
+      await invokeCompanyUserManager(supabase, { action: "deactivate_platform_user", user_id: String(id) });
+      resetUserEditingState(); await loadUsers(); alert("Platform user deactivated successfully.");
+    } catch (error) { alert(getCompanyUserManagerError(error)); }
+    finally { setUserManagementLoading(false); }
+    return;
+  }
   if (!window.confirm(`Deactivate ${target.name || target.email}?\n\nThe account will no longer be able to sign in.`)) return;
   setUserManagementLoading(true);
   try {
@@ -27837,6 +27889,49 @@ async function saveSubscriptionInvoice() {
   resetSubscriptionInvoiceForm();
   await loadSubscriptionInvoices();
   alert(subscriptionInvoiceEditingId ? "Invoice updated successfully" : `Invoice saved: ${payload.invoice_no}`);
+}
+
+async function saveMarketingProfile() {
+  if (!isPlatformMarketingUser) return;
+  const { error } = await supabase.rpc("save_my_marketing_profile", { p_profile: marketingProfileForm });
+  if (error) return alert(error.message);
+  setMarketingProfileForm({ phone: "", identity_reference: "", bank_name: "", account_holder_name: "", iban: "" });
+  await loadMarketingProfiles();
+  alert("Your representative and bank details were saved securely for settlement review.");
+}
+
+async function submitMarketingCompanyRequest() {
+  if (!isPlatformMarketingUser) return;
+  const { error } = await supabase.rpc("submit_marketing_company_request", { p_request: marketingRequestForm });
+  if (error) return alert(error.message.includes("DUPLICATE") ? "This company request is already pending or approved." : error.message);
+  setMarketingRequestForm({ company_name: "", commercial_registration: "", contact_name: "", contact_email: "", contact_phone: "", requested_product: "Recruitment", billing_cycle_months: 1, quoted_amount: "", notes: "" });
+  await loadMarketingRequests();
+  alert("Company registration request submitted to the Platform Owner.");
+}
+
+async function reviewMarketingRequest(item, decision) {
+  if (!isPlatformOwner) return;
+  let commissionRate = null;
+  let platformClientId = null;
+  if (decision === "Approved") {
+    const defaultRate = marketingProfiles.find((profile) => String(profile.user_id) === String(item.representative_user_id))?.default_commission_rate ?? "";
+    const enteredRate = window.prompt("Commission percentage for this company (0-100)", String(defaultRate));
+    if (enteredRate === null) return;
+    commissionRate = Number(enteredRate);
+    if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 100) return alert("Enter a valid commission percentage from 0 to 100.");
+    const selectedClient = window.prompt("Existing Platform Client ID (optional now; link it before marking an invoice Paid)", "");
+    if (selectedClient === null) return;
+    platformClientId = selectedClient.trim() || null;
+  }
+  const notes = window.prompt("Owner review notes (optional)", "");
+  if (notes === null) return;
+  const { error } = await supabase.rpc("review_marketing_company_request", {
+    p_request_id: item.id, p_decision: decision, p_commission_rate: commissionRate,
+    p_platform_client_id: platformClientId, p_notes: notes || null,
+  });
+  if (error) return alert(error.message);
+  await Promise.all([loadMarketingRequests(), loadMarketingCommissions()]);
+  alert(`Request ${decision.toLowerCase()} successfully.`);
 }
 
 async function createSubscriptionInvoiceForClient(client, subscriptionType = "Recruitment") {
@@ -41590,6 +41685,53 @@ onClick={() => setActiveReport("activityLog")}>
     )}
   </div>
 )}
+{activePage === "Marketing Sales" && (isPlatformOwner || isPlatformMarketingUser) && (
+  <div className="page-section">
+    <div className="executive-hero"><div><p className="eyebrow">Sales Representatives</p><h1>Marketing & Commissions / التسويق والعمولات</h1><p>Representatives submit company registration requests. The owner approves and sets the commission rate; commission is earned only from a Paid invoice.</p></div></div>
+    <div className="stats-grid">
+      <div className="stat-card"><h3>Requests</h3><strong>{marketingRequests.length}</strong><span>{marketingRequests.filter((r) => r.status === "Pending").length} pending</span></div>
+      <div className="stat-card"><h3>Approved Companies</h3><strong>{marketingRequests.filter((r) => r.status === "Approved").length}</strong></div>
+      <div className="stat-card"><h3>Earned Commission</h3><strong>{marketingCommissions.filter((c) => c.status !== "Reversed").reduce((sum, c) => sum + Number(c.commission_amount || 0), 0).toLocaleString()} SAR</strong></div>
+    </div>
+
+    {isPlatformMarketingUser && <>
+      <div className="card"><h3>My Representative & Bank Details / بيانات المندوب والحساب البنكي</h3><p>Bank details are private to you and the Platform Owner. Lists show only a masked IBAN.</p><div className="form-grid">
+        <input placeholder="Mobile / الجوال" value={marketingProfileForm.phone} onChange={(e) => setMarketingProfileForm({...marketingProfileForm, phone:e.target.value})}/>
+        <input placeholder="Identity / Iqama reference (optional)" value={marketingProfileForm.identity_reference} onChange={(e) => setMarketingProfileForm({...marketingProfileForm, identity_reference:e.target.value})}/>
+        <input placeholder="Bank name / اسم البنك" value={marketingProfileForm.bank_name} onChange={(e) => setMarketingProfileForm({...marketingProfileForm, bank_name:e.target.value})}/>
+        <input placeholder="Account holder / اسم صاحب الحساب" value={marketingProfileForm.account_holder_name} onChange={(e) => setMarketingProfileForm({...marketingProfileForm, account_holder_name:e.target.value})}/>
+        <input placeholder="IBAN / الآيبان" value={marketingProfileForm.iban} onChange={(e) => setMarketingProfileForm({...marketingProfileForm, iban:e.target.value})}/>
+        <button onClick={saveMarketingProfile}>Save Details</button>
+      </div></div>
+      <div className="card"><h3>Submit Company Registration Request / رفع طلب تسجيل شركة</h3><div className="form-grid">
+        <input placeholder="Company name *" value={marketingRequestForm.company_name} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,company_name:e.target.value})}/>
+        <input placeholder="Commercial Registration" value={marketingRequestForm.commercial_registration} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,commercial_registration:e.target.value})}/>
+        <input placeholder="Contact name *" value={marketingRequestForm.contact_name} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,contact_name:e.target.value})}/>
+        <input type="email" placeholder="Contact email *" value={marketingRequestForm.contact_email} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,contact_email:e.target.value})}/>
+        <input placeholder="Contact phone *" value={marketingRequestForm.contact_phone} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,contact_phone:e.target.value})}/>
+        <select value={marketingRequestForm.requested_product} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,requested_product:e.target.value})}>{["Recruitment","Housing","Combined","Talent","AI Agent"].map((v)=><option key={v}>{v}</option>)}</select>
+        <input type="number" min="1" max="60" placeholder="Billing months" value={marketingRequestForm.billing_cycle_months} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,billing_cycle_months:e.target.value})}/>
+        <input type="number" min="0" placeholder="Quoted amount SAR" value={marketingRequestForm.quoted_amount} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,quoted_amount:e.target.value})}/>
+        <input placeholder="Notes" value={marketingRequestForm.notes} onChange={(e) => setMarketingRequestForm({...marketingRequestForm,notes:e.target.value})}/>
+        <button onClick={submitMarketingCompanyRequest}>Submit to Owner</button>
+      </div></div>
+    </>}
+
+    {isPlatformOwner && <div className="card"><h3>Representative Settlement Profiles / بيانات المندوبين البنكية</h3><div className="table-wrap"><table className="data-table"><thead><tr><th>Representative</th><th>Mobile</th><th>Bank</th><th>Account Holder</th><th>IBAN</th><th>Verification</th></tr></thead><tbody>
+      {marketingProfiles.length === 0 ? <tr><td colSpan="6">No representative bank details submitted</td></tr> : marketingProfiles.map((profile)=>{const rep=users.find((u)=>String(u.id)===String(profile.user_id)); const iban=String(profile.iban||""); return <tr key={profile.user_id}><td>{rep?.name || profile.user_id}<br/><small>{rep?.email || ""}</small></td><td>{profile.phone || "-"}</td><td>{profile.bank_name || "-"}</td><td>{profile.account_holder_name || "-"}</td><td>{iban ? `****${iban.slice(-4)}` : "-"}</td><td><Badge value={profile.bank_verification_status || "Pending"}/></td></tr>})}
+    </tbody></table></div></div>}
+
+    <div className="card"><div className="section-title-row"><div><h3>{isPlatformOwner ? "All Representatives & Company Requests" : "My Company Requests"}</h3><p>The owner sets the rate during approval. A client must be linked before its paid invoice can earn commission.</p></div><button onClick={() => Promise.all([loadMarketingProfiles(),loadMarketingRequests(),loadMarketingCommissions()])}>Refresh</button></div>
+      <div className="table-wrap"><table className="data-table"><thead><tr><th>Representative</th><th>Company</th><th>Contact</th><th>Product / Cycle</th><th>Quote</th><th>Status</th><th>Rate</th><th>Client Link</th><th>Actions</th></tr></thead><tbody>
+        {marketingRequests.length === 0 ? <tr><td colSpan="9">No requests found</td></tr> : marketingRequests.map((item) => { const rep=users.find((u)=>String(u.id)===String(item.representative_user_id)); return <tr key={item.id}><td>{rep?.name || item.representative_user_id}</td><td>{item.company_name}<br/><small>{item.commercial_registration || ""}</small></td><td>{item.contact_name}<br/><small>{item.contact_email} · {item.contact_phone}</small></td><td>{item.requested_product}<br/><small>{item.billing_cycle_months} month(s)</small></td><td>{Number(item.quoted_amount || 0).toLocaleString()} SAR</td><td><Badge value={item.status}/></td><td>{item.commission_rate == null ? "-" : `${item.commission_rate}%`}</td><td>{item.platform_client_id || "Not linked"}</td><td>{isPlatformOwner && item.status === "Pending" ? <><button onClick={()=>reviewMarketingRequest(item,"Approved")}>Approve</button><button className="danger" onClick={()=>reviewMarketingRequest(item,"Rejected")}>Reject</button></> : "-"}</td></tr>; })}
+      </tbody></table></div>
+    </div>
+    <div className="card"><h3>Commission Ledger / سجل العمولات</h3><div className="table-wrap"><table className="data-table"><thead><tr><th>Representative</th><th>Invoice</th><th>Collected</th><th>Rate</th><th>Commission</th><th>Status</th><th>Earned</th></tr></thead><tbody>
+      {marketingCommissions.length === 0 ? <tr><td colSpan="7">No commission is earned until a linked invoice is marked Paid.</td></tr> : marketingCommissions.map((item)=>{const rep=users.find((u)=>String(u.id)===String(item.representative_user_id)); const inv=subscriptionInvoices.find((i)=>i.id===item.invoice_id); return <tr key={item.id}><td>{rep?.name || item.representative_user_id}</td><td>{inv?.invoice_no || item.invoice_id}</td><td>{Number(item.invoice_amount).toLocaleString()} SAR</td><td>{item.commission_rate}%</td><td>{Number(item.commission_amount).toLocaleString()} SAR</td><td><Badge value={item.status}/></td><td>{item.earned_at ? new Date(item.earned_at).toLocaleDateString() : "-"}</td></tr>})}
+    </tbody></table></div></div>
+  </div>
+)}
+
 {activePage === "Platform Users" && canManagePlatformAccounts && (
   <div className="page-section">
     <div className="executive-hero">
@@ -41635,11 +41777,11 @@ onClick={() => setActiveReport("activityLog")}>
 
     <div className="card">
       <h3>{userEditingId ? "Edit Platform User" : "Add Platform User"}</h3>
-      <p style={{ padding: "12px", borderRadius: "10px", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>
+      <p style={{ display: "none" }}>
         User management is temporarily restricted during the security migration.<br />
         إدارة المستخدمين مقيدة مؤقتًا أثناء الترحيل الأمني.
       </p>
-      <fieldset disabled style={{ border: 0, padding: 0, margin: 0, opacity: 0.55, cursor: "not-allowed" }}>
+      <fieldset disabled={!isPlatformOwner || userManagementLoading} style={{ border: 0, padding: 0, margin: 0 }}>
       <div className="form-grid">
         <input
           placeholder="Full Name"
@@ -41661,12 +41803,13 @@ onClick={() => setActiveReport("activityLog")}>
         />
 
         <select
-          value={isPlatformRole(userForm.role) ? userForm.role : "Platform Accounts User"}
+          value={isPlatformRole(userForm.role) ? userForm.role : "Platform Marketing User"}
           onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
         >
           <option value="Platform Owner">Platform Owner</option>
           <option value="Platform Accounts User">Platform Accounts User</option>
           <option value="Platform Support User">Platform Support User</option>
+          <option value="Platform Marketing User">Platform Marketing User / مسوّق</option>
         </select>
 
         <select
@@ -41697,7 +41840,7 @@ onClick={() => setActiveReport("activityLog")}>
       <div className="section-title-row">
         <div>
           <h3>Platform Users List</h3>
-          <p>Only Platform Owner, Platform Accounts User, and Platform Support User are shown here.</p>
+          <p>Owner, accounts, support, and marketing representatives are shown here.</p>
         </div>
         <button onClick={loadUsers}>Refresh Users</button>
       </div>
@@ -41730,8 +41873,8 @@ onClick={() => setActiveReport("activityLog")}>
                   <td><Badge value={user.status || "Active"} /></td>
                   <td>{user.company_id || "-"}</td>
                   <td>
-                    <button disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>Edit</button>
-                    <button className="danger" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
+                    <button disabled={!isPlatformOwner} onClick={() => editUser(user)}>Edit</button>
+                    <button className="danger" disabled={!isPlatformOwner} onClick={() => deleteUser(user.id)}>
                       Delete
                     </button>
                   </td>
