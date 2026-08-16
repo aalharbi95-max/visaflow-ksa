@@ -25,6 +25,8 @@ test("platform owner can create an isolated marketing representative payload", (
   );
   assert.throws(() => buildPlatformUserMutation({ name: "Bad", email: "bad@example.com", role: "Admin" }), /valid platform role/);
   assert.equal(normalizePlatformUserRole("Platform Marketing User / مسوّق"), "Platform Marketing User");
+  assert.equal(normalizePlatformUserRole("\u200fPlatform Marketing User / مسوّق"), "Platform Marketing User");
+  assert.equal(normalizePlatformUserRole("مسوّق / Platform Marketing User"), "Platform Marketing User");
 });
 
 test("platform and agency roles cannot use the company invitation route", () => {

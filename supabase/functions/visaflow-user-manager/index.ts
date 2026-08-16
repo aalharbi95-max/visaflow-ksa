@@ -80,8 +80,9 @@ function cleanRole(value: unknown) {
 }
 
 function cleanPlatformRole(value: unknown) {
-  const requested = cleanText(value, 80);
-  const normalized = requested.toLowerCase().startsWith("platform marketing user")
+  const requested = cleanText(value, 80).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+  const requestedKey = requested.toLowerCase();
+  const normalized = requestedKey.includes("platform marketing user") || requested.includes("مسوّق") || requested.includes("مسوق")
     ? "Platform Marketing User"
     : requested;
   if (!PLATFORM_ROLES.has(normalized)) throw new RequestError("PLATFORM_USER_INVALID_ROLE");

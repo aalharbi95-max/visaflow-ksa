@@ -22,8 +22,9 @@ export const PLATFORM_USER_ROLES = Object.freeze([
 ]);
 
 export function normalizePlatformUserRole(value) {
-  const role = String(value || "").trim();
-  if (role.toLowerCase().startsWith("platform marketing user")) return "Platform Marketing User";
+  const role = String(value || "").replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").trim();
+  const key = role.toLowerCase();
+  if (key.includes("platform marketing user") || role.includes("مسوّق") || role.includes("مسوق")) return "Platform Marketing User";
   return PLATFORM_USER_ROLES.find((item) => item.toLowerCase() === role.toLowerCase()) || role;
 }
 
