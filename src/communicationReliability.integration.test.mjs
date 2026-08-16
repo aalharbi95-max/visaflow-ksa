@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 
 const migrationUrl = new URL("../supabase/migrations/20260816000100_communication_reliability_hiring_pipeline.sql", import.meta.url);
+const pipelineDecisionSyncUrl = new URL("../supabase/migrations/20260816000300_pipeline_contact_decision_sync.sql", import.meta.url);
 const contactWorkerUrl = new URL("../supabase/functions/talent-prospect-email-worker/index.ts", import.meta.url);
 const retryWorkerUrl = new URL("../supabase/functions/visaflow-email-retry-worker/index.ts", import.meta.url);
 
@@ -36,4 +37,13 @@ test("hiring pipeline is tenant scoped, duplicate safe and transition controlled
   assert.match(migration, /Invalid hiring stage transition/i);
   assert.match(migration, /when 'Offer' then p_to_stage in \('Hired','Rejected'\)/i);
   assert.match(migration, /revoke all on public\.company_hiring_jobs.*authenticated/is);
+});
+
+test("pipeline keeps private candidates and synchronizes contact decisions", async () => {
+  const migration = await readFile(pipelineDecisionSyncUrl, "utf8");
+  assert.match(migration, /sync_imported_talent_contact_decision_to_pipeline/i);
+  assert.match(migration, /new\.status = 'Declined'/i);
+  assert.match(migration, /set stage = 'Rejected'/i);
+  assert.match(migration, /case when contact\.status = 'Approved' then imported\.email end/i);
+  assert.match(migration, /case when contact\.status = 'Approved' then imported\.phone end/i);
 });
