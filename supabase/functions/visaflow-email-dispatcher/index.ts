@@ -122,6 +122,11 @@ const messageContracts: Record<string, MessageContract> = {
     requiredId: "imported_talent_interview_id", recipientSource: "talent_imported_interview_invitations -> approved contact request -> talent_imported_prospects.email", ownershipRule: "invitation and approved contact request belong to the same company",
     subject: "VisaFlow Talent Interview Invitation", fields: [["candidate_name", "Candidate"], ["company_name", "Company"], ["interview_type", "Interview type"], ["scheduled_at", "Scheduled"], ["destination", "Meeting link / location"], ["notes", "Notes"]], allowedInputVariables: [], allowedPath: "none",
   },
+  HIRING_PIPELINE_OFFER: {
+    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: true,
+    requiredId: "hiring_offer_id", recipientSource: "company_hiring_offers.recipient_email", ownershipRule: "offer belongs to actor.company_id",
+    subject: "VisaFlow Job Offer", fields: [["candidate_name", "Candidate"], ["position_title", "Position"], ["salary", "Salary / package"], ["joining_date", "Expected joining"], ["expires_at", "Offer valid until"], ["notes", "Notes"]], allowedInputVariables: [], allowedPath: "none",
+  },
   AI_AGENT_MANAGER_APPROVAL: {
     roles: [...COMPANY_ADMINS, "Recruitment Manager"], browserEnabled: true, internalEnabled: true,
     requiredId: "request_id", recipientSource: "active company manager users", ownershipRule: "request.company_id = authenticated/internal company",
@@ -152,7 +157,7 @@ const messageContracts: Record<string, MessageContract> = {
 const allowedTopLevelFields = new Set([
   "message_type", "variables", "request_id", "agency_id", "notification_event_id", "candidate_id",
   "interview_session_id", "agreement_id", "penalty_id", "offer_id", "target_user_id", "company_id",
-  "talent_interview_id", "imported_talent_interview_id", "email_log_id", "idempotency_key", "recipient",
+  "talent_interview_id", "imported_talent_interview_id", "hiring_offer_id", "email_log_id", "idempotency_key", "recipient",
 ]);
 const forbiddenEnvelopeFields = new Set(["to", "cc", "bcc", "from", "replyTo", "reply_to", "subject", "text", "html", "actionUrl", "action_url"]);
 
@@ -572,6 +577,22 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
       candidate_name: String(prospect.full_name || "Candidate"), company_name: String(company.name || "Employer"),
       interview_type: String(invitation.interview_type), scheduled_at: String(invitation.scheduled_at),
       destination: String(invitation.meeting_url || invitation.location || "Phone interview"), notes: String(invitation.notes || "-"),
+    } };
+  }
+
+  if (type === "HIRING_PIPELINE_OFFER") {
+    const companyId = caller.kind === "authenticated" ? caller.actor.company_id : safeId(body.company_id, "company_id");
+    if (!companyId) throw new RequestFailure(403, "forbidden");
+    const offerId = safeId(body.hiring_offer_id, "hiring_offer_id");
+    const offer = await exactlyOne(admin.from("company_hiring_offers")
+      .select("id, company_id, candidate_name_snapshot, recipient_email, position_title, salary, currency, joining_date, expires_at, notes, status")
+      .eq("id", offerId).eq("company_id", companyId).eq("status", "Draft"), "hiring_offer_not_found");
+    const recipients = normalizeEmails([offer.recipient_email]);
+    if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
+    return { recipients: [recipients[0]], companyId, variables: {
+      candidate_name: String(offer.candidate_name_snapshot || "Candidate"), position_title: String(offer.position_title || "Position"),
+      salary: `${offer.salary} ${offer.currency}`, joining_date: String(offer.joining_date || "To be confirmed"),
+      expires_at: String(offer.expires_at), notes: String(offer.notes || "-"),
     } };
   }
 

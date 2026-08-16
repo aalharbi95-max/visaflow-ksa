@@ -9,6 +9,7 @@ const identifierFields: Record<string, string> = {
   AI_INTERVIEW_INVITATION: "interview_session_id",
   TALENT_INTERVIEW_INVITATION: "talent_interview_id",
   IMPORTED_TALENT_INTERVIEW_INVITATION: "imported_talent_interview_id",
+  HIRING_PIPELINE_OFFER: "hiring_offer_id",
   AGENCY_USER_INVITATION: "request_id",
 };
 
