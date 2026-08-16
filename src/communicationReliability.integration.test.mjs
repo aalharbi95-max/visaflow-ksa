@@ -50,7 +50,6 @@ test("pipeline offers are stored, emailed and only then move to Offer", async ()
   assert.match(dispatcher, /HIRING_PIPELINE_OFFER/);
   assert.match(dispatcher, /company_hiring_offers/);
 });
-
 test("pipeline keeps private candidates and synchronizes contact decisions", async () => {
   const migration = await readFile(pipelineDecisionSyncUrl, "utf8");
   assert.match(migration, /sync_imported_talent_contact_decision_to_pipeline/i);
