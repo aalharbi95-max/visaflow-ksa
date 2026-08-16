@@ -21,10 +21,16 @@ export const PLATFORM_USER_ROLES = Object.freeze([
   "Platform Marketing User",
 ]);
 
+export function normalizePlatformUserRole(value) {
+  const role = String(value || "").trim();
+  if (role.toLowerCase().startsWith("platform marketing user")) return "Platform Marketing User";
+  return PLATFORM_USER_ROLES.find((item) => item.toLowerCase() === role.toLowerCase()) || role;
+}
+
 export function buildPlatformUserMutation(form, editingId = null) {
   const name = String(form?.name || "").trim();
   const email = String(form?.email || "").trim().toLowerCase();
-  const role = String(form?.role || "Platform Marketing User").trim();
+  const role = normalizePlatformUserRole(form?.role || "Platform Marketing User");
   const status = String(form?.status || "Active").trim();
   if (!name) throw new Error("User name is required.");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("A valid email address is required.");

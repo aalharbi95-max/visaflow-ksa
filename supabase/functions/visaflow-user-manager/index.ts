@@ -80,7 +80,10 @@ function cleanRole(value: unknown) {
 }
 
 function cleanPlatformRole(value: unknown) {
-  const normalized = cleanText(value, 80);
+  const requested = cleanText(value, 80);
+  const normalized = requested.toLowerCase().startsWith("platform marketing user")
+    ? "Platform Marketing User"
+    : requested;
   if (!PLATFORM_ROLES.has(normalized)) throw new RequestError("PLATFORM_USER_INVALID_ROLE");
   return normalized;
 }

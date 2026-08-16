@@ -5,6 +5,7 @@ import {
   buildPlatformUserMutation,
   COMPANY_USER_ROLES,
   PLATFORM_USER_ROLES,
+  normalizePlatformUserRole,
   getCompanyUserManagerError,
   sendCompanyUserSetupEmail,
 } from "./companyUserManagement.mjs";
@@ -23,6 +24,7 @@ test("platform owner can create an isolated marketing representative payload", (
     { action: "invite_platform_user", name: "Sales Rep", email: "rep@example.com", role: "Platform Marketing User" }
   );
   assert.throws(() => buildPlatformUserMutation({ name: "Bad", email: "bad@example.com", role: "Admin" }), /valid platform role/);
+  assert.equal(normalizePlatformUserRole("Platform Marketing User / مسوّق"), "Platform Marketing User");
 });
 
 test("platform and agency roles cannot use the company invitation route", () => {
