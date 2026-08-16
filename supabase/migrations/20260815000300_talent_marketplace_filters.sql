@@ -222,4 +222,3 @@ revoke all on function public.list_company_talent_marketplace_filtered_page(
 grant execute on function public.list_company_talent_marketplace_filtered_page(
   text, integer, integer, text, text, integer, integer, text, text, text, text
 ) to authenticated;
-

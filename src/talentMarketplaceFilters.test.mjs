@@ -18,7 +18,6 @@ test("normalizes empty marketplace filters for the RPC", () => {
     sort: "Newest",
   });
 });
-
 test("clamps experience and keeps the range valid", () => {
   assert.deepEqual(normalizeTalentMarketplaceFilters({ minExperience: "8", maxExperience: "3", profession: " Finance " }), {
     profession: "Finance",
@@ -35,4 +34,3 @@ test("clamps experience and keeps the range valid", () => {
 test("counts only filters that narrow candidate results", () => {
   assert.equal(countActiveTalentMarketplaceFilters({ profession: "Accounting", minExperience: 5, sort: "Experience: high to low" }), 2);
 });
-

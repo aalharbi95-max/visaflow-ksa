@@ -27,4 +27,3 @@ test("Talent Marketplace filter migration creates the authenticated RPC", async 
   assert.equal(result.rows[0].count, 1);
   await db.close();
 });
-

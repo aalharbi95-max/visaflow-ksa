@@ -72,7 +72,8 @@ test("only imported applicants with a documented sharing basis reach company car
   assert.match(app, /Experience Summary/);
   assert.match(app, /Email Candidate/);
   assert.match(app, /Schedule Interview/);
-  assert.match(app, /Interview invitation email draft opened for the imported candidate/);
+  assert.match(app, /Request Contact Approval/);
+  assert.match(app, /Approval request sent/);
 });
 
 test("Marketplace Ready public counter includes consented imported cards", async () => {

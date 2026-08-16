@@ -14,7 +14,6 @@ function optionalExperience(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(60, Math.max(0, Math.trunc(parsed))) : null;
 }
-
 function optionalChoice(value) {
   const normalized = String(value || "").trim();
   return !normalized || normalized === "All" ? null : normalized;
@@ -52,4 +51,3 @@ export function countActiveTalentMarketplaceFilters(filters = {}) {
     normalized.contactAccess,
   ].filter((value) => value !== null).length;
 }
-
