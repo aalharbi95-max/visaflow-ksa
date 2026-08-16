@@ -5150,6 +5150,124 @@ body:has(.vf-public) {
   grid-column: span 4;
 }
 
+.talent-pipeline-button {
+  border: 1px solid #0f766e;
+  background: #ecfdf5;
+  color: #0f766e;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+}
+
+.hiring-pipeline-feedback {
+  border-inline-start: 4px solid #0f766e;
+  margin-bottom: 16px;
+}
+
+.hiring-job-create {
+  margin-bottom: 18px;
+}
+
+.hiring-job-tabs {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px 14px;
+}
+
+.hiring-job-tabs button {
+  min-width: 190px;
+  text-align: start;
+  border: 1px solid #dbe4ee;
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #17345f;
+}
+
+.hiring-job-tabs button.active {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, .12);
+}
+
+.hiring-job-tabs small {
+  display: block;
+  margin-top: 5px;
+  color: #64748b;
+}
+
+.hiring-pipeline-board {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(230px, 1fr));
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 14px;
+}
+
+.hiring-stage {
+  min-height: 330px;
+  border: 1px solid #dbe4ee;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.hiring-stage > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #dbe4ee;
+}
+
+.hiring-stage > header h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.hiring-stage > header span {
+  min-width: 26px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  text-align: center;
+  font-weight: 800;
+}
+
+.hiring-stage-list {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.hiring-application-card {
+  padding: 12px;
+  border: 1px solid #dbe4ee;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.hiring-application-card h4,
+.hiring-application-card p {
+  margin: 0 0 6px;
+}
+
+.hiring-application-card small,
+.hiring-stage-empty {
+  color: #64748b;
+}
+
+.hiring-stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.hiring-stage-actions button {
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
 .talent-marketplace-section {
   padding: 24px;
   border: 1px solid #e2e8f0;

@@ -113,9 +113,14 @@ const messageContracts: Record<string, MessageContract> = {
     subject: "VisaFlow AI Interview Invitation", fields: [["candidate_name", "Candidate"], ["profession", "Profession"], ["request_no", "Request"], ["scheduled_at", "Scheduled"], ["expires_at", "Expires"], ["action_url", "Interview link"]], allowedInputVariables: [], allowedPath: "/?ai_interview=<record access_token>",
   },
   TALENT_INTERVIEW_INVITATION: {
-    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: false,
+    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: true,
     requiredId: "talent_interview_id", recipientSource: "talent_interview_invitations -> talent_candidates.email", ownershipRule: "invitation belongs to actor.company_id and candidate authorized contact sharing",
     subject: "VisaFlow Talent Interview Invitation", fields: [["candidate_name", "Candidate"], ["company_name", "Company"], ["interview_type", "Interview type"], ["scheduled_at", "Scheduled"], ["destination", "Meeting link / location"], ["notes", "Notes"], ["action_url", "Candidate portal"]], allowedInputVariables: [], allowedPath: "/?talent=1",
+  },
+  IMPORTED_TALENT_INTERVIEW_INVITATION: {
+    roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: true,
+    requiredId: "imported_talent_interview_id", recipientSource: "talent_imported_interview_invitations -> approved contact request -> talent_imported_prospects.email", ownershipRule: "invitation and approved contact request belong to the same company",
+    subject: "VisaFlow Talent Interview Invitation", fields: [["candidate_name", "Candidate"], ["company_name", "Company"], ["interview_type", "Interview type"], ["scheduled_at", "Scheduled"], ["destination", "Meeting link / location"], ["notes", "Notes"]], allowedInputVariables: [], allowedPath: "none",
   },
   AI_AGENT_MANAGER_APPROVAL: {
     roles: [...COMPANY_ADMINS, "Recruitment Manager"], browserEnabled: true, internalEnabled: true,
@@ -147,7 +152,7 @@ const messageContracts: Record<string, MessageContract> = {
 const allowedTopLevelFields = new Set([
   "message_type", "variables", "request_id", "agency_id", "notification_event_id", "candidate_id",
   "interview_session_id", "agreement_id", "penalty_id", "offer_id", "target_user_id", "company_id",
-  "talent_interview_id", "email_log_id", "idempotency_key", "recipient",
+  "talent_interview_id", "imported_talent_interview_id", "email_log_id", "idempotency_key", "recipient",
 ]);
 const forbiddenEnvelopeFields = new Set(["to", "cc", "bcc", "from", "replyTo", "reply_to", "subject", "text", "html", "actionUrl", "action_url"]);
 
@@ -527,23 +532,46 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
   }
 
   if (type === "TALENT_INTERVIEW_INVITATION") {
-    if (caller.kind !== "authenticated" || !caller.actor.company_id) throw new RequestFailure(403, "forbidden");
+    const companyId = caller.kind === "authenticated" ? caller.actor.company_id : safeId(body.company_id, "company_id");
+    if (!companyId) throw new RequestFailure(403, "forbidden");
     const invitationId = safeId(body.talent_interview_id, "talent_interview_id");
     const invitation = await exactlyOne(admin.from("talent_interview_invitations")
       .select("id, company_id, candidate_id, interview_type, scheduled_at, meeting_url, location, notes, status")
-      .eq("id", invitationId).eq("company_id", caller.actor.company_id), "talent_interview_not_found");
+      .eq("id", invitationId).eq("company_id", companyId), "talent_interview_not_found");
     const candidate = await exactlyOne(admin.from("talent_candidates")
       .select("id, full_name, email, employer_contact_sharing_consent")
       .eq("id", invitation.candidate_id).eq("employer_contact_sharing_consent", true), "talent_candidate_not_authorized");
     const company = await exactlyOne(admin.from("companies").select("id, name")
-      .eq("id", caller.actor.company_id), "company_not_found");
+      .eq("id", companyId), "company_not_found");
     const recipients = normalizeEmails([candidate.email]);
     if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
-    return { recipients: [recipients[0]], companyId: caller.actor.company_id, variables: {
+    return { recipients: [recipients[0]], companyId, variables: {
       candidate_name: String(candidate.full_name || "Candidate"), company_name: String(company.name || "Employer"),
       interview_type: String(invitation.interview_type), scheduled_at: String(invitation.scheduled_at),
       destination: String(invitation.meeting_url || invitation.location || "Details are available in VisaFlow Talent"),
       notes: String(invitation.notes || "-"), action_url: approvedUrl({ talent: "1" }),
+    } };
+  }
+
+  if (type === "IMPORTED_TALENT_INTERVIEW_INVITATION") {
+    const companyId = caller.kind === "authenticated" ? caller.actor.company_id : safeId(body.company_id, "company_id");
+    if (!companyId) throw new RequestFailure(403, "forbidden");
+    const invitationId = safeId(body.imported_talent_interview_id, "imported_talent_interview_id");
+    const invitation = await exactlyOne(admin.from("talent_imported_interview_invitations")
+      .select("id, company_id, prospect_id, interview_type, scheduled_at, meeting_url, location, notes, status")
+      .eq("id", invitationId).eq("company_id", companyId), "talent_interview_not_found");
+    const contact = await exactlyOne(admin.from("talent_company_contact_requests")
+      .select("id, prospect_id, status").eq("company_id", companyId).eq("prospect_id", invitation.prospect_id).eq("status", "Approved"), "talent_candidate_not_authorized");
+    if (!contact) throw new RequestFailure(403, "talent_candidate_not_authorized");
+    const prospect = await exactlyOne(admin.from("talent_imported_prospects").select("id, full_name, email")
+      .eq("id", invitation.prospect_id), "talent_candidate_not_found");
+    const company = await exactlyOne(admin.from("companies").select("id, name").eq("id", companyId), "company_not_found");
+    const recipients = normalizeEmails([prospect.email]);
+    if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
+    return { recipients: [recipients[0]], companyId, variables: {
+      candidate_name: String(prospect.full_name || "Candidate"), company_name: String(company.name || "Employer"),
+      interview_type: String(invitation.interview_type), scheduled_at: String(invitation.scheduled_at),
+      destination: String(invitation.meeting_url || invitation.location || "Phone interview"), notes: String(invitation.notes || "-"),
     } };
   }
 
@@ -706,6 +734,12 @@ Deno.serve(async (req) => {
     const smtpSecure = parseBoolean(Deno.env.get("SMTP_SECURE"), smtpPort === 465);
     const smtpFrom = Deno.env.get("SMTP_FROM") || "VisaFlow KSA";
     const approvedReplyTo = Deno.env.get("SMTP_REPLY_TO") || "support@visaflowksa.com";
+    const fallbackHost = Deno.env.get("SMTP_FALLBACK_HOSTNAME") || "";
+    const fallbackPort = Number(Deno.env.get("SMTP_FALLBACK_PORT") || "465");
+    const fallbackSecure = parseBoolean(Deno.env.get("SMTP_FALLBACK_SECURE"), fallbackPort === 465);
+    const fallbackUser = Deno.env.get("SMTP_FALLBACK_USERNAME") || "";
+    const fallbackPass = Deno.env.get("SMTP_FALLBACK_PASSWORD") || "";
+    const fallbackFrom = Deno.env.get("SMTP_FALLBACK_FROM_EMAIL") || fallbackUser;
     const relatedIdentifier = contract.requiredId ? String(body[contract.requiredId] || "") : caller.key;
     const identifier = resolved.deliveryKey || relatedIdentifier;
     const idempotencyKey = buildEmailIdempotencyKey(messageType, identifier, recipients);
@@ -731,9 +765,12 @@ Deno.serve(async (req) => {
     const insertQueued = async () => {
       const { data, error } = await admin.from("email_logs").insert({
         company_id: companyId, agency_id: resolved.agencyId || null, user_id: resolved.userId || (caller.kind === "authenticated" ? caller.actor.id : null),
-        event_type: messageType, type: messageType, status: "Queued", provider: "SMTP",
+        event_type: messageType, type: messageType, status: "Queued", provider: "Primary SMTP",
+        channel: "Email", primary_provider: "Primary SMTP",
+        fallback_provider: fallbackHost && fallbackUser && fallbackPass ? "Fallback SMTP" : null,
         from_email: smtpFrom, recipient: recipients[0], to_email: recipients[0], to_emails: recipients.join(","),
-        subject: rendered.subject, related_id: relatedIdentifier || null, idempotency_key: idempotencyKey, retry_count: 0,
+        subject: rendered.subject, related_id: relatedIdentifier || null, idempotency_key: idempotencyKey, retry_count: 0, max_retries: 3,
+        last_attempt_at: new Date().toISOString(),
         dispatch_claimed_at: new Date().toISOString(),
       }).select("id").single();
       if (error) throw error;
@@ -753,7 +790,8 @@ Deno.serve(async (req) => {
       claimFailed: async (row: Json) => {
         const { data, error } = await admin.from("email_logs").update({
           status: "Queued", retry_count: Number(row.retry_count || 0) + 1,
-          error_code: null, error_message: null, failed_at: null, dispatch_claimed_at: new Date().toISOString(),
+          error_code: null, error_message: null, failed_at: null, next_retry_at: null,
+          dispatch_claimed_at: new Date().toISOString(), last_attempt_at: new Date().toISOString(),
         }).eq("id", row.id).eq("status", "Failed").select("id").maybeSingle();
         if (error) throw error;
         return data;
@@ -778,9 +816,23 @@ Deno.serve(async (req) => {
     const smtpUser = requireSecret("SMTP_USERNAME");
     const smtpPass = requireSecret("SMTP_PASSWORD");
     const transport = nodemailer.createTransport({ host: smtpHost, port: smtpPort, secure: smtpSecure, auth: { user: smtpUser, pass: smtpPass } });
-    const providerResult = await deliverWithTransport(transport, { from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html });
-    const { error: sentLogError } = await admin.from("email_logs").update({ status: "Sent", provider_message_id: providerResult.providerMessageId,
-      message_id: providerResult.providerMessageId, sent_at: new Date().toISOString(), failed_at: null, error_code: null, error_message: null }).eq("id", emailLogId);
+    const envelope = { from: smtpFrom, to: recipients, replyTo: approvedReplyTo, subject: rendered.subject, text: rendered.text, html: rendered.html };
+    let providerResult;
+    let providerUsed = "Primary SMTP";
+    let fallbackUsedAt: string | null = null;
+    try {
+      providerResult = await deliverWithTransport(transport, envelope);
+    } catch (primaryError) {
+      if (!fallbackHost || !fallbackUser || !fallbackPass || !fallbackFrom) throw primaryError;
+      const fallbackTransport = nodemailer.createTransport({ host: fallbackHost, port: fallbackPort, secure: fallbackSecure, auth: { user: fallbackUser, pass: fallbackPass } });
+      providerResult = await deliverWithTransport(fallbackTransport, { ...envelope, from: fallbackFrom });
+      providerUsed = "Fallback SMTP";
+      fallbackUsedAt = new Date().toISOString();
+    }
+    const { error: sentLogError } = await admin.from("email_logs").update({ status: "Sent", provider: providerUsed,
+      provider_message_id: providerResult.providerMessageId, message_id: providerResult.providerMessageId,
+      sent_at: new Date().toISOString(), failed_at: null, next_retry_at: null,
+      fallback_used_at: fallbackUsedAt, error_code: null, error_message: null }).eq("id", emailLogId);
     if (sentLogError) throw sentLogError;
     await recordAgreementDelivery(admin, messageType, relatedIdentifier, companyId, {
       email_delivery_status: "Sent", email_provider_message_id: providerResult.providerMessageId,

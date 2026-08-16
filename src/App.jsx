@@ -95,6 +95,12 @@ import {
   normalizeCvDraft,
 } from "./cvBuilder.mjs";
 import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.mjs";
+import { summarizeCommunicationStatus } from "./communicationReliability.mjs";
+import {
+  HIRING_PIPELINE_STAGES,
+  getHiringStageOptions,
+  groupHiringPipelineByStage,
+} from "./hiringPipeline.mjs";
 import {
   createAgencyAgreement,
   getAgencyAgreementSaveError,
@@ -195,6 +201,7 @@ const PAGES = [
   "Visa Allocation",
   "Candidates",
   "Talent Marketplace",
+  "Hiring Pipeline",
   "Interviews",
   "AI Interview Center",
   "Mobilization",
@@ -243,7 +250,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Recruitment",
     icon: "📋",
-    pages: ["Requests", "Saudi Hiring", "Candidates", "Talent Marketplace", "Interviews", "AI Interview Center", "Rejected Candidates"],
+    pages: ["Requests", "Saudi Hiring", "Candidates", "Talent Marketplace", "Hiring Pipeline", "Interviews", "AI Interview Center", "Rejected Candidates"],
   },
   {
     title: "Visa & Authorization",
@@ -7426,6 +7433,13 @@ const [companyTalentPage, setCompanyTalentPage] = useState(1);
 const [companyTalentCvBusyId, setCompanyTalentCvBusyId] = useState("");
 const [companyTalentAnalysisBusyId, setCompanyTalentAnalysisBusyId] = useState("");
 const [companyTalentContactBusyId, setCompanyTalentContactBusyId] = useState("");
+const [hiringJobs, setHiringJobs] = useState([]);
+const [hiringApplications, setHiringApplications] = useState([]);
+const [hiringPipelineLoading, setHiringPipelineLoading] = useState(false);
+const [hiringPipelineMessage, setHiringPipelineMessage] = useState("");
+const [selectedHiringJobId, setSelectedHiringJobId] = useState("");
+const [hiringTargetJobId, setHiringTargetJobId] = useState("");
+const [hiringJobForm, setHiringJobForm] = useState({ title: "", department: "", location: "", source: "VisaFlow", external_job_id: "", job_code: "" });
 const [selectedTalentAnalysis, setSelectedTalentAnalysis] = useState(null);
 const companyTalentPageSize = 24;
 const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
@@ -7606,6 +7620,7 @@ const ROLE_PAGES = {
     "AI Report Studio",
     "Dashboard",
     "Talent Marketplace",
+    "Hiring Pipeline",
     "AI Interview Center",
     "Recruitment Performance",
     "Onboarding & Validation",
@@ -7664,6 +7679,7 @@ const ROLE_PAGES = {
     "RequestDetails",
     "Candidates",
     "Talent Marketplace",
+    "Hiring Pipeline",
     "Interviews",
     "AI Interview Center",
     "Rejected Candidates",
@@ -7709,6 +7725,7 @@ const ROLE_PAGES = {
     "RequestDetails",
     "Candidates",
     "Talent Marketplace",
+    "Hiring Pipeline",
     "Interviews",
     "AI Interview Center",
     "Rejected Candidates",
@@ -9386,6 +9403,7 @@ Cancel = إضافتها كوظيفة مستقلة`
       loadLocalContentSettings(),
       loadLocalContentProjectTargets(),
       loadCompanyTalentMarketplace(),
+      loadCompanyHiringPipeline(),
       ]);
       const failedLoads = results.filter((result) => result.status === "rejected");
       if (failedLoads.length) {
@@ -10692,6 +10710,105 @@ async function loadProfessionAliases() {
     }
   }
 
+  async function loadCompanyHiringPipeline() {
+    if (!currentCompanyId || isCurrentPlatformUser || currentRole === "Agency") {
+      setHiringJobs([]);
+      setHiringApplications([]);
+      return { jobs: [], applications: [] };
+    }
+    setHiringPipelineLoading(true);
+    try {
+      const { data, error } = await supabase.rpc("list_company_hiring_pipeline");
+      if (error) throw error;
+      const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      const applications = Array.isArray(data?.applications) ? data.applications : [];
+      setHiringJobs(jobs);
+      setHiringApplications(applications);
+      const firstActiveJob = jobs.find((job) => job.status === "Active")?.id || jobs[0]?.id || "";
+      setSelectedHiringJobId((current) => jobs.some((job) => job.id === current) ? current : firstActiveJob);
+      setHiringTargetJobId((current) => jobs.some((job) => job.id === current && job.status === "Active") ? current : firstActiveJob);
+      return { jobs, applications };
+    } catch (error) {
+      console.warn("Hiring pipeline:", error?.message || error);
+      setHiringJobs([]);
+      setHiringApplications([]);
+      return { jobs: [], applications: [] };
+    } finally {
+      setHiringPipelineLoading(false);
+    }
+  }
+
+  async function createHiringJob() {
+    if (!hiringJobForm.title.trim()) return setHiringPipelineMessage("Job title is required.");
+    setHiringPipelineLoading(true);
+    setHiringPipelineMessage("");
+    try {
+      const { data: jobId, error } = await supabase.rpc("create_company_hiring_job", {
+        p_title: hiringJobForm.title.trim(),
+        p_department: hiringJobForm.department.trim() || null,
+        p_location: hiringJobForm.location.trim() || null,
+        p_source: hiringJobForm.source.trim() || "VisaFlow",
+        p_external_job_id: hiringJobForm.external_job_id.trim() || null,
+        p_job_code: hiringJobForm.job_code.trim() || null,
+      });
+      if (error) throw error;
+      setHiringJobForm({ title: "", department: "", location: "", source: "VisaFlow", external_job_id: "", job_code: "" });
+      await loadCompanyHiringPipeline();
+      setSelectedHiringJobId(jobId);
+      setHiringTargetJobId(jobId);
+      setHiringPipelineMessage("Hiring job created. Candidates can now be added without duplicates.");
+    } catch (error) {
+      setHiringPipelineMessage(error?.message || "Unable to create the hiring job.");
+    } finally {
+      setHiringPipelineLoading(false);
+    }
+  }
+
+  async function addCandidateToHiringPipeline(candidate) {
+    if (!hiringTargetJobId) {
+      setCompanyTalentMessage("Create or select an active hiring job first.");
+      return;
+    }
+    setHiringPipelineLoading(true);
+    try {
+      const isImported = candidate?.is_imported === true || candidate?.profile_source === "Imported Excel";
+      const { data, error } = await supabase.rpc("add_talent_candidate_to_hiring_pipeline", {
+        p_job_id: hiringTargetJobId,
+        p_candidate_source: isImported ? "Imported Talent" : "Registered Talent",
+        p_candidate_id: candidate.candidate_id,
+      });
+      if (error) throw error;
+      await loadCompanyHiringPipeline();
+      setCompanyTalentMessage(data?.duplicate_prevented
+        ? "This candidate is already in the selected job pipeline; no duplicate was created."
+        : "Candidate added to the selected job at the Applicant stage.");
+    } catch (error) {
+      setCompanyTalentMessage(error?.message || "Unable to add this candidate to the hiring pipeline.");
+    } finally {
+      setHiringPipelineLoading(false);
+    }
+  }
+
+  async function moveHiringApplication(application, nextStage) {
+    if (!application?.id || !nextStage) return;
+    setHiringPipelineLoading(true);
+    setHiringPipelineMessage("");
+    try {
+      const { error } = await supabase.rpc("move_company_hiring_stage", {
+        p_application_id: application.id,
+        p_to_stage: nextStage,
+        p_note: null,
+      });
+      if (error) throw error;
+      await loadCompanyHiringPipeline();
+      setHiringPipelineMessage(`${application.candidate_name || "Candidate"} moved to ${nextStage}.`);
+    } catch (error) {
+      setHiringPipelineMessage(error?.message || "Unable to update the hiring stage.");
+    } finally {
+      setHiringPipelineLoading(false);
+    }
+  }
+
   async function requestImportedTalentContact(candidate) {
     if (!candidate?.candidate_id || companyTalentContactBusyId) return;
     setCompanyTalentContactBusyId(candidate.candidate_id);
@@ -10741,35 +10858,20 @@ async function loadProfessionAliases() {
         if (!candidate?.identity_shared) throw new Error("The candidate must approve contact sharing for this company first.");
         if (!candidate?.email) throw new Error("This imported candidate does not have an email address.");
 
-        const candidateName = candidate.full_name || candidate.public_reference || "Candidate";
-        const scheduledAt = new Date(talentInterviewForm.scheduled_at).toLocaleString("en-GB", {
-          dateStyle: "full",
-          timeStyle: "short",
-          timeZone: "Asia/Riyadh",
+        const { data: importedInvitationId, error: importedInvitationError } = await supabase.rpc("schedule_imported_talent_interview", {
+          p_prospect_id: candidateId,
+          p_interview_type: talentInterviewForm.interview_type,
+          p_scheduled_at: new Date(talentInterviewForm.scheduled_at).toISOString(),
+          p_meeting_url: talentInterviewForm.meeting_url.trim() || null,
+          p_location: talentInterviewForm.location.trim() || null,
+          p_notes: talentInterviewForm.notes.trim() || null,
         });
-        const destination = talentInterviewForm.interview_type === "Online Video"
-          ? talentInterviewForm.meeting_url.trim()
-          : talentInterviewForm.interview_type === "In Person"
-            ? talentInterviewForm.location.trim()
-            : candidate.phone || "Phone interview";
-        const subject = `Interview Invitation — ${candidateName}`;
-        const body = [
-          `Dear ${candidateName},`,
-          "",
-          "You are invited to an interview through VisaFlow Talent.",
-          `Interview type: ${talentInterviewForm.interview_type}`,
-          `Date and time (Riyadh): ${scheduledAt}`,
-          `Meeting details: ${destination}`,
-          talentInterviewForm.notes.trim() ? `Notes: ${talentInterviewForm.notes.trim()}` : "",
-          "",
-          "Best regards,",
-          "Recruitment Team",
-        ].filter(Boolean).join("\n");
-
-        window.location.href = `mailto:${candidate.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        if (importedInvitationError) throw importedInvitationError;
+        await dispatchVisaFlowEmail({ type: "IMPORTED_TALENT_INTERVIEW_INVITATION", identifiers: { imported_talent_interview_id: importedInvitationId } });
         setTalentInterviewForm({ interview_type: "Online Video", scheduled_at: "", meeting_url: "", location: "", notes: "" });
         setSelectedTalentCandidateId("");
-        setCompanyTalentMessage("Interview invitation email draft opened for the imported candidate.");
+        await Promise.all([loadCompanyTalentMarketplace(), loadEmailLogs(), loadCompanyHiringPipeline()]);
+        setCompanyTalentMessage("Interview invitation was sent through VisaFlow and added to the communication log.");
         return;
       }
 
@@ -11551,6 +11653,8 @@ async function loadNotifications() {
 
   const emailLogStats = useMemo(() => ({
     sent: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "sent").length,
+    delivered: emailLogs.filter((item) => Boolean(item.delivered_at) || ["delivered", "opened"].includes(String(item.status || "").toLowerCase())).length,
+    opened: emailLogs.filter((item) => Boolean(item.opened_at) || String(item.status || "").toLowerCase() === "opened").length,
     failed: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "failed").length,
     skipped: emailLogs.filter((item) => String(item.status || "").toLowerCase() === "skipped").length,
   }), [emailLogs]);
@@ -32168,6 +32272,8 @@ if (!currentUser) {
             <div className="dashboard-grid">
               <Stat title="Total Email Events" value={emailLogs.length} />
               <Stat title="Sent" value={emailLogStats.sent} className="passed" />
+              <Stat title="Delivered" value={emailLogStats.delivered} className="passed" />
+              <Stat title="Opened" value={emailLogStats.opened} className="passed" />
               <Stat title="Failed" value={emailLogStats.failed} className={emailLogStats.failed ? "danger" : "passed"} />
               <Stat title="Queued" value={emailLogs.filter((item) => item.status === "Queued").length} className="warning" />
             </div>
@@ -32177,7 +32283,7 @@ if (!currentUser) {
               </div>
               <div className="form-grid" style={{ marginBottom: "14px" }}>
                 <Select value={emailLogFilters.eventType} placeholder="Event Type" options={["All", ...Array.from(new Set(emailLogs.map((item) => item.event_type || item.type).filter(Boolean)))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, eventType: value }))} />
-                <Select value={emailLogFilters.status} placeholder="Status" options={["All", "Queued", "Sent", "Failed"]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, status: value }))} />
+                <Select value={emailLogFilters.status} placeholder="Status" options={["All", "Queued", "Sent", "Delivered", "Opened", "Failed"]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, status: value }))} />
                 <Select value={emailLogFilters.agency} placeholder="Agency" options={[{ value: "All", label: "All agencies" }, ...agencies.map((agency) => ({ value: String(agency.id), label: agency.name }))]} onChange={(value) => setEmailLogFilters((current) => ({ ...current, agency: value }))} />
                 <Input placeholder="Recipient" value={emailLogFilters.recipient} onChange={(value) => setEmailLogFilters((current) => ({ ...current, recipient: value }))} />
                 <Input type="date" placeholder="From date" value={emailLogFilters.dateFrom} onChange={(value) => setEmailLogFilters((current) => ({ ...current, dateFrom: value }))} />
@@ -32188,10 +32294,11 @@ if (!currentUser) {
                   <thead><tr>
                     <th>Event Type</th><th>Recipient</th><th>Agency</th><th>Status</th><th>Provider</th>
                     <th>Provider Message ID</th><th>Error Code</th><th>Safe Error Message</th><th>Retry Count</th>
-                    <th>Created At</th><th>Sent At</th><th>Failed At</th>
+                    <th>Communication State</th><th>Delivered At</th><th>Opened At</th><th>Candidate Response</th>
+                    <th>Next Retry</th><th>Fallback</th><th>Created At</th><th>Sent At</th><th>Failed At</th>
                   </tr></thead>
                   <tbody>
-                    {filteredEmailLogs.length === 0 ? <tr><td colSpan="12">No email logs match the selected filters.</td></tr> : filteredEmailLogs.map((item) => (
+                    {filteredEmailLogs.length === 0 ? <tr><td colSpan="18">No email logs match the selected filters.</td></tr> : filteredEmailLogs.map((item) => (
                       <tr key={item.id}>
                         <td>{item.event_type || item.type || "-"}</td>
                         <td>{displayEmailRecipient(item.recipient || item.to_email)}</td>
@@ -32199,6 +32306,12 @@ if (!currentUser) {
                         <td><Badge value={item.status || "-"} /></td><td>{item.provider || "-"}</td>
                         <td>{item.provider_message_id || item.message_id || "-"}</td><td>{item.error_code || "-"}</td>
                         <td>{item.error_message || "-"}</td><td>{item.retry_count || 0}</td>
+                        <td><Badge value={summarizeCommunicationStatus(item)} /></td>
+                        <td>{item.delivered_at ? new Date(item.delivered_at).toLocaleString() : "-"}</td>
+                        <td>{item.opened_at ? new Date(item.opened_at).toLocaleString() : "-"}</td>
+                        <td>{item.response_status || "-"}</td>
+                        <td>{item.next_retry_at ? new Date(item.next_retry_at).toLocaleString() : "-"}</td>
+                        <td>{item.fallback_used_at ? `${item.fallback_provider || "Fallback SMTP"} used` : item.fallback_provider ? "Ready" : "Not configured"}</td>
                         <td>{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
                         <td>{item.sent_at ? new Date(item.sent_at).toLocaleString() : "-"}</td>
                         <td>{item.failed_at ? new Date(item.failed_at).toLocaleString() : "-"}</td>
@@ -35324,6 +35437,59 @@ disabled={authorizationWorkflowBusy === "create"}
   </div>
 )}
 
+            {activePage === "Hiring Pipeline" && (() => {
+              const selectedJob = hiringJobs.find((job) => job.id === selectedHiringJobId) || hiringJobs[0] || null;
+              const selectedApplications = selectedJob ? hiringApplications.filter((item) => item.job_id === selectedJob.id) : [];
+              const groupedApplications = groupHiringPipelineByStage(selectedApplications);
+              return <div className="page-section hiring-pipeline-page">
+                <div className="executive-hero" style={{ marginBottom: 18 }}>
+                  <div><p className="eyebrow">VisaFlow Recruitment</p><h1>Hiring Pipeline</h1><p>Track every applicant from submission through screening, contact approval, interview, offer and final decision.</p></div>
+                  <div className="hero-actions"><button type="button" onClick={loadCompanyHiringPipeline} disabled={hiringPipelineLoading}>{hiringPipelineLoading ? "Loading..." : "Refresh"}</button><button type="button" className="light-btn" onClick={() => setActivePage("Talent Marketplace")}>Find Candidates</button></div>
+                </div>
+
+                {hiringPipelineMessage && <div className="form-card hiring-pipeline-feedback" role="status"><p style={{ margin: 0 }}>{hiringPipelineMessage}</p></div>}
+
+                <div className="form-card hiring-job-create">
+                  <h2>Create Hiring Job</h2>
+                  <div className="form-grid">
+                    <Input placeholder="Job title" value={hiringJobForm.title} onChange={(value) => setHiringJobForm((current) => ({ ...current, title: value }))} />
+                    <Input placeholder="Department" value={hiringJobForm.department} onChange={(value) => setHiringJobForm((current) => ({ ...current, department: value }))} />
+                    <Input placeholder="Location" value={hiringJobForm.location} onChange={(value) => setHiringJobForm((current) => ({ ...current, location: value }))} />
+                    <Input placeholder="Source (VisaFlow, LinkedIn...)" value={hiringJobForm.source} onChange={(value) => setHiringJobForm((current) => ({ ...current, source: value }))} />
+                    <Input placeholder="External job ID" value={hiringJobForm.external_job_id} onChange={(value) => setHiringJobForm((current) => ({ ...current, external_job_id: value }))} />
+                    <Input placeholder="Job code (optional)" value={hiringJobForm.job_code} onChange={(value) => setHiringJobForm((current) => ({ ...current, job_code: value }))} />
+                  </div>
+                  <div className="actions-line"><button type="button" className="new-btn" disabled={hiringPipelineLoading} onClick={createHiringJob}>Create Job</button></div>
+                </div>
+
+                <div className="hiring-job-tabs" aria-label="Hiring jobs">
+                  {hiringJobs.length === 0 ? <p>No hiring jobs yet. Create the first job above.</p> : hiringJobs.map((job) => <button type="button" key={job.id} className={selectedJob?.id === job.id ? "active" : ""} onClick={() => { setSelectedHiringJobId(job.id); setHiringTargetJobId(job.id); }}><strong>{job.title}</strong><small>{job.job_code} · {job.status}</small></button>)}
+                </div>
+
+                {selectedJob && <>
+                  <div className="dashboard-grid hiring-pipeline-stats">
+                    <Stat title="Applicants" value={selectedApplications.length} />
+                    <Stat title="Interviews" value={groupedApplications.Interview.length} />
+                    <Stat title="Offers" value={groupedApplications.Offer.length} className="warning" />
+                    <Stat title="Hired" value={groupedApplications.Hired.length} className="passed" />
+                  </div>
+                  <div className="hiring-pipeline-board">
+                    {HIRING_PIPELINE_STAGES.map((stage) => <section key={stage} className={`hiring-stage hiring-stage-${stage.toLowerCase().replaceAll(" ", "-")}`}>
+                      <header><h3>{stage}</h3><span>{groupedApplications[stage].length}</span></header>
+                      <div className="hiring-stage-list">
+                        {groupedApplications[stage].length === 0 ? <p className="hiring-stage-empty">No candidates</p> : groupedApplications[stage].map((application) => <article key={application.id} className="hiring-application-card">
+                          <h4>{application.candidate_name || "Confidential candidate"}</h4>
+                          <p>{application.profession || "Profession not specified"}</p>
+                          <small>{application.candidate_source} · Contact: {application.contact_status || "Private"}</small>
+                          {getHiringStageOptions(application.stage).length > 0 && <div className="hiring-stage-actions">{getHiringStageOptions(application.stage).map((nextStage) => <button type="button" key={nextStage} disabled={hiringPipelineLoading} className={nextStage === "Rejected" ? "danger-btn" : "light-btn"} onClick={() => moveHiringApplication(application, nextStage)}>{nextStage}</button>)}</div>}
+                        </article>)}
+                      </div>
+                    </section>)}
+                  </div>
+                </>}
+              </div>;
+            })()}
+
             {activePage === "Talent Marketplace" && talentEntitlement.enabled && (
               <div className="page-section">
                 <div className="executive-hero" style={{ marginBottom: 18 }}>
@@ -35333,6 +35499,11 @@ disabled={authorizationWorkflowBusy === "create"}
                     <p>Browse all available Talent cards. Imported profiles stay anonymous until the candidate approves contact for your company.</p>
                   </div>
                   <div className="hero-actions">
+                    <select aria-label="Hiring job for selected candidates" value={hiringTargetJobId} onChange={(event) => setHiringTargetJobId(event.target.value)}>
+                      <option value="">Select hiring job</option>
+                      {hiringJobs.filter((job) => job.status === "Active").map((job) => <option key={job.id} value={job.id}>{job.job_code} · {job.title}</option>)}
+                    </select>
+                    <button type="button" className="light-btn" onClick={() => setActivePage("Hiring Pipeline")}>Open Pipeline</button>
                     <button onClick={() => loadCompanyTalentMarketplace({ page: companyTalentPage })} disabled={companyTalentLoading}>{companyTalentLoading ? "Loading..." : "Refresh"}</button>
                   </div>
                 </div>
@@ -35411,6 +35582,7 @@ disabled={authorizationWorkflowBusy === "create"}
                               <button type="button" className="talent-analysis-button" disabled={analysisBusy || candidate.ai_cv_status !== "Completed"} onClick={() => openCompanyTalentAnalysis(candidate)}>{candidate.ai_cv_status !== "Completed" ? "Analysis pending" : analysisBusy ? "Loading..." : "AI Analysis"}</button>
                               <button type="button" className="talent-schedule-button" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
                             </>}
+                            <button type="button" className="talent-pipeline-button" disabled={hiringPipelineLoading || !hiringTargetJobId} onClick={() => addCandidateToHiringPipeline(candidate)}>{hiringPipelineLoading ? "Adding..." : "Add to Pipeline"}</button>
                           </footer>
                         </article>;
                       })}
