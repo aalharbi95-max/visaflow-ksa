@@ -125,7 +125,7 @@ const messageContracts: Record<string, MessageContract> = {
   HIRING_PIPELINE_OFFER: {
     roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: true,
     requiredId: "hiring_offer_id", recipientSource: "company_hiring_offers.recipient_email", ownershipRule: "offer belongs to actor.company_id",
-    subject: "VisaFlow Job Offer", fields: [["candidate_name", "Candidate"], ["position_title", "Position"], ["salary", "Salary / package"], ["joining_date", "Expected joining"], ["expires_at", "Offer valid until"], ["notes", "Notes"]], allowedInputVariables: [], allowedPath: "none",
+    subject: "VisaFlow Job Offer", fields: [["candidate_name", "Candidate"], ["position_title", "Position"], ["salary", "Salary / package"], ["joining_date", "Expected joining"], ["expires_at", "Offer valid until"], ["notes", "Notes"], ["accept_url", "Accept offer"], ["decline_url", "Decline offer"]], allowedInputVariables: [], allowedPath: "/?hiring_offer_token=<record decision_token>",
   },
   AI_AGENT_MANAGER_APPROVAL: {
     roles: [...COMPANY_ADMINS, "Recruitment Manager"], browserEnabled: true, internalEnabled: true,
@@ -241,6 +241,13 @@ function renderTemplate(messageType: string, contract: MessageContract, variable
     actionUrl: variables.action_url,
     loginUrl: variables.login_url,
   });
+  if (messageType === "HIRING_PIPELINE_OFFER") {
+    const populated = contract.fields.filter(([key]) => !["accept_url", "decline_url"].includes(key)).map(([key, label]) => [label, variables[key] || "-"] as const);
+    const text = [contract.subject, "", ...populated.map(([label, value]) => `${label}: ${value}`), "", `Accept: ${variables.accept_url}`, `Decline: ${variables.decline_url}`, "", "VisaFlow KSA"].join("\n").slice(0, 6_000);
+    const rows = populated.map(([label, value]) => `<div style="margin:7px 0;"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</div>`).join("");
+    const html = `<div style="margin:0;padding:24px;background:#f4f7fb;font-family:Arial,Tahoma,sans-serif;color:#0f172a;"><div style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;"><div style="background:#061b49;color:#fff;padding:22px 26px;"><h2 style="margin:0;">${escapeHtml(contract.subject)}</h2></div><div style="padding:22px 26px;line-height:1.65;font-size:14px;">${rows}<p style="margin:22px 0 10px;">Please record your decision using one of the secure buttons below.<br>يرجى تسجيل قرارك باستخدام أحد الزرين الآمنين أدناه.</p><div style="margin-top:18px;"><a href="${escapeHtml(variables.accept_url)}" style="display:inline-block;margin:5px;padding:11px 20px;border-radius:9px;background:#087f5b;color:#fff;text-decoration:none;font-weight:700;">Accept Offer / موافق</a><a href="${escapeHtml(variables.decline_url)}" style="display:inline-block;margin:5px;padding:11px 20px;border-radius:9px;background:#b42318;color:#fff;text-decoration:none;font-weight:700;">Decline Offer / غير موافق</a></div></div><div style="padding:14px 26px;background:#f8fafc;color:#64748b;font-size:12px;">VisaFlow KSA</div></div></div>`;
+    return { subject: contract.subject.slice(0, 160), text, html };
+  }
   const populated = contract.fields.map(([key, label]) => [label, variables[key] || "-"] as const);
   const text = [contract.subject, "", ...populated.map(([label, value]) => `${label}: ${value}`), "", "VisaFlow KSA"].join("\n").slice(0, 6_000);
   const rows = populated.map(([label, value]) => `<div style="margin:7px 0;"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</div>`).join("");
@@ -585,7 +592,7 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
     if (!companyId) throw new RequestFailure(403, "forbidden");
     const offerId = safeId(body.hiring_offer_id, "hiring_offer_id");
     const offer = await exactlyOne(admin.from("company_hiring_offers")
-      .select("id, company_id, candidate_name_snapshot, recipient_email, position_title, salary, currency, joining_date, expires_at, notes, status")
+      .select("id, company_id, candidate_name_snapshot, recipient_email, position_title, salary, currency, joining_date, expires_at, notes, status, decision_token")
       .eq("id", offerId).eq("company_id", companyId).eq("status", "Draft"), "hiring_offer_not_found");
     const recipients = normalizeEmails([offer.recipient_email]);
     if (!recipients.length) throw new RequestFailure(404, "candidate_recipient_not_found");
@@ -593,6 +600,8 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
       candidate_name: String(offer.candidate_name_snapshot || "Candidate"), position_title: String(offer.position_title || "Position"),
       salary: `${offer.salary} ${offer.currency}`, joining_date: String(offer.joining_date || "To be confirmed"),
       expires_at: String(offer.expires_at), notes: String(offer.notes || "-"),
+      accept_url: approvedUrl({ hiring_offer_token: String(offer.decision_token), hiring_offer_response: "Accepted" }),
+      decline_url: approvedUrl({ hiring_offer_token: String(offer.decision_token), hiring_offer_response: "Declined" }),
     } };
   }
 

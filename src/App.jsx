@@ -4060,6 +4060,59 @@ function getTalentContactConsentUrlState() {
   }
 }
 
+function getHiringOfferDecisionUrlState() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("hiring_offer_token") || "";
+    const response = params.get("hiring_offer_response") || "";
+    return { requested: Boolean(token && ["Accepted", "Declined"].includes(response)), token, response };
+  } catch {
+    return { requested: false, token: "", response: "" };
+  }
+}
+
+function HiringOfferDecisionPage({ requestState }) {
+  const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState("");
+  const [result, setResult] = useState(null);
+  const isAcceptance = requestState.response === "Accepted";
+
+  async function confirmResponse() {
+    if (busy || result) return;
+    setBusy(true);
+    try {
+      const { data, error } = await talentSupabase.rpc("respond_company_hiring_offer", {
+        p_token: requestState.token,
+        p_response: requestState.response,
+        p_reason: isAcceptance ? null : reason.trim() || null,
+      });
+      if (error) throw error;
+      setResult({ ok: true, status: data?.status || requestState.response, position: data?.position_title || "the position" });
+    } catch (error) {
+      setResult({ ok: false, message: error?.message || "Unable to record your offer decision." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="vf-login-shell" dir="rtl" lang="ar"><section className="vf-login-right" style={{ width: "100%" }}>
+    <div className="vf-login-card" style={{ maxWidth: 640, textAlign: "center" }}>
+      <img src="/visaflow-logo-transparent.png" alt="VisaFlow" style={{ width: 150, margin: "0 auto 16px" }} />
+      {!result ? <>
+        <h2>{isAcceptance ? "الموافقة على العرض الوظيفي" : "رفض العرض الوظيفي"}</h2>
+        <p>{isAcceptance ? "بعد التأكيد ستُبلغ الشركة بموافقتك على العرض." : "بعد التأكيد ستُبلغ الشركة برفضك للعرض."}</p>
+        <p style={{ color: "#64748b" }}>{isAcceptance ? "The company will be notified when you confirm acceptance." : "The company will be notified when you confirm decline."}</p>
+        {!isAcceptance && <label style={{ display: "block", textAlign: "right", margin: "18px 0" }}><span>سبب الرفض (اختياري) / Reason (optional)</span><textarea rows="4" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} style={{ width: "100%", marginTop: 8 }} /></label>}
+        <button type="button" className={isAcceptance ? "save-btn" : "light-btn"} disabled={busy} onClick={confirmResponse}>{busy ? "جاري الحفظ..." : isAcceptance ? "تأكيد الموافقة / Confirm Acceptance" : "تأكيد الرفض / Confirm Decline"}</button>
+      </> : result.ok ? <>
+        <h2>{result.status === "Accepted" ? "تم قبول العرض بنجاح" : "تم تسجيل رفض العرض"}</h2>
+        <p>تم إشعار الشركة بقرارك بخصوص {result.position}.</p>
+        <p>{result.status === "Accepted" ? "Your acceptance has been recorded and the company has been notified." : "Your decline has been recorded and the company has been notified."}</p>
+      </> : <><h2>تعذر تسجيل القرار</h2><p>{result.message}</p><p>قد يكون الرابط منتهي الصلاحية أو سبق استخدامه.</p></>}
+    </div>
+  </section></main>;
+}
+
 function TalentContactConsentPage({ requestState }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
@@ -31538,6 +31591,7 @@ async function completeAcceptedAgencyInvitation({ request, session }) {
 
 const aiInterviewAccessToken = getAIInterviewAccessToken();
 const talentContactConsentState = getTalentContactConsentUrlState();
+const hiringOfferDecisionState = getHiringOfferDecisionUrlState();
 if (agencyInvitationRequested) {
   return (
     <AgencyInvitationPasswordScreen
@@ -31551,6 +31605,10 @@ if (workspaceRecoveryRequested) {
 }
 if (aiInterviewAccessToken) {
   return <AIInterviewCandidatePortal accessToken={aiInterviewAccessToken} />;
+}
+
+if (hiringOfferDecisionState.requested) {
+  return <HiringOfferDecisionPage requestState={hiringOfferDecisionState} />;
 }
 
 if (talentContactConsentState.requested) {
@@ -35560,6 +35618,7 @@ disabled={authorizationWorkflowBusy === "create"}
               const selectedJob = hiringJobs.find((job) => job.id === selectedHiringJobId) || hiringJobs[0] || null;
               const selectedApplications = selectedJob ? hiringApplications.filter((item) => item.job_id === selectedJob.id) : [];
               const groupedApplications = groupHiringPipelineByStage(selectedApplications);
+              const respondedOffers = selectedApplications.filter((item) => ["Accepted", "Declined"].includes(item.offer_status));
               return <div className="page-section hiring-pipeline-page">
                 <div className="executive-hero" style={{ marginBottom: 18 }}>
                   <div><p className="eyebrow">VisaFlow Recruitment</p><h1>Hiring Pipeline</h1><p>Track every applicant from submission through screening, contact approval, interview, offer and final decision.</p></div>
@@ -35567,6 +35626,7 @@ disabled={authorizationWorkflowBusy === "create"}
                 </div>
 
                 {hiringPipelineMessage && <div className="form-card hiring-pipeline-feedback" role="status"><p style={{ margin: 0 }}>{hiringPipelineMessage}</p></div>}
+                {respondedOffers.length > 0 && <div className="form-card hiring-pipeline-feedback" role="status"><strong>Offer responses / ردود العروض</strong><p style={{ margin: "6px 0 0" }}>{respondedOffers.filter((item) => item.offer_status === "Accepted").length} accepted · {respondedOffers.filter((item) => item.offer_status === "Declined").length} declined. The decision is also available in Notifications.</p></div>}
 
                 <div className="form-card hiring-job-create">
                   <h2>Create Hiring Job</h2>
@@ -35600,6 +35660,7 @@ disabled={authorizationWorkflowBusy === "create"}
                           <h4>{application.candidate_name || "Confidential candidate"}</h4>
                           <p>{application.profession || "Profession not specified"}</p>
                           <small>{application.candidate_source} · Contact: {application.contact_status || "Private"}</small>
+                          {application.offer_status && <div style={{ marginTop: 8 }}><strong>Offer {application.offer_status}</strong>{application.offer_responded_at ? <small style={{ display: "block", marginTop: 4 }}>Candidate response: {formatDateTime(application.offer_responded_at)}</small> : null}{application.offer_decline_reason ? <small style={{ display: "block", marginTop: 4 }}>Reason: {application.offer_decline_reason}</small> : null}</div>}
                           {application.contact_status === "Approved" || application.contact_status === "Shared" ? <div className="hiring-application-contact">
                             {application.email ? <a href={`mailto:${application.email}`}>{application.email}</a> : <span>Email not provided</span>}
                             {application.phone ? <a href={`tel:${application.phone}`}>{application.phone}</a> : <span>Phone not provided</span>}
