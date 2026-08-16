@@ -41,6 +41,7 @@ import {
   ENGINEERING_TALENT_CAMPAIGN_SLUG,
   FINANCE_TALENT_CAMPAIGN_SLUG,
   HR_TALENT_CAMPAIGN_SLUG,
+  IT_TALENT_CAMPAIGN_SLUG,
   getAvailableTalentCampaigns,
   getCampaignProfessionLabel,
   getCampaignReadiness,
@@ -7412,6 +7413,7 @@ const [ownerTalentMessage, setOwnerTalentMessage] = useState("");
 const [ownerTalentError, setOwnerTalentError] = useState(null);
 const [ownerTalentCampaign, setOwnerTalentCampaign] = useState(null);
 const [ownerFinanceTalentCampaign, setOwnerFinanceTalentCampaign] = useState(null);
+const [ownerItTalentCampaign, setOwnerItTalentCampaign] = useState(null);
 const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
 const [ownerTalentInviteBusy, setOwnerTalentInviteBusy] = useState(false);
 const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
@@ -10832,11 +10834,12 @@ async function loadProfessionAliases() {
       : Number(value);
 
     try {
-      const [ownerResult, publicStatsResult, campaignResult, financeCampaignResult, prospectsResult] = await Promise.all([
+      const [ownerResult, publicStatsResult, campaignResult, financeCampaignResult, itCampaignResult, prospectsResult] = await Promise.all([
         supabase.rpc("get_owner_talent_dashboard"),
         supabase.rpc("get_talent_public_stats"),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: ENGINEERING_TALENT_CAMPAIGN_SLUG }),
         supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: FINANCE_TALENT_CAMPAIGN_SLUG }),
+        supabase.rpc("get_owner_talent_campaign_dashboard", { p_slug: IT_TALENT_CAMPAIGN_SLUG }),
         supabase.rpc("list_owner_talent_prospects", { p_limit: 500 }),
       ]);
 
@@ -10864,6 +10867,7 @@ async function loadProfessionAliases() {
       setOwnerTalentRecent(getOwnerTalentProfiles(ownerData.latest_profiles));
       setOwnerTalentCampaign(campaignResult.error ? null : campaignResult.data);
       setOwnerFinanceTalentCampaign(financeCampaignResult.error ? null : financeCampaignResult.data);
+      setOwnerItTalentCampaign(itCampaignResult.error ? null : itCampaignResult.data);
       const prospectData = prospectsResult.error ? null : prospectsResult.data;
       setOwnerTalentProspectStats({
         total: Number(prospectData?.total || 0),
@@ -10891,6 +10895,8 @@ async function loadProfessionAliases() {
       setOwnerTalentStats(unavailableStats);
       setOwnerTalentRecent([]);
       setOwnerTalentCampaign(null);
+      setOwnerFinanceTalentCampaign(null);
+      setOwnerItTalentCampaign(null);
       setOwnerTalentProspectStats({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
       setOwnerTalentDistributions({ country_of_residence: [], profession: [], marketplace_status: [] });
       setOwnerTalentError({
@@ -40320,6 +40326,33 @@ onClick={() => setActiveReport("activityLog")}>
           );
         })}
       </div>
+    </div>
+
+    <div className="form-card" style={{ marginTop: 16 }}>
+      <div className="section-title-row">
+        <div>
+          <h2>IT &amp; Digital Talent Campaign / حملة كفاءات تقنية المعلومات</h2>
+          <p>Open to qualified professionals of all nationalities. Only approved Information Technology interview templates are offered.</p>
+        </div>
+        <button type="button" onClick={async () => {
+          const url = `${window.location.origin}/?talent=1&talent_campaign=${IT_TALENT_CAMPAIGN_SLUG}&utm_source=linkedin&utm_medium=social&utm_campaign=it_digital_2026`;
+          await navigator.clipboard.writeText(url);
+          setOwnerTalentMessage(`Campaign link copied: ${url}`);
+        }}>Copy IT Campaign Link</button>
+      </div>
+      {ownerItTalentCampaign ? <>
+        <div className="stats-grid" style={{ marginTop: 14 }}>
+          <div className="stat-card"><h3>Registered</h3><strong>{Number(ownerItTalentCampaign.registered || 0)}</strong><span>المسجلون</span></div>
+          <div className="stat-card"><h3>Started</h3><strong>{Number(ownerItTalentCampaign.started || 0)}</strong><span>بدؤوا الاختبار</span></div>
+          <div className="stat-card"><h3>Completed</h3><strong>{Number(ownerItTalentCampaign.completed || 0)}</strong><span>أكملوا الاختبار</span></div>
+          <div className="stat-card"><h3>Result Sharing</h3><strong>{Number(ownerItTalentCampaign.result_sharing_granted || 0)}</strong><span>وافقوا على مشاركة النتيجة</span></div>
+        </div>
+        <div className="table-card" style={{ marginTop: 14 }}>
+          <table><thead><tr><th>Reference</th><th>Candidate</th><th>IT Specialization</th><th>Status</th><th>Result Sharing</th><th>Score</th><th>Registered</th></tr></thead>
+            <tbody>{(ownerItTalentCampaign.applications || []).length === 0 ? <tr><td colSpan="7">No IT campaign registrations yet.</td></tr> : (ownerItTalentCampaign.applications || []).map((application) => <tr key={application.id}><td>{application.candidate_reference || "-"}</td><td>{application.candidate_name || "-"}</td><td>{application.profession || "-"}</td><td><Badge value={application.status || "Registered"} /></td><td>{application.result_sharing_consent ? "Allowed" : "Private"}</td><td>{application.result_sharing_consent && application.score != null ? `${application.score}%` : "Private"}</td><td>{application.created_at ? new Date(application.created_at).toLocaleString() : "-"}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </> : <p style={{ color: "#64748b" }}>IT campaign data will appear after the database migration is deployed.</p>}
     </div>
 
     <div className="form-card" style={{ marginTop: 16 }}>

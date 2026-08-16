@@ -1,6 +1,7 @@
 export const ENGINEERING_TALENT_CAMPAIGN_SLUG = "saudi-engineers-2026";
 export const HR_TALENT_CAMPAIGN_SLUG = "saudi-hr-professionals-2026";
 export const FINANCE_TALENT_CAMPAIGN_SLUG = "finance-accounting-professionals-2026";
+export const IT_TALENT_CAMPAIGN_SLUG = "it-digital-professionals-2026";
 
 const TALENT_CAMPAIGN_CONTENT = {
   [ENGINEERING_TALENT_CAMPAIGN_SLUG]: {
@@ -44,6 +45,20 @@ const TALENT_CAMPAIGN_CONTENT = {
     headlineEn: "Finance and accounting professionals: register, choose your track, and test your readiness.",
     introAr: "الحملة متاحة لجميع المتخصصين المؤهلين في المالية والمحاسبة دون اشتراط جنسية. مشاركة السيرة مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.",
     introEn: "The campaign is open to qualified finance and accounting professionals of all nationalities. CV sharing is required to enter the assessment; result sharing remains optional.",
+  },
+  [IT_TALENT_CAMPAIGN_SLUG]: {
+    nameAr: "حملة كفاءات تقنية المعلومات",
+    nameEn: "IT & Digital Talent Campaign",
+    descriptionAr: "محاكاة مقابلات لمسارات البرمجيات والبيانات والأمن السيبراني والبنية التحتية والدعم التقني.",
+    descriptionEn: "Interview simulations for software, data, cybersecurity, infrastructure, and IT support tracks.",
+    professionLabelAr: "اختر تخصصك في تقنية المعلومات",
+    professionLabelEn: "Select your IT specialization",
+    badgeAr: "حملة VisaFlow لكفاءات تقنية المعلومات",
+    badgeEn: "VisaFlow IT & Digital Talent Campaign",
+    headlineAr: "لمتخصصي تقنية المعلومات: سجّل، اختر مسارك، واختبر جاهزيتك.",
+    headlineEn: "IT professionals: register, choose your track, and test your readiness.",
+    introAr: "الحملة متاحة لجميع المتخصصين المؤهلين في تقنية المعلومات دون اشتراط جنسية. مشاركة السيرة وبيانات التواصل مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية وتحت تحكمك.",
+    introEn: "The campaign is open to qualified IT professionals of all nationalities. CV and contact sharing with employers are required to enter the assessment; result sharing remains optional.",
   },
 };
 
@@ -140,6 +155,20 @@ export function buildLinkedInFinanceCampaignDraft(campaignUrl) {
       "الحملة متاحة لجميع المتخصصين المؤهلين دون اشتراط جنسية. مشاركة السيرة وبيانات التواصل مع الشركات المشتركة شرط لدخول الاختبار، أما مشاركة نتيجة الاختبار فهي اختيارية بالكامل.",
       `التسجيل: ${campaignUrl}`,
       "#Finance #Accounting #Audit #FinancialJobs #محاسبة #مالية #وظائف #VisaFlowTalent",
+    ].join("\n\n"),
+  };
+}
+
+export function buildLinkedInItCampaignDraft(campaignUrl) {
+  return {
+    title: "دعوة لكفاءات تقنية المعلومات: اختبر جاهزيتك المهنية مع VisaFlow Talent",
+    body: [
+      "هل تعمل في تقنية المعلومات وتريد قياس جاهزيتك للمقابلات المهنية؟",
+      "سجّل في VisaFlow Talent، ارفع سيرتك الذاتية، واختر مسارك لإجراء مقابلة مهنية مدعومة بالذكاء الاصطناعي.",
+      "تشمل الحملة: تطوير البرمجيات، تحليل البيانات والذكاء الاصطناعي، الأمن السيبراني، الحوسبة السحابية وDevOps، الشبكات، إدارة الأنظمة، الدعم التقني، ضمان الجودة، أنظمة ERP، وتحليل الأعمال وإدارة مشاريع التقنية.",
+      "الحملة متاحة لجميع المتخصصين المؤهلين دون اشتراط جنسية. مشاركة السيرة وبيانات التواصل مع الشركات المشتركة شرط لدخول الاختبار، أما مشاركة نتيجة الاختبار فهي اختيارية بالكامل.",
+      `التسجيل: ${campaignUrl}`,
+      "#InformationTechnology #Cybersecurity #SoftwareEngineering #Data #تقنية_المعلومات #وظائف #VisaFlowTalent",
     ].join("\n\n"),
   };
 }
