@@ -5108,6 +5108,48 @@ body:has(.vf-public) {
   background: transparent;
 }
 
+.talent-marketplace-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  gap: 12px;
+  margin: -6px 0 20px;
+  padding: 16px;
+  border: 1px solid #dbe7f2;
+  border-radius: 18px;
+  background: #f8fafc;
+}
+
+.talent-marketplace-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.talent-marketplace-filters label > span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.talent-marketplace-filters select,
+.talent-marketplace-filters input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.talent-marketplace-filter-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  grid-column: span 4;
+}
+
 .talent-marketplace-section {
   padding: 24px;
   border: 1px solid #e2e8f0;
@@ -5410,6 +5452,8 @@ body:has(.vf-public) {
 
 @media (max-width: 760px) {
   .talent-marketplace-toolbar { align-items: stretch; flex-direction: column; }
+  .talent-marketplace-filters { grid-template-columns: 1fr; }
+  .talent-marketplace-filter-actions { grid-column: auto; flex-direction: column; align-items: stretch; }
   .talent-profile-grid { grid-template-columns: 1fr; }
   .talent-profile-card > footer { grid-template-columns: 1fr 1fr; }
   .talent-analysis-score-grid { grid-template-columns: 1fr 1fr; }
