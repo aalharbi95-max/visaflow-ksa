@@ -99,6 +99,7 @@ import { canRetryAgreementEmail, filterEmailLogs } from "./emailAdministration.m
 import { summarizeCommunicationStatus } from "./communicationReliability.mjs";
 import {
   HIRING_PIPELINE_STAGES,
+  doesCandidateMatchHiringJob,
   getHiringStageOptions,
   groupHiringPipelineByStage,
 } from "./hiringPipeline.mjs";
@@ -35588,6 +35589,8 @@ disabled={authorizationWorkflowBusy === "create"}
                           : candidate.city || candidate.country_of_residence || "Flexible";
                         const cvBusy = companyTalentCvBusyId === candidate.candidate_id;
                         const analysisBusy = companyTalentAnalysisBusyId === candidate.candidate_id;
+                        const targetHiringJob = hiringJobs.find((job) => job.id === hiringTargetJobId) || null;
+                        const matchesSelectedHiringJob = doesCandidateMatchHiringJob(candidate, targetHiringJob);
                         return <article className="talent-profile-card" key={`${candidate.profile_source || "candidate"}-${candidate.candidate_id}`}>
                           <header>
                             <div className="talent-profile-avatar">{initials || "VF"}</div>
@@ -35615,7 +35618,7 @@ disabled={authorizationWorkflowBusy === "create"}
                               <button type="button" className="talent-analysis-button" disabled={analysisBusy || candidate.ai_cv_status !== "Completed"} onClick={() => openCompanyTalentAnalysis(candidate)}>{candidate.ai_cv_status !== "Completed" ? "Analysis pending" : analysisBusy ? "Loading..." : "AI Analysis"}</button>
                               <button type="button" className="talent-schedule-button" disabled={!candidate.identity_shared} onClick={() => setSelectedTalentCandidateId((current) => current === candidate.candidate_id ? "" : candidate.candidate_id)}>{selectedTalentCandidateId === candidate.candidate_id ? "Close" : "Schedule Interview"}</button>
                             </>}
-                            <button type="button" className="talent-pipeline-button" disabled={hiringPipelineLoading || !hiringTargetJobId} onClick={() => addCandidateToHiringPipeline(candidate)}>{hiringPipelineLoading ? "Adding..." : "Add to Pipeline"}</button>
+                            <button type="button" className="talent-pipeline-button" disabled={hiringPipelineLoading || !hiringTargetJobId || !matchesSelectedHiringJob} title={hiringTargetJobId && !matchesSelectedHiringJob ? "Candidate profession does not match the selected hiring job." : undefined} onClick={() => addCandidateToHiringPipeline(candidate)}>{hiringPipelineLoading ? "Adding..." : hiringTargetJobId && !matchesSelectedHiringJob ? "Not Matched" : "Add to Pipeline"}</button>
                           </footer>
                         </article>;
                       })}
