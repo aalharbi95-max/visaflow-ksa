@@ -35510,6 +35510,10 @@ disabled={authorizationWorkflowBusy === "create"}
                           <h4>{application.candidate_name || "Confidential candidate"}</h4>
                           <p>{application.profession || "Profession not specified"}</p>
                           <small>{application.candidate_source} · Contact: {application.contact_status || "Private"}</small>
+                          {application.contact_status === "Approved" || application.contact_status === "Shared" ? <div className="hiring-application-contact">
+                            {application.email ? <a href={`mailto:${application.email}`}>{application.email}</a> : <span>Email not provided</span>}
+                            {application.phone ? <a href={`tel:${application.phone}`}>{application.phone}</a> : <span>Phone not provided</span>}
+                          </div> : <p className="hiring-application-private">Contact details remain hidden until the candidate approves.</p>}
                           {getHiringStageOptions(application.stage).length > 0 && <div className="hiring-stage-actions">{getHiringStageOptions(application.stage).map((nextStage) => <button type="button" key={nextStage} disabled={hiringPipelineLoading} className={nextStage === "Rejected" ? "danger-btn" : "light-btn"} onClick={() => moveHiringApplication(application, nextStage)}>{nextStage}</button>)}</div>}
                         </article>)}
                       </div>
