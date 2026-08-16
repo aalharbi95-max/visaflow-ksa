@@ -5,9 +5,11 @@ import {
   ENGINEERING_TALENT_CAMPAIGN_SLUG,
   FINANCE_TALENT_CAMPAIGN_SLUG,
   HR_TALENT_CAMPAIGN_SLUG,
+  IT_TALENT_CAMPAIGN_SLUG,
   buildCampaignUrl,
   buildLinkedInFinanceCampaignDraft,
   buildLinkedInHrCampaignDraft,
+  buildLinkedInItCampaignDraft,
   getAvailableTalentCampaigns,
   getCampaignProfessionLabel,
   getCampaignReadiness,
@@ -36,6 +38,16 @@ test("Finance campaign is nationality-neutral and available in the Talent portal
   const campaign = getAvailableTalentCampaigns("AR").find((item) => item.slug === FINANCE_TALENT_CAMPAIGN_SLUG);
   assert.equal(campaign?.name, "حملة الكفاءات المالية والمحاسبية");
   assert.doesNotMatch(campaign?.name || "", /سعود/);
+});
+
+test("IT campaign is nationality-neutral and has dedicated registration copy", () => {
+  const url = new URL(buildCampaignUrl("https://www.visaflowksa.com/", IT_TALENT_CAMPAIGN_SLUG));
+  assert.equal(url.searchParams.get("talent_campaign"), IT_TALENT_CAMPAIGN_SLUG);
+  assert.equal(getCampaignProfessionLabel(IT_TALENT_CAMPAIGN_SLUG, "AR"), "اختر تخصصك في تقنية المعلومات");
+  assert.match(buildLinkedInItCampaignDraft(url.toString()).body, /الأمن السيبراني/);
+  assert.match(buildLinkedInItCampaignDraft(url.toString()).body, /دون اشتراط جنسية/);
+  const campaign = getAvailableTalentCampaigns("AR").find((item) => item.slug === IT_TALENT_CAMPAIGN_SLUG);
+  assert.equal(campaign?.name, "حملة كفاءات تقنية المعلومات");
 });
 
 test("CV and employer sharing are required while result sharing is not", () => {
@@ -102,6 +114,17 @@ test("Finance campaign migration seeds finance templates and rejects cross-campa
   assert.match(sql, /else false/i);
   assert.match(sql, /General Accounting \| المحاسبة العامة/);
   assert.match(sql, /Corporate Finance & Investment \| تمويل الشركات والاستثمار/);
+});
+
+test("IT campaign migration seeds approved IT templates and isolates campaign eligibility", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20260816000100_talent_it_campaign.sql", import.meta.url), "utf8");
+  assert.match(sql, /it-digital-professionals-2026/i);
+  assert.match(sql, /Information Technology/);
+  assert.match(sql, /information_technology/);
+  assert.match(sql, /nationality_restriction"\s*:\s*false/i);
+  assert.match(sql, /else false/i);
+  assert.match(sql, /Software Engineering \| تطوير البرمجيات/);
+  assert.match(sql, /Cybersecurity \| الأمن السيبراني/);
 });
 
 test("failed campaign interviews can be retried without overwriting history", async () => {
