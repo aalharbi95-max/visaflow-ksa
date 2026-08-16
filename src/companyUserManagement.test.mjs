@@ -29,6 +29,13 @@ test("platform owner can create an isolated marketing representative payload", (
   assert.equal(normalizePlatformUserRole("مسوّق / Platform Marketing User"), "Platform Marketing User");
 });
 
+test("platform marketing is the safe default when the platform form has no selected role", () => {
+  assert.deepEqual(
+    buildPlatformUserMutation({ name: "Rep", email: "rep@example.com", role: "Platform Marketing User", status: "Active" }),
+    { action: "invite_platform_user", name: "Rep", email: "rep@example.com", role: "Platform Marketing User" }
+  );
+});
+
 test("platform and agency roles cannot use the company invitation route", () => {
   assert.equal(COMPANY_USER_ROLES.includes("Platform Owner"), false);
   assert.equal(COMPANY_USER_ROLES.includes("Agency"), false);
