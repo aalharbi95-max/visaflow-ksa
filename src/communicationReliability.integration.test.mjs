@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 const migrationUrl = new URL("../supabase/migrations/20260816000100_communication_reliability_hiring_pipeline.sql", import.meta.url);
 const pipelineDecisionSyncUrl = new URL("../supabase/migrations/20260816000300_pipeline_contact_decision_sync.sql", import.meta.url);
+const pipelineActionsUrl = new URL("../supabase/migrations/20260816000500_hiring_pipeline_interview_offer_actions.sql", import.meta.url);
 const contactWorkerUrl = new URL("../supabase/functions/talent-prospect-email-worker/index.ts", import.meta.url);
 const retryWorkerUrl = new URL("../supabase/functions/visaflow-email-retry-worker/index.ts", import.meta.url);
 
@@ -37,6 +38,17 @@ test("hiring pipeline is tenant scoped, duplicate safe and transition controlled
   assert.match(migration, /Invalid hiring stage transition/i);
   assert.match(migration, /when 'Offer' then p_to_stage in \('Hired','Rejected'\)/i);
   assert.match(migration, /revoke all on public\.company_hiring_jobs.*authenticated/is);
+});
+
+test("pipeline offers are stored, emailed and only then move to Offer", async () => {
+  const migration = await readFile(pipelineActionsUrl, "utf8");
+  const dispatcher = await readFile(new URL("../supabase/functions/visaflow-email-dispatcher/index.ts", import.meta.url), "utf8");
+  assert.match(migration, /create table if not exists public\.company_hiring_offers/i);
+  assert.match(migration, /create_company_hiring_offer/i);
+  assert.match(migration, /mark_company_hiring_offer_sent/i);
+  assert.match(migration, /set stage = 'Offer'/i);
+  assert.match(dispatcher, /HIRING_PIPELINE_OFFER/);
+  assert.match(dispatcher, /company_hiring_offers/);
 });
 
 test("pipeline keeps private candidates and synchronizes contact decisions", async () => {

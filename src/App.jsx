@@ -7463,6 +7463,9 @@ const [hiringPipelineMessage, setHiringPipelineMessage] = useState("");
 const [selectedHiringJobId, setSelectedHiringJobId] = useState("");
 const [hiringTargetJobId, setHiringTargetJobId] = useState("");
 const [hiringJobForm, setHiringJobForm] = useState({ title: "", department: "", location: "", source: "VisaFlow", external_job_id: "", job_code: "" });
+const [pipelineInterviewApplication, setPipelineInterviewApplication] = useState(null);
+const [pipelineOfferApplication, setPipelineOfferApplication] = useState(null);
+const [pipelineOfferForm, setPipelineOfferForm] = useState({ salary: "", currency: "SAR", joining_date: "", expires_at: "", notes: "" });
 const [selectedTalentAnalysis, setSelectedTalentAnalysis] = useState(null);
 const companyTalentPageSize = 24;
 const [selectedTalentCandidateId, setSelectedTalentCandidateId] = useState("");
@@ -10827,6 +10830,92 @@ async function loadProfessionAliases() {
       setHiringPipelineMessage(`${application.candidate_name || "Candidate"} moved to ${nextStage}.`);
     } catch (error) {
       setHiringPipelineMessage(error?.message || "Unable to update the hiring stage.");
+    } finally {
+      setHiringPipelineLoading(false);
+    }
+  }
+
+  async function schedulePipelineInterview() {
+    const application = pipelineInterviewApplication;
+    if (!application) return;
+    if (!talentInterviewForm.scheduled_at) return setHiringPipelineMessage("Choose the interview date and time.");
+    if (talentInterviewForm.interview_type === "Online Video" && !talentInterviewForm.meeting_url.trim().toLowerCase().startsWith("https://")) return setHiringPipelineMessage("Add a secure meeting link starting with https://.");
+    if (talentInterviewForm.interview_type === "In Person" && !talentInterviewForm.location.trim()) return setHiringPipelineMessage("Add the interview location.");
+    setHiringPipelineLoading(true);
+    setHiringPipelineMessage("");
+    try {
+      let invitationId;
+      let messageType;
+      let identifierKey;
+      if (application.candidate_source === "Imported Talent") {
+        const result = await supabase.rpc("schedule_imported_talent_interview", {
+          p_prospect_id: application.candidate_id,
+          p_interview_type: talentInterviewForm.interview_type,
+          p_scheduled_at: new Date(talentInterviewForm.scheduled_at).toISOString(),
+          p_meeting_url: talentInterviewForm.meeting_url.trim() || null,
+          p_location: talentInterviewForm.location.trim() || null,
+          p_notes: talentInterviewForm.notes.trim() || null,
+        });
+        if (result.error) throw result.error;
+        invitationId = result.data;
+        messageType = "IMPORTED_TALENT_INTERVIEW_INVITATION";
+        identifierKey = "imported_talent_interview_id";
+      } else if (application.candidate_source === "Registered Talent") {
+        const result = await supabase.rpc("schedule_talent_interview", {
+          p_candidate_id: application.candidate_id,
+          p_interview_type: talentInterviewForm.interview_type,
+          p_scheduled_at: new Date(talentInterviewForm.scheduled_at).toISOString(),
+          p_meeting_url: talentInterviewForm.meeting_url.trim() || null,
+          p_location: talentInterviewForm.location.trim() || null,
+          p_notes: talentInterviewForm.notes.trim() || null,
+        });
+        if (result.error) throw result.error;
+        invitationId = result.data;
+        messageType = "TALENT_INTERVIEW_INVITATION";
+        identifierKey = "talent_interview_id";
+      } else {
+        throw new Error("Pipeline interview scheduling is available for Talent candidates.");
+      }
+      await dispatchVisaFlowEmail({ type: messageType, identifiers: { [identifierKey]: invitationId } });
+      const moved = await supabase.rpc("move_company_hiring_stage", { p_application_id: application.id, p_to_stage: "Interview", p_note: "Interview scheduled and invitation sent from Hiring Pipeline." });
+      if (moved.error) throw moved.error;
+      setTalentInterviewForm({ interview_type: "Online Video", scheduled_at: "", meeting_url: "", location: "", notes: "" });
+      setPipelineInterviewApplication(null);
+      await Promise.all([loadCompanyHiringPipeline(), loadEmailLogs()]);
+      setHiringPipelineMessage("Interview scheduled, invitation sent, and candidate moved to Interview.");
+    } catch (error) {
+      setHiringPipelineMessage(error?.message || "Unable to schedule the interview.");
+    } finally {
+      setHiringPipelineLoading(false);
+    }
+  }
+
+  async function sendPipelineOffer() {
+    const application = pipelineOfferApplication;
+    if (!application) return;
+    if (!(Number(pipelineOfferForm.salary) > 0)) return setHiringPipelineMessage("Enter a valid salary.");
+    if (!pipelineOfferForm.expires_at) return setHiringPipelineMessage("Choose the offer expiry date.");
+    setHiringPipelineLoading(true);
+    setHiringPipelineMessage("");
+    try {
+      const created = await supabase.rpc("create_company_hiring_offer", {
+        p_application_id: application.id,
+        p_salary: Number(pipelineOfferForm.salary),
+        p_currency: pipelineOfferForm.currency,
+        p_joining_date: pipelineOfferForm.joining_date || null,
+        p_expires_at: pipelineOfferForm.expires_at,
+        p_notes: pipelineOfferForm.notes.trim() || null,
+      });
+      if (created.error) throw created.error;
+      await dispatchVisaFlowEmail({ type: "HIRING_PIPELINE_OFFER", identifiers: { hiring_offer_id: created.data } });
+      const marked = await supabase.rpc("mark_company_hiring_offer_sent", { p_offer_id: created.data });
+      if (marked.error) throw marked.error;
+      setPipelineOfferForm({ salary: "", currency: "SAR", joining_date: "", expires_at: "", notes: "" });
+      setPipelineOfferApplication(null);
+      await Promise.all([loadCompanyHiringPipeline(), loadEmailLogs()]);
+      setHiringPipelineMessage("Job offer sent and candidate moved to Offer.");
+    } catch (error) {
+      setHiringPipelineMessage(error?.message || "Unable to create and send the offer.");
     } finally {
       setHiringPipelineLoading(false);
     }
@@ -35515,11 +35604,39 @@ disabled={authorizationWorkflowBusy === "create"}
                             {application.email ? <a href={`mailto:${application.email}`}>{application.email}</a> : <span>Email not provided</span>}
                             {application.phone ? <a href={`tel:${application.phone}`}>{application.phone}</a> : <span>Phone not provided</span>}
                           </div> : <p className="hiring-application-private">Contact details remain hidden until the candidate approves.</p>}
-                          {getHiringStageOptions(application.stage).length > 0 && <div className="hiring-stage-actions">{getHiringStageOptions(application.stage).map((nextStage) => <button type="button" key={nextStage} disabled={hiringPipelineLoading} className={nextStage === "Rejected" ? "danger-btn" : "light-btn"} onClick={() => moveHiringApplication(application, nextStage)}>{nextStage}</button>)}</div>}
+                          {getHiringStageOptions(application.stage).length > 0 && <div className="hiring-stage-actions">{getHiringStageOptions(application.stage).map((nextStage) => {
+                            if (nextStage === "Interview") return <button type="button" key={nextStage} disabled={hiringPipelineLoading || !["Approved", "Shared"].includes(application.contact_status)} className="light-btn" onClick={() => { setPipelineInterviewApplication(application); setHiringPipelineMessage(""); }}>Schedule Interview</button>;
+                            if (nextStage === "Offer") return <button type="button" key={nextStage} disabled={hiringPipelineLoading || !application.email} className="light-btn" onClick={() => { setPipelineOfferApplication(application); setHiringPipelineMessage(""); }}>Create Offer</button>;
+                            return <button type="button" key={nextStage} disabled={hiringPipelineLoading} className={nextStage === "Rejected" ? "danger-btn" : "light-btn"} onClick={() => moveHiringApplication(application, nextStage)}>{nextStage}</button>;
+                          })}</div>}
                         </article>)}
                       </div>
                     </section>)}
                   </div>
+                  {pipelineInterviewApplication && <div className="form-card talent-interview-modal" role="dialog" aria-modal="true" aria-labelledby="pipeline-interview-title">
+                    <button type="button" className="talent-interview-modal-close" aria-label="Close interview form" onClick={() => setPipelineInterviewApplication(null)}>×</button>
+                    <h2 id="pipeline-interview-title">Schedule Interview — {pipelineInterviewApplication.candidate_name}</h2>
+                    <div className="form-grid">
+                      <label><span>Interview Type</span><select value={talentInterviewForm.interview_type} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, interview_type: event.target.value }))}><option>Online Video</option><option>Phone</option><option>In Person</option></select></label>
+                      <label><span>Date &amp; Time</span><input type="datetime-local" value={talentInterviewForm.scheduled_at} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, scheduled_at: event.target.value }))} /></label>
+                      {talentInterviewForm.interview_type === "Online Video" && <label><span>Meeting Link</span><input type="url" placeholder="https://..." value={talentInterviewForm.meeting_url} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, meeting_url: event.target.value }))} /></label>}
+                      {talentInterviewForm.interview_type === "In Person" && <label><span>Location</span><input value={talentInterviewForm.location} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, location: event.target.value }))} /></label>}
+                      <label><span>Notes</span><textarea rows="3" value={talentInterviewForm.notes} onChange={(event) => setTalentInterviewForm((prev) => ({ ...prev, notes: event.target.value }))} /></label>
+                    </div>
+                    <div className="talent-interview-modal-actions"><button type="button" className="light-btn" onClick={() => setPipelineInterviewApplication(null)}>Cancel</button><button type="button" className="new-btn" disabled={hiringPipelineLoading} onClick={schedulePipelineInterview}>{hiringPipelineLoading ? "Sending..." : "Schedule & Send Invitation"}</button></div>
+                  </div>}
+                  {pipelineOfferApplication && <div className="form-card talent-interview-modal" role="dialog" aria-modal="true" aria-labelledby="pipeline-offer-title">
+                    <button type="button" className="talent-interview-modal-close" aria-label="Close offer form" onClick={() => setPipelineOfferApplication(null)}>×</button>
+                    <h2 id="pipeline-offer-title">Create Job Offer — {pipelineOfferApplication.candidate_name}</h2>
+                    <div className="form-grid">
+                      <label><span>Monthly Salary</span><input type="number" min="1" value={pipelineOfferForm.salary} onChange={(event) => setPipelineOfferForm((prev) => ({ ...prev, salary: event.target.value }))} /></label>
+                      <label><span>Currency</span><select value={pipelineOfferForm.currency} onChange={(event) => setPipelineOfferForm((prev) => ({ ...prev, currency: event.target.value }))}><option>SAR</option><option>USD</option><option>AED</option><option>EUR</option></select></label>
+                      <label><span>Joining Date</span><input type="date" value={pipelineOfferForm.joining_date} onChange={(event) => setPipelineOfferForm((prev) => ({ ...prev, joining_date: event.target.value }))} /></label>
+                      <label><span>Offer Valid Until</span><input type="date" value={pipelineOfferForm.expires_at} onChange={(event) => setPipelineOfferForm((prev) => ({ ...prev, expires_at: event.target.value }))} /></label>
+                      <label><span>Notes</span><textarea rows="3" value={pipelineOfferForm.notes} onChange={(event) => setPipelineOfferForm((prev) => ({ ...prev, notes: event.target.value }))} /></label>
+                    </div>
+                    <div className="talent-interview-modal-actions"><button type="button" className="light-btn" onClick={() => setPipelineOfferApplication(null)}>Cancel</button><button type="button" className="new-btn" disabled={hiringPipelineLoading} onClick={sendPipelineOffer}>{hiringPipelineLoading ? "Sending..." : "Create & Send Offer"}</button></div>
+                  </div>}
                 </>}
               </div>;
             })()}
