@@ -47,6 +47,7 @@ test("Staging baseline bounds include-all to the exact reviewed pending manifest
     assert.match(workflow, new RegExp(`supabase functions deploy ${name}`));
   }
   assert.match(workflow, /test "\$status" = "401" \|\| test "\$status" = "403"/);
+  assert.match(workflow, /node scripts\/staging-security-smoke\.mjs/);
 });
 
 test("release workflow deploys only reviewed functions and rejects anonymous callers", async () => {

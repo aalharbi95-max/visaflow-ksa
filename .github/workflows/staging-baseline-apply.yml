@@ -57,3 +57,5 @@ jobs:
               --data '{}')"
             test "$status" = "401" || test "$status" = "403"
           done
+      - name: Verify Staging tenant isolation and Hiring Pipeline
+        run: node scripts/staging-security-smoke.mjs
