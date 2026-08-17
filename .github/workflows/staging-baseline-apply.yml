@@ -59,3 +59,5 @@ jobs:
           done
       - name: Verify Staging tenant isolation and Hiring Pipeline
         run: node scripts/staging-security-smoke.mjs
+      - name: Verify canonical MIRGAB lifecycle after RLS
+        run: node scripts/staging-mirgab-lifecycle.mjs
