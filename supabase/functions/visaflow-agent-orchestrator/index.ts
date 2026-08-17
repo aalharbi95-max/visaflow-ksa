@@ -446,9 +446,9 @@ async function runOrchestrator(admin: any, caller: Caller, originalBody: Json) {
       .eq("company_id", companyId).eq("case_id", agentCase.id).neq("run_id", run.id)
       .in("tool_name", GREEN_MUTATING_AGENT_TOOLS).order("created_at", { ascending: false }),
     admin.from("ai_agent_approval_requests")
-      .select("id,company_id,case_id,approval_status,proposed_payload,stable_action_key,executed_at,created_at")
+      .select("id,company_id,case_id,approval_status,proposed_payload,stable_action_key,executed_at,requested_by_agent_at")
       .eq("company_id", companyId).eq("case_id", agentCase.id)
-      .eq("action_type", "REASSIGN_REQUEST_QUANTITY").order("created_at", { ascending: true }).limit(2),
+      .eq("action_type", "REASSIGN_REQUEST_QUANTITY").order("requested_by_agent_at", { ascending: true }).limit(2),
   ]);
   if (previousStepResult.error) throw previousStepResult.error;
   if (existingApprovalResult.error) throw existingApprovalResult.error;
