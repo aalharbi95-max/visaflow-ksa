@@ -29,7 +29,7 @@ test("Email Logs is a sidebar page with required columns and no browser mutation
 
 test("email log consistency migration clears stale failures from sent rows", async () => {
   const migration = await readFile(
-    new URL("../supabase/migrations/20260805000100_fix_email_log_status_consistency.sql", import.meta.url),
+    new URL("../supabase/migrations/20260817000900_fix_email_log_status_consistency.sql", import.meta.url),
     "utf8"
   );
   assert.match(migration, /where lower\(coalesce\(status, ''\)\) = 'sent'/);

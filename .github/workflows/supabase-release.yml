@@ -1,0 +1,100 @@
+name: Supabase release
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub Environment to deploy
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      deploy_functions:
+        description: Deploy the reviewed Agent functions
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/release-validation.yml
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_CLI_VERSION: 2.109.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate required deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+          test -n "$SUPABASE_PROJECT_REF"
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_ANON_KEY"
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Validate repository and migrations
+        run: |
+          npm run validate:migrations
+          npm test
+          npm run test:postgres
+          npm run build
+      - name: Link exact Supabase project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Inspect migration status
+        run: supabase migration list --linked
+      - name: Database migration dry-run
+        run: supabase db push --linked --include-all --dry-run
+      - name: Apply database migrations deterministically
+        run: supabase db push --linked --include-all
+      - name: Verify migration history
+        run: supabase migration list --linked
+      - name: Deploy reviewed Edge Functions
+        if: ${{ inputs.deploy_functions }}
+        run: |
+          supabase functions deploy visaflow-agent-orchestrator --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy aiagentworker --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy visaflow-ai-commander --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy visaflow-email-dispatcher --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Smoke-test authentication boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for function_name in visaflow-agent-orchestrator aiagentworker visaflow-ai-commander visaflow-email-dispatcher; do
+            status="$(curl --silent --show-error --output /tmp/function-response.json --write-out '%{http_code}' \
+              --request POST "$SUPABASE_URL/functions/v1/$function_name" \
+              --header "apikey: $SUPABASE_ANON_KEY" \
+              --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              --header 'Content-Type: application/json' \
+              --data '{}')"
+            test "$status" = "401" || test "$status" = "403"
+          done

@@ -131,7 +131,7 @@ test("Finance campaign migration seeds finance templates and rejects cross-campa
 });
 
 test("IT campaign migration seeds approved IT templates and isolates campaign eligibility", async () => {
-  const sql = await readFile(new URL("../supabase/migrations/20260816000100_talent_it_campaign.sql", import.meta.url), "utf8");
+  const sql = await readFile(new URL("../supabase/migrations/20260817001200_talent_it_campaign.sql", import.meta.url), "utf8");
   assert.match(sql, /it-digital-professionals-2026/i);
   assert.match(sql, /Information Technology/);
   assert.match(sql, /information_technology/);

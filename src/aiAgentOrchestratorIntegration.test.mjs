@@ -62,6 +62,9 @@ test("Worker and Commander connect to the Orchestrator without exposing service 
   assert.match(worker, /orchestrator_request_review/);
   assert.match(worker, /x-visaflow-worker-secret/);
   assert.match(commander, /action\?: "chat" \| "commander" \| "offer" \| "agent_goal"/);
+  assert.match(commander, /await authenticateRequest\(req\)/);
+  assert.match(commander, /\/auth\/v1\/user/);
+  assert.match(commander, /error: "unauthorized".*401/);
   assert.match(commander, /Authorization: authorization/);
   assert.doesNotMatch(commander, /SUPABASE_SERVICE_ROLE_KEY/);
 });

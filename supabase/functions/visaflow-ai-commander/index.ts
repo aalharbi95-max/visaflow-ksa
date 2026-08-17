@@ -17,6 +17,20 @@ type CommanderPayload = {
   offerData?: Record<string, unknown>;
 };
 
+async function authenticateRequest(req: Request) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  const authorization = req.headers.get("authorization") || "";
+  if (!supabaseUrl || !anonKey || !authorization.toLowerCase().startsWith("bearer ")) return false;
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { Authorization: authorization, apikey: anonKey },
+  });
+  if (!response.ok) return false;
+  const user = await response.json().catch(() => null);
+  return Boolean(user?.id);
+}
+
 async function runAgentGoal(req: Request, payload: CommanderPayload) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -125,6 +139,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
 
   try {
+    if (!(await authenticateRequest(req))) return jsonResponse({ ok: false, error: "unauthorized" }, 401);
     const payload = (await req.json()) as CommanderPayload;
     if (payload.action === "agent_goal") return await runAgentGoal(req, payload);
     const apiKey = Deno.env.get("OPENAI_API_KEY");
