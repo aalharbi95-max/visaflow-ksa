@@ -55,9 +55,10 @@ await query(`
   do $fixture$
   declare
     source_request public.requests%rowtype;
-    source_candidate public.candidates%rowtype;
     new_request_id bigint;
     new_line_id uuid;
+    responsible_agency text;
+    responsible_agency_id uuid;
     source_line record;
   begin
     perform pg_advisory_xact_lock(hashtext('${requestNo}'));
@@ -107,29 +108,26 @@ await query(`
     end loop;
     if new_line_id is null then raise exception 'MIRGAB_SOURCE_LINE_MISSING'; end if;
 
-    select * into source_candidate
-    from public.candidates
-    where company_id=source_request.company_id and request_no=source_request.request_no
-      and nullif(trim(agency),'') is not null
-    order by created_at
+    select v.agency into responsible_agency
+    from public.visa_authorizations v
+    where v.company_id=source_request.company_id and v.request_no=source_request.request_no
+      and nullif(trim(v.agency),'') is not null
+    order by v.created_at
     limit 1;
-    if source_candidate.id is null then raise exception 'MIRGAB_SOURCE_CANDIDATE_MISSING'; end if;
-    insert into public.candidates
-    select (jsonb_populate_record(
-      null::public.candidates,
-      to_jsonb(source_candidate) || jsonb_build_object(
-        'id',gen_random_uuid(),
-        'candidate_name','MIRGAB QA Candidate',
-        'request_no','${requestNo}',
-        'request_line_id',new_line_id,
-        'passport_no','QA-MIRGAB-20260817',
-        'mobile',null,
-        'email',null,
-        'medical_status','Pending',
-        'created_at',now()-interval '30 days',
-        'updated_at',now()-interval '30 days'
-      )
-    )).*;
+    if responsible_agency is null then raise exception 'MIRGAB_SOURCE_AGENCY_MISSING'; end if;
+    select a.id into responsible_agency_id
+    from public.agencies a
+    where a.company_id=source_request.company_id and lower(trim(a.name))=lower(trim(responsible_agency))
+    limit 1;
+    if responsible_agency_id is null then raise exception 'MIRGAB_SOURCE_AGENCY_UNRESOLVED'; end if;
+    insert into public.candidates(
+      id,candidate_name,request_no,agency,agency_id,status,company_id,request_line_id,
+      passport_no,medical_status,created_at,updated_at
+    ) values (
+      gen_random_uuid(),'MIRGAB QA Candidate','${requestNo}',responsible_agency,responsible_agency_id,
+      'New',source_request.company_id,new_line_id,'QA-MIRGAB-20260817','Pending',
+      now()-interval '30 days',now()-interval '30 days'
+    );
 
     insert into public.ai_agent_cases(
       company_id,goal_type,goal,target_type,target_id,status,priority,stable_case_key
