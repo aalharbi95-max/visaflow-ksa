@@ -43,19 +43,27 @@ run(["migration", "repair", ...repair, "--status", "applied"]);
 const listOutput = runCaptured(["migration", "list"]);
 const pending = pendingVersions(listOutput);
 const baselineAlreadyApplied = pending.length === 0;
-if (!baselineAlreadyApplied) {
+const originalBaselinePending = pending.length > 0
+  && pending.every((version, index) => version === manifest.genuinely_missing_and_safe_to_apply[index])
+  && pending.length === manifest.genuinely_missing_and_safe_to_apply.length;
+const postBaselinePending = pending.length > 0
+  && pending.every((version, index) => version === manifest.post_baseline_safe_to_apply[index])
+  && pending.length === manifest.post_baseline_safe_to_apply.length;
+if (!baselineAlreadyApplied && !originalBaselinePending && !postBaselinePending) {
   assert.deepEqual(
     pending,
-    manifest.genuinely_missing_and_safe_to_apply,
+    manifest.post_baseline_safe_to_apply,
     "Remote pending migrations differ from the reviewed Staging baseline manifest"
   );
 }
 // Supabase requires --include-all because the reviewed missing files precede newer
 // migrations already recorded remotely. The assertion above makes this bounded.
-if (!baselineAlreadyApplied) run(["db", "push", "--dry-run", "--include-all"]);
+if (originalBaselinePending) run(["db", "push", "--dry-run", "--include-all"]);
+if (postBaselinePending) run(["db", "push", "--dry-run"]);
 if (process.env.STAGING_BASELINE_APPLY !== "true") {
   console.log("Baseline dry-run completed; apply flag is false.");
   process.exit(0);
 }
-if (!baselineAlreadyApplied) run(["db", "push", "--include-all"]);
+if (originalBaselinePending) run(["db", "push", "--include-all"]);
+if (postBaselinePending) run(["db", "push"]);
 run(["migration", "list"]);

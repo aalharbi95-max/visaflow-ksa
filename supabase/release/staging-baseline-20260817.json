@@ -17,9 +17,11 @@
     "20260816000100", "20260816000200", "20260816000300", "20260816000400", "20260816000500",
     "20260817000100", "20260817000300", "20260817001000", "20260817001100", "20260817001300"
   ],
+  "post_baseline_safe_to_apply": ["20260817001400"],
   "notes": {
     "20260816000100": "Canonical source for list_company_hiring_pipeline(); apply repository file unchanged.",
     "20260817001300": "Full sensitive-table RLS hardening; fail-closed and transactional.",
+    "20260817001400": "Security Advisor high-impact remediation: invoker-rights Agent view and removal of anonymous privileged RPC execution.",
     "baseline_rule": "Only reflected/obsolete versions are repaired as applied. Missing versions are executed from repository files in order."
   }
 }

@@ -33,6 +33,7 @@ test("Staging baseline bounds include-all to the exact reviewed pending manifest
   assert.match(runner, /migration", "repair/);
   assert.match(runner, /pendingVersions\(listOutput\)/);
   assert.match(runner, /baselineAlreadyApplied = pending\.length === 0/);
+  assert.match(runner, /postBaselinePending/);
   assert.match(runner, /manifest\.genuinely_missing_and_safe_to_apply/);
   assert.match(runner, /db", "push", "--dry-run", "--include-all/);
   assert.match(runner, /db", "push", "--include-all/);
