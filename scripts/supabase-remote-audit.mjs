@@ -17,6 +17,14 @@ async function query(sql) {
   return response.json();
 }
 
+async function securityAdvisor() {
+  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/advisors/security`, {
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  });
+  if (!response.ok) throw new Error(`Supabase Security Advisor failed with HTTP ${response.status}`);
+  return response.json();
+}
+
 const queries = {
   migrations: `select version::text from supabase_migrations.schema_migrations order by version`,
   tables: `
@@ -62,7 +70,8 @@ const queries = {
     order by c.relname`,
 };
 
-const evidence = { project_ref: projectRef, captured_at: new Date().toISOString(), queries: {} };
+const evidence = { project_ref: projectRef, captured_at: new Date().toISOString(), queries: {}, security_advisor: null };
 for (const [name, sql] of Object.entries(queries)) evidence.queries[name] = await query(sql);
+evidence.security_advisor = await securityAdvisor();
 await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-console.log(`Captured read-only Staging evidence: ${evidence.queries.migrations.length} migrations, ${evidence.queries.tables.length} tables.`);
+console.log(`Captured read-only Staging evidence: ${evidence.queries.migrations.length} migrations, ${evidence.queries.tables.length} tables, ${evidence.security_advisor?.lints?.length || 0} Security Advisor findings.`);

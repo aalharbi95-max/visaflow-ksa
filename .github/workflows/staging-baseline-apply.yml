@@ -21,6 +21,8 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       STAGING_BASELINE_APPLY: "true"
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +38,22 @@ jobs:
           version: 2.109.1
       - name: Apply reviewed Staging baseline and missing migrations
         run: node scripts/apply-staging-baseline.mjs
+      - name: Deploy reviewed Staging Edge Functions
+        run: |
+          supabase functions deploy visaflow-agent-orchestrator --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy aiagentworker --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy visaflow-ai-commander --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy visaflow-email-dispatcher --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Smoke-test function authentication boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for function_name in visaflow-agent-orchestrator aiagentworker visaflow-ai-commander visaflow-email-dispatcher; do
+            status="$(curl --silent --show-error --output /tmp/function-response.json --write-out '%{http_code}' \
+              --request POST "$SUPABASE_URL/functions/v1/$function_name" \
+              --header "apikey: $SUPABASE_ANON_KEY" \
+              --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              --header 'Content-Type: application/json' \
+              --data '{}')"
+            test "$status" = "401" || test "$status" = "403"
+          done

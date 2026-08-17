@@ -22,6 +22,7 @@ test("Staging hardening audit is read-only and captures canonical evidence", asy
   assert.match(workflow, /supabase-pooler-cli\.mjs migration list/);
   assert.match(workflow, /node scripts\/supabase-remote-audit\.mjs/);
   assert.doesNotMatch(workflow, /db push|migration repair|functions deploy/);
+  assert.match(await read("../scripts/supabase-remote-audit.mjs"), /advisors\/security/);
 });
 
 test("Staging baseline bounds include-all to the exact reviewed pending manifest", async () => {
@@ -36,6 +37,15 @@ test("Staging baseline bounds include-all to the exact reviewed pending manifest
   assert.match(runner, /db", "push", "--dry-run", "--include-all/);
   assert.match(runner, /db", "push", "--include-all/);
   assert.match(workflow, /STAGING_BASELINE_APPLY: "true"/);
+  for (const name of [
+    "visaflow-agent-orchestrator",
+    "aiagentworker",
+    "visaflow-ai-commander",
+    "visaflow-email-dispatcher",
+  ]) {
+    assert.match(workflow, new RegExp(`supabase functions deploy ${name}`));
+  }
+  assert.match(workflow, /test "\$status" = "401" \|\| test "\$status" = "403"/);
 });
 
 test("release workflow deploys only reviewed functions and rejects anonymous callers", async () => {
