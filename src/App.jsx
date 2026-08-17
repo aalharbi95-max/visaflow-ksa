@@ -27918,26 +27918,50 @@ async function submitMarketingCompanyRequest() {
 async function reviewMarketingRequest(item, decision) {
   if (!isPlatformOwner) return;
   let commissionRate = null;
-  let platformClientId = null;
   if (decision === "Approved") {
     const defaultRate = marketingProfiles.find((profile) => String(profile.user_id) === String(item.representative_user_id))?.default_commission_rate ?? "";
     const enteredRate = window.prompt("Commission percentage for this company (0-100)", String(defaultRate));
     if (enteredRate === null) return;
     commissionRate = Number(enteredRate);
     if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 100) return alert("Enter a valid commission percentage from 0 to 100.");
-    const selectedClient = window.prompt("Existing Platform Client ID (optional now; link it before marking an invoice Paid)", "");
-    if (selectedClient === null) return;
-    platformClientId = selectedClient.trim() || null;
   }
   const notes = window.prompt("Owner review notes (optional)", "");
   if (notes === null) return;
-  const { error } = await supabase.rpc("review_marketing_company_request", {
-    p_request_id: item.id, p_decision: decision, p_commission_rate: commissionRate,
-    p_platform_client_id: platformClientId, p_notes: notes || null,
+  const { data, error } = await supabase.functions.invoke("visaflow-marketing-sales-manager", {
+    body: {
+      action: decision === "Approved" ? "approve" : "reject",
+      request_id: item.id,
+      commission_rate: commissionRate,
+      notes: notes || null,
+    },
   });
-  if (error) return alert(error.message);
-  await Promise.all([loadMarketingRequests(), loadMarketingCommissions()]);
-  alert(`Request ${decision.toLowerCase()} successfully.`);
+  if (error || data?.ok === false) {
+    let code = String(data?.code || error?.message || "MARKETING_SALES_ACTION_FAILED");
+    try {
+      if (!data && error?.context?.clone) {
+        const responseBody = await error.context.clone().json();
+        code = String(responseBody?.code || code);
+      }
+    } catch { /* Keep the safe error code already available. */ }
+    const messages = {
+      EMAIL_ALREADY_REGISTERED: "The contact email already belongs to another account. Link the existing company before approval.",
+      DUPLICATE_COMPANY_MATCH: "More than one company matches this request. Resolve the duplicate company records first.",
+      REQUEST_NOT_PENDING: "This request has already been reviewed. Refresh the page.",
+      INVALID_COMPANY_CONTACT: "The company contact name or email is invalid.",
+      PLATFORM_OWNER_REQUIRED: "Only the Platform Owner can approve this deal.",
+    };
+    return alert(messages[code] || `The deal could not be ${decision.toLowerCase()}. Please try again.`);
+  }
+  await Promise.all([loadMarketingRequests(), loadMarketingCommissions(), loadPlatformClients(), loadUsers()]);
+  if (decision === "Approved" && data?.account_created) {
+    alert(data?.setup_email_sent
+      ? `Deal approved. ${data.company_name} and its Admin user were created, linked automatically, and a password setup email was sent to ${data.admin_email}.`
+      : `Deal approved. ${data.company_name} and its Admin user were created and linked. The setup email failed; ask the user to use Forgot Password.`);
+    return;
+  }
+  alert(decision === "Approved"
+    ? `Deal approved and linked to ${data?.company_name || "the existing company"}. No duplicate user was created.`
+    : "Deal rejected. No company or user was created.");
 }
 
 async function createSubscriptionInvoiceForClient(client, subscriptionType = "Recruitment") {
