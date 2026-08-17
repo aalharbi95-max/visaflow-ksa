@@ -26,6 +26,11 @@ test("the approved company administrator receives a secure password setup route"
   assert.match(edge, /recovery", "1"/);
 });
 
+test("approval strips invisible RTL controls from the company admin email", () => {
+  assert.match(edge, /\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069/);
+  assert.match(edge, /const adminEmail = cleanEmail\(lead\.contact_email\)/);
+});
+
 test("the browser delegates owner approval to the protected sales manager", () => {
   assert.match(app, /functions\.invoke\("visaflow-marketing-sales-manager"/);
   assert.doesNotMatch(app, /Existing Platform Client ID \(optional now/);
