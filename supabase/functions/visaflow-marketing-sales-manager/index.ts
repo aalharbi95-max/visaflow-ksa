@@ -25,6 +25,13 @@ function clean(value: unknown, max = 180) {
   return String(value || "").trim().slice(0, max);
 }
 
+function cleanEmail(value: unknown) {
+  return clean(value, 254)
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
 function allowedOrigin(origin: string | null) {
   if (!origin) return false;
   try { return ALLOWED_ORIGINS.has(new URL(origin).origin); } catch { return false; }
@@ -110,7 +117,7 @@ Deno.serve(async (request) => {
     if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 100) throw new SalesError("COMMISSION_RATE_REQUIRED");
     const companyName = clean(lead.company_name);
     const adminName = clean(lead.contact_name) || "Company Administrator";
-    const adminEmail = clean(lead.contact_email, 254).toLowerCase();
+    const adminEmail = cleanEmail(lead.contact_email);
     if (!companyName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) throw new SalesError("INVALID_COMPANY_CONTACT");
 
     let platformClient: any = null;
