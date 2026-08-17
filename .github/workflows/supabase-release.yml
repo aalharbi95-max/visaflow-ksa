@@ -71,13 +71,13 @@ jobs:
       - name: Link exact Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
       - name: Inspect migration status
-        run: supabase migration list --linked
+        run: node scripts/supabase-pooler-cli.mjs migration list
       - name: Database migration dry-run
-        run: supabase db push --linked --dry-run
+        run: node scripts/supabase-pooler-cli.mjs db push --dry-run
       - name: Apply database migrations deterministically
-        run: supabase db push --linked
+        run: node scripts/supabase-pooler-cli.mjs db push
       - name: Verify migration history
-        run: supabase migration list --linked
+        run: node scripts/supabase-pooler-cli.mjs migration list
       - name: Deploy reviewed Edge Functions
         if: ${{ inputs.deploy_functions }}
         run: |
