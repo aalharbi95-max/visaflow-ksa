@@ -12,7 +12,13 @@ async function query(sql) {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ query: sql }),
   });
-  if (!response.ok) throw new Error(`Staging security smoke query failed with HTTP ${response.status}`);
+  if (!response.ok) {
+    let diagnostic = {};
+    try { diagnostic = await response.json(); } catch { diagnostic = {}; }
+    const code = String(diagnostic.code || diagnostic.error_code || "unknown").slice(0, 80);
+    const message = String(diagnostic.message || diagnostic.error || "query rejected").slice(0, 500);
+    throw new Error(`Staging security smoke query failed with HTTP ${response.status} (${code}): ${message}`);
+  }
   return response.json();
 }
 
