@@ -31,10 +31,11 @@ test("Staging baseline bounds include-all to the exact reviewed pending manifest
   assert.match(workflow, /version: 2\.109\.1/);
   assert.match(runner, /migration", "repair/);
   assert.match(runner, /pendingVersions\(listOutput\)/);
+  assert.match(runner, /baselineAlreadyApplied = pending\.length === 0/);
   assert.match(runner, /manifest\.genuinely_missing_and_safe_to_apply/);
   assert.match(runner, /db", "push", "--dry-run", "--include-all/);
   assert.match(runner, /db", "push", "--include-all/);
-  assert.match(workflow, /STAGING_BASELINE_APPLY: "false"/);
+  assert.match(workflow, /STAGING_BASELINE_APPLY: "true"/);
 });
 
 test("release workflow deploys only reviewed functions and rejects anonymous callers", async () => {
