@@ -29,6 +29,8 @@ jobs:
         run: npm ci
       - name: Validate migration inventory
         run: npm run validate:migrations
+      - name: Release hardening tests
+        run: npm run test:release-hardening
       - name: Application tests
         run: npm test
       - name: PostgreSQL tests

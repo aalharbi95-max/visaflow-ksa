@@ -1,0 +1,21 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const migration = await readFile(new URL("../supabase/migrations/20260817001300_full_sensitive_table_rls.sql", import.meta.url), "utf8");
+const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+const client = await readFile(new URL("./supabase.js", import.meta.url), "utf8");
+
+test("Security Advisor target tables are RLS enabled and anon grants are reset", () => {
+  for (const table of ["agency_members","agency_penalties","agency_scores","ai_agent_worker_runs","ai_interview_answers","ai_interview_sessions","candidate_technical_profiles","company_email_settings","invoices","marketplace_deal_workers","platform_clients","subscription_invoices"]) assert.match(migration, new RegExp(`['"]${table}['"]`));
+  assert.match(migration, /enable row level security/i);
+  assert.match(migration, /revoke all on table public\.%I from anon, authenticated/i);
+  assert.match(migration, /grant all on table public\.%I to service_role/i);
+});
+
+test("anonymous interview access is bound to the exact URL token header", () => {
+  assert.match(migration, /x-ai-interview-token/);
+  assert.match(migration, /access_token=public\.current_ai_interview_access_token\(\)/);
+  assert.match(client, /'x-ai-interview-token': token/);
+  assert.match(app, /createAIInterviewPortalClient\(accessToken\)/);
+});

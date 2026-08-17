@@ -25,7 +25,8 @@
     "test:supabase-config": "node --test src/supabaseConfig.test.mjs",
     "test:authorization-workflow": "node --test src/authorizationWorkflow.test.mjs",
     "scan:protected-writes": "node scripts/protected-write-scan.mjs",
-    "validate:migrations": "node scripts/validate-supabase-migrations.mjs"
+    "validate:migrations": "node scripts/validate-supabase-migrations.mjs",
+    "test:release-hardening": "node --test src/releaseWorkflow.test.mjs src/fullSensitiveRls.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

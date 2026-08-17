@@ -9,6 +9,7 @@ import {
   hasTalentRecoveryProof,
   hasWorkspaceRecoveryProof,
   talentSupabase,
+  createAIInterviewPortalClient,
   workspaceSupabase as supabase,
 } from "./supabase";
 import {
@@ -1676,6 +1677,7 @@ function isAIInterviewVideoRecording(answerOrPath = "") {
 }
 
 function AIInterviewCandidatePortal({ accessToken }) {
+  const supabase = useMemo(() => createAIInterviewPortalClient(accessToken), [accessToken]);
   const [portalLanguage, setPortalLanguage] = useState(() =>
     String(navigator.language || "en").toLowerCase().startsWith("ar") ? "AR" : "EN"
   );
