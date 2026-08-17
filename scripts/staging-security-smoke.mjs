@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 const token = process.env.SUPABASE_ACCESS_TOKEN || "";
 const projectRef = process.env.SUPABASE_PROJECT_REF || "";
@@ -15,27 +16,41 @@ async function query(sql) {
   return response.json();
 }
 
-function uuid(value, label) {
-  const normalized = String(value || "");
-  assert.match(normalized, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i, `${label} is invalid`);
-  return normalized;
-}
-
-const companyActors = await query(`
-  select distinct on (u.company_id) u.auth_user_id::text, u.company_id::text
-  from public.users u
-  where u.auth_user_id is not null and u.company_id is not null
-    and u.status='Active' and u.is_active is true and u.role in ('Admin','Company Admin')
-  order by u.company_id, case when u.role='Company Admin' then 0 else 1 end, u.id
-  limit 2`);
-assert.equal(companyActors.length, 2, "Two active company-admin tenants are required for isolation smoke");
-assert.notEqual(companyActors[0].company_id, companyActors[1].company_id, "Company smoke actors must belong to different tenants");
-const companyAUser = uuid(companyActors[0].auth_user_id, "Company A auth user");
-const companyA = uuid(companyActors[0].company_id, "Company A");
-const companyB = uuid(companyActors[1].company_id, "Company B");
+const companyA = randomUUID();
+const companyB = randomUUID();
+const companyAUser = randomUUID();
+const companyBUser = randomUUID();
+const agencyA = randomUUID();
+const agencyB = randomUUID();
+const agencyAUser = randomUUID();
+const agencyBUser = randomUUID();
+const runTag = randomUUID();
 
 await query(`
   begin;
+  insert into public.companies(id,name,status)
+  values
+    ('${companyA}','RLS Company A ${runTag}','Active'),
+    ('${companyB}','RLS Company B ${runTag}','Active');
+  insert into public.users(name,email,role,status,is_active,company_id,auth_user_id)
+  values
+    ('RLS Company A Admin','company-a-${runTag}@example.invalid','Company Admin','Active',true,'${companyA}','${companyAUser}'),
+    ('RLS Company B Admin','company-b-${runTag}@example.invalid','Company Admin','Active',true,'${companyB}','${companyBUser}');
+  insert into public.agencies(id,name,status,company_id)
+  values
+    ('${agencyA}','RLS Agency A ${runTag}','Active','${companyA}'),
+    ('${agencyB}','RLS Agency B ${runTag}','Active','${companyA}');
+  insert into public.users(name,email,role,status,is_active,agency_id,auth_user_id)
+  values
+    ('RLS Agency A User','agency-a-${runTag}@example.invalid','Agency','Active',true,'${agencyA}','${agencyAUser}'),
+    ('RLS Agency B User','agency-b-${runTag}@example.invalid','Agency','Active',true,'${agencyB}','${agencyBUser}');
+  insert into public.agency_members(id,agency_id,user_id,role,status)
+  select gen_random_uuid(),u.agency_id,u.id,'Agency','Active'
+  from public.users u where u.auth_user_id in ('${agencyAUser}'::uuid,'${agencyBUser}'::uuid);
+  insert into public.agency_penalties(id,company_id,penalty_no,agency_id,agency_name,status,agency_evidence)
+  values
+    (gen_random_uuid(),'${companyA}','RLS-A-${runTag}','${agencyA}','RLS Agency A','Open','[]'::jsonb),
+    (gen_random_uuid(),'${companyA}','RLS-B-${runTag}','${agencyB}','RLS Agency B','Open','[]'::jsonb);
   insert into public.local_content_settings(
     company_id,saudi_labor_weight,non_saudi_labor_weight,default_target_percent,
     forecast_days,expiring_window_days,default_monthly_penalty_percent)
@@ -46,7 +61,7 @@ await query(`
   select set_config('request.jwt.claim.sub','${companyAUser}',true);
   set local role authenticated;
   do $smoke$
-  declare pipeline jsonb;
+  declare pipeline jsonb; affected integer;
   begin
     if public.current_app_user_company_id() <> '${companyA}'::uuid then
       raise exception 'COMPANY_ACTOR_CONTEXT_FAILED';
@@ -57,6 +72,15 @@ await query(`
     if not exists(select 1 from public.local_content_settings where company_id='${companyA}'::uuid) then
       raise exception 'COMPANY_OWN_TENANT_READ_FAILED';
     end if;
+    update public.local_content_settings set forecast_days=31 where company_id='${companyA}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>1 then raise exception 'COMPANY_OWN_TENANT_WRITE_FAILED'; end if;
+    update public.local_content_settings set forecast_days=32 where company_id='${companyB}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>0 then raise exception 'COMPANY_CROSS_TENANT_UPDATE'; end if;
+    delete from public.local_content_settings where company_id='${companyB}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>0 then raise exception 'COMPANY_CROSS_TENANT_DELETE'; end if;
     if exists(select 1 from public.invoices where company_id<>'${companyA}'::uuid)
        or exists(select 1 from public.company_email_settings where company_id<>'${companyA}'::uuid)
        or exists(select 1 from public.ai_interview_sessions where company_id<>'${companyA}'::uuid) then
@@ -67,33 +91,27 @@ await query(`
       raise exception 'HIRING_PIPELINE_SMOKE_FAILED';
     end if;
   end $smoke$;
-  rollback;`);
-
-const agencyActors = await query(`
-  select distinct on (u.agency_id) u.id, u.auth_user_id::text, u.agency_id::text
-  from public.users u
-  where u.auth_user_id is not null and u.agency_id is not null
-    and u.status='Active' and u.is_active is true and u.role='Agency'
-  order by u.agency_id,u.id
-  limit 2`);
-assert.equal(agencyActors.length, 2, "Two active agency tenants are required for isolation smoke");
-assert.notEqual(agencyActors[0].agency_id, agencyActors[1].agency_id, "Agency smoke actors must belong to different tenants");
-const agencyAUser = uuid(agencyActors[0].auth_user_id, "Agency A auth user");
-const agencyA = uuid(agencyActors[0].agency_id, "Agency A");
-const agencyB = uuid(agencyActors[1].agency_id, "Agency B");
-assert.match(String(agencyActors[0].id), /^\d+$/, "Agency A user id is invalid");
-assert.match(String(agencyActors[1].id), /^\d+$/, "Agency B user id is invalid");
-
-await query(`
-  begin;
-  insert into public.agency_members(id,agency_id,user_id,role,status)
-  values
-    (gen_random_uuid(),'${agencyA}',${agencyActors[0].id},'Agency','Active'),
-    (gen_random_uuid(),'${agencyB}',${agencyActors[1].id},'Agency','Active')
-  on conflict do nothing;
+  reset role;
+  select set_config('request.jwt.claim.sub','${companyBUser}',true);
+  set local role authenticated;
+  do $smoke$
+  declare affected integer;
+  begin
+    if exists(select 1 from public.local_content_settings where company_id='${companyA}'::uuid) then
+      raise exception 'COMPANY_B_TO_A_CROSS_TENANT_READ';
+    end if;
+    update public.local_content_settings set forecast_days=33 where company_id='${companyA}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>0 then raise exception 'COMPANY_B_TO_A_CROSS_TENANT_UPDATE'; end if;
+    update public.local_content_settings set forecast_days=34 where company_id='${companyB}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>1 then raise exception 'COMPANY_B_OWN_TENANT_WRITE_FAILED'; end if;
+  end $smoke$;
+  reset role;
   select set_config('request.jwt.claim.sub','${agencyAUser}',true);
   set local role authenticated;
   do $smoke$
+  declare affected integer;
   begin
     if public.current_app_user_agency_id() <> '${agencyA}'::uuid then
       raise exception 'AGENCY_ACTOR_CONTEXT_FAILED';
@@ -104,10 +122,32 @@ await query(`
     if not exists(select 1 from public.agency_members where agency_id='${agencyA}'::uuid) then
       raise exception 'AGENCY_OWN_TENANT_READ_FAILED';
     end if;
-    if exists(select 1 from public.company_agency_users where agency_id<>'${agencyA}'::uuid)
-       or exists(select 1 from public.agency_penalties where agency_id is not null and agency_id<>'${agencyA}'::uuid) then
+    if exists(select 1 from public.agency_penalties where agency_id='${agencyB}'::uuid) then
       raise exception 'SENSITIVE_AGENCY_CROSS_TENANT_READ';
     end if;
+    update public.agency_penalties set decision_notes='own-tenant-smoke' where agency_id='${agencyA}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>1 then raise exception 'AGENCY_OWN_TENANT_WRITE_FAILED'; end if;
+    update public.agency_penalties set decision_notes='cross-tenant-smoke' where agency_id='${agencyB}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>0 then raise exception 'AGENCY_CROSS_TENANT_UPDATE'; end if;
+  end $smoke$;
+  reset role;
+  select set_config('request.jwt.claim.sub','${agencyBUser}',true);
+  set local role authenticated;
+  do $smoke$
+  declare affected integer;
+  begin
+    if exists(select 1 from public.agency_members where agency_id='${agencyA}'::uuid)
+       or exists(select 1 from public.agency_penalties where agency_id='${agencyA}'::uuid) then
+      raise exception 'AGENCY_B_TO_A_CROSS_TENANT_READ';
+    end if;
+    update public.agency_penalties set decision_notes='cross-tenant-smoke' where agency_id='${agencyA}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>0 then raise exception 'AGENCY_B_TO_A_CROSS_TENANT_UPDATE'; end if;
+    update public.agency_penalties set decision_notes='own-tenant-smoke' where agency_id='${agencyB}'::uuid;
+    get diagnostics affected = row_count;
+    if affected<>1 then raise exception 'AGENCY_B_OWN_TENANT_WRITE_FAILED'; end if;
   end $smoke$;
   rollback;`);
 
