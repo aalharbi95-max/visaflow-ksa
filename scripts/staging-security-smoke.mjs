@@ -38,6 +38,14 @@ await query(`
   values
     ('${companyA}','RLS Company A ${runTag}','Active'),
     ('${companyB}','RLS Company B ${runTag}','Active');
+  insert into auth.users(
+    id,aud,role,email,encrypted_password,email_confirmed_at,
+    raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
+  values
+    ('${companyAUser}','authenticated','authenticated','company-a-${runTag}@example.invalid','',now(),'{}'::jsonb,'{}'::jsonb,now(),now()),
+    ('${companyBUser}','authenticated','authenticated','company-b-${runTag}@example.invalid','',now(),'{}'::jsonb,'{}'::jsonb,now(),now()),
+    ('${agencyAUser}','authenticated','authenticated','agency-a-${runTag}@example.invalid','',now(),'{}'::jsonb,'{}'::jsonb,now(),now()),
+    ('${agencyBUser}','authenticated','authenticated','agency-b-${runTag}@example.invalid','',now(),'{}'::jsonb,'{}'::jsonb,now(),now());
   insert into public.users(name,email,role,status,is_active,company_id,auth_user_id)
   values
     ('RLS Company A Admin','company-a-${runTag}@example.invalid','Company Admin','Active',true,'${companyA}','${companyAUser}'),
