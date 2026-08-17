@@ -24,14 +24,17 @@ test("Staging hardening audit is read-only and captures canonical evidence", asy
   assert.doesNotMatch(workflow, /db push|migration repair|functions deploy/);
 });
 
-test("Staging baseline uses an explicit reviewed repair manifest and never include-all", async () => {
+test("Staging baseline bounds include-all to the exact reviewed pending manifest", async () => {
   const workflow = await read("../.github/workflows/staging-baseline-apply.yml");
   const runner = await read("../scripts/apply-staging-baseline.mjs");
   assert.match(workflow, /environment: staging/);
   assert.match(workflow, /version: 2\.109\.1/);
   assert.match(runner, /migration", "repair/);
-  assert.match(runner, /db", "push", "--dry-run/);
-  assert.doesNotMatch(`${workflow}\n${runner}`, /--include-all/);
+  assert.match(runner, /pendingVersions\(listOutput\)/);
+  assert.match(runner, /manifest\.genuinely_missing_and_safe_to_apply/);
+  assert.match(runner, /db", "push", "--dry-run", "--include-all/);
+  assert.match(runner, /db", "push", "--include-all/);
+  assert.match(workflow, /STAGING_BASELINE_APPLY: "false"/);
 });
 
 test("release workflow deploys only reviewed functions and rejects anonymous callers", async () => {

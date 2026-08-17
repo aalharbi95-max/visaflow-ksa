@@ -13,12 +13,45 @@ function run(args) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+function runCaptured(args) {
+  const result = spawnSync("node", ["scripts/supabase-pooler-cli.mjs", ...args], {
+    encoding: "utf8",
+    shell: false,
+    env: process.env,
+  });
+  if (result.error) throw result.error;
+  process.stdout.write(result.stdout || "");
+  process.stderr.write(result.stderr || "");
+  if (result.status !== 0) process.exit(result.status ?? 1);
+  return `${result.stdout || ""}\n${result.stderr || ""}`;
+}
+
+function pendingVersions(migrationList) {
+  return migrationList
+    .split(/\r?\n/)
+    .map((line) => line.split("|"))
+    .filter((columns) => columns.length >= 2)
+    .map(([local, remote]) => ({
+      local: local.match(/\d{14}/)?.[0],
+      remote: remote.match(/\d{14}/)?.[0],
+    }))
+    .filter(({ local, remote }) => local && !remote)
+    .map(({ local }) => local);
+}
+
 run(["migration", "repair", ...repair, "--status", "applied"]);
-run(["migration", "list"]);
-run(["db", "push", "--dry-run"]);
+const listOutput = runCaptured(["migration", "list"]);
+assert.deepEqual(
+  pendingVersions(listOutput),
+  manifest.genuinely_missing_and_safe_to_apply,
+  "Remote pending migrations differ from the reviewed Staging baseline manifest"
+);
+// Supabase requires --include-all because the reviewed missing files precede newer
+// migrations already recorded remotely. The assertion above makes this bounded.
+run(["db", "push", "--dry-run", "--include-all"]);
 if (process.env.STAGING_BASELINE_APPLY !== "true") {
   console.log("Baseline dry-run completed; apply flag is false.");
   process.exit(0);
 }
-run(["db", "push"]);
+run(["db", "push", "--include-all"]);
 run(["migration", "list"]);
