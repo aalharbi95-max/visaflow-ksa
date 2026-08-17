@@ -2,12 +2,19 @@ export const AGENT_TERMINATION_REASONS = Object.freeze([
   "completed",
   "awaiting_external_response",
   "awaiting_human_approval",
+  "approved_awaiting_supported_execution",
   "blocked",
   "failed",
   "max_steps_reached",
 ]);
 
 export const AGENT_RISK = Object.freeze({ GREEN: "GREEN", YELLOW: "YELLOW", RED: "RED" });
+
+export const GREEN_MUTATING_AGENT_TOOLS = Object.freeze([
+  "send_agency_followup",
+  "create_followup_task",
+  "escalate_to_manager",
+]);
 
 export const TERMINAL_CANDIDATE_STATUSES = new Set([
   "rejected", "interview failed", "medical failed", "medical fail", "ksa medical failed",
@@ -33,6 +40,45 @@ export function firstAgentText(...values) {
     if (text) return text;
   }
   return "";
+}
+
+export function buildAgentActionKey({ toolName, companyId, caseId, requestId, agencyId = "", period = "" }) {
+  const tool = String(toolName || "");
+  const company = String(companyId || "");
+  const agentCase = String(caseId || "");
+  const request = String(requestId || "");
+  const agency = String(agencyId || "");
+  const timePeriod = String(period || "");
+  if (tool === "send_agency_followup") return `${company}:${request}:${agency}:send_agency_followup:${timePeriod}`;
+  if (tool === "create_followup_task") return `${agentCase}:${agency}:followup`;
+  if (tool === "escalate_to_manager") return `${company}:${request}:manager_escalation:${timePeriod}`;
+  return "";
+}
+
+export function selectReusableAgentStep(steps, { companyId, toolName, actionKey = "", agencyId = "" }) {
+  const candidates = (steps || []).filter((row) => {
+    if (String(row?.company_id || "") !== String(companyId || "")) return false;
+    if (String(row?.tool_name || "") !== String(toolName || "")) return false;
+    if (!["completed", "skipped"].includes(String(row?.status || ""))) return false;
+    if (row?.verification?.verified !== true) return false;
+    const entityId = firstAgentText(row?.verification?.entity_id, row?.output?.entity_id);
+    if (!entityId) return false;
+    if (actionKey && row?.idempotency_key && String(row.idempotency_key) !== String(actionKey)) return false;
+    if (agencyId && row?.input?.agency_id && String(row.input.agency_id) !== String(agencyId)) return false;
+    return true;
+  });
+  return candidates.sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")))[0] || null;
+}
+
+export function resolveAgentApprovalState(status) {
+  const normalized = String(status || "");
+  if (normalized === "Pending") return { state: "awaiting_human_approval", should_wait: true, may_execute: false };
+  if (normalized === "Approved") return { state: "approved_awaiting_supported_execution", should_wait: false, may_execute: false };
+  if (normalized === "Rejected") return { state: "approval_rejected", should_wait: false, may_execute: false };
+  if (normalized === "Executed") return { state: "completed", should_wait: false, may_execute: false };
+  if (normalized === "Execution Failed") return { state: "approval_execution_failed", should_wait: false, may_execute: false };
+  if (normalized === "Expired") return { state: "approval_expired", should_wait: false, may_execute: false };
+  return { state: "approval_missing", should_wait: false, may_execute: false };
 }
 
 export function agentDaysSince(value, now = new Date()) {

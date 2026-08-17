@@ -2,12 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   AGENT_TOOL_DEFINITIONS,
+  buildAgentActionKey,
   buildAgencyPerformance,
   buildOperationalMemory,
   buildRecruitmentReviewPlan,
   calculateRequestGap,
   detectRequestBlockers,
   parseRequestReference,
+  resolveAgentApprovalState,
+  selectReusableAgentStep,
   selectReassignmentRecommendation,
   validateAgentToolCall,
 } from "../supabase/functions/_shared/aiAgentOrchestratorCore.mjs";
@@ -93,4 +96,26 @@ test("operational memory contains facts and action evidence, not reasoning trans
   assert.equal(memory.candidate_gap, 8);
   assert.equal(memory.actions[0].verified, true);
   assert.equal(JSON.stringify(memory).includes("chain_of_thought"), false);
+});
+
+test("stable action keys and tenant-owned verified steps drive safe replay", () => {
+  const actionKey = buildAgentActionKey({
+    toolName: "escalate_to_manager",
+    companyId: "company-a",
+    caseId: "case-a",
+    requestId: "1008",
+    period: "2026-08-17",
+  });
+  assert.equal(actionKey, "company-a:1008:manager_escalation:2026-08-17");
+  const reusable = selectReusableAgentStep([
+    { company_id: "company-b", tool_name: "escalate_to_manager", status: "completed", verification: { verified: true, entity_id: "wrong" }, idempotency_key: actionKey },
+    { company_id: "company-a", tool_name: "escalate_to_manager", status: "completed", verification: { verified: true, entity_id: "right" }, idempotency_key: actionKey },
+  ], { companyId: "company-a", toolName: "escalate_to_manager", actionKey });
+  assert.equal(reusable.verification.entity_id, "right");
+});
+
+test("approval states never imply a reassignment executor", () => {
+  assert.deepEqual(resolveAgentApprovalState("Pending"), { state: "awaiting_human_approval", should_wait: true, may_execute: false });
+  assert.deepEqual(resolveAgentApprovalState("Rejected"), { state: "approval_rejected", should_wait: false, may_execute: false });
+  assert.deepEqual(resolveAgentApprovalState("Approved"), { state: "approved_awaiting_supported_execution", should_wait: false, may_execute: false });
 });

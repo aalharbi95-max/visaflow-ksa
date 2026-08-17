@@ -35,6 +35,23 @@ test("every mutating Phase 1 path records and verifies evidence", async () => {
   assert.match(source, /verification: \{ verified:/);
   assert.match(source, /ai_agent_audit_logs/);
   assert.match(source, /ai_agent_case_events/);
+  assert.match(source, /previously_completed_and_verified/);
+  assert.match(source, /approval_already_/);
+  assert.doesNotMatch(source, /ai_agent_approval_requests"\)\.upsert/);
+});
+
+test("manager escalation is atomic and approved proposals terminate without execution", async () => {
+  const [source, migration] = await Promise.all([
+    read("../supabase/functions/visaflow-agent-orchestrator/index.ts"),
+    read("../supabase/migrations/20260817000600_agent_orchestrator_resume_idempotency.sql"),
+  ]);
+  assert.match(source, /rpc\("ai_agent_create_manager_escalation"/);
+  assert.match(source, /approved_awaiting_supported_execution/);
+  assert.match(source, /executor_available: false/);
+  assert.match(migration, /on conflict \(company_id,dedupe_key\) where dedupe_key is not null do nothing/i);
+  assert.match(migration, /cooldown_or_duplicate/);
+  assert.match(migration, /grant execute on function public\.ai_agent_create_manager_escalation[\s\S]*to service_role/i);
+  assert.doesNotMatch(source, /REASSIGN_REQUEST_QUANTITY[\s\S]{0,500}(update|insert).*visa_authorizations/i);
 });
 
 test("Worker and Commander connect to the Orchestrator without exposing service credentials", async () => {

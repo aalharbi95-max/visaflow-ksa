@@ -3,6 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   AGENT_RISK,
   AGENT_TOOL_DEFINITIONS,
+  GREEN_MUTATING_AGENT_TOOLS,
+  buildAgentActionKey,
   buildAgencyPerformance,
   buildOperationalMemory,
   buildRecruitmentReviewPlan,
@@ -11,7 +13,9 @@ import {
   getAgentToolDefinition,
   normalizeAgentText,
   parseRequestReference,
+  resolveAgentApprovalState,
   safeAgentNumber,
+  selectReusableAgentStep,
   selectReassignmentRecommendation,
   validateAgentToolCall,
 } from "../_shared/aiAgentOrchestratorCore.mjs";
@@ -112,6 +116,38 @@ async function release(ctx: ToolContext, actionKey: string, status = "completed"
   await ctx.supabase.rpc("ai_agent_release_lock", { p_company_id: ctx.companyId, p_action_key: actionKey, p_status: status, p_error_message: error || null });
 }
 
+async function reuseVerifiedGreenStep(ctx: ToolContext, toolName: string, input: Json, actionKey: string) {
+  const previous = selectReusableAgentStep(ctx.cache.previousSteps || [], {
+    companyId: ctx.companyId,
+    toolName,
+    actionKey,
+    agencyId: input.agency_id || "",
+  });
+  if (!previous) return null;
+  const entityId = firstAgentText(previous.verification?.entity_id, previous.output?.entity_id);
+  if (!entityId) return null;
+  const verification = await executeTool("verify_action", { action_type: toolName, entity_id: entityId }, ctx);
+  if (!verification.ok || !verification.verified) return null;
+  const auditId = await audit(ctx, toolName, actionKey, "skipped", {
+    reason: "previously_completed_and_verified",
+    reused_step_id: previous.id,
+    reused_run_id: previous.run_id,
+    entity_id: entityId,
+  });
+  return toolResult({
+    ok: true,
+    verified: true,
+    skipped: true,
+    reused: true,
+    reason: "previously_completed_and_verified",
+    entity_id: entityId,
+    audit_id: auditId,
+    action_key: actionKey,
+    previous_state: verification.data || null,
+    new_state: verification.data || null,
+  });
+}
+
 async function dispatch(ctx: ToolContext, payload: Json) {
   const url = Deno.env.get("SUPABASE_URL") || "";
   const anon = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -205,8 +241,8 @@ async function executeTool(name: string, input: Json, ctx: ToolContext): Promise
     const agency = (ctx.cache.agencies || []).find((row: Json) => String(row.id) === String(input.agency_id));
     if (!agency) throw new AgentFailure(403, "agency_not_responsible_for_request");
     const day = new Date().toISOString().slice(0, 10);
-    const actionKey = `${ctx.companyId}:${request.id}:${agency.id}:send_agency_followup:${day}`;
-    if (!(await acquire(ctx, name, actionKey, agency.id))) return toolResult({ ok: false, verified: true, skipped: true, reason: "cooldown_or_duplicate" });
+    const actionKey = buildAgentActionKey({ toolName: name, companyId: ctx.companyId, caseId: ctx.caseId, requestId: request.id, agencyId: agency.id, period: day });
+    if (!(await acquire(ctx, name, actionKey, agency.id))) return toolResult({ ok: true, verified: true, skipped: true, reason: "cooldown_or_duplicate", action_key: actionKey });
     try {
       const { data: event, error } = await ctx.supabase.from("notification_events").insert({
         company_id: ctx.companyId, agency_id: agency.id, agency_name: agency.name, type: "AI_AGENT_REQUEST_FOLLOWUP",
@@ -227,7 +263,7 @@ async function executeTool(name: string, input: Json, ctx: ToolContext): Promise
       const verified = Boolean(verifiedEvent) && (ctx.settings.allow_auto_agency_emails !== true || (delivery.ok && emailEvidence && ["Queued", "Sent"].includes(emailEvidence.status)));
       const auditId = await audit(ctx, name, actionKey, verified ? "completed" : "failed", { agency_id: agency.id, agency: agency.name, notification_event_id: event.id, delivery, email_evidence: emailEvidence });
       await release(ctx, actionKey, verified ? "completed" : "failed", verified ? "" : "followup_verification_failed");
-      return toolResult({ ok: verified, verified, entity_id: String(event.id), audit_id: auditId, previous_state: null, new_state: verifiedEvent, delivery, email_evidence: emailEvidence });
+      return toolResult({ ok: verified, verified, entity_id: String(event.id), audit_id: auditId, action_key: actionKey, previous_state: null, new_state: verifiedEvent, delivery, email_evidence: emailEvidence });
     } catch (error) { await release(ctx, actionKey, "failed", error instanceof Error ? error.message : String(error)); throw error; }
   }
 
@@ -235,7 +271,7 @@ async function executeTool(name: string, input: Json, ctx: ToolContext): Promise
     const agency = (ctx.cache.agencies || []).find((row: Json) => String(row.id) === String(input.agency_id));
     if (!agency) throw new AgentFailure(403, "agency_not_responsible_for_request");
     const dueAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
-    const actionKey = `${ctx.caseId}:${agency.id}:followup:${dueAt.slice(0, 13)}`;
+    const actionKey = buildAgentActionKey({ toolName: name, companyId: ctx.companyId, caseId: ctx.caseId, requestId: request.id, agencyId: agency.id });
     const { data, error } = await ctx.supabase.from("ai_agent_followup_tasks").upsert({
       company_id: ctx.companyId, case_id: ctx.caseId, run_id: ctx.runId, request_id: request.id, request_no: request.request_no,
       agency_id: agency.id, due_at: dueAt, priority: "High", summary: `Re-check agency response and recruitment blockers for ${request.request_no}.`, stable_action_key: actionKey,
@@ -243,22 +279,30 @@ async function executeTool(name: string, input: Json, ctx: ToolContext): Promise
     if (error) throw error;
     const { data: verified } = await ctx.supabase.from("ai_agent_followup_tasks").select("id,company_id,case_id,status,due_at").eq("id", data.id).eq("company_id", ctx.companyId).maybeSingle();
     const auditId = await audit(ctx, name, actionKey, verified ? "completed" : "failed", { agency_id: agency.id, agency: agency.name, task_id: data.id, due_at: dueAt });
-    return toolResult({ ok: Boolean(verified), verified: Boolean(verified), entity_id: String(data.id), audit_id: auditId, previous_state: null, new_state: verified });
+    return toolResult({ ok: Boolean(verified), verified: Boolean(verified), entity_id: String(data.id), audit_id: auditId, action_key: actionKey, previous_state: null, new_state: verified });
   }
 
   if (name === "escalate_to_manager") {
-    const period = new Date().toISOString().slice(0, 10);
-    const actionKey = `${ctx.companyId}:${request.id}:manager_escalation:${period}`;
-    const { data, error } = await ctx.supabase.from("notification_events").insert({
-      company_id: ctx.companyId, type: "AI_AGENT_OPERATIONAL_ESCALATION", title: `Recruitment delay escalation - ${request.request_no}`,
-      message: `Request ${request.request_no} requires manager attention. ${(ctx.cache.analysis?.blockers || []).map((row: Json) => row.summary).join(" ")}`.slice(0, 4000),
-      priority: "High", status: "Unread", related_table: "requests", related_id: String(request.id), request_no: request.request_no,
-      dedupe_key: actionKey, data: { source: "VisaFlow Agent Orchestrator", case_id: ctx.caseId, run_id: ctx.runId, non_financial: true },
-    }).select("id,company_id,type,dedupe_key").single();
+    const { data, error } = await ctx.supabase.rpc("ai_agent_create_manager_escalation", {
+      p_company_id: ctx.companyId,
+      p_request_id: request.id,
+      p_case_id: ctx.caseId,
+      p_run_id: ctx.runId,
+      p_request_no: String(request.request_no || request.id),
+      p_title: `Recruitment delay escalation - ${request.request_no}`,
+      p_message: `Request ${request.request_no} requires manager attention. ${(ctx.cache.analysis?.blockers || []).map((row: Json) => row.summary).join(" ")}`.slice(0, 4000),
+    });
     if (error) throw error;
-    const { data: verified } = await ctx.supabase.from("notification_events").select("id,company_id,type").eq("id", data.id).eq("company_id", ctx.companyId).maybeSingle();
-    const auditId = await audit(ctx, name, actionKey, verified ? "completed" : "failed", { notification_event_id: data.id });
-    return toolResult({ ok: Boolean(verified), verified: Boolean(verified), entity_id: String(data.id), audit_id: auditId, previous_state: null, new_state: verified });
+    const event = data?.event || null;
+    const actionKey = String(data?.action_key || "");
+    const { data: verified } = await ctx.supabase.from("notification_events").select("id,company_id,type,dedupe_key").eq("id", event?.id).eq("company_id", ctx.companyId).maybeSingle();
+    const skipped = data?.skipped === true;
+    const auditId = await audit(ctx, name, actionKey, verified ? (skipped ? "skipped" : "completed") : "failed", {
+      notification_event_id: event?.id,
+      reason: skipped ? "cooldown_or_duplicate" : "created",
+      atomic: true,
+    });
+    return toolResult({ ok: Boolean(verified), verified: Boolean(verified), skipped, reason: skipped ? "cooldown_or_duplicate" : undefined, entity_id: String(event?.id || ""), audit_id: auditId, action_key: actionKey, previous_state: skipped ? verified : null, new_state: verified });
   }
 
   if (name === "create_manager_approval_request") {
@@ -266,20 +310,58 @@ async function executeTool(name: string, input: Json, ctx: ToolContext): Promise
     if (!recommendation || String(recommendation.to_agency_id) !== String(input.agency_id)) return toolResult({ ok: false, verified: true, skipped: true, reason: "no_supported_yellow_recommendation" });
     const actionKey = `${ctx.caseId}:REASSIGN_REQUEST_QUANTITY:${recommendation.from_agency_id}:${recommendation.to_agency_id}`;
     const payload = { request_id: request.id, request_no: request.request_no, quantity: Math.min(ctx.cache.analysis.gap.gap, 5), ...recommendation };
-    const { data, error } = await ctx.supabase.from("ai_agent_approval_requests").upsert({
-      company_id: ctx.companyId, case_id: ctx.caseId, agent_run_id: ctx.runId, action_type: recommendation.action,
-      tool_name: "assign_agency", target_type: "request", target_id: String(request.id), proposed_payload: payload,
-      reason: `The responsible agency is high risk while a stronger tenant-approved alternative is available.`, evidence: recommendation.evidence,
-      confidence: recommendation.confidence, risk_level: "YELLOW", stable_action_key: actionKey,
-    }, { onConflict: "company_id,stable_action_key" }).select("id,company_id,case_id,approval_status,risk_level,proposed_payload").single();
-    if (error) throw error;
-    if (data?.approval_status !== "Pending") {
-      const auditId = await audit(ctx, name, actionKey, "skipped", { approval_id: data?.id, reason: `approval_already_${String(data?.approval_status || "resolved").toLowerCase()}` });
-      return toolResult({ ok: false, verified: true, skipped: true, entity_id: String(data.id), audit_id: auditId, reason: `approval_already_${String(data.approval_status).toLowerCase()}` });
+    const approvalColumns = "id,company_id,case_id,agent_run_id,approval_status,risk_level,proposed_payload,approved_at,rejected_at,rejection_reason,executed_at,stable_action_key";
+    let { data: existing, error: existingError } = await ctx.supabase.from("ai_agent_approval_requests")
+      .select(approvalColumns).eq("company_id", ctx.companyId).eq("stable_action_key", actionKey).limit(2);
+    if (existingError) throw existingError;
+    let data = existing?.[0] || null;
+    let created = false;
+    if (!data) {
+      const inserted = await ctx.supabase.from("ai_agent_approval_requests").insert({
+        company_id: ctx.companyId, case_id: ctx.caseId, agent_run_id: ctx.runId, action_type: recommendation.action,
+        tool_name: "assign_agency", target_type: "request", target_id: String(request.id), proposed_payload: payload,
+        reason: `The responsible agency is high risk while a stronger tenant-approved alternative is available.`, evidence: recommendation.evidence,
+        confidence: recommendation.confidence, risk_level: "YELLOW", stable_action_key: actionKey,
+      }).select(approvalColumns).single();
+      if (inserted.error && String(inserted.error.code || "") !== "23505") throw inserted.error;
+      if (inserted.error) {
+        const raced = await ctx.supabase.from("ai_agent_approval_requests").select(approvalColumns)
+          .eq("company_id", ctx.companyId).eq("stable_action_key", actionKey).limit(2);
+        if (raced.error) throw raced.error;
+        data = raced.data?.[0] || null;
+      } else {
+        data = inserted.data;
+        created = true;
+      }
     }
-    const verified = data?.company_id === ctx.companyId && data?.approval_status === "Pending" && data?.risk_level === "YELLOW";
-    const auditId = await audit(ctx, name, actionKey, verified ? "completed" : "failed", { approval_id: data?.id, proposed_action: recommendation.action, confidence: recommendation.confidence });
-    return toolResult({ ok: verified, verified, entity_id: String(data.id), audit_id: auditId, previous_state: null, new_state: data, approval_required: true });
+    if (!data) throw new AgentFailure(500, "approval_state_unavailable");
+    const lifecycle = resolveAgentApprovalState(data.approval_status);
+    const verified = data.company_id === ctx.companyId && data.risk_level === "YELLOW" && data.stable_action_key === actionKey;
+    const pending = data.approval_status === "Pending";
+    const auditId = await audit(ctx, name, actionKey, created ? "completed" : "skipped", {
+      approval_id: data.id,
+      approval_status: data.approval_status,
+      approval_state: lifecycle.state,
+      proposed_action: recommendation.action,
+      confidence: recommendation.confidence,
+      executor_available: false,
+    });
+    return toolResult({
+      ok: verified,
+      verified,
+      skipped: !pending,
+      reused: !created,
+      reason: created ? "approval_created" : `approval_already_${String(data.approval_status).toLowerCase().replaceAll(" ", "_")}`,
+      entity_id: String(data.id),
+      audit_id: auditId,
+      action_key: actionKey,
+      previous_state: created ? null : data,
+      new_state: data,
+      approval_required: true,
+      approval_status: data.approval_status,
+      approval_state: lifecycle.state,
+      may_execute: false,
+    });
   }
 
   if (name === "verify_action") {
@@ -358,7 +440,32 @@ async function runOrchestrator(admin: any, caller: Caller, originalBody: Json) {
     requested_by: resolved.actorId, status: "in_progress", plan, max_steps: maxSteps,
   }).select("*").single();
   if (runError) throw runError;
-  const ctx: ToolContext = { supabase: admin, companyId, actorId: resolved.actorId, caseId: agentCase.id, runId: run.id, settings, cache: { request } };
+  const [previousStepResult, existingApprovalResult] = await Promise.all([
+    admin.from("ai_agent_execution_steps")
+      .select("id,company_id,case_id,run_id,tool_name,status,input,output,verification,idempotency_key,created_at")
+      .eq("company_id", companyId).eq("case_id", agentCase.id).neq("run_id", run.id)
+      .in("tool_name", GREEN_MUTATING_AGENT_TOOLS).order("created_at", { ascending: false }),
+    admin.from("ai_agent_approval_requests")
+      .select("id,company_id,case_id,approval_status,proposed_payload,stable_action_key,executed_at,created_at")
+      .eq("company_id", companyId).eq("case_id", agentCase.id)
+      .eq("action_type", "REASSIGN_REQUEST_QUANTITY").order("created_at", { ascending: true }).limit(2),
+  ]);
+  if (previousStepResult.error) throw previousStepResult.error;
+  if (existingApprovalResult.error) throw existingApprovalResult.error;
+  if ((existingApprovalResult.data || []).length > 1) throw new AgentFailure(409, "multiple_case_approvals_detected");
+  const ctx: ToolContext = {
+    supabase: admin,
+    companyId,
+    actorId: resolved.actorId,
+    caseId: agentCase.id,
+    runId: run.id,
+    settings,
+    cache: {
+      request,
+      previousSteps: previousStepResult.data || [],
+      existingApproval: existingApprovalResult.data?.[0] || null,
+    },
+  };
   const actions: Json[] = []; const results: Json = {};
 
   const planned = plan.steps as Json[];
@@ -375,7 +482,8 @@ async function runOrchestrator(admin: any, caller: Caller, originalBody: Json) {
       await saveStep(ctx, stepNo, toolName, "skipped", input, { ok: true, verified: true, skipped: true, reason: "escalation_threshold_not_met" }); continue;
     }
     if (toolName === "create_manager_approval_request") {
-      ctx.cache.recommendation = selectReassignmentRecommendation(ctx.cache.performance || [], (ctx.cache.agencies || []).map((row: Json) => row.id));
+      const existingApproval = ctx.cache.existingApproval;
+      ctx.cache.recommendation = existingApproval?.proposed_payload || selectReassignmentRecommendation(ctx.cache.performance || [], (ctx.cache.agencies || []).map((row: Json) => row.id));
       if (!ctx.cache.recommendation || ctx.cache.analysis?.gap?.gap <= 0) { await saveStep(ctx, stepNo, toolName, "skipped", input, { ok: true, verified: true, skipped: true, reason: "no_supported_yellow_recommendation" }); continue; }
       input = { request_id: request.id, agency_id: ctx.cache.recommendation.to_agency_id };
     }
@@ -385,6 +493,23 @@ async function runOrchestrator(admin: any, caller: Caller, originalBody: Json) {
       input = { action_type: last.tool, entity_id: last.entity_id };
     }
     try {
+      if (GREEN_MUTATING_AGENT_TOOLS.includes(toolName)) {
+        const actionKey = buildAgentActionKey({
+          toolName,
+          companyId,
+          caseId: agentCase.id,
+          requestId: request.id,
+          agencyId: input.agency_id || "",
+          period: new Date().toISOString().slice(0, 10),
+        });
+        const reused = await reuseVerifiedGreenStep(ctx, toolName, input, actionKey);
+        if (reused) {
+          results[toolName] = reused;
+          await saveStep(ctx, stepNo, toolName, "skipped", input, reused);
+          actions.push({ tool: toolName, ...reused });
+          continue;
+        }
+      }
       const output = await executeTool(toolName, input, ctx);
       results[toolName] = output;
       const status = output.skipped ? "skipped" : output.ok && output.verified ? (output.approval_required ? "awaiting_approval" : "completed") : "failed";
@@ -401,23 +526,40 @@ async function runOrchestrator(admin: any, caller: Caller, originalBody: Json) {
   }
 
   const approval = actions.find((row) => row.tool === "create_manager_approval_request" && row.ok);
+  const approvalState = String(approval?.approval_state || "");
   const outbound = actions.find((row) => row.tool === "send_agency_followup" && row.ok);
   const blockers = ctx.cache.analysis?.blockers || [];
   const planStoppedEarly = planned.length < 11 && blockers.length > 0 && !approval && !outbound;
-  const termination = planStoppedEarly ? "max_steps_reached" : approval ? "awaiting_human_approval" : outbound || blockers.length ? "awaiting_external_response" : "completed";
-  const caseStatus = termination === "completed" ? "closed" : termination === "max_steps_reached" ? "blocked" : termination;
-  const nextCheckAt = termination === "completed" ? null : new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+  const termination = planStoppedEarly
+    ? "max_steps_reached"
+    : approvalState === "approved_awaiting_supported_execution"
+      ? "approved_awaiting_supported_execution"
+      : approvalState === "awaiting_human_approval"
+        ? "awaiting_human_approval"
+        : approvalState === "approval_rejected"
+          ? "blocked"
+          : outbound || blockers.length ? "awaiting_external_response" : "completed";
+  const caseStatus = termination === "completed" ? "closed" : ["max_steps_reached", "blocked"].includes(termination) ? "blocked" : termination;
+  const nextCheckAt = ["completed", "approved_awaiting_supported_execution"].includes(termination)
+    ? null
+    : new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const memory = buildOperationalMemory({ request, analysis: ctx.cache.analysis, agencies: (ctx.cache.performance || []).filter((row: Json) => (ctx.cache.agencies || []).some((agency: Json) => agency.id === row.agency_id)), actions, nextCheckAt });
   await admin.from("ai_agent_case_memory").upsert({ company_id: companyId, case_id: agentCase.id, facts: memory, updated_at: new Date().toISOString() }, { onConflict: "case_id" });
   const summary = {
     request: { id: request.id, request_no: request.request_no }, issues: blockers.map((row: Json) => ({ code: row.code, severity: row.severity, summary: row.summary })),
     gap: ctx.cache.analysis?.gap || {}, actions_completed: actions.filter((row) => row.ok && !row.approval_required).map((row) => ({ tool: row.tool, entity_id: row.entity_id, verified: row.verified })),
-    approval_required: approval ? { approval_id: approval.entity_id, recommendation: ctx.cache.recommendation } : null,
+    approval_required: approval ? { approval_id: approval.entity_id, status: approval.approval_status, state: approvalState, recommendation: ctx.cache.recommendation, executor_available: false } : null,
+    safe_state: approvalState || null,
     case_status: caseStatus, next_automatic_review: nextCheckAt,
   };
   const persistedRunStatus = termination === "completed" ? "completed" : termination === "max_steps_reached" ? "blocked" : termination;
   await admin.from("ai_agent_runs").update({ status: persistedRunStatus, termination_reason: termination, result_summary: summary, completed_at: new Date().toISOString() }).eq("id", run.id).eq("company_id", companyId);
-  await admin.from("ai_agent_cases").update({ status: caseStatus, current_summary: `${blockers.length} blocker(s); ${summary.actions_completed.length} verified action(s).`, next_check_at: nextCheckAt, closed_at: caseStatus === "closed" ? new Date().toISOString() : null, closed_reason: caseStatus === "closed" ? "No active blockers" : null, updated_at: new Date().toISOString() }).eq("id", agentCase.id).eq("company_id", companyId);
+  const caseSummary = termination === "approved_awaiting_supported_execution"
+    ? "Approved YELLOW proposal is safely paused until a supported executor exists."
+    : approvalState === "approval_rejected"
+      ? "YELLOW proposal was rejected by an authorized manager; no action was executed."
+      : `${blockers.length} blocker(s); ${summary.actions_completed.length} verified action(s).`;
+  await admin.from("ai_agent_cases").update({ status: caseStatus, current_summary: caseSummary, next_check_at: nextCheckAt, closed_at: caseStatus === "closed" ? new Date().toISOString() : null, closed_reason: caseStatus === "closed" ? "No active blockers" : null, updated_at: new Date().toISOString() }).eq("id", agentCase.id).eq("company_id", companyId);
   return { ok: true, case_id: agentCase.id, run_id: run.id, termination_reason: termination, plan, summary };
 }
 
