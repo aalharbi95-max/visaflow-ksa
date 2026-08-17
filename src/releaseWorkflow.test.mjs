@@ -10,8 +10,18 @@ test("release workflow pins Supabase CLI and uses protected staging/production e
   assert.match(workflow, /version: 2\.109\.1/);
   assert.match(workflow, /- staging\s+[\s\S]*- production/);
   assert.match(workflow, /environment: \$\{\{ inputs\.environment \}\}/);
-  assert.match(workflow, /supabase db push --linked --include-all --dry-run/);
-  assert.match(workflow, /supabase db push --linked --include-all/);
+  assert.match(workflow, /supabase db push --linked --dry-run/);
+  assert.match(workflow, /supabase db push --linked/);
+  assert.doesNotMatch(workflow, /--include-all/);
+});
+
+test("Staging hardening audit is read-only and captures canonical evidence", async () => {
+  const workflow = await read("../.github/workflows/staging-hardening-audit.yml");
+  assert.match(workflow, /environment: staging/);
+  assert.match(workflow, /version: 2\.109\.1/);
+  assert.match(workflow, /supabase migration list --linked/);
+  assert.match(workflow, /node scripts\/supabase-remote-audit\.mjs/);
+  assert.doesNotMatch(workflow, /db push|migration repair|functions deploy/);
 });
 
 test("release workflow deploys only reviewed functions and rejects anonymous callers", async () => {

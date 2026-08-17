@@ -1,0 +1,56 @@
+name: Staging hardening audit
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'codex/release-readiness-20260817'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_AUDIT_OUTPUT: staging-hardening-audit.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate migration inventory
+        run: npm run validate:migrations
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Validate required audit configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+          test -n "$SUPABASE_PROJECT_REF"
+      - name: Link exact Staging project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Capture linked migration history
+        shell: bash
+        run: supabase migration list --linked > staging-migration-list.txt
+      - name: Capture read-only schema and security evidence
+        run: node scripts/supabase-remote-audit.mjs
+      - name: Upload audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-hardening-audit
+          path: |
+            staging-hardening-audit.json
+            staging-migration-list.txt
+          if-no-files-found: error
+          retention-days: 14

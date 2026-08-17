@@ -73,9 +73,9 @@ jobs:
       - name: Inspect migration status
         run: supabase migration list --linked
       - name: Database migration dry-run
-        run: supabase db push --linked --include-all --dry-run
+        run: supabase db push --linked --dry-run
       - name: Apply database migrations deterministically
-        run: supabase db push --linked --include-all
+        run: supabase db push --linked
       - name: Verify migration history
         run: supabase migration list --linked
       - name: Deploy reviewed Edge Functions
