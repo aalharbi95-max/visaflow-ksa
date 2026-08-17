@@ -9,6 +9,8 @@ test("Phase 1 migration defines memory, plans, approvals, RLS, and tenant-derive
   for (const table of ["ai_agent_cases", "ai_agent_runs", "ai_agent_execution_steps", "ai_agent_case_events", "ai_agent_case_memory", "ai_agent_followup_tasks", "ai_agent_approval_requests"]) assert.match(source, new RegExp(`create table if not exists public\\.${table}`));
   assert.match(source, /enable row level security/gi);
   assert.match(source, /revoke all on public\.ai_agent_jobs from public, anon, authenticated/i);
+  assert.match(source, /create table if not exists public\.ai_agent_usage_ledger/i);
+  assert.match(source, /add column if not exists ai_agent_enabled/i);
   assert.match(source, /current_app_user_company_id\(\) is distinct from p_company_id/i);
   assert.match(source, /enqueue_ai_agent_request_review/);
   assert.match(source, /decide_ai_agent_approval/);

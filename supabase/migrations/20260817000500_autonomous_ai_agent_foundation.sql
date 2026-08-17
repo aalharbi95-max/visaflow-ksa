@@ -1,6 +1,60 @@
 -- VisaFlow autonomous AI Agent Phase 1: cases, resumable runs, controlled tools,
 -- approvals, operational memory, and tenant-safe queueing.
 
+-- Keep this migration deployable on Staging baselines that have the original
+-- Agent Worker tables but have not yet received the Professional entitlement
+-- ledger migration. These definitions are identical and remain additive on
+-- environments where the Professional migration already ran.
+alter table public.platform_clients
+  add column if not exists ai_agent_enabled boolean not null default false,
+  add column if not exists ai_agent_plan text not null default 'Standard',
+  add column if not exists ai_agent_trial_start date,
+  add column if not exists ai_agent_trial_end date,
+  add column if not exists ai_agent_monthly_credit_limit bigint not null default 0;
+
+alter table public.platform_clients drop constraint if exists platform_clients_ai_agent_plan_check;
+alter table public.platform_clients
+  add constraint platform_clients_ai_agent_plan_check
+  check (ai_agent_plan in ('Standard', 'Professional', 'Professional Trial'));
+alter table public.platform_clients drop constraint if exists platform_clients_ai_agent_credit_limit_check;
+alter table public.platform_clients
+  add constraint platform_clients_ai_agent_credit_limit_check
+  check (ai_agent_monthly_credit_limit >= 0);
+
+create table if not exists public.ai_agent_usage_ledger (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  run_id uuid,
+  action_key text not null,
+  feature text not null,
+  model_name text not null,
+  input_tokens bigint not null default 0,
+  output_tokens bigint not null default 0,
+  total_tokens bigint not null default 0,
+  credits_debited bigint not null default 0,
+  status text not null default 'Completed',
+  created_at timestamptz not null default now(),
+  constraint ai_agent_usage_nonnegative_check check (
+    input_tokens >= 0 and output_tokens >= 0 and total_tokens >= 0 and credits_debited >= 0
+  )
+);
+
+create unique index if not exists idx_ai_agent_usage_action_key
+  on public.ai_agent_usage_ledger (company_id, action_key);
+create index if not exists idx_ai_agent_usage_company_month
+  on public.ai_agent_usage_ledger (company_id, created_at desc);
+alter table public.ai_agent_usage_ledger enable row level security;
+revoke all on public.ai_agent_usage_ledger from public, anon, authenticated;
+grant all on public.ai_agent_usage_ledger to service_role;
+grant select on public.ai_agent_usage_ledger to authenticated;
+drop policy if exists ai_agent_usage_tenant_select on public.ai_agent_usage_ledger;
+create policy ai_agent_usage_tenant_select
+on public.ai_agent_usage_ledger for select to authenticated
+using (
+  public.is_current_platform_user()
+  or company_id = public.current_app_user_company_id()
+);
+
 alter table public.ai_agent_settings
   add column if not exists allowed_auto_actions jsonb not null default '["send_agency_followup","create_followup_task","escalate_to_manager"]'::jsonb,
   add column if not exists blocked_actions jsonb not null default '[]'::jsonb,
