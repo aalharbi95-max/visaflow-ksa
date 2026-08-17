@@ -24,6 +24,16 @@ test("Staging hardening audit is read-only and captures canonical evidence", asy
   assert.doesNotMatch(workflow, /db push|migration repair|functions deploy/);
 });
 
+test("Staging baseline uses an explicit reviewed repair manifest and never include-all", async () => {
+  const workflow = await read("../.github/workflows/staging-baseline-apply.yml");
+  const runner = await read("../scripts/apply-staging-baseline.mjs");
+  assert.match(workflow, /environment: staging/);
+  assert.match(workflow, /version: 2\.109\.1/);
+  assert.match(runner, /migration", "repair/);
+  assert.match(runner, /db", "push", "--dry-run/);
+  assert.doesNotMatch(`${workflow}\n${runner}`, /--include-all/);
+});
+
 test("release workflow deploys only reviewed functions and rejects anonymous callers", async () => {
   const workflow = await read("../.github/workflows/supabase-release.yml");
   for (const name of [

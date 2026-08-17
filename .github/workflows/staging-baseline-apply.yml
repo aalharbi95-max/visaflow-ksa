@@ -1,0 +1,38 @@
+name: Staging baseline apply
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-baseline-20260817
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.head_ref == 'codex/release-readiness-20260817'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      STAGING_BASELINE_APPLY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run validate:migrations
+      - run: npm run test:release-hardening
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Apply reviewed Staging baseline and missing migrations
+        run: node scripts/apply-staging-baseline.mjs
