@@ -144,8 +144,8 @@ const fixture = await query(`
     (select count(*)::integer from public.ai_agent_approval_requests a where a.case_id=c.id) as approval_count,
     (select allow_auto_agency_emails from public.ai_agent_settings s where s.company_id=c.company_id and s.is_active=true limit 1) as allow_email
   from public.requests r join public.ai_agent_cases c
-    on c.company_id=r.company_id and c.stable_case_key='RECRUITMENT_REQUEST_REVIEW:'||r.id::text
-  where r.request_no='${requestNo}'`);
+    on c.company_id=r.company_id and c.target_type='request' and c.target_id=r.id::text
+  where r.request_no='${requestNo}' and c.goal_type='RECRUITMENT_REQUEST_REVIEW'`);
 assert.equal(fixture.length, 1, "MIRGAB fixture is not unique");
 const { case_id: caseId, company_id: companyId } = fixture[0];
 assert.equal(fixture[0].allow_email, false, "External agency email must remain disabled");
