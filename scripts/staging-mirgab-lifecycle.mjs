@@ -51,7 +51,7 @@ async function invoke(workerSecret, body, expectedStatus = 200) {
 
 // Build one persistent, non-PII QA request from the previously validated tenant.
 // Advisory locking and fixed identifiers make concurrent/replayed CI runs safe.
-await query(`
+const fixture = await query(`
   do $fixture$
   declare
     source_request public.requests%rowtype;
@@ -161,9 +161,7 @@ await query(`
     on conflict(company_id,stable_case_key) do update
     set goal_type=excluded.goal_type,goal=excluded.goal,target_type=excluded.target_type,
       target_id=excluded.target_id,priority=excluded.priority,updated_at=now();
-  end $fixture$;`);
-
-const fixture = await query(`
+  end $fixture$;
   select c.id::text as case_id,c.company_id::text,r.id::text as request_id,
     (select count(*)::integer from public.ai_agent_runs x where x.case_id=c.id) as run_count,
     (select count(*)::integer from public.ai_agent_approval_requests a where a.case_id=c.id) as approval_count,
