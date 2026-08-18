@@ -44,8 +44,13 @@ const repositoryVersions = migrationFiles.map((name) => name.match(/^(\d+)_/)?.[
 const metadata = await management(`/projects/${projectRef}`);
 assert.equal(metadata.id || metadata.ref, projectRef, "Management API returned a different project");
 
-const [remoteMigrations, tables, tenantColumns, hiringRpc, advisor, backups] = await Promise.all([
-  query(`select version::text from supabase_migrations.schema_migrations order by version`),
+const migrationHistoryTable = await query(`
+  select to_regclass('supabase_migrations.schema_migrations') is not null as exists`);
+const remoteMigrations = migrationHistoryTable[0]?.exists === true
+  ? await query(`select version::text from supabase_migrations.schema_migrations order by version`)
+  : [];
+
+const [tables, tenantColumns, hiringRpc, advisor, backups] = await Promise.all([
   query(`
     select c.relname as table_name,c.relrowsecurity as rls_enabled,c.relforcerowsecurity as rls_forced
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
@@ -92,6 +97,7 @@ const backupRows = Array.isArray(backups.backups) ? backups.backups : [];
 const completedBackups = backupRows.filter((backup) => String(backup.status).toUpperCase() === "COMPLETED");
 
 const blockers = [];
+if (migrationHistoryTable[0]?.exists !== true) blockers.push("migration_history_table_missing");
 if (unknownRemoteVersions.length) blockers.push("unknown_remote_migration_versions");
 if (rlsDisabled.length) blockers.push("public_tables_without_rls");
 if (advisorErrors.length) blockers.push("security_advisor_errors");
