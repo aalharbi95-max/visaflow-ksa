@@ -5,12 +5,14 @@ const token = process.env.SUPABASE_ACCESS_TOKEN || "";
 const projectRef = process.env.SUPABASE_PROJECT_REF || "";
 const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const anonKey = process.env.SUPABASE_ANON_KEY || "";
+const workerSecret = process.env.AI_AGENT_WORKER_SECRET || "";
 const requestNo = "REQ-MIRGAB-RH-20260817";
 
 assert.ok(token, "SUPABASE_ACCESS_TOKEN is required");
 assert.match(projectRef, /^[a-z]{20}$/i, "SUPABASE_PROJECT_REF is invalid");
 assert.equal(new URL(supabaseUrl).hostname, `${projectRef}.supabase.co`, "SUPABASE_URL does not match the Staging project");
 assert.ok(anonKey, "SUPABASE_ANON_KEY is required");
+assert.ok(workerSecret, "AI_AGENT_WORKER_SECRET is required");
 
 async function query(sql) {
   const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
@@ -197,14 +199,18 @@ assert.equal(fixture.length, 1, "MIRGAB fixture is not unique");
 const { case_id: caseId, company_id: companyId, request_id: requestId } = fixture[0];
 assert.equal(fixture[0].allow_email, false, "External agency email must remain disabled");
 
-const secretRows = await query(`
-  select decrypted_secret
-  from vault.decrypted_secrets
-  where name='visaflow_ai_interview_worker_secret'
-  limit 2`);
-assert.equal(secretRows.length, 1, "Canonical worker secret is unavailable or ambiguous");
-const workerSecret = String(secretRows[0].decrypted_secret || "");
-assert.ok(workerSecret, "Canonical worker secret is empty");
+// Keep database-scheduled worker calls on the same Staging-only credential.
+await query(`
+  do $vault_sync$
+  declare secret_id uuid;
+  begin
+    select id into secret_id from vault.secrets where name='visaflow_ai_interview_worker_secret' limit 1;
+    if secret_id is null then
+      perform vault.create_secret(${sqlLiteral(workerSecret)},'visaflow_ai_interview_worker_secret','Staging worker authentication');
+    else
+      perform vault.update_secret(secret_id,${sqlLiteral(workerSecret)},'visaflow_ai_interview_worker_secret','Staging worker authentication');
+    end if;
+  end $vault_sync$;`);
 
 const counts = async () => (await query(`
   select
