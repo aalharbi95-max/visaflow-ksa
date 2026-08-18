@@ -214,27 +214,44 @@ await query(`
 
 const counts = async () => (await query(`
   select
-    (select count(*)::integer from public.notification_events where company_id=${sqlLiteral(companyId)}::uuid and dedupe_key like '%'||${sqlLiteral(caseId)}||'%') as notifications,
+    (select count(*)::integer from public.notification_events where company_id=${sqlLiteral(companyId)}::uuid and data->>'case_id'=${sqlLiteral(caseId)}) as notifications,
     (select count(*)::integer from public.ai_agent_followup_tasks where case_id=${sqlLiteral(caseId)}::uuid) as followups,
     (select count(*)::integer from public.ai_agent_approval_requests where case_id=${sqlLiteral(caseId)}::uuid) as approvals`))[0];
 
-if (fixture[0].run_count === 0 && fixture[0].approval_count === 0) {
+const lifecycleState = async () => (await query(`
+  select
+    (select count(*)::integer from public.ai_agent_runs where case_id=${sqlLiteral(caseId)}::uuid) as runs,
+    (select count(*)::integer from public.ai_agent_approval_requests where case_id=${sqlLiteral(caseId)}::uuid) as approvals,
+    (select approval_status from public.ai_agent_approval_requests where case_id=${sqlLiteral(caseId)}::uuid limit 1) as approval_status`))[0];
+
+let state = await lifecycleState();
+assert.ok(state.runs >= 0 && state.runs <= 4, "Existing MIRGAB fixture has unexpected runs");
+if (state.runs === 0) {
+  assert.equal(state.approvals, 0, "Approval exists before the first run");
   const first = await invoke(workerSecret, { case_id: caseId });
   assert.equal(first.ok, true);
   assert.equal(first.termination_reason, "awaiting_human_approval", "First run did not pause for YELLOW approval");
-  const afterFirst = await counts();
-  assert.equal(afterFirst.notifications, 2, "First run did not create exactly two notification business actions");
-  assert.equal(afterFirst.followups, 1, "First run did not create exactly one follow-up task");
-  assert.equal(afterFirst.approvals, 1, "First run did not create exactly one approval");
+  state = await lifecycleState();
+}
+const afterFirst = await counts();
+assert.equal(afterFirst.notifications, 2, "First run did not create exactly two notification business actions");
+assert.equal(afterFirst.followups, 1, "First run did not create exactly one follow-up task");
+assert.equal(afterFirst.approvals, 1, "First run did not create exactly one approval");
 
+if (state.runs === 1) {
+  assert.equal(state.approval_status, "Pending", "Approval changed before pending replay");
   const replay = await invoke(workerSecret, { case_id: caseId });
   assert.equal(replay.termination_reason, "awaiting_human_approval", "Pending replay did not remain paused");
   assert.deepEqual(await counts(), afterFirst, "Pending replay duplicated a business action or approval");
+  state = await lifecycleState();
+}
 
-  const approval = await query(`
-    select id::text from public.ai_agent_approval_requests
+const approval = await query(`
+    select id::text,approval_status from public.ai_agent_approval_requests
     where case_id=${sqlLiteral(caseId)}::uuid and action_type='REASSIGN_REQUEST_QUANTITY'`);
-  assert.equal(approval.length, 1, "Expected exactly one YELLOW approval");
+assert.equal(approval.length, 1, "Expected exactly one YELLOW approval");
+if (approval[0].approval_status === "Pending") {
+  assert.equal(state.runs, 2, "Approval became pending outside the expected replay state");
   const actor = await query(`
     select auth_user_id::text
     from public.users
@@ -249,18 +266,27 @@ if (fixture[0].run_count === 0 && fixture[0].approval_count === 0) {
     set local role authenticated;
     select public.decide_ai_agent_approval(${sqlLiteral(approval[0].id)}::uuid,'approve',null);
     commit;`);
+  state = await lifecycleState();
+}
 
+if (state.runs === 2) {
+  assert.equal(state.approval_status, "Approved", "Resume requires the existing Approved proposal");
   const resumed = await invoke(workerSecret, { case_id: caseId });
   assert.equal(resumed.termination_reason, "approved_awaiting_supported_execution", "Approved proposal did not enter the safe unsupported-executor state");
   assert.deepEqual(await counts(), afterFirst, "Approval resume duplicated a business action or approval");
+  state = await lifecycleState();
+}
 
+if (state.runs === 3) {
+  assert.equal(state.approval_status, "Approved", "Post-resume replay requires the same Approved proposal");
   const postResumeReplay = await invoke(workerSecret, { case_id: caseId });
   assert.equal(postResumeReplay.termination_reason, "approved_awaiting_supported_execution", "Post-resume replay left the safe state");
   assert.deepEqual(await counts(), afterFirst, "Post-resume replay duplicated a business action or approval");
-} else {
-  assert.equal(fixture[0].run_count, 4, "Existing MIRGAB fixture is partial or has unexpected replay runs");
-  assert.equal(fixture[0].approval_count, 1, "Existing MIRGAB fixture has an unexpected approval count");
+  state = await lifecycleState();
 }
+assert.equal(state.runs, 4, "MIRGAB lifecycle did not reach four canonical runs");
+assert.equal(state.approvals, 1, "MIRGAB lifecycle did not preserve exactly one approval");
+assert.equal(state.approval_status, "Approved", "MIRGAB lifecycle did not preserve the Approved state");
 
 const injectedCompanyId = randomUUID();
 const rejected = await invoke(workerSecret, { case_id: caseId, company_id: injectedCompanyId }, 400);
@@ -280,8 +306,8 @@ const evidence = await query(`
     (select count(*)::integer from public.ai_agent_runs where case_id=${sqlLiteral(caseId)}::uuid) as runs,
     (select count(*)::integer from public.ai_agent_runs where case_id=${sqlLiteral(caseId)}::uuid and status='failed') as failed_runs,
     (select count(*)::integer from public.ai_agent_execution_steps where case_id=${sqlLiteral(caseId)}::uuid and status='failed') as failed_steps,
-    (select count(*)::integer from public.notification_events where company_id=${sqlLiteral(companyId)}::uuid and dedupe_key like '%'||${sqlLiteral(caseId)}||'%') as notifications,
-    (select count(distinct dedupe_key)::integer from public.notification_events where company_id=${sqlLiteral(companyId)}::uuid and dedupe_key like '%'||${sqlLiteral(caseId)}||'%') as notification_keys,
+    (select count(*)::integer from public.notification_events where company_id=${sqlLiteral(companyId)}::uuid and data->>'case_id'=${sqlLiteral(caseId)}) as notifications,
+    (select count(distinct dedupe_key)::integer from public.notification_events where company_id=${sqlLiteral(companyId)}::uuid and data->>'case_id'=${sqlLiteral(caseId)}) as notification_keys,
     (select count(*)::integer from public.ai_agent_followup_tasks where case_id=${sqlLiteral(caseId)}::uuid) as followups,
     (select count(distinct stable_action_key)::integer from public.ai_agent_followup_tasks where case_id=${sqlLiteral(caseId)}::uuid) as followup_keys,
     (select count(*)::integer from proposed) as approvals,
