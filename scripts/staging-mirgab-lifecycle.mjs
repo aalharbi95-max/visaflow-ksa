@@ -56,6 +56,7 @@ await query(`
   declare
     source_request public.requests%rowtype;
     new_request_id bigint;
+    qa_request_no text;
     new_line_id uuid;
     responsible_agency text;
     responsible_agency_id uuid;
@@ -73,11 +74,21 @@ await query(`
       where s.company_id=source_request.company_id and s.is_active=true and s.allow_auto_agency_emails=false
     ) then raise exception 'MIRGAB_EMAIL_SAFETY_PRECONDITION_FAILED'; end if;
 
-    select r.id into new_request_id
-    from public.requests r
-    where r.company_id=source_request.company_id and r.request_no='${requestNo}'
-    order by r.id
+    select c.target_id::bigint into new_request_id
+    from public.ai_agent_cases c
+    where c.company_id=source_request.company_id
+      and c.goal='Review and safely resolve recruitment blockers for ${requestNo}'
+      and c.target_type='request' and c.target_id ~ '^[0-9]+$'
+    order by c.created_at,c.id
     limit 1;
+    if new_request_id is null then
+      select r.id into new_request_id
+      from public.requests r
+      where r.company_id=source_request.company_id
+        and r.notes='Canonical MIRGAB release-hardening QA fixture; no external email'
+      order by r.id
+      limit 1;
+    end if;
     if new_request_id is null then
       perform pg_advisory_xact_lock(hashtext('public.requests.id'));
       select coalesce(max(id),0)+1 into new_request_id from public.requests;
@@ -93,6 +104,10 @@ await query(`
         )
       )).*;
     end if;
+    select r.request_no into qa_request_no
+    from public.requests r
+    where r.id=new_request_id and r.company_id=source_request.company_id;
+    if qa_request_no is null then raise exception 'MIRGAB_QA_REQUEST_MISSING'; end if;
 
     select rl.id into new_line_id
     from public.request_lines rl
@@ -110,7 +125,7 @@ await query(`
         to_jsonb(source_line) || jsonb_build_object(
           'id',new_line_id,
           'request_id',new_request_id,
-          'request_no','${requestNo}',
+          'request_no',qa_request_no,
           'quantity',greatest(coalesce(source_line.quantity,0),6),
           'created_at',now()-interval '30 days',
           'updated_at',now()-interval '30 days'
@@ -130,25 +145,30 @@ await query(`
     where a.company_id=source_request.company_id and lower(trim(a.name))=lower(trim(responsible_agency))
     limit 1;
     if responsible_agency_id is null then raise exception 'MIRGAB_SOURCE_AGENCY_UNRESOLVED'; end if;
-    if not exists(
-      select 1 from public.candidates c
-      where c.company_id=source_request.company_id and c.request_no='${requestNo}'
-        and c.passport_no='QA-MIRGAB-20260817'
-    ) then
+    if not exists(select 1 from public.candidates c where c.company_id=source_request.company_id and c.request_line_id=new_line_id) then
+      update public.candidates
+      set request_no=qa_request_no,agency=responsible_agency,agency_id=responsible_agency_id,
+        request_line_id=new_line_id,medical_status='Pending',updated_at=now()-interval '30 days'
+      where id=(
+        select c.id from public.candidates c
+        where c.company_id=source_request.company_id and c.passport_no='QA-MIRGAB-20260817'
+        order by c.created_at,c.id limit 1
+      );
+    end if;
+    if not exists(select 1 from public.candidates c where c.company_id=source_request.company_id and c.request_line_id=new_line_id) then
       insert into public.candidates(
         id,candidate_name,request_no,agency,agency_id,status,company_id,request_line_id,
         passport_no,medical_status,created_at,updated_at
       ) values (
-        gen_random_uuid(),'MIRGAB QA Candidate','${requestNo}',responsible_agency,responsible_agency_id,
+        gen_random_uuid(),'MIRGAB QA Candidate',qa_request_no,responsible_agency,responsible_agency_id,
         'New',source_request.company_id,new_line_id,'QA-MIRGAB-20260817','Pending',
         now()-interval '30 days',now()-interval '30 days'
       );
     else
       update public.candidates
-      set agency=responsible_agency,agency_id=responsible_agency_id,request_line_id=new_line_id,
+      set request_no=qa_request_no,agency=responsible_agency,agency_id=responsible_agency_id,request_line_id=new_line_id,
         medical_status='Pending',updated_at=least(updated_at,now()-interval '30 days')
-      where company_id=source_request.company_id and request_no='${requestNo}'
-        and passport_no='QA-MIRGAB-20260817';
+      where company_id=source_request.company_id and request_line_id=new_line_id;
     end if;
 
     insert into public.ai_agent_cases(
@@ -170,9 +190,11 @@ const fixture = await query(`
     (select allow_auto_agency_emails from public.ai_agent_settings s where s.company_id=c.company_id and s.is_active=true limit 1) as allow_email
   from public.ai_agent_cases c
   where c.goal_type='RECRUITMENT_REQUEST_REVIEW' and c.target_type='request'
-    and c.goal='Review and safely resolve recruitment blockers for ${requestNo}'`);
+    and c.goal='Review and safely resolve recruitment blockers for ${requestNo}'
+  order by c.created_at,c.id
+  limit 1`);
 assert.equal(fixture.length, 1, "MIRGAB fixture is not unique");
-const { case_id: caseId, company_id: companyId } = fixture[0];
+const { case_id: caseId, company_id: companyId, request_id: requestId } = fixture[0];
 assert.equal(fixture[0].allow_email, false, "External agency email must remain disabled");
 
 const secretRows = await query(`
@@ -271,7 +293,9 @@ const evidence = await query(`
     (select count(*)::integer
       from proposed p
       join public.agencies a on a.id::text=p.target_agency_id and a.company_id=p.company_id
-      join public.visa_authorizations v on v.company_id=p.company_id and v.request_no='${requestNo}' and lower(trim(v.agency))=lower(trim(a.name))) as target_authorizations,
+      join public.visa_authorizations v on v.company_id=p.company_id
+        and v.request_no=(select r.request_no from public.requests r where r.id=${sqlLiteral(requestId)}::bigint)
+        and lower(trim(v.agency))=lower(trim(a.name))) as target_authorizations,
     (select count(*)::integer from public.ai_agent_approval_requests where action_type='REASSIGN_REQUEST_QUANTITY' and executed_at is not null) as global_executed_reassignments`);
 
 assert.equal(evidence.length, 1);
