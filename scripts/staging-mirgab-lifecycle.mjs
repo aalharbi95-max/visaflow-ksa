@@ -62,8 +62,6 @@ await query(`
     source_line record;
   begin
     perform pg_advisory_xact_lock(hashtext('${requestNo}'));
-    if exists(select 1 from public.requests where request_no='${requestNo}') then return; end if;
-
     select * into source_request
     from public.requests
     where request_no='REQ-2026-0006'
@@ -75,23 +73,36 @@ await query(`
       where s.company_id=source_request.company_id and s.is_active=true and s.allow_auto_agency_emails=false
     ) then raise exception 'MIRGAB_EMAIL_SAFETY_PRECONDITION_FAILED'; end if;
 
-    perform pg_advisory_xact_lock(hashtext('public.requests.id'));
-    select coalesce(max(id),0)+1 into new_request_id from public.requests;
-    insert into public.requests
-    select (jsonb_populate_record(
-      null::public.requests,
-      to_jsonb(source_request) || jsonb_build_object(
-        'id',new_request_id,
-        'request_no','${requestNo}',
-        'notes','Canonical MIRGAB release-hardening QA fixture; no external email',
-        'created_at',now()-interval '30 days',
-        'updated_at',now()-interval '30 days'
-      )
-    )).*;
+    select r.id into new_request_id
+    from public.requests r
+    where r.company_id=source_request.company_id and r.request_no='${requestNo}'
+    order by r.id
+    limit 1;
+    if new_request_id is null then
+      perform pg_advisory_xact_lock(hashtext('public.requests.id'));
+      select coalesce(max(id),0)+1 into new_request_id from public.requests;
+      insert into public.requests
+      select (jsonb_populate_record(
+        null::public.requests,
+        to_jsonb(source_request) || jsonb_build_object(
+          'id',new_request_id,
+          'request_no','${requestNo}',
+          'notes','Canonical MIRGAB release-hardening QA fixture; no external email',
+          'created_at',now()-interval '30 days',
+          'updated_at',now()-interval '30 days'
+        )
+      )).*;
+    end if;
 
-    for source_line in
-      select * from public.request_lines where request_id=source_request.id order by line_no limit 1
-    loop
+    select rl.id into new_line_id
+    from public.request_lines rl
+    where rl.company_id=source_request.company_id and rl.request_id=new_request_id
+    order by rl.line_no
+    limit 1;
+    if new_line_id is null then
+      select * into source_line
+      from public.request_lines where request_id=source_request.id order by line_no limit 1;
+      if source_line.id is null then raise exception 'MIRGAB_SOURCE_LINE_MISSING'; end if;
       new_line_id := gen_random_uuid();
       insert into public.request_lines
       select (jsonb_populate_record(
@@ -105,8 +116,7 @@ await query(`
           'updated_at',now()-interval '30 days'
         )
       )).*;
-    end loop;
-    if new_line_id is null then raise exception 'MIRGAB_SOURCE_LINE_MISSING'; end if;
+    end if;
 
     select v.agency into responsible_agency
     from public.visa_authorizations v
@@ -120,14 +130,26 @@ await query(`
     where a.company_id=source_request.company_id and lower(trim(a.name))=lower(trim(responsible_agency))
     limit 1;
     if responsible_agency_id is null then raise exception 'MIRGAB_SOURCE_AGENCY_UNRESOLVED'; end if;
-    insert into public.candidates(
-      id,candidate_name,request_no,agency,agency_id,status,company_id,request_line_id,
-      passport_no,medical_status,created_at,updated_at
-    ) values (
-      gen_random_uuid(),'MIRGAB QA Candidate','${requestNo}',responsible_agency,responsible_agency_id,
-      'New',source_request.company_id,new_line_id,'QA-MIRGAB-20260817','Pending',
-      now()-interval '30 days',now()-interval '30 days'
-    );
+    if not exists(
+      select 1 from public.candidates c
+      where c.company_id=source_request.company_id and c.request_no='${requestNo}'
+        and c.passport_no='QA-MIRGAB-20260817'
+    ) then
+      insert into public.candidates(
+        id,candidate_name,request_no,agency,agency_id,status,company_id,request_line_id,
+        passport_no,medical_status,created_at,updated_at
+      ) values (
+        gen_random_uuid(),'MIRGAB QA Candidate','${requestNo}',responsible_agency,responsible_agency_id,
+        'New',source_request.company_id,new_line_id,'QA-MIRGAB-20260817','Pending',
+        now()-interval '30 days',now()-interval '30 days'
+      );
+    else
+      update public.candidates
+      set agency=responsible_agency,agency_id=responsible_agency_id,request_line_id=new_line_id,
+        medical_status='Pending',updated_at=least(updated_at,now()-interval '30 days')
+      where company_id=source_request.company_id and request_no='${requestNo}'
+        and passport_no='QA-MIRGAB-20260817';
+    end if;
 
     insert into public.ai_agent_cases(
       company_id,goal_type,goal,target_type,target_id,status,priority,stable_case_key
@@ -135,7 +157,10 @@ await query(`
       source_request.company_id,'RECRUITMENT_REQUEST_REVIEW',
       'Review and safely resolve recruitment blockers for ${requestNo}',
       'request',new_request_id::text,'open','High','RECRUITMENT_REQUEST_REVIEW:'||new_request_id::text
-    );
+    )
+    on conflict(company_id,stable_case_key) do update
+    set goal_type=excluded.goal_type,goal=excluded.goal,target_type=excluded.target_type,
+      target_id=excluded.target_id,priority=excluded.priority,updated_at=now();
   end $fixture$;`);
 
 const fixture = await query(`
