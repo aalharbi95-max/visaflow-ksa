@@ -51,7 +51,7 @@ async function invoke(workerSecret, body, expectedStatus = 200) {
 
 // Build one persistent, non-PII QA request from the previously validated tenant.
 // Advisory locking and fixed identifiers make concurrent/replayed CI runs safe.
-const fixture = await query(`
+await query(`
   do $fixture$
   declare
     source_request public.requests%rowtype;
@@ -161,14 +161,16 @@ const fixture = await query(`
     on conflict(company_id,stable_case_key) do update
     set goal_type=excluded.goal_type,goal=excluded.goal,target_type=excluded.target_type,
       target_id=excluded.target_id,priority=excluded.priority,updated_at=now();
-  end $fixture$;
-  select c.id::text as case_id,c.company_id::text,r.id::text as request_id,
+  end $fixture$;`);
+
+const fixture = await query(`
+  select c.id::text as case_id,c.company_id::text,c.target_id as request_id,
     (select count(*)::integer from public.ai_agent_runs x where x.case_id=c.id) as run_count,
     (select count(*)::integer from public.ai_agent_approval_requests a where a.case_id=c.id) as approval_count,
     (select allow_auto_agency_emails from public.ai_agent_settings s where s.company_id=c.company_id and s.is_active=true limit 1) as allow_email
-  from public.requests r join public.ai_agent_cases c
-    on c.company_id=r.company_id and c.target_type='request' and c.target_id=r.id::text
-  where r.request_no='${requestNo}' and c.goal_type='RECRUITMENT_REQUEST_REVIEW'`);
+  from public.ai_agent_cases c
+  where c.goal_type='RECRUITMENT_REQUEST_REVIEW' and c.target_type='request'
+    and c.goal='Review and safely resolve recruitment blockers for ${requestNo}'`);
 assert.equal(fixture.length, 1, "MIRGAB fixture is not unique");
 const { case_id: caseId, company_id: companyId } = fixture[0];
 assert.equal(fixture[0].allow_email, false, "External agency email must remain disabled");
