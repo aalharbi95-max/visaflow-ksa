@@ -1,0 +1,144 @@
+import assert from "node:assert/strict";
+import { readdir, writeFile } from "node:fs/promises";
+
+const token = process.env.SUPABASE_ACCESS_TOKEN || "";
+const projectRef = process.env.SUPABASE_PROJECT_REF || "";
+const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
+const output = process.env.SUPABASE_PREFLIGHT_OUTPUT || "production-preflight.json";
+const expectedProductionRef = "zeocbftriydodzfgixjv";
+const stagingRef = "iijhdilfzndqlguefipn";
+
+assert.ok(token, "SUPABASE_ACCESS_TOKEN is required");
+assert.equal(projectRef, expectedProductionRef, "Production project identity mismatch");
+assert.notEqual(projectRef, stagingRef, "Refusing to audit Staging as Production");
+assert.equal(new URL(supabaseUrl).hostname, `${projectRef}.supabase.co`, "Production URL/ref mismatch");
+
+async function management(path) {
+  const response = await fetch(`https://api.supabase.com/v1${path}`, {
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  });
+  if (!response.ok) throw new Error(`Management API ${path} failed with HTTP ${response.status}`);
+  return response.json();
+}
+
+async function query(sql) {
+  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ query: sql }),
+  });
+  if (!response.ok) throw new Error(`Production read-only query failed with HTTP ${response.status}`);
+  return response.json();
+}
+
+function identifier(value) {
+  assert.match(value, /^[a-z_][a-z0-9_]*$/i, "Unsafe catalog identifier");
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+const migrationFiles = (await readdir("supabase/migrations"))
+  .filter((name) => /^\d+_.+\.sql$/.test(name))
+  .sort();
+const repositoryVersions = migrationFiles.map((name) => name.match(/^(\d+)_/)?.[1]).filter(Boolean);
+
+const metadata = await management(`/projects/${projectRef}`);
+assert.equal(metadata.id || metadata.ref, projectRef, "Management API returned a different project");
+
+const [remoteMigrations, tables, tenantColumns, hiringRpc, advisor, backups] = await Promise.all([
+  query(`select version::text from supabase_migrations.schema_migrations order by version`),
+  query(`
+    select c.relname as table_name,c.relrowsecurity as rls_enabled,c.relforcerowsecurity as rls_forced
+    from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relkind in ('r','p') order by c.relname`),
+  query(`
+    select table_name,column_name,is_nullable
+    from information_schema.columns
+    where table_schema='public' and column_name in ('company_id','agency_id')
+    order by table_name,column_name`),
+  query(`
+    select count(*)::integer as count
+    from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname='list_company_hiring_pipeline'`),
+  management(`/projects/${projectRef}/advisors/security`),
+  management(`/projects/${projectRef}/database/backups`),
+]);
+
+const nullAndOrphanCounts = [];
+for (const column of tenantColumns) {
+  const parent = column.column_name === "company_id" ? "companies" : "agencies";
+  const rows = await query(`
+    select
+      count(*) filter(where t.${identifier(column.column_name)} is null)::integer as null_count,
+      count(*) filter(where t.${identifier(column.column_name)} is not null and p.id is null)::integer as orphan_count
+    from public.${identifier(column.table_name)} t
+    left join public.${identifier(parent)} p on p.id=t.${identifier(column.column_name)}`);
+  nullAndOrphanCounts.push({
+    table_name: column.table_name,
+    column_name: column.column_name,
+    nullable: column.is_nullable === "YES",
+    null_count: rows[0]?.null_count || 0,
+    orphan_count: rows[0]?.orphan_count || 0,
+  });
+}
+
+const remoteVersions = remoteMigrations.map((row) => String(row.version));
+const unknownRemoteVersions = remoteVersions.filter((version) => !repositoryVersions.includes(version));
+const pendingVersions = repositoryVersions.filter((version) => !remoteVersions.includes(version));
+const rlsDisabled = tables.filter((row) => row.rls_enabled !== true).map((row) => row.table_name);
+const advisorErrors = (advisor.lints || []).filter((lint) => String(lint.level || lint.severity).toUpperCase() === "ERROR")
+  .map((lint) => ({ name: lint.name || lint.code || "unknown", level: lint.level || lint.severity || "ERROR" }));
+const tenantBlockers = nullAndOrphanCounts.filter((row) => row.orphan_count > 0 || row.null_count > 0);
+const backupRows = Array.isArray(backups.backups) ? backups.backups : [];
+const completedBackups = backupRows.filter((backup) => String(backup.status).toUpperCase() === "COMPLETED");
+
+const blockers = [];
+if (unknownRemoteVersions.length) blockers.push("unknown_remote_migration_versions");
+if (rlsDisabled.length) blockers.push("public_tables_without_rls");
+if (advisorErrors.length) blockers.push("security_advisor_errors");
+if (tenantBlockers.length) blockers.push("null_or_orphan_tenant_references");
+if (hiringRpc[0]?.count !== 1) blockers.push("canonical_hiring_pipeline_rpc_missing");
+if (!completedBackups.length && backups.pitr_enabled !== true) blockers.push("no_completed_backup_or_pitr");
+
+const report = {
+  captured_at: new Date().toISOString(),
+  project: {
+    ref: projectRef,
+    name: metadata.name || null,
+    region: metadata.region || null,
+    status: metadata.status || null,
+    url: supabaseUrl,
+    staging_ref_rejected: projectRef !== stagingRef,
+  },
+  migrations: {
+    repository_count: repositoryVersions.length,
+    remote_count: remoteVersions.length,
+    pending_count: pendingVersions.length,
+    pending_versions: pendingVersions,
+    unknown_remote_versions: unknownRemoteVersions,
+  },
+  security: {
+    public_table_count: tables.length,
+    rls_disabled: rlsDisabled,
+    advisor_error_count: advisorErrors.length,
+    advisor_errors: advisorErrors,
+  },
+  tenant_integrity: {
+    checked_columns: nullAndOrphanCounts.length,
+    blockers: tenantBlockers,
+  },
+  hiring_pipeline_rpc_count: hiringRpc[0]?.count || 0,
+  backups: {
+    pitr_enabled: backups.pitr_enabled === true,
+    walg_enabled: backups.walg_enabled === true,
+    completed_count: completedBackups.length,
+    latest_completed_at: completedBackups.map((backup) => backup.inserted_at).filter(Boolean).sort().at(-1) || null,
+  },
+  blockers,
+};
+
+await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+console.log(`Production preflight captured: ${remoteVersions.length}/${repositoryVersions.length} migrations, ${rlsDisabled.length} tables without RLS, ${advisorErrors.length} Advisor errors, ${tenantBlockers.length} tenant-integrity blockers, ${completedBackups.length} completed backups.`);
+if (blockers.length) {
+  console.error(`Production preflight blockers: ${blockers.join(", ")}`);
+  process.exit(1);
+}
