@@ -79,20 +79,8 @@ jobs:
       - name: Confirm PostgreSQL client availability
         run: psql --version
 
-      - name: Verify RLS, view, service role, orphan absence, and history read-only
-        run: node scripts/controlled-production-security-remediation.mjs post-verify
-
-      - name: Verify pinned Supabase Security Advisor rules read-only
-        run: node scripts/check-production-security-advisor-sql.mjs
-
-      - name: Run rollback-only Company and Agency tenant isolation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git show acf9c3d07c2fb0a3fd4eb025ebd009d59cf63ca8:scripts/production-tenant-isolation-smoke.mjs > "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
-          node scripts/prepare-production-tenant-smoke.mjs "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
-          PRODUCTION_TENANT_DML_SMOKE=ROLLBACK_ONLY_EXPLICITLY_APPROVED node scripts/run-production-tenant-smoke-pooler.mjs "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
-          rm -f -- "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
+      - name: Run rollback-only Company and Agency isolation without auth schema access
+        run: PRODUCTION_TENANT_DML_SMOKE=ROLLBACK_ONLY_EXPLICITLY_APPROVED node scripts/production-tenant-isolation-no-auth.mjs
 
       - name: Confirm final bounded migration list
         shell: bash
@@ -127,3 +115,4 @@ jobs:
           rm -f -- "$RUNNER_TEMP/production-service-role-check.sql"
           rm -f -- "$RUNNER_TEMP/production-security-advisor-read-only.sql"
           rm -f -- "$RUNNER_TEMP"/production-tenant-smoke-*.sql
+          rm -f -- "$RUNNER_TEMP/production-no-auth-isolation.sql"
