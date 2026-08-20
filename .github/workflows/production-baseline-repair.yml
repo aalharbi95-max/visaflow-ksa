@@ -59,7 +59,7 @@ jobs:
           test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
           test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
           test "${{ inputs.confirm_migration_version }}" = "20260820000100"
-          test "${{ inputs.confirm_reviewed_sha }}" = "71c9db1e1719d8c2e62f4ff226bbb7307ea6d941"
+          test "${{ inputs.confirm_reviewed_sha }}" = "7fdf417c9dda3a9b4545ad33672e2e90d0f6a780"
           test "$(gh api repos/aalharbi95-max/visaflow-ksa/pulls/53 --jq .head.sha)" = "${{ inputs.confirm_reviewed_sha }}"
           test "${{ inputs.confirm_backup_artifact_id }}" = "9426185634"
           git cat-file -e "${{ inputs.confirm_reviewed_sha }}^{commit}"
