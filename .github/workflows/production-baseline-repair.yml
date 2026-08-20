@@ -1,4 +1,4 @@
-name: Production baseline repair
+name: Controlled Production security remediation
 
 on:
   workflow_dispatch:
@@ -7,48 +7,88 @@ on:
         description: Exact Production project ref
         required: true
         type: string
+      confirm_migration_version:
+        description: The only migration authorized to apply
+        required: true
+        type: string
+      confirm_commit_sha:
+        description: Exact reviewed commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: controlled-production-security-remediation
+  cancel-in-progress: false
+
 jobs:
-  repair:
+  remediate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     environment: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      PRODUCTION_BASELINE_REPAIR: "true"
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      PRODUCTION_SECURITY_REMEDIATION: APPLY_20260820000100_ONLY
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out the exact reviewed revision
+        uses: actions/checkout@v4
         with:
-          node-version: 22
-          cache: npm
-      - name: Validate exact Production identity and explicit dispatch input
+          ref: ${{ github.sha }}
+
+      - name: Validate exact Production identity and authorization boundary
         shell: bash
         run: |
           set -euo pipefail
+          test "${{ github.ref_name }}" = "codex/release-readiness-20260817"
           test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
           test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
+          test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
+          test "${{ inputs.confirm_migration_version }}" = "20260820000100"
+          test "${{ inputs.confirm_commit_sha }}" = "${{ github.sha }}"
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
-      - uses: supabase/setup-cli@v1
+          test -s supabase/migrations/20260820000100_production_security_alignment.sql
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
         with:
           version: 2.109.1
-      - name: Repair reviewed history and verify bounded dry-run
-        run: node scripts/apply-production-baseline-repair.mjs
-      - name: Retry Production Security Advisor read-only
-        run: node scripts/check-production-security-advisor.mjs
-      - name: Upload version-only repair evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-baseline-repair-evidence
-          path: |
-            production-migration-list-after-repair.txt
-            production-migration-dry-run-after-repair.txt
-          if-no-files-found: warn
-          retention-days: 1
+
+      - name: Run exact read-only prechecks and apply only 20260820000100
+        run: node scripts/apply-production-security-remediation.mjs
+
+      - name: Verify Security Advisor has no Critical, High, or Error findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if node scripts/check-production-security-advisor.mjs; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then sleep 15; fi
+          done
+          exit 1
+
+      - name: Run transactional Company and Agency tenant-isolation validation
+        run: node scripts/staging-security-smoke.mjs
+
+      - name: Confirm exact migration history after all validations
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/supabase-pooler-cli.mjs migration list > "$RUNNER_TEMP/production-migration-list.txt" 2>&1
+          node - "$RUNNER_TEMP/production-migration-list.txt" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const text = readFileSync(process.argv[2], 'utf8');
+          const rows = text.split(/\r?\n/).map((line) => line.split('|'));
+          const status = new Map(rows.filter((parts) => parts.length >= 2).map(([local, remote]) => [local.match(/\d{14}/)?.[0], remote.match(/\d{14}/)?.[0]]));
+          if (status.get('20260820000100') !== '20260820000100') throw new Error('20260820000100 is not applied');
+          if (status.get('20260804000200')) throw new Error('20260804000200 was unexpectedly applied');
+          console.log('Final migration history PASS: 20260820000100 applied; 20260804000200 pending.');
+          NODE
