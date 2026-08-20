@@ -14,11 +14,19 @@ assert.notEqual(projectRef, stagingRef, "Refusing to audit Staging as Production
 assert.equal(new URL(supabaseUrl).hostname, `${projectRef}.supabase.co`, "Production URL/ref mismatch");
 
 async function management(path) {
-  const response = await fetch(`https://api.supabase.com/v1${path}`, {
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-  });
-  if (!response.ok) throw new Error(`Management API ${path} failed with HTTP ${response.status}`);
-  return response.json();
+  const retryableStatuses = new Set([408, 429, 500, 502, 503, 504, 522, 524, 544]);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(`https://api.supabase.com/v1${path}`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+    if (response.ok) return response.json();
+    if (!retryableStatuses.has(response.status) || attempt === 3) {
+      throw new Error(`Management API ${path} failed with HTTP ${response.status} after ${attempt} attempt(s)`);
+    }
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+  }
+  throw new Error(`Management API ${path} retry loop exited unexpectedly`);
 }
 
 async function query(sql) {
