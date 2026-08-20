@@ -47,7 +47,10 @@ const advisorResult = spawnSync("supabase", [
 ], {
   encoding: "utf8",
   shell: false,
-  env: process.env,
+  // Supabase CLI 2.109.1 does not propagate the hosted PostgREST schema list
+  // when using --db-url. Set it for this read-only session so API-exposure
+  // lints match the hosted Security Advisor instead of silently false-passing.
+  env: { ...process.env, PGOPTIONS: "-c pgrst.db_schemas=public" },
   maxBuffer: 10 * 1024 * 1024,
 });
 if (advisorResult.error) throw advisorResult.error;
