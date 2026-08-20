@@ -77,3 +77,20 @@ test("Production baseline classification keeps schema evidence ephemeral and ver
   assert.match(classifier, /schema_dump_persisted: false/);
   assert.doesNotMatch(classifier, /definition|pg_get_functiondef/);
 });
+
+test("Production baseline repair is manual, bounded, and never applies migration SQL", async () => {
+  const workflow = await read("../.github/workflows/production-baseline-repair.yml");
+  const runner = await read("../scripts/apply-production-baseline-repair.mjs");
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /production-baseline-repair/);
+  assert.doesNotMatch(workflow, /push:/);
+  assert.match(workflow, /environment: Production/);
+  assert.match(workflow, /confirm_project_ref/);
+  assert.match(runner, /migration", "repair"/);
+  assert.match(runner, /db", "push", "--dry-run", "--include-all"/);
+  assert.doesNotMatch(runner, /db", "push"\](?!.*--dry-run)/);
+  assert.match(runner, /assert\.deepEqual\(pending, missing/);
+  assert.match(runner, /assert\.deepEqual\(proposed, missing/);
+  assert.match(workflow, /check-production-security-advisor\.mjs/);
+  assert.doesNotMatch(workflow, /functions deploy/);
+});
