@@ -67,7 +67,7 @@ const directCounts = (await query(`
 assert.equal(directCounts.companies, 0, "Orphan company unexpectedly exists");
 
 const companyColumns = await query(`
-  select columns.table_name
+  select columns.table_name,columns.data_type,columns.udt_name
   from information_schema.columns columns
   join information_schema.tables tables
     on tables.table_schema=columns.table_schema and tables.table_name=columns.table_name
@@ -77,8 +77,16 @@ const companyColumns = await query(`
   order by columns.table_name`);
 const companyTables = companyColumns.map((row) => String(row.table_name));
 companyTables.forEach(identifier);
-const referenceSql = companyTables.map((table) =>
-  `select '${table}'::text as table_name,count(*)::integer as match_count from public.${identifier(table)} where company_id::text='${companyId}'`).join(" union all ");
+const referenceSql = companyColumns.map((row) => {
+  const table = String(row.table_name);
+  if (row.udt_name === "uuid") {
+    return `select '${table}'::text as table_name,count(*)::integer as match_count from public.${identifier(table)} where company_id='${companyId}'::uuid`;
+  }
+  if (["text", "character varying", "character"].includes(String(row.data_type))) {
+    return `select '${table}'::text as table_name,count(*)::integer as match_count from public.${identifier(table)} where company_id='${companyId}'`;
+  }
+  return `select '${table}'::text as table_name,0::integer as match_count`;
+}).join(" union all ");
 const references = referenceSql ? await query(referenceSql) : [];
 const positiveReferences = references.filter((row) => Number(row.match_count) > 0);
 const aiAgentReferences = positiveReferences.filter((row) =>
