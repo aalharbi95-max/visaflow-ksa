@@ -63,3 +63,17 @@ test("release workflow deploys only reviewed functions and rejects anonymous cal
   assert.match(workflow, /test "\$status" = "401" \|\| test "\$status" = "403"/);
   assert.doesNotMatch(workflow, /echo.*SUPABASE_(?:ACCESS_TOKEN|DB_PASSWORD|ANON_KEY)/i);
 });
+
+test("Production baseline classification keeps schema evidence ephemeral and version-only", async () => {
+  const workflow = await read("../.github/workflows/production-baseline-classify.yml");
+  const classifier = await read("../scripts/classify-production-migrations.mjs");
+  assert.match(workflow, /environment: Production/);
+  assert.match(workflow, /PRODUCTION_SCHEMA_DUMP: \$\{\{ runner\.temp \}\}/);
+  assert.match(workflow, /db dump --schema public/);
+  assert.match(workflow, /rm -f -- "\$PRODUCTION_SCHEMA_DUMP"/);
+  assert.doesNotMatch(workflow, /path:\s*production-schema\.sql|path:\s*\$\{\{ runner\.temp \}\}/);
+  assert.doesNotMatch(workflow, /migration repair|db push|functions deploy/);
+  assert.match(classifier, /assert\.equal\(files\.length, 76/);
+  assert.match(classifier, /schema_dump_persisted: false/);
+  assert.doesNotMatch(classifier, /definition|pg_get_functiondef/);
+});
