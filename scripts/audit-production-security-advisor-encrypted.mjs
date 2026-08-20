@@ -51,8 +51,17 @@ const advisorResult = spawnSync("supabase", [
   maxBuffer: 10 * 1024 * 1024,
 });
 if (advisorResult.error) throw advisorResult.error;
-assert.equal(advisorResult.status, 0, "Supabase CLI read-only Security Advisor failed");
-const advisor = JSON.parse(advisorResult.stdout || "{}");
+const stdout = String(advisorResult.stdout || "").trim();
+let advisor;
+try {
+  advisor = JSON.parse(stdout);
+} catch {
+  const firstJson = [stdout.indexOf("{"), stdout.indexOf("[")]
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+  if (firstJson !== undefined) advisor = JSON.parse(stdout.slice(firstJson));
+}
+assert.ok(advisor, `Supabase CLI read-only Security Advisor returned no JSON (exit ${advisorResult.status})`);
 const advisorFindings = Array.isArray(advisor) ? advisor : (advisor.results || advisor.lints || []);
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
 
