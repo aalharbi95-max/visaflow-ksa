@@ -167,7 +167,7 @@ begin
 
   select count(*) into v_count
   from public.marketplace_deal_workers child
-  left join public.marketplace_deals parent on parent.id = child.deal_id
+  left join public.marketplace_deals parent on parent.id = child.deal_id::text
   where child.deal_id is not null
     and (parent.id is null or parent.company_id is distinct from child.company_id);
   if v_count > 0 then
