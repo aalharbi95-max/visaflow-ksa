@@ -1,138 +1,81 @@
-name: One-time encrypted Production logical backup
+name: Production preflight
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirm_project_ref:
-        description: Exact Production project ref
-        required: true
-        type: string
-      confirm_commit_sha:
-        description: Exact reviewed commit SHA
-        required: true
-        type: string
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  backup:
+  preflight:
+    if: github.head_ref == 'codex/release-readiness-20260817'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     environment: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      EXPECTED_PROJECT_REF: zeocbftriydodzfgixjv
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PREFLIGHT_OUTPUT: production-preflight.json
     steps:
-      - name: Check out the exact reviewed revision
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          ref: ${{ github.sha }}
-
-      - name: Validate exact Production identity and invocation
+          node-version: 22
+          cache: npm
+      - name: Validate exact Production configuration
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ github.ref_name }}" = "codex/release-readiness-20260817"
-          test "${{ inputs.confirm_project_ref }}" = "$EXPECTED_PROJECT_REF"
-          test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
-          test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
-          test "${{ inputs.confirm_commit_sha }}" = "${{ github.sha }}"
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
-          test -s .github/production-backup-public-cert.pem
-
+          test -n "$SUPABASE_ANON_KEY"
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
+          test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
       - name: Install pinned Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: 2.109.1
-
-      - name: Create roles, schema, and data logical dumps
+      - name: Capture Production catalog, RLS, tenant integrity, Advisor, and backup status
+        id: catalog
+        continue-on-error: true
+        run: node scripts/production-preflight.mjs
+      - name: Capture Production migration history
+        id: history
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          umask 077
-          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
-          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          mkdir -p "$PLAIN_DIR" "$ENCRYPTED_DIR"
-          node scripts/supabase-pooler-cli.mjs db dump --role-only --file "$PLAIN_DIR/roles.sql"
-          node scripts/supabase-pooler-cli.mjs db dump --file "$PLAIN_DIR/schema.sql"
-          node scripts/supabase-pooler-cli.mjs db dump --data-only --use-copy --file "$PLAIN_DIR/data.sql"
-          test -s "$PLAIN_DIR/roles.sql"
-          test -s "$PLAIN_DIR/schema.sql"
-          test -s "$PLAIN_DIR/data.sql"
-
-      - name: Compress and asymmetrically encrypt backup
-        id: encrypt
+          for attempt in 1 2 3; do
+            if node scripts/supabase-pooler-cli.mjs migration list > production-migration-list.txt 2>&1; then
+              exit 0
+            fi
+            sleep $((attempt * 2))
+          done
+          exit 1
+      - name: Capture migration dry-run only
+        id: dry_run
+        continue-on-error: true
         shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
-          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          archive="$PLAIN_DIR/visaflow-production-logical-backup-$timestamp.tar.gz"
-          encrypted="$ENCRYPTED_DIR/visaflow-production-logical-backup-$timestamp.tar.gz.cms"
-          artifact="visaflow-production-logical-backup-$timestamp-encrypted"
-          tar -C "$PLAIN_DIR" -czf "$archive" roles.sql schema.sql data.sql
-          test -s "$archive"
-          openssl cms -encrypt -binary -aes-256-cbc \
-            -in "$archive" \
-            -outform DER \
-            -out "$encrypted" \
-            .github/production-backup-public-cert.pem
-          test -s "$encrypted"
-          openssl cms -cmsout -inform DER -in "$encrypted" -noout
-          size_bytes="$(stat -c %s "$encrypted")"
-          test "$size_bytes" -gt 0
-          {
-            echo "artifact_name=$artifact"
-            echo "encrypted_path=$encrypted"
-            echo "backup_timestamp=$timestamp"
-            echo "encrypted_size_bytes=$size_bytes"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Delete all plaintext backup material before upload
-        shell: bash
-        run: |
-          set -euo pipefail
-          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
-          if [ -d "$PLAIN_DIR" ]; then
-            find "$PLAIN_DIR" -type f -exec shred -u {} +
-            rm -rf "$PLAIN_DIR"
-          fi
-          test ! -e "$PLAIN_DIR"
-          test -s "${{ steps.encrypt.outputs.encrypted_path }}"
-
-      - name: Upload encrypted backup only
+        run: node scripts/supabase-pooler-cli.mjs db push --dry-run > production-migration-dry-run.txt 2>&1
+      - name: Upload sanitized Production preflight evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.encrypt.outputs.artifact_name }}
-          path: ${{ steps.encrypt.outputs.encrypted_path }}
+          name: production-preflight
+          path: |
+            production-preflight.json
+            production-migration-list.txt
+            production-migration-dry-run.txt
           if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-      - name: Delete encrypted runner copy
-        shell: bash
-        run: |
-          set -euo pipefail
-          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          find "$ENCRYPTED_DIR" -type f -exec shred -u {} +
-          rm -rf "$ENCRYPTED_DIR"
-
-      - name: Cleanup runner backup material on every outcome
+          retention-days: 7
+      - name: Enforce Production preflight gates
         if: always()
         shell: bash
         run: |
-          set +e
-          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
-          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          for target in "$PLAIN_DIR" "$ENCRYPTED_DIR"; do
-            if [ -d "$target" ]; then
-              find "$target" -type f -exec shred -u {} +
-              rm -rf "$target"
-            fi
-          done
+          test "${{ steps.catalog.outcome }}" = "success"
+          test "${{ steps.history.outcome }}" = "success"
+          test "${{ steps.dry_run.outcome }}" = "success"
