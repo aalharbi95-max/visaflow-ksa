@@ -31,7 +31,6 @@ begin
     'public.is_current_platform_user()',
     'public.agency_recruitment_access_allowed(uuid,uuid,text)',
     'public.agency_candidate_access_allowed(uuid,text,text)',
-    'public.can_read_ai_agent_company(uuid)',
     'public.current_ai_interview_access_token()',
     'public.ai_interview_session_token_allowed(uuid)'
   ] loop
@@ -197,6 +196,22 @@ begin
   end if;
 end
 $precheck$;
+
+-- Exact canonical helper from 20260817000500. Its two dependencies are
+-- verified by the prerequisite block above before any security change.
+create or replace function public.can_read_ai_agent_company(p_company_id uuid)
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $function$
+  select public.is_current_platform_user()
+    or p_company_id = public.current_app_user_company_id();
+$function$;
+
+revoke all on function public.can_read_ai_agent_company(uuid) from public, anon;
+grant execute on function public.can_read_ai_agent_company(uuid) to authenticated, service_role;
 
 -- Canonical operational-table grants and RLS from 20260817000700/00800.
 revoke all on table public.employees, public.interviews, public.mobilizations,
