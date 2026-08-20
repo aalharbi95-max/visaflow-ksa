@@ -10,6 +10,7 @@ let advisor;
 for (let attempt = 1; attempt <= 3; attempt += 1) {
   const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/advisors/security`, {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(60_000),
   });
   if (response.ok) {
     advisor = await response.json();

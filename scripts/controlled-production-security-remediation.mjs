@@ -33,7 +33,7 @@ const affectedTables = [
   "onboarding_validations", "platform_clients", "profession_aliases", "subscription_invoices",
 ];
 assert.equal(affectedTables.length, 34);
-assert.ok(["backup", "connectivity", "orphan-precheck", "orphan-delete", "precheck", "apply", "verify"].includes(mode), "Unknown remediation mode");
+assert.ok(["backup", "connectivity", "orphan-precheck", "orphan-delete", "precheck", "apply", "verify", "post-verify"].includes(mode), "Unknown remediation mode");
 assert.equal(projectRef, expectedProjectRef, "Production project identity mismatch");
 assert.notEqual(projectRef, forbiddenProjectRef, "Refusing to run against Staging");
 assert.ok(accessToken, "SUPABASE_ACCESS_TOKEN is required");
@@ -370,6 +370,23 @@ async function verify() {
   console.log(`Migration history PASS: ${migrationVersion} applied; ${forbiddenVersion} pending.`);
 }
 
+async function postVerify() {
+  const connection = await pooler();
+  const versions = migrationVersions(connection);
+  assert.ok(versions.includes(migrationVersion), `${migrationVersion} is not recorded as applied`);
+  assert.ok(!versions.includes(forbiddenVersion), `${forbiddenVersion} was unexpectedly applied`);
+  const quotedTables = affectedTables.map((table) => `'${table}'`).join(",");
+  const rls = query(connection, `select count(*)::text,count(*) filter(where c.relrowsecurity)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any(array[${quotedTables}])`).split("|");
+  assert.deepEqual(rls, ["34", "34"], "RLS is not enabled on all 34 targeted tables");
+  const invoker = query(connection, "select (coalesce(c.reloptions,array[]::text[]) @> array['security_invoker=true']::text[])::text from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname='ai_agent_hourly_activity' and c.relkind='v'");
+  assert.equal(invoker, "true", "ai_agent_hourly_activity is not security_invoker");
+  const orphanRemaining = query(connection, `select count(*)::text from public.ai_agent_settings where id='${orphanRowId}'::uuid or company_id='${orphanCompanyId}'::uuid`);
+  assert.equal(orphanRemaining, "0", "Deleted orphan unexpectedly remains after remediation");
+  await runSql(connection, `begin; set transaction read only; set local role service_role; ${affectedTables.map((table) => `select count(*) from public."${table}";`).join("\n")} select count(*) from public.ai_agent_hourly_activity; rollback;`, "production-service-role-check");
+  console.log("Read-only post-remediation verification PASS: 34/34 RLS, security_invoker, service_role, orphan absent.");
+  console.log(`Migration history PASS: ${migrationVersion} applied; ${forbiddenVersion} pending.`);
+}
+
 if (mode === "backup") await verifyBackup();
 if (mode === "connectivity") await connectivity();
 if (mode === "orphan-precheck") await orphanPrecheck();
@@ -377,3 +394,4 @@ if (mode === "orphan-delete") await orphanDelete();
 if (mode === "precheck") await precheck();
 if (mode === "apply") await apply();
 if (mode === "verify") await verify();
+if (mode === "post-verify") await postVerify();
