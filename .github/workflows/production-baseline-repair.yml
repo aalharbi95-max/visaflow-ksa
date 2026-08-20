@@ -1,4 +1,4 @@
-name: One-time encrypted Production logical backup 2026-08-21
+name: One-time controlled Production security remediation
 
 on:
   workflow_dispatch:
@@ -7,142 +7,152 @@ on:
         description: Exact Production project ref
         required: true
         type: string
-      confirm_commit_sha:
-        description: Exact operations commit SHA
+      confirm_migration_version:
+        description: The only migration authorized to apply
+        required: true
+        type: string
+      confirm_reviewed_sha:
+        description: Exact PR 53 reviewed HEAD
+        required: true
+        type: string
+      confirm_backup_artifact_id:
+        description: Valid encrypted Production backup artifact id
         required: true
         type: string
 
 permissions:
+  actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: production-logical-backup-20260821
+  group: controlled-production-security-remediation
   cancel-in-progress: false
 
 jobs:
-  backup:
+  remediate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     environment: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-      EXPECTED_PROJECT_REF: zeocbftriydodzfgixjv
+      GITHUB_TOKEN: ${{ github.token }}
+      PRODUCTION_BACKUP_ARTIFACT_ID: ${{ inputs.confirm_backup_artifact_id }}
     steps:
-      - name: Check out exact operations revision
+      - name: Check out isolated operations revision
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Validate immutable Production and invocation boundaries
+      - name: Validate immutable PR, backup, and Production boundaries
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test "${{ github.ref_name }}" = "codex/production-security-remediation-20260821"
-          test "${{ inputs.confirm_project_ref }}" = "$EXPECTED_PROJECT_REF"
-          test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
+          test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
           test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
           test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
-          test "${{ inputs.confirm_commit_sha }}" = "${{ github.sha }}"
+          test "${{ inputs.confirm_migration_version }}" = "20260820000100"
+          test "${{ inputs.confirm_reviewed_sha }}" = "3d70d65a57643104aaf57ec54c9446d4a458cf37"
+          test "$(gh api repos/aalharbi95-max/visaflow-ksa/pulls/53 --jq .head.sha)" = "${{ inputs.confirm_reviewed_sha }}"
+          test "${{ inputs.confirm_backup_artifact_id }}" = "9426185634"
+          git cat-file -e "${{ inputs.confirm_reviewed_sha }}^{commit}"
+          git diff --exit-code "${{ inputs.confirm_reviewed_sha }}" -- supabase/migrations/20260820000100_production_security_alignment.sql
+          git merge-base --is-ancestor acf9c3d07c2fb0a3fd4eb025ebd009d59cf63ca8 "${{ inputs.confirm_reviewed_sha }}"
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
-          test -s .github/production-backup-20260821-public-cert.pem
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
-      - name: Install pinned Supabase CLI
-        uses: supabase/setup-cli@v1
+      - run: npm ci
+      - run: npm run validate:migrations
+      - run: npm run test:release-hardening
+
+      - uses: supabase/setup-cli@v1
         with:
           version: 2.109.1
 
-      - name: Create roles, schema, and data logical dumps
+      - name: Confirm PostgreSQL client availability
+        run: psql --version
+
+      - name: Confirm new encrypted Production backup remains valid
+        run: node scripts/controlled-production-security-remediation.mjs backup
+
+      - name: Recheck exact orphan and all zero-reference conditions read-only
+        run: node scripts/controlled-production-security-remediation.mjs orphan-precheck
+
+      - name: Delete only the exact reviewed orphan atomically
+        run: node scripts/controlled-production-security-remediation.mjs orphan-delete
+
+      - name: Run all Production migration prechecks through Session Pooler
+        run: node scripts/controlled-production-security-remediation.mjs precheck
+
+      - name: Apply only reviewed security SQL through Session Pooler
+        run: node scripts/controlled-production-security-remediation.mjs apply
+
+      - name: Record only 20260820000100 in migration history
+        run: node scripts/supabase-pooler-cli.mjs migration repair 20260820000100 --status applied
+
+      - name: Verify RLS, view, service role, orphan deletion, row counts, and history
+        run: node scripts/controlled-production-security-remediation.mjs verify
+
+      - name: Verify Security Advisor has no Critical, High, or Error findings
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          plain_dir="$RUNNER_TEMP/visaflow-production-backup-plain"
-          encrypted_dir="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          mkdir -p "$plain_dir" "$encrypted_dir"
-          node scripts/supabase-pooler-cli.mjs db dump --role-only --file "$plain_dir/roles.sql"
-          node scripts/supabase-pooler-cli.mjs db dump --file "$plain_dir/schema.sql"
-          node scripts/supabase-pooler-cli.mjs db dump --data-only --use-copy --file "$plain_dir/data.sql"
-          test -s "$plain_dir/roles.sql"
-          test -s "$plain_dir/schema.sql"
-          test -s "$plain_dir/data.sql"
+          for attempt in 1 2 3 4 5; do
+            if node scripts/check-production-security-advisor.mjs; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then sleep 15; fi
+          done
+          exit 1
 
-      - name: Compress and asymmetrically encrypt backup
-        id: encrypt
+      - name: Run rollback-only Company and Agency tenant isolation
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          plain_dir="$RUNNER_TEMP/visaflow-production-backup-plain"
-          encrypted_dir="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          archive="$plain_dir/visaflow-production-logical-backup-$timestamp.tar.gz"
-          encrypted="$encrypted_dir/visaflow-production-logical-backup-$timestamp.tar.gz.cms"
-          artifact="visaflow-production-logical-backup-$timestamp-encrypted"
-          tar -C "$plain_dir" -czf "$archive" roles.sql schema.sql data.sql
-          test -s "$archive"
-          openssl cms -encrypt -binary -aes-256-cbc \
-            -in "$archive" \
-            -outform DER \
-            -out "$encrypted" \
-            .github/production-backup-20260821-public-cert.pem
-          test -s "$encrypted"
-          openssl cms -cmsout -inform DER -in "$encrypted" -noout
-          size_bytes="$(stat -c %s "$encrypted")"
-          test "$size_bytes" -gt 0
-          {
-            echo "artifact_name=$artifact"
-            echo "encrypted_path=$encrypted"
-            echo "backup_timestamp=$timestamp"
-            echo "encrypted_size_bytes=$size_bytes"
-          } >> "$GITHUB_OUTPUT"
+          git show acf9c3d07c2fb0a3fd4eb025ebd009d59cf63ca8:scripts/production-tenant-isolation-smoke.mjs > "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
+          PRODUCTION_TENANT_DML_SMOKE=ROLLBACK_ONLY_EXPLICITLY_APPROVED node "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
+          rm -f -- "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
 
-      - name: Delete all plaintext backup material before upload
+      - name: Confirm final bounded migration list
         shell: bash
         run: |
           set -euo pipefail
-          plain_dir="$RUNNER_TEMP/visaflow-production-backup-plain"
-          if [ -d "$plain_dir" ]; then
-            find "$plain_dir" -type f -exec shred -u {} +
-            rm -rf "$plain_dir"
-          fi
-          test ! -e "$plain_dir"
-          test -s "${{ steps.encrypt.outputs.encrypted_path }}"
+          node scripts/supabase-pooler-cli.mjs migration list > "$RUNNER_TEMP/production-migration-list.txt" 2>&1
+          node - "$RUNNER_TEMP/production-migration-list.txt" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const text = readFileSync(process.argv[2], 'utf8');
+          const rows = text.split(/\r?\n/).map((line) => line.split('|'));
+          const status = new Map(rows.filter((parts) => parts.length >= 2).map(([local, remote]) => [local.match(/\d{14}/)?.[0], remote.match(/\d{14}/)?.[0]]));
+          if (status.get('20260820000100') !== '20260820000100') throw new Error('20260820000100 is not applied');
+          if (status.get('20260804000200')) throw new Error('20260804000200 was unexpectedly applied');
+          console.log('Final migration list PASS: 20260820000100 applied; 20260804000200 pending.');
+          NODE
 
-      - name: Upload encrypted backup only
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.encrypt.outputs.artifact_name }}
-          path: ${{ steps.encrypt.outputs.encrypted_path }}
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-      - name: Delete encrypted runner copy
-        shell: bash
-        run: |
-          set -euo pipefail
-          encrypted_dir="$RUNNER_TEMP/visaflow-production-backup-encrypted"
-          find "$encrypted_dir" -type f -exec shred -u {} +
-          rm -rf "$encrypted_dir"
-
-      - name: Cleanup runner material on every outcome
+      - name: Remove temporary runner evidence
         if: always()
         shell: bash
         run: |
-          set +e
-          for target in \
-            "$RUNNER_TEMP/visaflow-production-backup-plain" \
-            "$RUNNER_TEMP/visaflow-production-backup-encrypted"; do
-            if [ -d "$target" ]; then
-              find "$target" -type f -exec shred -u {} +
-              rm -rf "$target"
-            fi
-          done
+          rm -f -- "$RUNNER_TEMP/production-backup-encrypted.zip"
+          rm -f -- "$RUNNER_TEMP/production-backup-encrypted.cms"
+          rm -f -- "$RUNNER_TEMP/production-orphan-delete-committed"
+          rm -f -- "$RUNNER_TEMP/production-security-precheck-state.json"
+          rm -f -- "$RUNNER_TEMP/production-security-schema-committed"
+          rm -f -- "$RUNNER_TEMP/production-migration-list.txt"
+          rm -f -- "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
+          rm -f -- "$RUNNER_TEMP/production-orphan-read-only-precheck.sql"
+          rm -f -- "$RUNNER_TEMP/production-exact-orphan-delete.sql"
+          rm -f -- "$RUNNER_TEMP/production-read-only-prechecks.sql"
+          rm -f -- "$RUNNER_TEMP/production-security-migration.sql"
+          rm -f -- "$RUNNER_TEMP/production-service-role-check.sql"

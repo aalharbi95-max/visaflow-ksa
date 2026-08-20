@@ -17,6 +17,9 @@ const migrationPath = "supabase/migrations/20260820000100_production_security_al
 const expectedMigrationSha256 = "b279e95cecc3ae9819feab5aac8b56b5bf592252955afa0a41dbc79b00b10b69";
 const statePath = join(runnerTemp, "production-security-precheck-state.json");
 const commitMarkerPath = join(runnerTemp, "production-security-schema-committed");
+const orphanDeleteMarkerPath = join(runnerTemp, "production-orphan-delete-committed");
+const orphanRowId = "db6b6925-91ee-4620-8e40-0e87e0286542";
+const orphanCompanyId = "97edff35-f215-4d26-aeab-74f06706c3d3";
 
 const affectedTables = [
   "agency_client_access", "agency_members", "agency_penalties", "agency_scores",
@@ -30,7 +33,7 @@ const affectedTables = [
   "onboarding_validations", "platform_clients", "profession_aliases", "subscription_invoices",
 ];
 assert.equal(affectedTables.length, 34);
-assert.ok(["backup", "precheck", "apply", "verify"].includes(mode), "Unknown remediation mode");
+assert.ok(["backup", "orphan-precheck", "orphan-delete", "precheck", "apply", "verify"].includes(mode), "Unknown remediation mode");
 assert.equal(projectRef, expectedProjectRef, "Production project identity mismatch");
 assert.notEqual(projectRef, forbiddenProjectRef, "Refusing to run against Staging");
 assert.ok(accessToken, "SUPABASE_ACCESS_TOKEN is required");
@@ -122,10 +125,10 @@ function rowCounts(connection) {
 async function verifyBackup() {
   assert.ok(process.env.GITHUB_TOKEN, "GITHUB_TOKEN is required");
   const artifactId = process.env.PRODUCTION_BACKUP_ARTIFACT_ID || "";
-  assert.equal(artifactId, "9421790381", "Unexpected backup artifact id");
+  assert.equal(artifactId, "9426185634", "Unexpected backup artifact id");
   const metadataResponse = await api(`https://api.github.com/repos/aalharbi95-max/visaflow-ksa/actions/artifacts/${artifactId}`);
   const metadata = await metadataResponse.json();
-  assert.equal(metadata.name, "visaflow-production-logical-backup-20260820T194240Z-encrypted");
+  assert.equal(metadata.name, "visaflow-production-logical-backup-20260820T220347Z-encrypted");
   assert.equal(metadata.expired, false, "Encrypted Production backup artifact has expired");
   assert.ok(Number(metadata.size_in_bytes) > 0, "Encrypted Production backup artifact is empty");
   assert.ok(Date.parse(metadata.expires_at) > Date.now(), "Encrypted Production backup artifact is no longer valid");
@@ -144,7 +147,7 @@ async function verifyBackup() {
   assert.equal(listing.status, 0, "Could not inspect encrypted backup ZIP");
   const entries = String(listing.stdout || "").split(/\r?\n/).filter(Boolean);
   assert.equal(entries.length, 1, "Backup artifact must contain exactly one encrypted file");
-  assert.equal(entries[0], "visaflow-production-logical-backup-20260820T194240Z.tar.gz.cms",
+  assert.equal(entries[0], "visaflow-production-logical-backup-20260820T220347Z.tar.gz.cms",
     "Backup artifact does not contain the expected encrypted CMS payload");
   const extracted = spawnSync("unzip", ["-p", zipPath, entries[0]], {
     encoding: null,
@@ -163,6 +166,112 @@ async function verifyBackup() {
   console.log(`Backup gate PASS: encrypted artifact ${artifactId}, ${metadata.size_in_bytes} bytes, expires ${metadata.expires_at}.`);
 }
 
+function orphanGuardSql({ deleteRow }) {
+  return `
+do $orphan_guard$
+declare
+  candidate record;
+  match_count bigint;
+  deleted_count bigint;
+begin
+  select count(*) into match_count
+  from public.ai_agent_settings
+  where id = '${orphanRowId}'::uuid;
+  if match_count <> 1 then
+    raise exception 'ORPHAN_GUARD_ROW_ID_COUNT_MISMATCH';
+  end if;
+
+  select count(*) into match_count
+  from public.ai_agent_settings
+  where id = '${orphanRowId}'::uuid
+    and company_id = '${orphanCompanyId}'::uuid;
+  if match_count <> 1 then
+    raise exception 'ORPHAN_GUARD_COMPANY_ID_MISMATCH';
+  end if;
+
+  select count(*) into match_count
+  from public.ai_agent_settings
+  where company_id = '${orphanCompanyId}'::uuid;
+  if match_count <> 1 then
+    raise exception 'ORPHAN_GUARD_SETTINGS_REFERENCE_COUNT_MISMATCH';
+  end if;
+
+  select count(*) into match_count
+  from public.companies
+  where id = '${orphanCompanyId}'::uuid;
+  if match_count <> 0 then
+    raise exception 'ORPHAN_GUARD_COMPANY_NOW_EXISTS';
+  end if;
+
+  select count(*) into match_count
+  from public.platform_clients
+  where operational_company_id = '${orphanCompanyId}'::uuid;
+  if match_count <> 0 then
+    raise exception 'ORPHAN_GUARD_PLATFORM_CLIENT_REFERENCE_FOUND';
+  end if;
+
+  select count(*) into match_count
+  from public.users
+  where company_id = '${orphanCompanyId}'::uuid;
+  if match_count <> 0 then
+    raise exception 'ORPHAN_GUARD_USER_REFERENCE_FOUND';
+  end if;
+
+  for candidate in
+    select columns.table_name, columns.data_type, columns.udt_name
+    from information_schema.columns columns
+    join information_schema.tables tables
+      on tables.table_schema = columns.table_schema
+     and tables.table_name = columns.table_name
+    where columns.table_schema = 'public'
+      and columns.column_name = 'company_id'
+      and tables.table_type = 'BASE TABLE'
+      and columns.table_name <> 'ai_agent_settings'
+    order by columns.table_name
+  loop
+    if candidate.udt_name = 'uuid' then
+      execute format('select count(*) from public.%I where company_id = $1', candidate.table_name)
+        into match_count using '${orphanCompanyId}'::uuid;
+    elsif candidate.data_type in ('text', 'character varying', 'character') then
+      execute format('select count(*) from public.%I where company_id = $1', candidate.table_name)
+        into match_count using '${orphanCompanyId}'::text;
+    else
+      match_count := 0;
+    end if;
+    if match_count <> 0 then
+      raise exception 'ORPHAN_GUARD_COMPANY_REFERENCE_FOUND:%', candidate.table_name;
+    end if;
+  end loop;
+
+  ${deleteRow ? `delete from public.ai_agent_settings
+  where id = '${orphanRowId}'::uuid
+    and company_id = '${orphanCompanyId}'::uuid;
+  get diagnostics deleted_count = row_count;
+  if deleted_count <> 1 then
+    raise exception 'ORPHAN_GUARD_DELETE_COUNT_MISMATCH';
+  end if;` : "null;"}
+end
+$orphan_guard$;`;
+}
+
+async function orphanPrecheck() {
+  const connection = await pooler();
+  await runSql(connection, `begin; set transaction read only; ${orphanGuardSql({ deleteRow: false })} rollback;`, "production-orphan-read-only-precheck");
+  console.log("Exact Production orphan identity and zero-reference guard PASS (read-only).");
+}
+
+async function orphanDelete() {
+  const connection = await pooler();
+  await runSql(connection, `begin isolation level serializable; ${orphanGuardSql({ deleteRow: true })} commit;`, "production-exact-orphan-delete");
+  const remaining = query(connection, `select
+    count(*) filter (where id='${orphanRowId}'::uuid)::text,
+    count(*) filter (where company_id='${orphanCompanyId}'::uuid)::text
+    from public.ai_agent_settings`).split("|");
+  assert.deepEqual(remaining, ["0", "0"], "Exact orphan deletion postcondition failed");
+  await writeFile(orphanDeleteMarkerPath, new Date().toISOString(), { encoding: "utf8", mode: 0o600 });
+  console.log("Exact orphan row deletion COMMITTED: one reviewed row only; postcondition PASS.");
+}
+
 async function validateMigration() {
   const migration = await readFile(migrationPath, "utf8");
   assert.equal(createHash("sha256").update(migration).digest("hex"), expectedMigrationSha256, "Reviewed migration hash mismatch");
@@ -173,6 +282,7 @@ async function validateMigration() {
 }
 
 async function precheck() {
+  await readFile(orphanDeleteMarkerPath, "utf8");
   const migration = await validateMigration();
   const connection = await pooler();
   const versions = migrationVersions(connection);
@@ -214,6 +324,8 @@ async function verify() {
   assert.deepEqual(rls, ["34", "34"], "RLS is not enabled on all 34 targeted tables");
   const invoker = query(connection, "select (coalesce(c.reloptions,array[]::text[]) @> array['security_invoker=true']::text[])::text from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname='ai_agent_hourly_activity' and c.relkind='v'");
   assert.equal(invoker, "true", "ai_agent_hourly_activity is not security_invoker");
+  const orphanRemaining = query(connection, `select count(*)::text from public.ai_agent_settings where id='${orphanRowId}'::uuid or company_id='${orphanCompanyId}'::uuid`);
+  assert.equal(orphanRemaining, "0", "Deleted orphan unexpectedly remains after remediation");
   await runSql(connection, `begin; set transaction read only; set local role service_role; ${affectedTables.map((table) => `select count(*) from public."${table}";`).join("\n")} select count(*) from public.ai_agent_hourly_activity; rollback;`, "production-service-role-check");
   assert.deepEqual(rowCounts(connection), state.counts, "Production targeted table row counts changed");
   console.log("Post-commit verification PASS: 34/34 RLS, security_invoker, service_role, row counts unchanged.");
@@ -221,6 +333,8 @@ async function verify() {
 }
 
 if (mode === "backup") await verifyBackup();
+if (mode === "orphan-precheck") await orphanPrecheck();
+if (mode === "orphan-delete") await orphanDelete();
 if (mode === "precheck") await precheck();
 if (mode === "apply") await apply();
 if (mode === "verify") await verify();
