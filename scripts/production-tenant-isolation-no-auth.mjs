@@ -95,6 +95,7 @@ with company_users as materialized (
   ) ub order by ua.id limit 1
 )
 select * from company_pair cross join agency_pair;
+grant select on isolation_context to authenticated;
 
 do $guard$ begin
   if (select count(*) from isolation_context)<>1 then raise exception 'NO_SAFE_TENANT_CONTEXTS'; end if;
