@@ -33,7 +33,7 @@ const affectedTables = [
   "onboarding_validations", "platform_clients", "profession_aliases", "subscription_invoices",
 ];
 assert.equal(affectedTables.length, 34);
-assert.ok(["backup", "orphan-precheck", "orphan-delete", "precheck", "apply", "verify"].includes(mode), "Unknown remediation mode");
+assert.ok(["backup", "connectivity", "orphan-precheck", "orphan-delete", "precheck", "apply", "verify"].includes(mode), "Unknown remediation mode");
 assert.equal(projectRef, expectedProjectRef, "Production project identity mismatch");
 assert.notEqual(projectRef, forbiddenProjectRef, "Refusing to run against Staging");
 assert.ok(accessToken, "SUPABASE_ACCESS_TOKEN is required");
@@ -86,7 +86,7 @@ function runPsql(connection, extraArgs, { capture = false } = {}) {
     encoding: capture ? "utf8" : undefined,
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
     shell: false,
-    env: { ...process.env, PGPASSWORD: password, PGSSLMODE: "require", PGCONNECT_TIMEOUT: "15" },
+    env: { ...process.env, PGPASSWORD: password, PGSSLMODE: "require", PGCONNECT_TIMEOUT: "60" },
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -281,6 +281,22 @@ async function validateMigration() {
   return migration;
 }
 
+async function connectivity() {
+  const connection = await pooler();
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      assert.equal(query(connection, "select 1"), "1", "Unexpected Session Pooler connectivity result");
+      console.log(`Authoritative Production Session Pooler connectivity PASS on attempt ${attempt}/3.`);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+  }
+  throw new Error("SESSION_POOLER_UNAVAILABLE_AFTER_3_ATTEMPTS", { cause: lastError });
+}
+
 async function precheck() {
   const migration = await validateMigration();
   const connection = await pooler();
@@ -332,6 +348,7 @@ async function verify() {
 }
 
 if (mode === "backup") await verifyBackup();
+if (mode === "connectivity") await connectivity();
 if (mode === "orphan-precheck") await orphanPrecheck();
 if (mode === "orphan-delete") await orphanDelete();
 if (mode === "precheck") await precheck();
