@@ -1,45 +1,81 @@
-name: Production backup capability inspection
+name: Production preflight
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirm_project_ref:
-        description: Exact Production project ref
-        required: true
-        type: string
-      confirm_commit_sha:
-        description: Exact PR head SHA being inspected
-        required: true
-        type: string
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  inspect:
+  preflight:
+    if: github.head_ref == 'codex/release-readiness-20260817'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     environment: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PREFLIGHT_OUTPUT: production-preflight.json
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Validate exact read-only scope
+          cache: npm
+      - name: Validate exact Production configuration
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "codex/release-readiness-20260817"
-          test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
-          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
-          test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
-          test "${{ inputs.confirm_commit_sha }}" = "$GITHUB_SHA"
           test -n "$SUPABASE_ACCESS_TOKEN"
-      - name: Inspect plan and managed backup capabilities
-        run: node scripts/inspect-production-backup-capabilities.mjs
+          test -n "$SUPABASE_DB_PASSWORD"
+          test -n "$SUPABASE_ANON_KEY"
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
+          test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Capture Production catalog, RLS, tenant integrity, Advisor, and backup status
+        id: catalog
+        continue-on-error: true
+        run: node scripts/production-preflight.mjs
+      - name: Capture Production migration history
+        id: history
+        continue-on-error: true
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if node scripts/supabase-pooler-cli.mjs migration list > production-migration-list.txt 2>&1; then
+              exit 0
+            fi
+            sleep $((attempt * 2))
+          done
+          exit 1
+      - name: Capture migration dry-run only
+        id: dry_run
+        continue-on-error: true
+        shell: bash
+        run: node scripts/supabase-pooler-cli.mjs db push --dry-run > production-migration-dry-run.txt 2>&1
+      - name: Upload sanitized Production preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-preflight
+          path: |
+            production-preflight.json
+            production-migration-list.txt
+            production-migration-dry-run.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce Production preflight gates
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.catalog.outcome }}" = "success"
+          test "${{ steps.history.outcome }}" = "success"
+          test "${{ steps.dry_run.outcome }}" = "success"
