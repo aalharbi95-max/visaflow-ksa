@@ -66,7 +66,18 @@ try {
   if (firstJson !== undefined) advisor = JSON.parse(stdout.slice(firstJson));
 }
 assert.ok(advisor, `Supabase CLI read-only Security Advisor returned no JSON (exit ${advisorResult.status})`);
-const advisorFindings = Array.isArray(advisor) ? advisor : (advisor.results || advisor.lints || []);
+const advisorFindings = Array.isArray(advisor)
+  ? advisor
+  : (
+      advisor.results
+      || advisor.lints
+      || advisor.data?.results
+      || advisor.data?.lints
+      || advisor.result?.results
+      || advisor.result?.lints
+      || (Array.isArray(advisor.result) ? advisor.result : undefined)
+      || []
+    );
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
 assert.equal(advisorFindings.length, 38, "Refusing to encrypt an unexpected Advisor result count");
 
