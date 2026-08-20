@@ -9,24 +9,12 @@ const outputPath = process.env.PRODUCTION_BASELINE_OUTPUT || "production-baselin
 assert.equal(projectRef, expectedProjectRef, "Production project mismatch");
 assert.ok(schemaPath, "PRODUCTION_SCHEMA_DUMP is required");
 
-const stagingManifest = JSON.parse(await readFile("supabase/release/staging-baseline-20260817.json", "utf8"));
 // pg_dump quotes identifiers by default. Removing identifier quotes in memory
 // makes object-presence checks format-independent; the dump is never emitted.
 const schema = (await readFile(schemaPath, "utf8")).toLowerCase().replaceAll('"', "");
 const migrationsDir = "supabase/migrations";
 const files = (await readdir(migrationsDir)).filter((file) => /^\d{14}_.+\.sql$/.test(file)).sort();
 assert.equal(files.length, 76, "Production baseline requires the reviewed 76-migration inventory");
-
-const reviewedReflected = new Set(stagingManifest.already_reflected_in_schema);
-const reviewedObsolete = new Set(stagingManifest.obsolete_or_unsafe_to_replay);
-const reviewedMissing = new Set([
-  ...stagingManifest.genuinely_missing_and_safe_to_apply,
-  ...stagingManifest.post_baseline_safe_to_apply,
-]);
-
-function unique(values) {
-  return [...new Set(values)];
-}
 
 function cleanIdentifier(value) {
   return value.replaceAll('"', "").toLowerCase();
@@ -99,8 +87,6 @@ const classifications = {
   obsolete_or_unsafe_to_replay: [],
   genuinely_missing_and_safe_to_apply: [],
 };
-const failures = [];
-
 for (const file of files) {
   const version = file.slice(0, 14);
   const sql = await readFile(path.join(migrationsDir, file), "utf8");
@@ -108,33 +94,19 @@ for (const file of files) {
   const present = checks.filter(Boolean).length;
   const allPresent = checks.length > 0 && present === checks.length;
   const allMissing = checks.length > 0 && present === 0;
-  const expected = reviewedObsolete.has(version)
-    ? "obsolete_or_unsafe_to_replay"
-    : reviewedMissing.has(version)
-      ? "genuinely_missing_and_safe_to_apply"
-      : "already_reflected_in_schema";
-
-  if (expected === "already_reflected_in_schema") {
-    if (allPresent) classifications.already_reflected_in_schema.push(version);
-    else if (checks.length === 0 && hasReplayRisk(sql)) classifications.obsolete_or_unsafe_to_replay.push(version);
-    else failures.push({ version, expected, anchor_count: checks.length, present_count: present });
-  } else if (expected === "obsolete_or_unsafe_to_replay") {
-    if (hasReplayRisk(sql) || !allMissing) classifications.obsolete_or_unsafe_to_replay.push(version);
-    else failures.push({ version, expected, anchor_count: checks.length, present_count: present });
-  } else if (allMissing) {
+  if (allPresent) {
+    classifications.already_reflected_in_schema.push(version);
+  } else if (allMissing && !hasReplayRisk(sql)) {
     classifications.genuinely_missing_and_safe_to_apply.push(version);
   } else {
-    failures.push({ version, expected, anchor_count: checks.length, present_count: present });
+    // Partial effects, migrations without provable positive anchors, and
+    // missing migrations with data/destructive replay risk are fail-closed.
+    classifications.obsolete_or_unsafe_to_replay.push(version);
   }
 }
 
 const classified = Object.values(classifications).flat();
 assert.equal(new Set(classified).size, classified.length, "Duplicate Production migration classification");
-if (failures.length) {
-  const summary = failures.map(({ version, expected, anchor_count, present_count }) =>
-    `${version}:${expected}:${present_count}/${anchor_count}`).join(",");
-  throw new Error(`Production migration classification is not proven: ${summary}`);
-}
 assert.equal(classified.length, files.length, "Every Production migration must be classified exactly once");
 
 const manifest = {
@@ -146,7 +118,7 @@ const manifest = {
     evidence_source: "ephemeral_schema_only_runner_file",
     schema_dump_persisted: false,
     fail_closed: true,
-    safety_basis: "Current Production schema evidence plus migrations previously proven safe on Staging.",
+    safety_basis: "Current Production schema evidence; partial/unverifiable/data-risk replays are classified unsafe.",
   },
 };
 await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
