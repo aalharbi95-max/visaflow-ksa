@@ -1,0 +1,47 @@
+name: Production Security Advisor encrypted read-only audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/audit-production-security-advisor-public.pem
+      - .github/workflows/production-security-advisor-audit.yml
+      - scripts/audit-production-security-advisor-encrypted.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.head_ref == 'codex/release-readiness-20260817'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: Production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      PRODUCTION_ADVISOR_AUDIT_OUTPUT: ${{ runner.temp }}/production-security-advisor-audit.enc.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate exact Production identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+      - name: Capture, sanitize, and encrypt findings in memory
+        run: node scripts/audit-production-security-advisor-encrypted.mjs
+      - name: Upload ciphertext only
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-security-advisor-audit-encrypted
+          path: ${{ runner.temp }}/production-security-advisor-audit.enc.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Delete temporary encrypted file
+        if: always()
+        shell: bash
+        run: rm -f "$PRODUCTION_ADVISOR_AUDIT_OUTPUT"
