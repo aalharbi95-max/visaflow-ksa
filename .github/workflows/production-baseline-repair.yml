@@ -1,4 +1,4 @@
-name: One-time Production self-contained helper inventory
+name: Production baseline repair
 
 on:
   workflow_dispatch:
@@ -7,82 +7,48 @@ on:
         description: Exact Production project ref
         required: true
         type: string
-      confirm_commit_sha:
-        description: Exact reviewed commit SHA
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 jobs:
-  inventory:
+  repair:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     environment: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      PRODUCTION_BASELINE_REPAIR: "true"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          ref: ${{ github.sha }}
-      - name: Validate exact Production identity and revision
+          node-version: 22
+          cache: npm
+      - name: Validate exact Production identity and explicit dispatch input
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ github.ref_name }}" = "codex/release-readiness-20260817"
           test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
           test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
-          test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
-          test "${{ inputs.confirm_commit_sha }}" = "${{ github.sha }}"
           test -n "$SUPABASE_ACCESS_TOKEN"
-      - name: Inventory all remote prerequisites and self-contained helpers
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          const projectRef = process.env.SUPABASE_PROJECT_REF;
-          const token = process.env.SUPABASE_ACCESS_TOKEN;
-          const remoteHelpers = [
-            'public.current_app_user_company_id()',
-            'public.current_app_user_role()',
-            'public.current_app_user_agency_id()',
-            'public.current_app_user_has_role(text[])',
-            'public.is_current_platform_user()',
-            'public.agency_recruitment_access_allowed(uuid,uuid,text)',
-            'public.agency_candidate_access_allowed(uuid,text,text)',
-          ];
-          const embeddedHelpers = [
-            'public.can_read_ai_agent_company(uuid)',
-            'public.current_ai_interview_access_token()',
-            'public.ai_interview_session_token_allowed(uuid)',
-          ];
-          const sql = `with helpers(helper) as (select unnest(array[${remoteHelpers.map((h) => `'${h}'`).join(',')}]::text[])) select 'function'::text as kind,helper as object_name,to_regprocedure(helper) is not null as present from helpers union all select 'table','public.ai_interview_sessions',to_regclass('public.ai_interview_sessions') is not null order by kind,object_name`;
-          let response;
-          for (let attempt = 1; attempt <= 3; attempt += 1) {
-            response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: sql, read_only: true }),
-            });
-            if (response.ok || ![408,429,500,502,503,504,522,524,544].includes(response.status)) break;
-            await response.text();
-            if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
-          }
-          assert.equal(response.ok, true, `Helper inventory failed with HTTP ${response.status}`);
-          const payload = await response.json();
-          const helperRows = payload.filter((row) => row.kind === 'function');
-          const tableRows = payload.filter((row) => row.kind === 'table');
-          assert.equal(helperRows.length, remoteHelpers.length, 'Remote helper inventory returned an unexpected row count');
-          assert.equal(tableRows[0]?.present, true, 'public.ai_interview_sessions is missing');
-          // These three helpers are supplied by the reviewed migration itself;
-          // exact canonical equivalence is enforced by the local test gate.
-          const embeddedMissing = [];
-          const remoteMissing = helperRows.filter((row) => row.present !== true).map((row) => row.object_name);
-          const missing = [...remoteMissing, ...embeddedMissing];
-          console.log(`Complete helper inventory: ${remoteHelpers.length + embeddedHelpers.length}; remote present: ${remoteHelpers.length - remoteMissing.length}; embedded present: ${embeddedHelpers.length - embeddedMissing.length}; missing: ${missing.length}`);
-          console.log(`Missing helpers after self-contained remediation: ${missing.length ? missing.join(', ') : 'none'}`);
-          if (missing.length) process.exit(1);
-          NODE
+          test -n "$SUPABASE_DB_PASSWORD"
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Repair reviewed history and verify bounded dry-run
+        run: node scripts/apply-production-baseline-repair.mjs
+      - name: Retry Production Security Advisor read-only
+        run: node scripts/check-production-security-advisor.mjs
+      - name: Upload version-only repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-baseline-repair-evidence
+          path: |
+            production-migration-list-after-repair.txt
+            production-migration-dry-run-after-repair.txt
+          if-no-files-found: warn
+          retention-days: 1
