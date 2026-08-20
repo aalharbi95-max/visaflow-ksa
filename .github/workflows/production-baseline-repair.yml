@@ -91,7 +91,7 @@ jobs:
           set -euo pipefail
           git show acf9c3d07c2fb0a3fd4eb025ebd009d59cf63ca8:scripts/production-tenant-isolation-smoke.mjs > "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
           node scripts/prepare-production-tenant-smoke.mjs "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
-          PRODUCTION_TENANT_DML_SMOKE=ROLLBACK_ONLY_EXPLICITLY_APPROVED node "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
+          PRODUCTION_TENANT_DML_SMOKE=ROLLBACK_ONLY_EXPLICITLY_APPROVED node scripts/run-production-tenant-smoke-pooler.mjs "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
           rm -f -- "$RUNNER_TEMP/production-tenant-isolation-smoke.mjs"
 
       - name: Confirm final bounded migration list
@@ -126,3 +126,4 @@ jobs:
           rm -f -- "$RUNNER_TEMP/production-security-migration.sql"
           rm -f -- "$RUNNER_TEMP/production-service-role-check.sql"
           rm -f -- "$RUNNER_TEMP/production-security-advisor-read-only.sql"
+          rm -f -- "$RUNNER_TEMP"/production-tenant-smoke-*.sql
