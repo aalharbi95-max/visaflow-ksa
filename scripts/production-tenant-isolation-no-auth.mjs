@@ -44,7 +44,7 @@ do $safe$ declare r record; begin
   loop
     if lower(r.lanname) not in ('sql','plpgsql') or concat(r.td,E'\\n',r.fd)
       ~* '(pg_notify|dblink|lo_export|supabase_functions|pg_net|net\\.http|http_(get|post|put|delete)|aws_lambda|webhook|nextval|insert[[:space:]]+into)'
-    then raise exception 'NO_SAFE_TRIGGER_FIXTURE'; end if;
+    then raise exception 'NO_SAFE_TRIGGER_FIXTURE:%:%',r.relname,r.tgname; end if;
   end loop;
 end $safe$; commit;
 
@@ -154,7 +154,7 @@ try {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const diagnostic = `${String(result.stderr || "")}\n${String(result.stdout || "")}`;
-    const marker = diagnostic.match(/(NO_SAFE_[A-Z_]+|[A-Z]+_(?:CROSS|SAME_TENANT|CONTEXT|ROLLBACK|VERIFICATION)_[A-Z_]+)/)?.[1] || "SANITIZED_SQL_FAILURE";
+    const marker = diagnostic.match(/(NO_SAFE_TRIGGER_FIXTURE:[a-z0-9_:-]+|NO_SAFE_[A-Z_]+|[A-Z]+_(?:CROSS|SAME_TENANT|CONTEXT|ROLLBACK|VERIFICATION)_[A-Z_]+)/i)?.[1] || "SANITIZED_SQL_FAILURE";
     throw new Error(`Production no-auth isolation failed: ${marker}`);
   }
 } finally {
