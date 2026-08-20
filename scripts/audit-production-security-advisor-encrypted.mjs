@@ -66,18 +66,30 @@ try {
   if (firstJson !== undefined) advisor = JSON.parse(stdout.slice(firstJson));
 }
 assert.ok(advisor, `Supabase CLI read-only Security Advisor returned no JSON (exit ${advisorResult.status})`);
-const advisorFindings = Array.isArray(advisor)
-  ? advisor
-  : (
-      advisor.results
-      || advisor.lints
-      || advisor.data?.results
-      || advisor.data?.lints
-      || advisor.result?.results
-      || advisor.result?.lints
-      || (Array.isArray(advisor.result) ? advisor.result : undefined)
-      || []
+const candidateArrays = [];
+const visit = (value) => {
+  if (Array.isArray(value)) {
+    const isExactAdvisorSet = value.length === 38 && value.every((item) =>
+      item
+      && typeof item === "object"
+      && typeof item.name === "string"
+      && typeof item.title === "string"
+      && item.metadata
+      && typeof item.metadata === "object"
     );
+    if (isExactAdvisorSet) {
+      candidateArrays.push(value);
+    }
+    for (const item of value) visit(item);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value)) visit(nested);
+  }
+};
+visit(advisor);
+assert.equal(candidateArrays.length, 1, "Expected exactly one validated 38-item Advisor result set");
+const advisorFindings = candidateArrays[0];
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
 assert.equal(advisorFindings.length, 38, "Refusing to encrypt an unexpected Advisor result count");
 
