@@ -30,9 +30,7 @@ begin
     'public.current_app_user_has_role(text[])',
     'public.is_current_platform_user()',
     'public.agency_recruitment_access_allowed(uuid,uuid,text)',
-    'public.agency_candidate_access_allowed(uuid,text,text)',
-    'public.current_ai_interview_access_token()',
-    'public.ai_interview_session_token_allowed(uuid)'
+    'public.agency_candidate_access_allowed(uuid,text,text)'
   ] loop
     if to_regprocedure(v_function) is null then
       raise exception using
@@ -212,6 +210,21 @@ $function$;
 
 revoke all on function public.can_read_ai_agent_company(uuid) from public, anon;
 grant execute on function public.can_read_ai_agent_company(uuid) to authenticated, service_role;
+
+create or replace function public.current_ai_interview_access_token()
+returns text language sql stable set search_path = '' as $$
+  select nullif(left(coalesce(current_setting('request.headers', true)::jsonb ->> 'x-ai-interview-token',''),256),'')
+$$;
+create or replace function public.ai_interview_session_token_allowed(p_session_id uuid)
+returns boolean language sql stable security definer set search_path = '' as $$
+  select exists(select 1 from public.ai_interview_sessions s where s.id=p_session_id
+    and s.access_token=public.current_ai_interview_access_token()
+    and (s.expires_at is null or s.expires_at>=now() or s.status in ('Completed','Cancelled')))
+$$;
+revoke all on function public.current_ai_interview_access_token() from public;
+revoke all on function public.ai_interview_session_token_allowed(uuid) from public;
+grant execute on function public.current_ai_interview_access_token() to anon,authenticated,service_role;
+grant execute on function public.ai_interview_session_token_allowed(uuid) to anon,authenticated,service_role;
 
 -- Canonical operational-table grants and RLS from 20260817000700/00800.
 revoke all on table public.employees, public.interviews, public.mobilizations,
