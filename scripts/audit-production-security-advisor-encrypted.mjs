@@ -76,6 +76,7 @@ try {
 assert.ok(advisor, `Supabase CLI read-only Security Advisor returned no JSON (exit ${advisorResult.status})`);
 const candidateArrays = [];
 const arrayShapes = [];
+const advisorSetSummaries = [];
 const visit = (value) => {
   if (Array.isArray(value)) {
     const firstObject = value.find((item) => item && typeof item === "object" && !Array.isArray(item));
@@ -83,7 +84,7 @@ const visit = (value) => {
       length: value.length,
       keys: firstObject ? Object.keys(firstObject).sort() : [],
     });
-    const isExactAdvisorSet = value.length === 38 && value.every((item) =>
+    const isAdvisorSet = value.length > 0 && value.every((item) =>
       item
       && typeof item === "object"
       && typeof item.name === "string"
@@ -91,7 +92,16 @@ const visit = (value) => {
       && item.metadata
       && typeof item.metadata === "object"
     );
-    if (isExactAdvisorSet) {
+    if (isAdvisorSet) {
+      const ruleCounts = Object.fromEntries(
+        Object.entries(value.reduce((counts, item) => {
+          counts[item.name] = (counts[item.name] || 0) + 1;
+          return counts;
+        }, {})).sort(([a], [b]) => a.localeCompare(b)),
+      );
+      advisorSetSummaries.push({ length: value.length, rule_counts: ruleCounts });
+    }
+    if (isAdvisorSet && value.length === 38) {
       candidateArrays.push(value);
     }
     for (const item of value) visit(item);
@@ -114,7 +124,7 @@ const failureCategory = [
 assert.equal(
   candidateArrays.length,
   1,
-  `Expected exactly one validated 38-item Advisor result set; category=${failureCategory}; JSON array shapes: ${JSON.stringify(arrayShapes)}`,
+  `Expected exactly one validated 38-item Advisor result set; category=${failureCategory}; Advisor sets: ${JSON.stringify(advisorSetSummaries)}; JSON array shapes: ${JSON.stringify(arrayShapes)}`,
 );
 const advisorFindings = candidateArrays[0];
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
