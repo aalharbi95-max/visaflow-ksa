@@ -82,9 +82,7 @@ test("Production baseline repair is manual, bounded, and never applies migration
   const workflow = await read("../.github/workflows/production-baseline-repair.yml");
   const runner = await read("../scripts/apply-production-baseline-repair.mjs");
   assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /production-baseline-repair/);
-  assert.match(workflow, /production-baseline-repair-once-20260820\.txt/);
-  assert.doesNotMatch(workflow, /push:/);
+  assert.doesNotMatch(workflow, /pull_request:|push:/);
   assert.match(workflow, /environment: Production/);
   assert.match(workflow, /confirm_project_ref/);
   assert.match(runner, /migration", "repair"/);

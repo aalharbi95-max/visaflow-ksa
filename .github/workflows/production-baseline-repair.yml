@@ -1,8 +1,6 @@
 name: Production baseline repair
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       confirm_project_ref:
@@ -33,12 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
-          else
-            test "${{ github.head_ref }}" = "codex/release-readiness-20260817"
-            test "$(tr -d '\r\n' < supabase/release/production-baseline-repair-once-20260820.txt)" = "zeocbftriydodzfgixjv"
-          fi
+          test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
           test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
