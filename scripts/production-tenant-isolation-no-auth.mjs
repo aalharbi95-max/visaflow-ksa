@@ -59,32 +59,40 @@ do $safe$ declare r record; begin
   end loop;
 end $safe$; commit;
 
+set statement_timeout='60s';
 create temp table isolation_baseline on commit preserve rows as
 select (select count(*) from public.company_email_settings)::bigint cs_count,
        (select count(*) from public.agency_penalties)::bigint ap_count;
 
 create temp table isolation_context on commit preserve rows as
-with company_pair as (
+with company_users as materialized (
+  select u.id,u.auth_user_id,u.company_id
+  from public.users u
+  where u.auth_user_id is not null and u.company_id is not null and u.is_active is true
+    and u.role in ('Admin','Company Admin')
+    and not exists(select 1 from public.company_email_settings s where s.company_id=u.company_id)
+), company_pair as (
   select ua.auth_user_id ca_auth,ua.company_id ca,ub.auth_user_id cb_auth,ub.company_id cb
-  from public.users ua join public.users ub on ub.company_id<>ua.company_id
-  where ua.auth_user_id is not null and ub.auth_user_id is not null
-    and ua.company_id is not null and ub.company_id is not null
-    and ua.is_active is true and ub.is_active is true
-    and ua.role in ('Admin','Company Admin') and ub.role in ('Admin','Company Admin')
-    and not exists(select 1 from public.company_email_settings s where s.company_id=ua.company_id)
-    and not exists(select 1 from public.company_email_settings s where s.company_id=ub.company_id)
-  order by ua.id,ub.id limit 1
+  from company_users ua cross join lateral (
+    select x.auth_user_id,x.company_id from company_users x
+    where x.company_id<>ua.company_id order by x.id limit 1
+  ) ub order by ua.id limit 1
+), agency_users as materialized (
+  select u.id,u.auth_user_id,u.agency_id,u.company_id user_company,a.company_id agency_company
+  from public.users u join public.agencies a on a.id=u.agency_id
+  where u.auth_user_id is not null and u.is_active is true and u.role='Agency'
+    and a.company_id is not null
 ), agency_pair as (
-  select ua.auth_user_id aa_auth,ua.agency_id aa,ag_a.company_id aa_company,
-         ub.auth_user_id ab_auth,ub.agency_id ab,ag_b.company_id ab_company
-  from public.users ua join public.agencies ag_a on ag_a.id=ua.agency_id
-  join public.users ub on ub.agency_id is not null and ub.agency_id<>ua.agency_id
-  join public.agencies ag_b on ag_b.id=ub.agency_id
-  where ua.auth_user_id is not null and ub.auth_user_id is not null
-    and ua.is_active is true and ub.is_active is true and ua.role='Agency' and ub.role='Agency'
-    and ag_a.company_id is not null and ag_b.company_id is not null
-    and ag_b.company_id is distinct from ua.company_id and ag_a.company_id is distinct from ub.company_id
-  order by ua.id,ub.id limit 1
+  select ua.auth_user_id aa_auth,ua.agency_id aa,ua.agency_company aa_company,
+         ub.auth_user_id ab_auth,ub.agency_id ab,ub.agency_company ab_company
+  from agency_users ua cross join lateral (
+    select x.auth_user_id,x.agency_id,x.agency_company
+    from agency_users x
+    where x.agency_id<>ua.agency_id
+      and x.agency_company is distinct from ua.user_company
+      and ua.agency_company is distinct from x.user_company
+    order by x.id limit 1
+  ) ub order by ua.id limit 1
 )
 select * from company_pair cross join agency_pair;
 
