@@ -17,18 +17,23 @@ async function management(path) {
 }
 
 async function query(sql) {
-  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: sql, read_only: true }),
-  });
-  if (!response.ok) {
+  const retryable = new Set([408, 429, 500, 502, 503, 504, 522, 524, 544]);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: sql, read_only: true }),
+    });
+    if (response.ok) return response.json();
     let detail = {};
     try { detail = await response.json(); } catch { detail = {}; }
     const code = String(detail.code || detail.error_code || "unknown").slice(0, 80);
-    throw new Error(`Read-only Production query failed with HTTP ${response.status} (${code})`);
+    if (!retryable.has(response.status) || attempt === 3) {
+      throw new Error(`Read-only Production query failed with HTTP ${response.status} (${code}) after ${attempt} attempt(s)`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 5_000));
   }
-  return response.json();
+  throw new Error("Read-only Production query returned no result");
 }
 
 function identifier(value) {
@@ -89,7 +94,8 @@ const searchableLogColumns = await query(`
   where columns.table_schema='public'
     and tables.table_type='BASE TABLE'
     and columns.table_name ~* '(audit|activity|event|history|log)'
-    and columns.data_type in ('text','character varying','json','jsonb','uuid')
+    and columns.column_name ~* '((company|tenant).*id|id.*(company|tenant))'
+    and columns.data_type in ('text','character varying','uuid')
   order by columns.table_name,columns.ordinal_position`);
 for (const row of searchableLogColumns) {
   identifier(String(row.table_name));
