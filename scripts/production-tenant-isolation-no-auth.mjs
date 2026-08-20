@@ -37,14 +37,25 @@ const apX = "85000000-0000-4000-8000-000000000053";
 const sql = `
 begin; set transaction read only; set local statement_timeout='60s';
 do $safe$ declare r record; begin
-  for r in select c.relname,t.tgname,l.lanname,pg_get_triggerdef(t.oid,true) td,pg_get_functiondef(p.oid) fd
+  for r in select c.relname,t.tgname,l.lanname,p.proname,pg_get_triggerdef(t.oid,true) td,pg_get_functiondef(p.oid) fd
     from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
     join pg_proc p on p.oid=t.tgfoid join pg_language l on l.oid=p.prolang
     where not t.tgisinternal and n.nspname='public' and c.relname=any(array['company_email_settings','agency_penalties'])
   loop
     if lower(r.lanname) not in ('sql','plpgsql') or concat(r.td,E'\\n',r.fd)
-      ~* '(pg_notify|dblink|lo_export|supabase_functions|pg_net|net\\.http|http_(get|post|put|delete)|aws_lambda|webhook|nextval|insert[[:space:]]+into)'
+      ~* '(pg_notify|dblink|lo_export|supabase_functions|pg_net|net\\.http|http_(get|post|put|delete)|aws_lambda|webhook|nextval)'
     then raise exception 'NO_SAFE_TRIGGER_FIXTURE:%:%',r.relname,r.tgname; end if;
+    if r.fd ~* 'insert[[:space:]]+into' and (
+      r.proname <> 'log_system_activity'
+      or r.fd !~* 'insert[[:space:]]+into[[:space:]]+public\\.system_activity_logs'
+      or coalesce(array_length(regexp_split_to_array(lower(r.fd),'insert[[:space:]]+into'),1),1)-1 <> 1
+      or exists (
+        select 1 from pg_attribute a
+        left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+        where a.attrelid='public.system_activity_logs'::regclass and a.attnum>0 and not a.attisdropped
+          and (a.attidentity<>'' or coalesce(pg_get_expr(d.adbin,d.adrelid),'') ~* 'nextval')
+      )
+    ) then raise exception 'NO_SAFE_TRIGGER_FIXTURE:%:%',r.relname,r.tgname; end if;
   end loop;
 end $safe$; commit;
 
