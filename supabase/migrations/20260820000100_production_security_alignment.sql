@@ -10,6 +10,8 @@ set local statement_timeout = '60s';
 
 -- All integrity and prerequisite checks intentionally precede the first
 -- privilege, RLS, policy, or view change. Any failure aborts the transaction.
+set local statement_timeout = '180s';
+
 do $precheck$
 declare
   v_table text;
@@ -194,6 +196,8 @@ begin
   end if;
 end
 $precheck$;
+
+set local statement_timeout = '60s';
 
 -- Exact canonical helper from 20260817000500. Its two dependencies are
 -- verified by the prerequisite block above before any security change.
