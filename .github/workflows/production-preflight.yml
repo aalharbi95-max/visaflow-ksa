@@ -44,8 +44,6 @@ jobs:
         id: catalog
         continue-on-error: true
         run: node scripts/production-preflight.mjs
-      - name: Link exact Production project locally
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
       - name: Capture Production migration history
         id: history
         continue-on-error: true
