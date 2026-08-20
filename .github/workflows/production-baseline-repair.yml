@@ -34,6 +34,7 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       PRODUCTION_SECURITY_REMEDIATION: APPLY_20260820000100_ONLY
+      PRODUCTION_TENANT_DML_SMOKE: ROLLBACK_ONLY_EXPLICITLY_APPROVED
     steps:
       - name: Check out the exact reviewed revision
         uses: actions/checkout@v4
@@ -75,8 +76,8 @@ jobs:
           done
           exit 1
 
-      - name: Run transactional Company and Agency tenant-isolation validation
-        run: node scripts/staging-security-smoke.mjs
+      - name: Run rollback-only Company and Agency tenant-isolation validation
+        run: node scripts/production-tenant-isolation-smoke.mjs
 
       - name: Confirm exact migration history after all validations
         shell: bash
