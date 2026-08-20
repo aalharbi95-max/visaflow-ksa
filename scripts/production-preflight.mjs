@@ -22,13 +22,21 @@ async function management(path) {
 }
 
 async function query(sql) {
-  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: sql }),
-  });
-  if (!response.ok) throw new Error(`Production read-only query failed with HTTP ${response.status}`);
-  return response.json();
+  const retryableStatuses = new Set([502, 503, 504, 522, 524, 544]);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: sql, read_only: true }),
+    });
+    if (response.ok) return response.json();
+    if (!retryableStatuses.has(response.status) || attempt === 3) {
+      throw new Error(`Production read-only query failed with HTTP ${response.status} after ${attempt} attempt(s)`);
+    }
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+  }
+  throw new Error("Production read-only query retry loop exited unexpectedly");
 }
 
 function identifier(value) {
