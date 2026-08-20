@@ -49,7 +49,7 @@ const errorBlocks = splinterSql
   .split(/\r?\nunion all\r?\n(?=\()/)
   .filter((block) => /'ERROR'\s+as\s+level/i.test(block));
 assert.equal(errorBlocks.length, 8, "Pinned Splinter ERROR rule inventory changed unexpectedly");
-const errorAdvisorSql = `set local search_path = '';\n${errorBlocks.join("\nunion all\n")};`;
+const errorAdvisorSql = `${errorBlocks.join("\nunion all\n")};`;
 const advisorResult = spawnSync("supabase", [
   "db", "query",
   "--output-format", "json",
