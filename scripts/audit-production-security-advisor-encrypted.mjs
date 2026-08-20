@@ -67,12 +67,12 @@ try {
 assert.ok(advisor, `Supabase CLI read-only Security Advisor returned no JSON (exit ${advisorResult.status})`);
 const advisorFindings = Array.isArray(advisor) ? advisor : (advisor.results || advisor.lints || []);
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
+assert.equal(advisorFindings.length, 38, "Refusing to encrypt an unexpected Advisor result count");
 
-const blockingLevels = new Set(["ERROR", "CRITICAL", "HIGH", "BLOCKER"]);
 const findings = advisorFindings
-  .filter((lint) => blockingLevels.has(String(lint.level || lint.severity || "").toUpperCase()))
   .map((lint) => ({
-    severity: String(lint.level || lint.severity || "UNKNOWN").toUpperCase(),
+    // The CLI invocation already limits output to --level error.
+    severity: String(lint.level || lint.severity || "ERROR").toUpperCase(),
     rule: String(lint.name || lint.code || lint.id || "unknown"),
     title: String(lint.title || ""),
     schema: String(lint.metadata?.schema || ""),
