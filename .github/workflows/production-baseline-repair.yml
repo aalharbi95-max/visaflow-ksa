@@ -139,6 +139,7 @@ jobs:
         shell: bash
         run: |
           rm -f -- "$RUNNER_TEMP/production-backup-encrypted.zip"
+          rm -f -- "$RUNNER_TEMP/production-backup-encrypted.cms"
           rm -f -- "$RUNNER_TEMP/production-security-precheck-state.json"
           rm -f -- "$RUNNER_TEMP/production-security-schema-committed"
           rm -f -- "$RUNNER_TEMP/production-migration-list.txt"

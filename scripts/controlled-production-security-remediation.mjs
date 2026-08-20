@@ -144,7 +144,22 @@ async function verifyBackup() {
   assert.equal(listing.status, 0, "Could not inspect encrypted backup ZIP");
   const entries = String(listing.stdout || "").split(/\r?\n/).filter(Boolean);
   assert.equal(entries.length, 1, "Backup artifact must contain exactly one encrypted file");
-  assert.match(entries[0], /\.age$/i, "Backup artifact does not contain the expected encrypted payload");
+  assert.equal(entries[0], "visaflow-production-logical-backup-20260820T194240Z.tar.gz.cms",
+    "Backup artifact does not contain the expected encrypted CMS payload");
+  const extracted = spawnSync("unzip", ["-p", zipPath, entries[0]], {
+    encoding: null,
+    shell: false,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  assert.equal(extracted.status, 0, "Could not extract encrypted CMS payload for integrity validation");
+  assert.ok(extracted.stdout?.length > 0, "Encrypted CMS payload is empty");
+  const encryptedPath = join(runnerTemp, "production-backup-encrypted.cms");
+  await writeFile(encryptedPath, extracted.stdout, { mode: 0o600 });
+  const cms = spawnSync("openssl", ["cms", "-cmsout", "-inform", "DER", "-in", encryptedPath, "-noout"], {
+    encoding: "utf8",
+    shell: false,
+  });
+  assert.equal(cms.status, 0, "Encrypted CMS payload structure is invalid");
   console.log(`Backup gate PASS: encrypted artifact ${artifactId}, ${metadata.size_in_bytes} bytes, expires ${metadata.expires_at}.`);
 }
 
