@@ -76,8 +76,9 @@ assert.equal(metadata.id || metadata.ref, expectedRef, "Supabase returned a diff
 const migration = await readFile(migrationPath, "utf8");
 assert.equal(createHash("sha256").update(migration).digest("hex"), expectedSha256,
   "Reviewed migration hash mismatch");
-assert.match(migration, /^\s*begin;/i, "Migration must start a transaction");
-assert.match(migration, /commit;\s*$/i, "Migration must end with commit");
+const firstExecutableStatement = migration.replace(/^(?:\s*--[^\r\n]*(?:\r?\n|$))+/, "").trimStart();
+assert.ok(/^begin;/i.test(firstExecutableStatement), "Migration must start a transaction after leading comments");
+assert.ok(/commit;\s*$/i.test(migration), "Migration must end with commit");
 assert.doesNotMatch(migration, /^\s*(insert|update|delete|truncate)\b/gim,
   "Migration contains forbidden row DML");
 
