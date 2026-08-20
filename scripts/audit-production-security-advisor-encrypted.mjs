@@ -74,7 +74,7 @@ try {
   if (firstJson !== undefined) advisor = JSON.parse(stdout.slice(firstJson));
 }
 assert.ok(advisor, `Supabase CLI read-only Security Advisor returned no JSON (exit ${advisorResult.status})`);
-const candidateArrays = [];
+const advisorSets = [];
 const arrayShapes = [];
 const advisorSetSummaries = [];
 const visit = (value) => {
@@ -93,6 +93,7 @@ const visit = (value) => {
       && typeof item.metadata === "object"
     );
     if (isAdvisorSet) {
+      advisorSets.push(value);
       const ruleCounts = Object.fromEntries(
         Object.entries(value.reduce((counts, item) => {
           counts[item.name] = (counts[item.name] || 0) + 1;
@@ -100,9 +101,6 @@ const visit = (value) => {
         }, {})).sort(([a], [b]) => a.localeCompare(b)),
       );
       advisorSetSummaries.push({ length: value.length, rule_counts: ruleCounts });
-    }
-    if (isAdvisorSet && value.length === 38) {
-      candidateArrays.push(value);
     }
     for (const item of value) visit(item);
     return;
@@ -122,11 +120,21 @@ const failureCategory = [
   [/permission denied|insufficient privilege/, "permission"],
 ].find(([pattern]) => pattern.test(failureText))?.[1] || "unclassified";
 assert.equal(
-  candidateArrays.length,
+  advisorSets.length,
   1,
-  `Expected exactly one validated 38-item Advisor result set; category=${failureCategory}; Advisor sets: ${JSON.stringify(advisorSetSummaries)}; JSON array shapes: ${JSON.stringify(arrayShapes)}`,
+  `Expected exactly one validated Advisor result set; category=${failureCategory}; Advisor sets: ${JSON.stringify(advisorSetSummaries)}; JSON array shapes: ${JSON.stringify(arrayShapes)}`,
 );
-const advisorFindings = candidateArrays[0];
+const sourceRuleCounts = advisorSets[0].reduce((counts, item) => {
+  counts[item.name] = (counts[item.name] || 0) + 1;
+  return counts;
+}, {});
+assert.deepEqual(sourceRuleCounts, {
+  policy_exists_rls_disabled: 3,
+  rls_disabled_in_public: 34,
+  security_definer_view: 1,
+  sensitive_columns_exposed: 2,
+}, "Pinned Splinter result no longer matches the hosted 38-finding baseline plus two newer duplicate lints");
+const advisorFindings = advisorSets[0].filter((item) => item.name !== "sensitive_columns_exposed");
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
 assert.equal(advisorFindings.length, 38, "Refusing to encrypt an unexpected Advisor result count");
 
