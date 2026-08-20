@@ -18,7 +18,6 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
       PRODUCTION_BASELINE_OUTPUT: production-baseline-candidate.json
     steps:
       - uses: actions/checkout@v4
@@ -37,12 +36,18 @@ jobs:
         with:
           version: 2.109.1
       - name: Capture ephemeral schema-only evidence
+        env:
+          PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
         run: node scripts/supabase-pooler-cli.mjs db dump --schema public --file "$PRODUCTION_SCHEMA_DUMP"
       - name: Classify all reviewed migrations
+        env:
+          PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
         run: node scripts/classify-production-migrations.mjs
       - name: Delete ephemeral Production schema evidence
         if: always()
         shell: bash
+        env:
+          PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
         run: rm -f -- "$PRODUCTION_SCHEMA_DUMP"
       - name: Upload version-only classification manifest
         if: always()
