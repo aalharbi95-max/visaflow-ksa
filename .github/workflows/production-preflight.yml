@@ -25,8 +25,6 @@ jobs:
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       EXPECTED_PROJECT_REF: zeocbftriydodzfgixjv
-      PLAIN_DIR: ${{ runner.temp }}/visaflow-production-backup-plain
-      ENCRYPTED_DIR: ${{ runner.temp }}/visaflow-production-backup-encrypted
     steps:
       - name: Check out the exact reviewed revision
         uses: actions/checkout@v4
@@ -56,6 +54,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
+          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
           mkdir -p "$PLAIN_DIR" "$ENCRYPTED_DIR"
           node scripts/supabase-pooler-cli.mjs db dump --role-only --file "$PLAIN_DIR/roles.sql"
           node scripts/supabase-pooler-cli.mjs db dump --file "$PLAIN_DIR/schema.sql"
@@ -70,6 +70,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
+          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
           archive="$PLAIN_DIR/visaflow-production-logical-backup-$timestamp.tar.gz"
           encrypted="$ENCRYPTED_DIR/visaflow-production-logical-backup-$timestamp.tar.gz.cms"
@@ -96,6 +98,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
           if [ -d "$PLAIN_DIR" ]; then
             find "$PLAIN_DIR" -type f -exec shred -u {} +
             rm -rf "$PLAIN_DIR"
@@ -116,6 +119,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
           find "$ENCRYPTED_DIR" -type f -exec shred -u {} +
           rm -rf "$ENCRYPTED_DIR"
 
@@ -124,6 +128,8 @@ jobs:
         shell: bash
         run: |
           set +e
+          PLAIN_DIR="$RUNNER_TEMP/visaflow-production-backup-plain"
+          ENCRYPTED_DIR="$RUNNER_TEMP/visaflow-production-backup-encrypted"
           for target in "$PLAIN_DIR" "$ENCRYPTED_DIR"; do
             if [ -d "$target" ]; then
               find "$target" -type f -exec shred -u {} +
