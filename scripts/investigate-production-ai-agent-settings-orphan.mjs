@@ -91,15 +91,17 @@ const searchableLogColumns = await query(`
     and columns.table_name ~* '(audit|activity|event|history|log)'
     and columns.data_type in ('text','character varying','json','jsonb','uuid')
   order by columns.table_name,columns.ordinal_position`);
-assert.ok(searchableLogColumns.length <= 120, "Log-column inventory exceeds the bounded read-only audit limit");
-const boundedLogColumns = searchableLogColumns.slice(0, 120);
-for (const row of boundedLogColumns) {
+for (const row of searchableLogColumns) {
   identifier(String(row.table_name));
   identifier(String(row.column_name));
 }
-const logSql = boundedLogColumns.map(({ table_name: table, column_name: column }) =>
-  `select '${table}'::text as table_name,'${column}'::text as column_name,count(*)::integer as match_count from public.${identifier(table)} where position('${companyId}' in coalesce(${identifier(column)}::text,'')) > 0`).join(" union all ");
-const logMatches = logSql ? (await query(logSql)).filter((row) => Number(row.match_count) > 0) : [];
+const logMatches = [];
+for (let offset = 0; offset < searchableLogColumns.length; offset += 20) {
+  const batch = searchableLogColumns.slice(offset, offset + 20);
+  const sql = batch.map(({ table_name: table, column_name: column }) =>
+    `select '${table}'::text as table_name,'${column}'::text as column_name,count(*)::integer as match_count from public.${identifier(table)} where position('${companyId}' in coalesce(${identifier(column)}::text,'')) > 0`).join(" union all ");
+  logMatches.push(...(await query(sql)).filter((row) => Number(row.match_count) > 0));
+}
 
 const result = {
   orphan: {
