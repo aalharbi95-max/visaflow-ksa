@@ -102,10 +102,19 @@ const visit = (value) => {
   }
 };
 visit(advisor);
+const failureText = `${stdout}\n${String(advisorResult.stderr || "")}`.toLowerCase();
+const failureCategory = [
+  [/cannot insert multiple commands|multiple commands.*prepared/, "multiple_commands"],
+  [/syntax error|parse error/, "sql_syntax"],
+  [/unknown flag|invalid value for flag|unexpected argument/, "cli_arguments"],
+  [/statement timeout|canceling statement|timed out|timeout/, "query_timeout"],
+  [/password authentication|authentication failed/, "authentication"],
+  [/permission denied|insufficient privilege/, "permission"],
+].find(([pattern]) => pattern.test(failureText))?.[1] || "unclassified";
 assert.equal(
   candidateArrays.length,
   1,
-  `Expected exactly one validated 38-item Advisor result set; JSON array shapes: ${JSON.stringify(arrayShapes)}`,
+  `Expected exactly one validated 38-item Advisor result set; category=${failureCategory}; JSON array shapes: ${JSON.stringify(arrayShapes)}`,
 );
 const advisorFindings = candidateArrays[0];
 assert.ok(Array.isArray(advisorFindings), "Supabase CLI returned an invalid Advisor result");
