@@ -38,19 +38,27 @@ assert.equal(user, `postgres.${projectRef}`, "Authoritative Supabase pooler user
 
 const sessionOptions = encodeURIComponent("-c pgrst.db_schemas=public -c statement_timeout=480000");
 const dbUrl = `postgresql://${user}:${encodeURIComponent(password)}@${host}:5432/${database}?sslmode=require&options=${sessionOptions}`;
+const splinterCommit = "af0013defad2ae07bc111194eca7920187f5f440";
+const splinterResponse = await fetch(
+  `https://raw.githubusercontent.com/supabase/splinter/${splinterCommit}/splinter.sql`,
+  { signal: AbortSignal.timeout(30_000) },
+);
+assert.ok(splinterResponse.ok, `Pinned Supabase Splinter source failed with HTTP ${splinterResponse.status}`);
+const splinterSql = await splinterResponse.text();
+const errorBlocks = splinterSql
+  .split(/\r?\nunion all\r?\n(?=\()/)
+  .filter((block) => /'ERROR'\s+as\s+level/i.test(block));
+assert.equal(errorBlocks.length, 8, "Pinned Splinter ERROR rule inventory changed unexpectedly");
+const errorAdvisorSql = `set local search_path = '';\n${errorBlocks.join("\nunion all\n")};`;
 const advisorResult = spawnSync("supabase", [
-  "db", "advisors",
-  "--type", "security",
-  "--level", "error",
-  "--fail-on", "none",
+  "db", "query",
   "--output-format", "json",
+  "--output", "json",
   "--db-url", dbUrl,
+  errorAdvisorSql,
 ], {
   encoding: "utf8",
   shell: false,
-  // Supabase CLI 2.109.1 does not propagate the hosted PostgREST schema list
-  // when using --db-url. Set it for this read-only session so API-exposure
-  // lints match the hosted Security Advisor instead of silently false-passing.
   env: process.env,
   maxBuffer: 10 * 1024 * 1024,
 });
