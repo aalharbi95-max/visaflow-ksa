@@ -14,7 +14,7 @@ const forbiddenProjectRef = "iijhdilfzndqlguefipn";
 const migrationVersion = "20260820000100";
 const forbiddenVersion = "20260804000200";
 const migrationPath = "supabase/migrations/20260820000100_production_security_alignment.sql";
-const expectedMigrationSha256 = "b279e95cecc3ae9819feab5aac8b56b5bf592252955afa0a41dbc79b00b10b69";
+const expectedMigrationSha256 = "5ff9d2bd677ab2123913636c47e48b95c8af4d64046606324afad0cf30642473";
 const statePath = join(runnerTemp, "production-security-precheck-state.json");
 const commitMarkerPath = join(runnerTemp, "production-security-schema-committed");
 const orphanDeleteMarkerPath = join(runnerTemp, "production-orphan-delete-committed");
@@ -282,7 +282,6 @@ async function validateMigration() {
 }
 
 async function precheck() {
-  await readFile(orphanDeleteMarkerPath, "utf8");
   const migration = await validateMigration();
   const connection = await pooler();
   const versions = migrationVersions(connection);

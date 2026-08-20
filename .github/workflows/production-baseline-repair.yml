@@ -59,7 +59,7 @@ jobs:
           test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
           test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
           test "${{ inputs.confirm_migration_version }}" = "20260820000100"
-          test "${{ inputs.confirm_reviewed_sha }}" = "3d70d65a57643104aaf57ec54c9446d4a458cf37"
+          test "${{ inputs.confirm_reviewed_sha }}" = "758a50813188cc0dda1c959343c3882237a9ba28"
           test "$(gh api repos/aalharbi95-max/visaflow-ksa/pulls/53 --jq .head.sha)" = "${{ inputs.confirm_reviewed_sha }}"
           test "${{ inputs.confirm_backup_artifact_id }}" = "9426185634"
           git cat-file -e "${{ inputs.confirm_reviewed_sha }}^{commit}"
@@ -86,12 +86,6 @@ jobs:
 
       - name: Confirm new encrypted Production backup remains valid
         run: node scripts/controlled-production-security-remediation.mjs backup
-
-      - name: Recheck exact orphan and all zero-reference conditions read-only
-        run: node scripts/controlled-production-security-remediation.mjs orphan-precheck
-
-      - name: Delete only the exact reviewed orphan atomically
-        run: node scripts/controlled-production-security-remediation.mjs orphan-delete
 
       - name: Run all Production migration prechecks through Session Pooler
         run: node scripts/controlled-production-security-remediation.mjs precheck
