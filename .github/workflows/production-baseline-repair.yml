@@ -41,8 +41,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node <<'NODE'
-          const assert = require('node:assert/strict');
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
           const projectRef = process.env.SUPABASE_PROJECT_REF;
           const token = process.env.SUPABASE_ACCESS_TOKEN;
           const helpers = [
