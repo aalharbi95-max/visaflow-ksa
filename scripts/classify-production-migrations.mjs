@@ -10,7 +10,9 @@ assert.equal(projectRef, expectedProjectRef, "Production project mismatch");
 assert.ok(schemaPath, "PRODUCTION_SCHEMA_DUMP is required");
 
 const stagingManifest = JSON.parse(await readFile("supabase/release/staging-baseline-20260817.json", "utf8"));
-const schema = (await readFile(schemaPath, "utf8")).toLowerCase();
+// pg_dump quotes identifiers by default. Removing identifier quotes in memory
+// makes object-presence checks format-independent; the dump is never emitted.
+const schema = (await readFile(schemaPath, "utf8")).toLowerCase().replaceAll('"', "");
 const migrationsDir = "supabase/migrations";
 const files = (await readdir(migrationsDir)).filter((file) => /^\d{14}_.+\.sql$/.test(file)).sort();
 assert.equal(files.length, 76, "Production baseline requires the reviewed 76-migration inventory");
@@ -81,7 +83,7 @@ function anchors(sql) {
       evidence.push(schema.includes(`constraint ${constraint} `) || schema.includes(`constraint "${constraint}" `));
     }
     if (/enable\s+row\s+level\s+security/.test(statement[0])) {
-      evidence.push(schema.includes(`table public.${table} enable row level security`));
+      evidence.push(new RegExp(`alter\\s+table\\s+(?:only\\s+)?public\\.${table}\\s+enable\\s+row\\s+level\\s+security`).test(schema));
     }
   }
   return evidence;
