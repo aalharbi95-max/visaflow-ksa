@@ -72,10 +72,13 @@ const [tables, tenantColumns, hiringRpc, advisor, backups] = await Promise.all([
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relkind in ('r','p') order by c.relname`),
   query(`
-    select table_name,column_name,is_nullable
-    from information_schema.columns
-    where table_schema='public' and column_name in ('company_id','agency_id')
-    order by table_name,column_name`),
+    select c.relname as table_name,a.attname as column_name,(not a.attnotnull) as is_nullable
+    from pg_class c
+    join pg_namespace n on n.oid=c.relnamespace
+    join pg_attribute a on a.attrelid=c.oid and a.attnum > 0 and not a.attisdropped
+    where n.nspname='public' and c.relkind in ('r','p')
+      and a.attname in ('company_id','agency_id')
+    order by c.relname,a.attname`),
   query(`
     select count(*)::integer as count
     from pg_proc p join pg_namespace n on n.oid=p.pronamespace
@@ -96,7 +99,7 @@ for (const column of tenantColumns) {
   nullAndOrphanCounts.push({
     table_name: column.table_name,
     column_name: column.column_name,
-    nullable: column.is_nullable === "YES",
+    nullable: column.is_nullable === true,
     null_count: rows[0]?.null_count || 0,
     orphan_count: rows[0]?.orphan_count || 0,
   });
