@@ -78,7 +78,7 @@ const companyColumns = await query(`
 const companyTables = companyColumns.map((row) => String(row.table_name));
 companyTables.forEach(identifier);
 const referenceSql = companyTables.map((table) =>
-  `select '${table}'::text as table_name,count(*)::integer as match_count from public.${identifier(table)} where company_id='${companyId}'::uuid`).join(" union all ");
+  `select '${table}'::text as table_name,count(*)::integer as match_count from public.${identifier(table)} where company_id::text='${companyId}'`).join(" union all ");
 const references = referenceSql ? await query(referenceSql) : [];
 const positiveReferences = references.filter((row) => Number(row.match_count) > 0);
 const aiAgentReferences = positiveReferences.filter((row) =>
