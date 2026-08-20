@@ -4,7 +4,12 @@ import { spawnSync } from "node:child_process";
 
 const manifest = JSON.parse(await readFile("supabase/release/staging-baseline-20260817.json", "utf8"));
 assert.equal(process.env.SUPABASE_PROJECT_REF, manifest.project_ref, "Staging project mismatch");
-const repair = [...manifest.already_reflected_in_schema, ...manifest.obsolete_or_unsafe_to_replay];
+const postBaselineReflected = manifest.post_baseline_already_reflected_in_schema || [];
+const repair = [
+  ...manifest.already_reflected_in_schema,
+  ...manifest.obsolete_or_unsafe_to_replay,
+  ...postBaselineReflected,
+];
 assert.equal(new Set(repair).size, repair.length, "Duplicate repair version");
 
 function run(args) {
