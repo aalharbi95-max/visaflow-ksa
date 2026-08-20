@@ -36,7 +36,8 @@ const database = String(primary.db_name || parsedConnection?.[3] || "postgres");
 assert.match(host, /^[a-z0-9.-]+\.pooler\.supabase\.com$/i, "Authoritative Supabase pooler host is invalid");
 assert.equal(user, `postgres.${projectRef}`, "Authoritative Supabase pooler user does not match Production");
 
-const dbUrl = `postgresql://${user}:${encodeURIComponent(password)}@${host}:5432/${database}?sslmode=require`;
+const sessionOptions = encodeURIComponent("-c pgrst.db_schemas=public");
+const dbUrl = `postgresql://${user}:${encodeURIComponent(password)}@${host}:5432/${database}?sslmode=require&options=${sessionOptions}`;
 const advisorResult = spawnSync("supabase", [
   "db", "advisors",
   "--type", "security",
@@ -50,7 +51,7 @@ const advisorResult = spawnSync("supabase", [
   // Supabase CLI 2.109.1 does not propagate the hosted PostgREST schema list
   // when using --db-url. Set it for this read-only session so API-exposure
   // lints match the hosted Security Advisor instead of silently false-passing.
-  env: { ...process.env, PGOPTIONS: "-c pgrst.db_schemas=public" },
+  env: process.env,
   maxBuffer: 10 * 1024 * 1024,
 });
 if (advisorResult.error) throw advisorResult.error;
