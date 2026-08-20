@@ -1,4 +1,4 @@
-name: Production baseline repair
+name: One-time Production helper inventory
 
 on:
   workflow_dispatch:
@@ -7,48 +7,66 @@ on:
         description: Exact Production project ref
         required: true
         type: string
+      confirm_commit_sha:
+        description: Exact reviewed commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  repair:
+  inventory:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     environment: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      PRODUCTION_BASELINE_REPAIR: "true"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-      - name: Validate exact Production identity and explicit dispatch input
+          ref: ${{ github.sha }}
+      - name: Validate exact Production identity and revision
         shell: bash
         run: |
           set -euo pipefail
+          test "${{ github.ref_name }}" = "codex/release-readiness-20260817"
           test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
           test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" != "iijhdilfzndqlguefipn"
+          test "${{ inputs.confirm_commit_sha }}" = "${{ github.sha }}"
           test -n "$SUPABASE_ACCESS_TOKEN"
-          test -n "$SUPABASE_DB_PASSWORD"
-      - uses: supabase/setup-cli@v1
-        with:
-          version: 2.109.1
-      - name: Repair reviewed history and verify bounded dry-run
-        run: node scripts/apply-production-baseline-repair.mjs
-      - name: Retry Production Security Advisor read-only
-        run: node scripts/check-production-security-advisor.mjs
-      - name: Upload version-only repair evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-baseline-repair-evidence
-          path: |
-            production-migration-list-after-repair.txt
-            production-migration-dry-run-after-repair.txt
-          if-no-files-found: warn
-          retention-days: 1
+      - name: Inventory every required pre-existing helper in one read-only query
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const projectRef = process.env.SUPABASE_PROJECT_REF;
+          const token = process.env.SUPABASE_ACCESS_TOKEN;
+          const helpers = [
+            'public.current_app_user_company_id()',
+            'public.current_app_user_role()',
+            'public.current_app_user_agency_id()',
+            'public.current_app_user_has_role(text[])',
+            'public.is_current_platform_user()',
+            'public.agency_recruitment_access_allowed(uuid,uuid,text)',
+            'public.agency_candidate_access_allowed(uuid,text,text)',
+            'public.current_ai_interview_access_token()',
+            'public.ai_interview_session_token_allowed(uuid)',
+          ];
+          const sql = `select helper, to_regprocedure(helper) is not null as present from unnest(array[${helpers.map((h) => `'${h}'`).join(',')}]::text[]) helper order by helper`;
+          const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: sql, read_only: true }),
+          });
+          assert.equal(response.ok, true, `Helper inventory failed with HTTP ${response.status}`);
+          const rows = await response.json();
+          assert.equal(rows.length, helpers.length, 'Helper inventory returned an unexpected row count');
+          const missing = rows.filter((row) => row.present !== true).map((row) => row.helper);
+          console.log(`Required helper inventory: ${rows.length}; present: ${rows.length - missing.length}; missing: ${missing.length}`);
+          console.log(`Missing helpers: ${missing.length ? missing.join(', ') : 'none'}`);
+          if (missing.length) process.exit(1);
+          NODE
