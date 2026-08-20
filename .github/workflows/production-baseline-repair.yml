@@ -1,4 +1,4 @@
-name: One-time controlled Production security remediation
+name: Production post-remediation validation
 
 on:
   workflow_dispatch:
@@ -79,27 +79,18 @@ jobs:
       - name: Confirm PostgreSQL client availability
         run: psql --version
 
-      - name: Run all Production migration prechecks through Session Pooler
-        run: node scripts/controlled-production-security-remediation.mjs precheck
-
-      - name: Apply only reviewed security SQL through Session Pooler
-        run: node scripts/controlled-production-security-remediation.mjs apply
-
-      - name: Record only 20260820000100 in migration history
-        run: node scripts/supabase-pooler-cli.mjs migration repair 20260820000100 --status applied
-
-      - name: Verify RLS, view, service role, orphan deletion, row counts, and history
-        run: node scripts/controlled-production-security-remediation.mjs verify
+      - name: Verify RLS, view, service role, orphan absence, and history read-only
+        run: node scripts/controlled-production-security-remediation.mjs post-verify
 
       - name: Verify Security Advisor has no Critical, High, or Error findings
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3; do
             if node scripts/check-production-security-advisor.mjs; then
               exit 0
             fi
-            if [ "$attempt" -lt 5 ]; then sleep 15; fi
+            if [ "$attempt" -lt 3 ]; then sleep 15; fi
           done
           exit 1
 
