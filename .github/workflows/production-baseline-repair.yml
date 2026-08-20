@@ -37,7 +37,7 @@ jobs:
             test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
           else
             test "${{ github.head_ref }}" = "codex/release-readiness-20260817"
-            test "$(git log -1 --format=%s)" = "ci: repair production migration baseline [production-baseline-repair]"
+            test "$(tr -d '\r\n' < supabase/release/production-baseline-repair-once-20260820.txt)" = "zeocbftriydodzfgixjv"
           fi
           test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
           test -n "$SUPABASE_ACCESS_TOKEN"
