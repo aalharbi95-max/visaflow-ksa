@@ -14,9 +14,19 @@ const retryable = new Set([408, 429, 500, 502, 503, 504, 522, 524, 544]);
 let advisor;
 
 for (let attempt = 1; attempt <= 4; attempt += 1) {
-  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/advisors/security`, {
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-  });
+  let response;
+  try {
+    response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/advisors/security`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    if (attempt === 4) {
+      throw new Error(`Production Security Advisor timed out after ${attempt} attempt(s)`, { cause: error });
+    }
+    await new Promise((resolve) => setTimeout(resolve, attempt * 5_000));
+    continue;
+  }
 
   if (response.ok) {
     advisor = await response.json();
@@ -70,4 +80,3 @@ await writeFile(outputPath, `${JSON.stringify({
 plaintext.fill(0);
 contentKey.fill(0);
 console.log(`Captured and encrypted ${findings.length} sanitized Production Security Advisor Critical/High/ERROR findings.`);
-
