@@ -36,7 +36,7 @@ const database = String(primary.db_name || parsedConnection?.[3] || "postgres");
 assert.match(host, /^[a-z0-9.-]+\.pooler\.supabase\.com$/i, "Authoritative Supabase pooler host is invalid");
 assert.equal(user, `postgres.${projectRef}`, "Authoritative Supabase pooler user does not match Production");
 
-const sessionOptions = encodeURIComponent("-c pgrst.db_schemas=public");
+const sessionOptions = encodeURIComponent("-c pgrst.db_schemas=public -c statement_timeout=480000");
 const dbUrl = `postgresql://${user}:${encodeURIComponent(password)}@${host}:5432/${database}?sslmode=require&options=${sessionOptions}`;
 const advisorResult = spawnSync("supabase", [
   "db", "advisors",
