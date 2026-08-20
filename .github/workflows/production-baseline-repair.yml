@@ -79,9 +79,6 @@ jobs:
       - name: Confirm PostgreSQL client availability
         run: psql --version
 
-      - name: Retry authoritative Production Session Pooler connectivity
-        run: node scripts/controlled-production-security-remediation.mjs connectivity
-
       - name: Run all Production migration prechecks through Session Pooler
         run: node scripts/controlled-production-security-remediation.mjs precheck
 

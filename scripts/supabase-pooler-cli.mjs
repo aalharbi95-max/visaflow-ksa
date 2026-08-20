@@ -40,10 +40,30 @@ assert.equal(user, `postgres.${projectRef}`, "Authoritative Supabase pooler user
 
 // Port 5432 selects Session Pooler mode. Credentials exist only in this process.
 const dbUrl = `postgresql://${user}:${encodeURIComponent(password)}@${host}:5432/${database}?sslmode=require`;
-const result = spawnSync("supabase", [...cliArgs, "--db-url", dbUrl], {
-  stdio: "inherit",
-  shell: false,
-  env: process.env,
-});
-if (result.error) throw result.error;
-process.exit(result.status ?? 1);
+for (let attempt = 1; attempt <= 3; attempt += 1) {
+  const result = spawnSync("supabase", [...cliArgs, "--db-url", dbUrl], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: false,
+    maxBuffer: 20 * 1024 * 1024,
+    env: process.env,
+  });
+  if (result.error) throw result.error;
+  const stdout = String(result.stdout || "");
+  const stderr = String(result.stderr || "");
+  if (result.status === 0) {
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+    process.exit(0);
+  }
+  const checkoutFailure = /ECHECKOUTTIMEOUT|authentication did not complete within/i.test(`${stderr}\n${stdout}`);
+  if (checkoutFailure && attempt < 3) {
+    console.error(`Session Pooler checkout unavailable; retrying safe CLI acquisition (${attempt}/3).`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_000);
+    continue;
+  }
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  process.exit(result.status ?? 1);
+}
+throw new Error("SESSION_POOLER_UNAVAILABLE_AFTER_3_ATTEMPTS");

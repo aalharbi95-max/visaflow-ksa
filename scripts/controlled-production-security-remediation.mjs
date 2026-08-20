@@ -82,18 +82,35 @@ function runPsql(connection, extraArgs, { capture = false } = {}) {
     "--username", connection.user, "--dbname", connection.database,
     ...extraArgs,
   ];
-  const result = spawnSync("psql", args, {
-    encoding: capture ? "utf8" : undefined,
-    stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
-    shell: false,
-    env: { ...process.env, PGPASSWORD: password, PGSSLMODE: "require", PGCONNECT_TIMEOUT: "60" },
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    if (capture && result.stderr) process.stderr.write(result.stderr);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const result = spawnSync("psql", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      maxBuffer: 20 * 1024 * 1024,
+      env: { ...process.env, PGPASSWORD: password, PGSSLMODE: "require", PGCONNECT_TIMEOUT: "60" },
+    });
+    if (result.error) throw result.error;
+    const stdout = String(result.stdout || "");
+    const stderr = String(result.stderr || "");
+    if (result.status === 0) {
+      if (!capture) {
+        if (stdout) process.stdout.write(stdout);
+        if (stderr) process.stderr.write(stderr);
+      }
+      return capture ? stdout.trim() : "";
+    }
+    const checkoutFailure = /ECHECKOUTTIMEOUT|authentication did not complete within/i.test(`${stderr}\n${stdout}`);
+    if (checkoutFailure && attempt < 3) {
+      console.error(`Session Pooler checkout unavailable; retrying safe pre-execution acquisition (${attempt}/3).`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_000);
+      continue;
+    }
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
     throw new Error(`psql failed with exit code ${result.status}`);
   }
-  return capture ? String(result.stdout || "").trim() : "";
+  throw new Error("SESSION_POOLER_UNAVAILABLE_AFTER_3_ATTEMPTS");
 }
 
 async function runSql(connection, sql, label) {
