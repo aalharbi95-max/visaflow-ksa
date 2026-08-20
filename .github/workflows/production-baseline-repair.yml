@@ -50,4 +50,41 @@ jobs:
           node-version: 22
 
       - name: Investigate only the ai_agent_settings orphan read-only
+        env:
+          ORPHAN_AUDIT_OUTPUT: ${{ runner.temp }}/production-orphan-audit.json
         run: node scripts/investigate-production-ai-agent-settings-orphan.mjs
+
+      - name: Encrypt approved evidence before upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          plaintext="$RUNNER_TEMP/production-orphan-audit.json"
+          encrypted="$RUNNER_TEMP/production-orphan-audit.json.cms"
+          test -s "$plaintext"
+          openssl cms -encrypt -binary -aes-256-cbc \
+            -in "$plaintext" \
+            -outform DER \
+            -out "$encrypted" \
+            .github/production-orphan-audit-public-cert.pem
+          test -s "$encrypted"
+          openssl cms -cmsout -inform DER -in "$encrypted" -noout
+          shred -u "$plaintext"
+          test ! -e "$plaintext"
+
+      - name: Upload encrypted approved evidence only
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-orphan-audit-encrypted
+          path: ${{ runner.temp }}/production-orphan-audit.json.cms
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Remove all runner evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for target in "$RUNNER_TEMP/production-orphan-audit.json" "$RUNNER_TEMP/production-orphan-audit.json.cms"; do
+            if [ -f "$target" ]; then shred -u "$target"; fi
+          done

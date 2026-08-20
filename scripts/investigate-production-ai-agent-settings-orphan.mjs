@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 
 const token = process.env.SUPABASE_ACCESS_TOKEN || "";
 const projectRef = process.env.SUPABASE_PROJECT_REF || "";
@@ -101,7 +102,6 @@ const logSql = boundedLogColumns.map(({ table_name: table, column_name: column }
 const logMatches = logSql ? (await query(logSql)).filter((row) => Number(row.match_count) > 0) : [];
 
 const result = {
-  production_identity: projectRef,
   orphan: {
     row_id: orphan.row_id,
     orphan_company_id: companyId,
@@ -126,9 +126,9 @@ const result = {
     column: row.column_name,
     count: Number(row.match_count),
   })),
-  inspected_company_id_tables: companyTables.length,
-  inspected_log_columns: boundedLogColumns.length,
-  read_only: true,
 };
 
-console.log(JSON.stringify(result, null, 2));
+const output = process.env.ORPHAN_AUDIT_OUTPUT || "";
+assert.ok(output, "ORPHAN_AUDIT_OUTPUT is required");
+await writeFile(output, `${JSON.stringify(result, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+console.log("Read-only orphan investigation completed; plaintext evidence retained only in runner temporary storage.");
