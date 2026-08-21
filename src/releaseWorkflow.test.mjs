@@ -87,6 +87,7 @@ test("Production preflight dry-run is read-only and bounded to the reviewed pend
   assert.match(workflow, /steps\.advisor\.outcome/);
   assert.match(await read("../scripts/production-preflight.mjs"), /AbortSignal\.timeout\(60_000\)/);
   assert.match(await read("../scripts/production-preflight.mjs"), /AbortSignal\.timeout\(180_000\)/);
+  assert.match(await read("../scripts/production-preflight.mjs"), /join\("\\nunion all\\n"\)/);
   assert.match(validator, /\["20260804000200"\]/);
   assert.doesNotMatch(workflow, /db push(?! --dry-run)/);
   assert.doesNotMatch(validator, /spawn|exec|writeFile/);

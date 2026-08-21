@@ -102,23 +102,17 @@ const [tables, tenantColumns, hiringRpc, backups] = await Promise.all([
   management(`/projects/${projectRef}/database/backups`),
 ]);
 
-const nullAndOrphanCounts = [];
-for (const column of tenantColumns) {
-  const parent = column.column_name === "company_id" ? "companies" : "agencies";
-  const rows = await query(`
-    select
-      count(*) filter(where t.${identifier(column.column_name)} is null)::integer as null_count,
-      count(*) filter(where t.${identifier(column.column_name)} is not null and p.id is null)::integer as orphan_count
-    from public.${identifier(column.table_name)} t
-    left join public.${identifier(parent)} p on p.id=t.${identifier(column.column_name)}`);
-  nullAndOrphanCounts.push({
-    table_name: column.table_name,
-    column_name: column.column_name,
-    nullable: column.is_nullable === true,
-    null_count: rows[0]?.null_count || 0,
-    orphan_count: rows[0]?.orphan_count || 0,
-  });
-}
+const integritySql = tenantColumns.map((column) => {
+  const table = identifier(column.table_name);
+  const tenantColumn = identifier(column.column_name);
+  const parent = identifier(column.column_name === "company_id" ? "companies" : "agencies");
+  return `select '${column.table_name}'::text as table_name,'${column.column_name}'::text as column_name,
+    ${column.is_nullable === true ? "true" : "false"}::boolean as nullable,
+    count(*) filter(where t.${tenantColumn} is null)::integer as null_count,
+    count(*) filter(where t.${tenantColumn} is not null and p.id is null)::integer as orphan_count
+    from public.${table} t left join public.${parent} p on p.id=t.${tenantColumn}`;
+}).join("\nunion all\n");
+const nullAndOrphanCounts = integritySql ? await query(integritySql) : [];
 
 const remoteVersions = remoteMigrations.map((row) => String(row.version));
 const unknownRemoteVersions = remoteVersions.filter((version) => !repositoryVersions.includes(version));
