@@ -87,7 +87,14 @@ test("Production preflight dry-run is read-only and bounded to the reviewed pend
   assert.match(workflow, /steps\.advisor\.outcome/);
   assert.match(await read("../scripts/production-preflight.mjs"), /AbortSignal\.timeout\(60_000\)/);
   assert.match(await read("../scripts/production-preflight.mjs"), /AbortSignal\.timeout\(180_000\)/);
-  assert.match(await read("../scripts/production-preflight.mjs"), /join\("\\nunion all\\n"\)/);
+  assert.match(workflow, /check-production-security-prechecks-sql\.mjs/);
+  assert.match(workflow, /steps\.integrity\.outcome/);
+  const prechecks = await read("../scripts/check-production-security-prechecks-sql.mjs");
+  assert.match(prechecks, /20260820000100_production_security_alignment\.sql/);
+  assert.match(prechecks, /migration\.match\(\/do/);
+  assert.match(prechecks, /Reviewed Production security precheck block is missing/);
+  assert.match(prechecks, /set transaction read only/);
+  assert.match(prechecks, /statement_timeout='180s'/);
   assert.match(validator, /\["20260804000200"\]/);
   assert.doesNotMatch(workflow, /db push(?! --dry-run)/);
   assert.doesNotMatch(validator, /spawn|exec|writeFile/);

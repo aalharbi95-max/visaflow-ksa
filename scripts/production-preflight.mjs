@@ -63,11 +63,6 @@ async function query(sql) {
   throw new Error("Production read-only query retry loop exited unexpectedly");
 }
 
-function identifier(value) {
-  assert.match(value, /^[a-z_][a-z0-9_]*$/i, "Unsafe catalog identifier");
-  return `"${value.replaceAll('"', '""')}"`;
-}
-
 const migrationFiles = (await readdir("supabase/migrations"))
   .filter((name) => /^\d+_.+\.sql$/.test(name))
   .sort();
@@ -82,19 +77,11 @@ const remoteMigrations = migrationHistoryTable[0]?.exists === true
   ? await query(`select version::text from supabase_migrations.schema_migrations order by version`)
   : [];
 
-const [tables, tenantColumns, hiringRpc, backups] = await Promise.all([
+const [tables, hiringRpc, backups] = await Promise.all([
   query(`
     select c.relname as table_name,c.relrowsecurity as rls_enabled,c.relforcerowsecurity as rls_forced
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relkind in ('r','p') order by c.relname`),
-  query(`
-    select c.relname as table_name,a.attname as column_name,(not a.attnotnull) as is_nullable
-    from pg_class c
-    join pg_namespace n on n.oid=c.relnamespace
-    join pg_attribute a on a.attrelid=c.oid and a.attnum > 0 and not a.attisdropped
-    where n.nspname='public' and c.relkind in ('r','p')
-      and a.attname in ('company_id','agency_id')
-    order by c.relname,a.attname`),
   query(`
     select count(*)::integer as count
     from pg_proc p join pg_namespace n on n.oid=p.pronamespace
@@ -102,23 +89,10 @@ const [tables, tenantColumns, hiringRpc, backups] = await Promise.all([
   management(`/projects/${projectRef}/database/backups`),
 ]);
 
-const integritySql = tenantColumns.map((column) => {
-  const table = identifier(column.table_name);
-  const tenantColumn = identifier(column.column_name);
-  const parent = identifier(column.column_name === "company_id" ? "companies" : "agencies");
-  return `select '${column.table_name}'::text as table_name,'${column.column_name}'::text as column_name,
-    ${column.is_nullable === true ? "true" : "false"}::boolean as nullable,
-    count(*) filter(where t.${tenantColumn} is null)::integer as null_count,
-    count(*) filter(where t.${tenantColumn} is not null and p.id is null)::integer as orphan_count
-    from public.${table} t left join public.${parent} p on p.id=t.${tenantColumn}`;
-}).join("\nunion all\n");
-const nullAndOrphanCounts = integritySql ? await query(integritySql) : [];
-
 const remoteVersions = remoteMigrations.map((row) => String(row.version));
 const unknownRemoteVersions = remoteVersions.filter((version) => !repositoryVersions.includes(version));
 const pendingVersions = repositoryVersions.filter((version) => !remoteVersions.includes(version));
 const rlsDisabled = tables.filter((row) => row.rls_enabled !== true).map((row) => row.table_name);
-const tenantBlockers = nullAndOrphanCounts.filter((row) => row.orphan_count > 0 || row.null_count > 0);
 const backupRows = Array.isArray(backups.backups) ? backups.backups : [];
 const completedBackups = backupRows.filter((backup) => String(backup.status).toUpperCase() === "COMPLETED");
 
@@ -126,7 +100,6 @@ const blockers = [];
 if (migrationHistoryTable[0]?.exists !== true) blockers.push("migration_history_table_missing");
 if (unknownRemoteVersions.length) blockers.push("unknown_remote_migration_versions");
 if (rlsDisabled.length) blockers.push("public_tables_without_rls");
-if (tenantBlockers.length) blockers.push("null_or_orphan_tenant_references");
 if (hiringRpc[0]?.count !== 1) blockers.push("canonical_hiring_pipeline_rpc_missing");
 if (!completedBackups.length && backups.pitr_enabled !== true) blockers.push("no_completed_backup_or_pitr");
 
@@ -152,10 +125,7 @@ const report = {
     rls_disabled: rlsDisabled,
     advisor_gate: "pinned_splinter_sql_zero_blockers",
   },
-  tenant_integrity: {
-    checked_columns: nullAndOrphanCounts.length,
-    blockers: tenantBlockers,
-  },
+  tenant_integrity_gate: "reviewed_security_migration_precheck_block",
   hiring_pipeline_rpc_count: hiringRpc[0]?.count || 0,
   backups: {
     pitr_enabled: backups.pitr_enabled === true,
@@ -167,7 +137,7 @@ const report = {
 };
 
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-console.log(`Production preflight captured: ${remoteVersions.length}/${repositoryVersions.length} migrations, ${rlsDisabled.length} tables without RLS, ${tenantBlockers.length} tenant-integrity blockers, ${completedBackups.length} completed backups.`);
+console.log(`Production preflight captured: ${remoteVersions.length}/${repositoryVersions.length} migrations, ${rlsDisabled.length} tables without RLS, ${completedBackups.length} completed backups.`);
 if (blockers.length) {
   console.error(`Production preflight blockers: ${blockers.join(", ")}`);
   process.exit(1);
