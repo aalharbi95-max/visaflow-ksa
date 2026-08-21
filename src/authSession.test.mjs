@@ -148,7 +148,10 @@ test("browser auth contract persists the workspace session and keeps cleanup sco
   assert.match(supabaseSource, /storage: typeof window === 'undefined' \? undefined : window\.localStorage/);
   assert.match(appSource, /workspaceSupabase as supabase/);
   assert.match(appSource, /const supabase = talentSupabase/);
-  assert.equal((supabaseSource.match(/createClient\(/g) || []).length, 2);
+  assert.equal((supabaseSource.match(/createClient\(/g) || []).length, 3);
+  assert.match(supabaseSource, /createAIInterviewPortalClient\(accessToken\)/);
+  assert.match(supabaseSource, /'x-ai-interview-token': token/);
+  assert.match(supabaseSource, /persistSession: false, autoRefreshToken: false, detectSessionInUrl: false/);
   assert.match(loginSource, /const verifiedSession = authData\.session \|\| null/);
   assert.match(loginSource, /verifyWorkspaceAuthSession\(supabase\.auth\)/);
   const successfulAuthSource = loginSource.slice(

@@ -48,6 +48,14 @@ export const workspaceSupabase = createClient(supabaseUrl, supabaseKey, {
 })
 export const supabase = workspaceSupabase
 
+export function createAIInterviewPortalClient(accessToken) {
+  const token = String(accessToken || '').trim()
+  return createClient(supabaseUrl, supabaseKey, {
+    global: { headers: token ? { 'x-ai-interview-token': token } : {} },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  })
+}
+
 // Keep candidate authentication independent from the company workspace session.
 export const talentSupabase = createClient(supabaseUrl, supabaseKey, {
   auth: {

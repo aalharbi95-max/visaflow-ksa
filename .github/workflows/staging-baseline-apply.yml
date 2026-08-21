@@ -1,0 +1,70 @@
+name: Staging baseline apply
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-baseline-20260817
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.head_ref == 'codex/release-readiness-20260817'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      AI_AGENT_WORKER_SECRET: ${{ secrets.AI_AGENT_WORKER_SECRET }}
+      STAGING_BASELINE_APPLY: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run validate:migrations
+      - run: npm run test:release-hardening
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Synchronize canonical Staging worker secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AI_AGENT_WORKER_SECRET"
+          supabase secrets set AI_AGENT_WORKER_SECRET="$AI_AGENT_WORKER_SECRET" --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Apply reviewed Staging baseline and missing migrations
+        run: node scripts/apply-staging-baseline.mjs
+      - name: Deploy reviewed Staging Edge Functions
+        run: |
+          supabase functions deploy visaflow-agent-orchestrator --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy aiagentworker --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy visaflow-ai-commander --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy visaflow-email-dispatcher --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Smoke-test function authentication boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for function_name in visaflow-agent-orchestrator aiagentworker visaflow-ai-commander visaflow-email-dispatcher; do
+            status="$(curl --silent --show-error --output /tmp/function-response.json --write-out '%{http_code}' \
+              --request POST "$SUPABASE_URL/functions/v1/$function_name" \
+              --header "apikey: $SUPABASE_ANON_KEY" \
+              --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              --header 'Content-Type: application/json' \
+              --data '{}')"
+            test "$status" = "401" || test "$status" = "403"
+          done
+      - name: Verify Staging tenant isolation and Hiring Pipeline
+        run: node scripts/staging-security-smoke.mjs
+      - name: Verify canonical MIRGAB lifecycle after RLS
+        run: node scripts/staging-mirgab-lifecycle.mjs

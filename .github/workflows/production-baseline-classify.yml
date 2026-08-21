@@ -1,0 +1,59 @@
+name: Production baseline classification
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'codex/release-readiness-20260817'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: Production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      PRODUCTION_BASELINE_OUTPUT: production-baseline-candidate.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate exact Production identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Capture ephemeral schema-only evidence
+        env:
+          PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
+        run: node scripts/supabase-pooler-cli.mjs db dump --schema public --file "$PRODUCTION_SCHEMA_DUMP"
+      - name: Classify all reviewed migrations
+        env:
+          PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
+        run: node scripts/classify-production-migrations.mjs
+      - name: Delete ephemeral Production schema evidence
+        if: always()
+        shell: bash
+        env:
+          PRODUCTION_SCHEMA_DUMP: ${{ runner.temp }}/visaflow-production-schema.sql
+        run: rm -f -- "$PRODUCTION_SCHEMA_DUMP"
+      - name: Upload version-only classification manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-baseline-candidate
+          path: production-baseline-candidate.json
+          if-no-files-found: warn
+          retention-days: 1

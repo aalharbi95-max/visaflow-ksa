@@ -74,9 +74,11 @@ test('Talent and Workspace share deployment config but retain separate storage k
     readFile(new URL('./supabase.js', import.meta.url), 'utf8'),
   ])
 
-  assert.equal((source.match(/createClient\(supabaseUrl, supabaseKey/g) || []).length, 2)
+  assert.equal((source.match(/createClient\(supabaseUrl, supabaseKey/g) || []).length, 3)
   assert.match(source, /WORKSPACE_AUTH_STORAGE_KEY = 'visaflow-workspace-auth'/)
   assert.match(source, /storageKey: 'visaflow-talent-auth'/)
+  assert.match(source, /createAIInterviewPortalClient\(accessToken\)/)
+  assert.match(source, /'x-ai-interview-token': token/)
   assert.match(mainSource, /Application configuration error/)
   assert.match(mainSource, /getViteSupabaseConfig\(\)/)
   assert.match(mainSource, /await import\('\.\/App\.jsx'\)/)

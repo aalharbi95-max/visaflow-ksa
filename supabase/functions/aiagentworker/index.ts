@@ -1189,6 +1189,27 @@ async function claimQueuedJobs(supabase: any, limit: number) {
   return jobs || [];
 }
 
+async function runOrchestratorJob(jobId: string) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  const workerSecret = Deno.env.get("AI_AGENT_WORKER_SECRET") || "";
+  if (!supabaseUrl || !anonKey || !workerSecret) throw new Error("Agent Orchestrator is not configured");
+  const response = await fetch(`${supabaseUrl}/functions/v1/visaflow-agent-orchestrator`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${anonKey}`,
+      apikey: anonKey,
+      "x-visaflow-worker-secret": workerSecret,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ job_id: jobId }),
+  });
+  let result: Row = {};
+  try { result = await response.json(); } catch { result = {}; }
+  if (!response.ok || result?.ok === false) throw new Error(String(result?.error || "Agent Orchestrator job failed"));
+  return result;
+}
+
 async function getActiveSettings(supabase: any, companyId = "") {
   let query = supabase.from("ai_agent_settings").select("*").eq("is_active", true).neq("mode", "off");
   if (companyId) query = query.eq("company_id", companyId);
@@ -1249,10 +1270,15 @@ serve(async (req) => {
         }
 
         try {
-          const settingsRows = await getActiveSettings(supabase, String(job.company_id));
-          const settings = settingsRows[0];
-          if (!settings) throw new Error("No active AI Agent settings for company");
-          const result = await processCompany(supabase, settings, runId);
+          let result: Row;
+          if (["orchestrator_request_review", "orchestrator_approval_resume"].includes(String(job.job_type))) {
+            result = await runOrchestratorJob(String(job.id));
+          } else {
+            const settingsRows = await getActiveSettings(supabase, String(job.company_id));
+            const settings = settingsRows[0];
+            if (!settings) throw new Error("No active AI Agent settings for company");
+            result = await processCompany(supabase, settings, runId);
+          }
           await supabase.from("ai_agent_jobs").update({ status: "completed", completed_at: new Date().toISOString(), result, updated_at: new Date().toISOString() }).eq("id", job.id);
           results.push({ job_id: job.id, ok: true, result });
         } catch (error) {

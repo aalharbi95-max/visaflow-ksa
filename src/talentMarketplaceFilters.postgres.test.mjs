@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 
-const migrationUrl = new URL("../supabase/migrations/20260815000300_talent_marketplace_filters.sql", import.meta.url);
+const migrationUrl = new URL("../supabase/migrations/20260817001100_talent_marketplace_filters.sql", import.meta.url);
 
 test("Talent Marketplace filter migration creates the authenticated RPC", async () => {
   const db = new PGlite();

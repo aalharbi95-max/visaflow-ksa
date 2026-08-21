@@ -142,6 +142,16 @@ const messageContracts: Record<string, MessageContract> = {
     requiredId: "agency_id", recipientSource: "active agencies.email", ownershipRule: "internal company_id + active agency access",
     subject: "VisaFlow Agency Daily Follow-up Digest", fields: [["agency", "Agency"], ["request_nos", "Requests"], ["pending_items", "Pending items"], ["highest_priority", "Highest priority"], ["action_url", "Portal"]], allowedInputVariables: ["request_nos", "pending_items", "highest_priority"], allowedPath: "/",
   },
+  AI_AGENT_REQUEST_FOLLOWUP: {
+    roles: [], browserEnabled: false, internalEnabled: true,
+    requiredId: "notification_event_id", recipientSource: "notification_events.agency_id -> active agencies.email", ownershipRule: "notification, agency, and internal company_id must match",
+    subject: "VisaFlow Recruitment Request Follow-up", fields: [["agency_name", "Agency"], ["request_no", "Request"], ["candidate_gap", "Candidate gap"], ["blockers", "Current blockers"], ["action_url", "Portal"]], allowedInputVariables: [], allowedPath: "/",
+  },
+  AI_AGENT_OPERATIONAL_ESCALATION_EMAIL: {
+    roles: [], browserEnabled: false, internalEnabled: true,
+    requiredId: "notification_event_id", recipientSource: "active company recruitment managers", ownershipRule: "notification and internal company_id must match",
+    subject: "VisaFlow Recruitment Delay Escalation", fields: [["request_no", "Request"], ["summary", "Operational summary"], ["action_url", "Portal"]], allowedInputVariables: [], allowedPath: "/",
+  },
   JOB_OFFER_EMAIL: {
     roles: COMPANY_EMAIL_ROLES, browserEnabled: true, internalEnabled: false,
     requiredId: "candidate_id", recipientSource: "candidates.email", ownershipRule: "candidate.company_id = actor.company_id",
@@ -626,6 +636,42 @@ async function resolveMessage(admin: any, caller: Caller, type: string, contract
     const agency = await activeAgency(admin, agencyId);
     await assertAgencyAccess(admin, companyId, agencyId);
     return { recipients: agencyRecipients(agency), variables: { agency: String(agency.name), ...input, action_url: approvedUrl() } };
+  }
+
+  if (type === "AI_AGENT_REQUEST_FOLLOWUP") {
+    if (caller.kind !== "internal") throw new RequestFailure(403, "forbidden");
+    const companyId = safeId(body.company_id, "company_id");
+    const eventId = safeId(body.notification_event_id, "notification_event_id");
+    const event = await exactlyOne(admin.from("notification_events")
+      .select("id,company_id,agency_id,agency_name,request_no,type,data")
+      .eq("id", eventId).eq("company_id", companyId).eq("type", "AI_AGENT_REQUEST_FOLLOWUP"), "notification_not_found");
+    if (!event.agency_id) throw new RequestFailure(404, "agency_not_found");
+    const agency = await activeAgency(admin, String(event.agency_id));
+    await assertAgencyAccess(admin, companyId, String(event.agency_id));
+    const eventData = event.data && typeof event.data === "object" ? event.data : {};
+    const blockerSummary = Array.isArray(eventData.blockers)
+      ? eventData.blockers.slice(0, 8).map((item: Json) => String(item?.summary || item?.code || "")).filter(Boolean).join("; ")
+      : "Operational update required";
+    return {
+      recipients: agencyRecipients(agency), companyId, agencyId: String(event.agency_id), deliveryKey: String(event.id),
+      variables: {
+        agency_name: String(agency.name || event.agency_name || "Agency"), request_no: String(event.request_no || "-"),
+        candidate_gap: String(eventData?.gap?.gap ?? "-"), blockers: blockerSummary.slice(0, 1500), action_url: approvedUrl(),
+      },
+    };
+  }
+
+  if (type === "AI_AGENT_OPERATIONAL_ESCALATION_EMAIL") {
+    if (caller.kind !== "internal") throw new RequestFailure(403, "forbidden");
+    const companyId = safeId(body.company_id, "company_id");
+    const eventId = safeId(body.notification_event_id, "notification_event_id");
+    const event = await exactlyOne(admin.from("notification_events")
+      .select("id,company_id,request_no,type,message")
+      .eq("id", eventId).eq("company_id", companyId).eq("type", "AI_AGENT_OPERATIONAL_ESCALATION"), "notification_not_found");
+    return {
+      recipients: await companyManagers(admin, companyId), companyId, deliveryKey: String(event.id),
+      variables: { request_no: String(event.request_no || "-"), summary: String(event.message || "Manager review required").slice(0, 1500), action_url: approvedUrl() },
+    };
   }
 
   if (type === "JOB_OFFER_EMAIL") {

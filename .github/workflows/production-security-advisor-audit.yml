@@ -1,0 +1,38 @@
+name: Production Security Advisor read-only audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/audit-production-security-advisor-public.pem
+      - .github/workflows/production-security-advisor-audit.yml
+      - scripts/audit-production-security-advisor-encrypted.mjs
+      - scripts/check-production-security-advisor-sql.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.head_ref == 'codex/release-readiness-20260817'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: Production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate exact Production identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+      - name: Run pinned Supabase ERROR rules through authoritative Session Pooler
+        run: node scripts/check-production-security-advisor-sql.mjs

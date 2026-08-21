@@ -5,8 +5,9 @@ const corsHeaders = {
 };
 
 type CommanderPayload = {
-  action?: "chat" | "commander" | "offer";
+  action?: "chat" | "commander" | "offer" | "agent_goal";
   question?: string;
+  request_ref?: string;
   language?: string;
   mode?: string;
   intent?: string;
@@ -15,6 +16,35 @@ type CommanderPayload = {
   localDecisionContext?: string;
   offerData?: Record<string, unknown>;
 };
+
+async function authenticateRequest(req: Request) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  const authorization = req.headers.get("authorization") || "";
+  if (!supabaseUrl || !anonKey || !authorization.toLowerCase().startsWith("bearer ")) return false;
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { Authorization: authorization, apikey: anonKey },
+  });
+  if (!response.ok) return false;
+  const user = await response.json().catch(() => null);
+  return Boolean(user?.id);
+}
+
+async function runAgentGoal(req: Request, payload: CommanderPayload) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  const authorization = req.headers.get("authorization") || "";
+  if (!supabaseUrl || !anonKey || !authorization) return jsonResponse({ ok: false, error: "agent_orchestrator_not_configured" }, 500);
+  const orchestratorResponse = await fetch(`${supabaseUrl}/functions/v1/visaflow-agent-orchestrator`, {
+    method: "POST",
+    headers: { Authorization: authorization, apikey: anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ goal: payload.question || "", request_ref: payload.request_ref || "" }),
+  });
+  let result: Record<string, unknown> = {};
+  try { result = await orchestratorResponse.json(); } catch { result = {}; }
+  return jsonResponse(result, orchestratorResponse.status);
+}
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -109,12 +139,14 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
 
   try {
+    if (!(await authenticateRequest(req))) return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+    const payload = (await req.json()) as CommanderPayload;
+    if (payload.action === "agent_goal") return await runAgentGoal(req, payload);
     const apiKey = Deno.env.get("OPENAI_API_KEY");
     if (!apiKey) {
       return jsonResponse({ ok: false, error: "OPENAI_API_KEY is not configured in Supabase Secrets." }, 500);
     }
 
-    const payload = (await req.json()) as CommanderPayload;
     const model = Deno.env.get("OPENAI_MODEL") || "gpt-4.1-mini";
     const requestBody = buildOpenAIInput(payload);
 
