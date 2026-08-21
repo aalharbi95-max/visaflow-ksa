@@ -12,7 +12,7 @@ const repair = [...manifest.already_reflected_in_schema, ...manifest.obsolete_or
 const missing = manifest.genuinely_missing_and_safe_to_apply;
 const classified = [...repair, ...missing].sort();
 assert.equal(manifest.project_ref, "zeocbftriydodzfgixjv", "Manifest is not tied to Production");
-assert.equal(manifest.repository_migration_count, 76, "Unexpected manifest migration count");
+assert.equal(manifest.repository_migration_count, 77, "Unexpected manifest migration count");
 assert.equal(new Set(classified).size, classified.length, "Duplicate Production baseline version");
 assert.deepEqual(classified, repositoryVersions, "Production manifest must classify every repository migration exactly once");
 

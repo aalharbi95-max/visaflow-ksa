@@ -73,9 +73,19 @@ test("Production baseline classification keeps schema evidence ephemeral and ver
   assert.match(workflow, /rm -f -- "\$PRODUCTION_SCHEMA_DUMP"/);
   assert.doesNotMatch(workflow, /path:\s*production-schema\.sql|path:\s*\$\{\{ runner\.temp \}\}/);
   assert.doesNotMatch(workflow, /migration repair|db push|functions deploy/);
-  assert.match(classifier, /assert\.equal\(files\.length, 76/);
+  assert.match(classifier, /assert\.equal\(files\.length, 77/);
   assert.match(classifier, /schema_dump_persisted: false/);
   assert.doesNotMatch(classifier, /definition|pg_get_functiondef/);
+});
+
+test("Production preflight dry-run is read-only and bounded to the reviewed pending migration", async () => {
+  const workflow = await read("../.github/workflows/production-preflight.yml");
+  const validator = await read("../scripts/validate-production-dry-run.mjs");
+  assert.match(workflow, /db push --dry-run --include-all/);
+  assert.match(workflow, /validate-production-dry-run\.mjs/);
+  assert.match(validator, /\["20260804000200"\]/);
+  assert.doesNotMatch(workflow, /db push(?! --dry-run)/);
+  assert.doesNotMatch(validator, /spawn|exec|writeFile/);
 });
 
 test("Production baseline repair is manual, bounded, and never applies migration SQL", async () => {

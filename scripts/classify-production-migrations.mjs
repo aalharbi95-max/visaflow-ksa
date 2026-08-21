@@ -14,7 +14,7 @@ assert.ok(schemaPath, "PRODUCTION_SCHEMA_DUMP is required");
 const schema = (await readFile(schemaPath, "utf8")).toLowerCase().replaceAll('"', "");
 const migrationsDir = "supabase/migrations";
 const files = (await readdir(migrationsDir)).filter((file) => /^\d{14}_.+\.sql$/.test(file)).sort();
-assert.equal(files.length, 76, "Production baseline requires the reviewed 76-migration inventory");
+assert.equal(files.length, 77, "Production baseline requires the reviewed 77-migration inventory");
 
 function cleanIdentifier(value) {
   return value.replaceAll('"', "").toLowerCase();
