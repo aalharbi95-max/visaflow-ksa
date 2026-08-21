@@ -85,8 +85,12 @@ test("Production preflight dry-run is read-only and bounded to the reviewed pend
   assert.match(workflow, /validate-production-dry-run\.mjs/);
   assert.match(workflow, /check-production-security-advisor-sql\.mjs/);
   assert.match(workflow, /steps\.advisor\.outcome/);
-  assert.match(await read("../scripts/production-preflight.mjs"), /AbortSignal\.timeout\(60_000\)/);
-  assert.match(await read("../scripts/production-preflight.mjs"), /AbortSignal\.timeout\(180_000\)/);
+  const preflight = await read("../scripts/production-preflight.mjs");
+  assert.match(preflight, /AbortSignal\.timeout\(60_000\)/);
+  assert.match(preflight, /Authoritative Session Pooler/);
+  assert.match(preflight, /"--port", "5432"/);
+  assert.match(preflight, /set transaction read only/);
+  assert.match(preflight, /statement_timeout = '180s'/);
   assert.match(workflow, /check-production-security-prechecks-sql\.mjs/);
   assert.match(workflow, /steps\.integrity\.outcome/);
   const prechecks = await read("../scripts/check-production-security-prechecks-sql.mjs");
