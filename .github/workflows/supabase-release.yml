@@ -15,6 +15,11 @@ on:
         required: true
         type: boolean
         default: true
+      apply_migrations:
+        description: Apply reviewed database migrations
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -58,6 +63,10 @@ jobs:
           test -n "$SUPABASE_PROJECT_REF"
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_ANON_KEY"
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+            test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
+          fi
       - name: Install pinned Supabase CLI
         uses: supabase/setup-cli@v1
         with:
@@ -73,8 +82,16 @@ jobs:
       - name: Inspect migration status
         run: node scripts/supabase-pooler-cli.mjs migration list
       - name: Database migration dry-run
+        if: ${{ inputs.apply_migrations }}
         run: node scripts/supabase-pooler-cli.mjs db push --dry-run
+      - name: Verify intentionally skipped Production migration boundary
+        if: ${{ inputs.environment == 'production' && !inputs.apply_migrations }}
+        shell: bash
+        run: |
+          node scripts/supabase-pooler-cli.mjs db push --dry-run --include-all > production-migration-dry-run.txt 2>&1
+          node scripts/validate-production-dry-run.mjs production-migration-dry-run.txt
       - name: Apply database migrations deterministically
+        if: ${{ inputs.apply_migrations }}
         run: node scripts/supabase-pooler-cli.mjs db push
       - name: Verify migration history
         run: node scripts/supabase-pooler-cli.mjs migration list

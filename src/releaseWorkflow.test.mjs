@@ -10,9 +10,13 @@ test("release workflow pins Supabase CLI and uses protected staging/production e
   assert.match(workflow, /version: 2\.109\.1/);
   assert.match(workflow, /- staging\s+[\s\S]*- production/);
   assert.match(workflow, /environment: \$\{\{ inputs\.environment \}\}/);
+  assert.match(workflow, /apply_migrations:/);
   assert.match(workflow, /supabase-pooler-cli\.mjs db push --dry-run/);
   assert.match(workflow, /supabase-pooler-cli\.mjs db push/);
-  assert.doesNotMatch(workflow, /--include-all/);
+  assert.match(workflow, /inputs\.environment == 'production' && !inputs\.apply_migrations/);
+  assert.match(workflow, /db push --dry-run --include-all/);
+  assert.match(workflow, /validate-production-dry-run\.mjs production-migration-dry-run\.txt/);
+  assert.match(workflow, /SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv/);
 });
 
 test("Staging hardening audit is read-only and captures canonical evidence", async () => {
