@@ -38,6 +38,40 @@ async function management(path) {
   throw new Error(`Management API ${path} retry loop exited unexpectedly`);
 }
 
+async function verifiedLogicalBackup() {
+  const githubToken = process.env.GITHUB_TOKEN || "";
+  const repository = process.env.GITHUB_REPOSITORY || "";
+  const artifactId = process.env.PRODUCTION_BACKUP_ARTIFACT_ID || "";
+  const runId = process.env.PRODUCTION_BACKUP_RUN_ID || "";
+  assert.ok(githubToken && repository && artifactId && runId, "Approved encrypted Production backup evidence is required");
+  const headers = { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" };
+  const [artifactResponse, runResponse] = await Promise.all([
+    fetch(`https://api.github.com/repos/${repository}/actions/artifacts/${artifactId}`, { headers, signal: AbortSignal.timeout(30_000) }),
+    fetch(`https://api.github.com/repos/${repository}/actions/runs/${runId}`, { headers, signal: AbortSignal.timeout(30_000) }),
+  ]);
+  assert.ok(artifactResponse.ok, `Approved encrypted backup artifact lookup failed with HTTP ${artifactResponse.status}`);
+  assert.ok(runResponse.ok, `Approved encrypted backup run lookup failed with HTTP ${runResponse.status}`);
+  const [artifact, run] = await Promise.all([artifactResponse.json(), runResponse.json()]);
+  const createdAt = Date.parse(artifact.created_at || "");
+  const expiresAt = Date.parse(artifact.expires_at || "");
+  const ageMs = Date.now() - createdAt;
+  const valid = artifact.expired === false
+    && artifact.workflow_run?.id === Number(runId)
+    && /^visaflow-production-logical-backup-\d{8}T\d{6}Z-encrypted$/.test(String(artifact.name || ""))
+    && Number(artifact.size_in_bytes) > 0
+    && Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 48 * 60 * 60 * 1000
+    && Number.isFinite(expiresAt) && expiresAt > Date.now()
+    && run.conclusion === "success";
+  return {
+    valid,
+    artifact_id: Number(artifactId),
+    run_id: Number(runId),
+    created_at: artifact.created_at || null,
+    expires_at: artifact.expires_at || null,
+    encrypted_size_bytes: Number(artifact.size_in_bytes || 0),
+  };
+}
+
 async function sessionPooler() {
   const poolers = await management(`/projects/${projectRef}/config/database/pooler`);
   assert.ok(Array.isArray(poolers) && poolers.length > 0, "Supabase returned no pooler configuration");
@@ -102,6 +136,7 @@ const catalog = queryPoolerJson(connection, `
   )::text
 `);
 const backups = await management(`/projects/${projectRef}/database/backups`);
+const logicalBackup = await verifiedLogicalBackup();
 const migrationHistoryExists = catalog.migration_history_exists === true;
 const remoteVersions = Array.isArray(catalog.remote_versions) ? catalog.remote_versions.map(String) : [];
 const tables = Array.isArray(catalog.tables) ? catalog.tables : [];
@@ -118,7 +153,7 @@ if (!migrationHistoryExists) blockers.push("migration_history_table_missing");
 if (unknownRemoteVersions.length) blockers.push("unknown_remote_migration_versions");
 if (rlsDisabled.length) blockers.push("public_tables_without_rls");
 if (hiringRpcCount !== 1) blockers.push("canonical_hiring_pipeline_rpc_missing");
-if (!completedBackups.length && backups.pitr_enabled !== true) blockers.push("no_completed_backup_or_pitr");
+if (!completedBackups.length && backups.pitr_enabled !== true && !logicalBackup.valid) blockers.push("no_valid_production_backup");
 
 const report = {
   captured_at: new Date().toISOString(),
@@ -149,6 +184,7 @@ const report = {
     walg_enabled: backups.walg_enabled === true,
     completed_count: completedBackups.length,
     latest_completed_at: completedBackups.map((backup) => backup.inserted_at).filter(Boolean).sort().at(-1) || null,
+    approved_encrypted_logical_backup: logicalBackup,
   },
   blockers,
 };

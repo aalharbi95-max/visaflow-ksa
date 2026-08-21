@@ -91,6 +91,10 @@ test("Production preflight dry-run is read-only and bounded to the reviewed pend
   assert.match(preflight, /"--port", "5432"/);
   assert.match(preflight, /set transaction read only/);
   assert.match(preflight, /statement_timeout = '180s'/);
+  assert.match(workflow, /PRODUCTION_BACKUP_ARTIFACT_ID: "9426185634"/);
+  assert.match(workflow, /PRODUCTION_BACKUP_RUN_ID: "32421494520"/);
+  assert.match(preflight, /visaflow-production-logical-backup-/);
+  assert.match(preflight, /ageMs < 48 \* 60 \* 60 \* 1000/);
   assert.match(workflow, /check-production-security-prechecks-sql\.mjs/);
   assert.match(workflow, /steps\.integrity\.outcome/);
   const prechecks = await read("../scripts/check-production-security-prechecks-sql.mjs");

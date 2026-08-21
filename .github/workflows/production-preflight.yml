@@ -5,6 +5,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -20,6 +21,10 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_PREFLIGHT_OUTPUT: production-preflight.json
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PRODUCTION_BACKUP_ARTIFACT_ID: "9426185634"
+      PRODUCTION_BACKUP_RUN_ID: "32421494520"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
