@@ -88,6 +88,17 @@ test("Production preflight dry-run is read-only and bounded to the reviewed pend
   assert.doesNotMatch(validator, /spawn|exec|writeFile/);
 });
 
+test("Production Advisor gate is pinned, read-only, retried, and requires zero blockers", async () => {
+  const workflow = await read("../.github/workflows/production-security-advisor-audit.yml");
+  const checker = await read("../scripts/check-production-security-advisor-sql.mjs");
+  assert.match(workflow, /check-production-security-advisor-sql\.mjs/);
+  assert.match(checker, /set transaction read only/);
+  assert.match(checker, /af0013defad2ae07bc111194eca7920187f5f440/);
+  assert.match(checker, /attempt <= 3/);
+  assert.match(checker, /assert\.equal\(blockerCount, 0/);
+  assert.doesNotMatch(checker, /\b(?:insert|update|delete|alter|drop|truncate)\b/i);
+});
+
 test("Production baseline repair is manual, bounded, and never applies migration SQL", async () => {
   const workflow = await read("../.github/workflows/production-baseline-repair.yml");
   const runner = await read("../scripts/apply-production-baseline-repair.mjs");

@@ -1,4 +1,4 @@
-name: Production Security Advisor encrypted read-only audit
+name: Production Security Advisor read-only audit
 
 on:
   pull_request:
@@ -7,6 +7,7 @@ on:
       - .github/audit-production-security-advisor-public.pem
       - .github/workflows/production-security-advisor-audit.yml
       - scripts/audit-production-security-advisor-encrypted.mjs
+      - scripts/check-production-security-advisor-sql.mjs
 
 permissions:
   contents: read
@@ -33,22 +34,5 @@ jobs:
           test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
-      - name: Install pinned Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: 2.115.0
-      - name: Capture, sanitize, and encrypt findings in memory
-        env:
-          PRODUCTION_ADVISOR_AUDIT_OUTPUT: ${{ runner.temp }}/production-security-advisor-audit.enc.json
-        run: node scripts/audit-production-security-advisor-encrypted.mjs
-      - name: Upload ciphertext only
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-security-advisor-audit-encrypted
-          path: ${{ runner.temp }}/production-security-advisor-audit.enc.json
-          if-no-files-found: error
-          retention-days: 1
-      - name: Delete temporary encrypted file
-        if: always()
-        shell: bash
-        run: rm -f "${{ runner.temp }}/production-security-advisor-audit.enc.json"
+      - name: Run pinned Supabase ERROR rules through authoritative Session Pooler
+        run: node scripts/check-production-security-advisor-sql.mjs
