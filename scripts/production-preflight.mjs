@@ -66,7 +66,7 @@ const remoteMigrations = migrationHistoryTable[0]?.exists === true
   ? await query(`select version::text from supabase_migrations.schema_migrations order by version`)
   : [];
 
-const [tables, tenantColumns, hiringRpc, advisor, backups] = await Promise.all([
+const [tables, tenantColumns, hiringRpc, backups] = await Promise.all([
   query(`
     select c.relname as table_name,c.relrowsecurity as rls_enabled,c.relforcerowsecurity as rls_forced
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
@@ -83,7 +83,6 @@ const [tables, tenantColumns, hiringRpc, advisor, backups] = await Promise.all([
     select count(*)::integer as count
     from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public' and p.proname='list_company_hiring_pipeline'`),
-  management(`/projects/${projectRef}/advisors/security`),
   management(`/projects/${projectRef}/database/backups`),
 ]);
 
@@ -109,8 +108,6 @@ const remoteVersions = remoteMigrations.map((row) => String(row.version));
 const unknownRemoteVersions = remoteVersions.filter((version) => !repositoryVersions.includes(version));
 const pendingVersions = repositoryVersions.filter((version) => !remoteVersions.includes(version));
 const rlsDisabled = tables.filter((row) => row.rls_enabled !== true).map((row) => row.table_name);
-const advisorErrors = (advisor.lints || []).filter((lint) => String(lint.level || lint.severity).toUpperCase() === "ERROR")
-  .map((lint) => ({ name: lint.name || lint.code || "unknown", level: lint.level || lint.severity || "ERROR" }));
 const tenantBlockers = nullAndOrphanCounts.filter((row) => row.orphan_count > 0 || row.null_count > 0);
 const backupRows = Array.isArray(backups.backups) ? backups.backups : [];
 const completedBackups = backupRows.filter((backup) => String(backup.status).toUpperCase() === "COMPLETED");
@@ -119,7 +116,6 @@ const blockers = [];
 if (migrationHistoryTable[0]?.exists !== true) blockers.push("migration_history_table_missing");
 if (unknownRemoteVersions.length) blockers.push("unknown_remote_migration_versions");
 if (rlsDisabled.length) blockers.push("public_tables_without_rls");
-if (advisorErrors.length) blockers.push("security_advisor_errors");
 if (tenantBlockers.length) blockers.push("null_or_orphan_tenant_references");
 if (hiringRpc[0]?.count !== 1) blockers.push("canonical_hiring_pipeline_rpc_missing");
 if (!completedBackups.length && backups.pitr_enabled !== true) blockers.push("no_completed_backup_or_pitr");
@@ -144,8 +140,7 @@ const report = {
   security: {
     public_table_count: tables.length,
     rls_disabled: rlsDisabled,
-    advisor_error_count: advisorErrors.length,
-    advisor_errors: advisorErrors,
+    advisor_gate: "pinned_splinter_sql_zero_blockers",
   },
   tenant_integrity: {
     checked_columns: nullAndOrphanCounts.length,
@@ -162,7 +157,7 @@ const report = {
 };
 
 await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-console.log(`Production preflight captured: ${remoteVersions.length}/${repositoryVersions.length} migrations, ${rlsDisabled.length} tables without RLS, ${advisorErrors.length} Advisor errors, ${tenantBlockers.length} tenant-integrity blockers, ${completedBackups.length} completed backups.`);
+console.log(`Production preflight captured: ${remoteVersions.length}/${repositoryVersions.length} migrations, ${rlsDisabled.length} tables without RLS, ${tenantBlockers.length} tenant-integrity blockers, ${completedBackups.length} completed backups.`);
 if (blockers.length) {
   console.error(`Production preflight blockers: ${blockers.join(", ")}`);
   process.exit(1);

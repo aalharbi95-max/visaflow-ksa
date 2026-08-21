@@ -40,10 +40,14 @@ jobs:
         uses: supabase/setup-cli@v1
         with:
           version: 2.109.1
-      - name: Capture Production catalog, RLS, tenant integrity, Advisor, and backup status
+      - name: Capture Production catalog, RLS, tenant integrity, and backup status
         id: catalog
         continue-on-error: true
         run: node scripts/production-preflight.mjs
+      - name: Run pinned Production Security Advisor ERROR rules read-only
+        id: advisor
+        continue-on-error: true
+        run: node scripts/check-production-security-advisor-sql.mjs
       - name: Capture Production migration history
         id: history
         continue-on-error: true
@@ -79,5 +83,6 @@ jobs:
         shell: bash
         run: |
           test "${{ steps.catalog.outcome }}" = "success"
+          test "${{ steps.advisor.outcome }}" = "success"
           test "${{ steps.history.outcome }}" = "success"
           test "${{ steps.dry_run.outcome }}" = "success"
