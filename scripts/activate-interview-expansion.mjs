@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {sectors} from './interview-expansion-data.mjs';
+const project=process.env.SUPABASE_PROJECT_REF;
+assert.equal(project,'zeocbftriydodzfgixjv');
+assert.ok(process.env.SUPABASE_ACCESS_TOKEN);
+const release='VF-EXPANSION-20260911';
+const migration=await readFile('supabase/migrations/20260911000200_expand_interview_library.sql','utf8');
+async function query(sql) {
+  const response=await fetch(`https://api.supabase.com/v1/projects/${project}/database/query`,{
+    method:'POST',headers:{Authorization:`Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,'Content-Type':'application/json'},
+    body:JSON.stringify({query:sql,read_only:false}),signal:AbortSignal.timeout(120000),
+  });
+  if(!response.ok) throw new Error(`Database query failed HTTP ${response.status}: ${(await response.text()).slice(0,700)}`);
+  return response.json();
+}
+const body=sql=>sql.match(/as (\$[a-z_]*\$)([^]*?)\1/i)?.[2]?.replace(/\s+/g,' ').trim();
+const previous=await readFile('supabase/migrations/20260911000100_talent_junior_accountant_campaign.sql','utf8');
+const [definition]=await query("select pg_get_functiondef('public.talent_campaign_template_is_eligible(uuid,uuid)'::regprocedure) as definition");
+assert.ok([body(previous),body(migration)].includes(body(definition.definition)),'Production eligibility differs from reviewed version');
+const snapshotSql=`select slug, public.get_public_talent_campaign(slug)->'templates' as templates from public.talent_public_campaigns where status='Active' and coalesce(settings->>'catalog_release','')<>'${release}' order by slug`;
+const before=await query(snapshotSql);
+const history=await query("select version from supabase_migrations.schema_migrations where version='20260911000200'");
+if(!history.length) {
+  await query(`begin; set local statement_timeout='90s'; ${migration}
+    insert into supabase_migrations.schema_migrations(version,name,statements)
+      values('20260911000200','expand_interview_library',ARRAY[$migration_text$${migration}$migration_text$]); commit;`);
+}
+assert.deepEqual(await query(snapshotSql),before,'Previous campaign templates changed');
+const summaries=[];
+for(const s of sectors) {
+  const [{campaign}]=await query(`select public.get_public_talent_campaign('${s.slug}') as campaign`);
+  assert.equal(campaign?.templates?.length,15);
+  assert.ok(campaign.templates.every(t=>t.question_count===8));
+  summaries.push({slug:s.slug,name:campaign.name_ar,templates:campaign.templates.length});
+}
+const [counts]=await query(`select count(*)::integer as templates,
+  count(*) filter(where is_global and is_active and is_locked and is_current_version and status='Active' and approval_status='Approved')::integer as approved,
+  (select count(*)::integer from public.ai_interview_questions q join public.ai_interview_templates t on t.id=q.template_id where t.ai_analysis->>'catalog_release'='${release}' and q.is_active) as questions
+  from public.ai_interview_templates where ai_analysis->>'catalog_release'='${release}'`);
+assert.equal(counts.templates,90);assert.equal(counts.approved,90);assert.equal(counts.questions,720);
+console.log(JSON.stringify({activated:true,...counts,campaigns:summaries,existingCampaignsVerified:before.length}));

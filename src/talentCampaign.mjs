@@ -1,3 +1,5 @@
+import { EXPANDED_TALENT_CAMPAIGNS } from './expandedTalentCampaigns.mjs';
+
 export const ENGINEERING_TALENT_CAMPAIGN_SLUG = "saudi-engineers-2026";
 export const HR_TALENT_CAMPAIGN_SLUG = "saudi-hr-professionals-2026";
 export const FINANCE_TALENT_CAMPAIGN_SLUG = "finance-accounting-professionals-2026";
@@ -5,6 +7,7 @@ export const IT_TALENT_CAMPAIGN_SLUG = "it-digital-professionals-2026";
 export const JUNIOR_ACCOUNTANT_CAMPAIGN_SLUG = "junior-accountants-2026";
 
 const TALENT_CAMPAIGN_CONTENT = {
+  ...Object.fromEntries(EXPANDED_TALENT_CAMPAIGNS.map(({slug, ...content}) => [slug, content])),
   [JUNIOR_ACCOUNTANT_CAMPAIGN_SLUG]: {
     nameAr: "حملة مقابلات المحاسب المبتدئ",
     nameEn: "Junior Accountant Interview Campaign",

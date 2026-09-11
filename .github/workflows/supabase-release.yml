@@ -1,4 +1,4 @@
-name: Activate junior accountant campaign
+name: Activate interview library expansion
 on:
   workflow_dispatch:
     inputs:
@@ -36,7 +36,7 @@ jobs:
       - run: npm ci
       - name: Validate the isolated campaign
         run: |
-          node --test src/juniorAccountantCampaign.test.mjs
+          node --test src/interviewExpansion.test.mjs src/juniorAccountantCampaign.test.mjs
           npm run validate:migrations
-      - name: Apply only the reviewed junior accountant campaign and verify existing campaigns
-        run: node scripts/activate-junior-accountant-campaign.mjs
+      - name: Apply the reviewed 90-template expansion and verify existing campaigns
+        run: node scripts/activate-interview-expansion.mjs
