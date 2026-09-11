@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {sectors} from './interview-expansion-data.mjs';
 const project=process.env.SUPABASE_PROJECT_REF;
 assert.equal(project,'zeocbftriydodzfgixjv');
@@ -22,9 +23,23 @@ const snapshotSql=`select slug, public.get_public_talent_campaign(slug)->'templa
 const before=await query(snapshotSql);
 const history=await query("select version from supabase_migrations.schema_migrations where version='20260911000200'");
 if(!history.length) {
-  await query(`begin; set local statement_timeout='90s'; ${migration}
+  // Keep requests below the Management API body limit. Each seed batch is atomic
+  // and idempotent. Campaigns become available only after all templates exist.
+  const catalog=JSON.parse(migration.match(/\$catalog\$([^]*?)\$catalog\$/)[1]);
+  const seedOnly=migration.slice(0,migration.indexOf('create or replace function public.talent_campaign_template_is_eligible'));
+  for(let offset=0;offset<catalog.length;offset+=3) {
+    const batch=seedOnly.replace(/\$catalog\$[^]*?\$catalog\$/,()=>`$catalog$${JSON.stringify(catalog.slice(offset,offset+3))}$catalog$`)
+      .replace(/\$campaigns\$[^]*?\$campaigns\$/,()=>'$campaigns$[]$campaigns$');
+    await query(`begin; set local statement_timeout='45s'; ${batch} commit;`);
+    console.log(`Verified template batch ${Math.min(offset+3,catalog.length)}/${catalog.length}`);
+  }
+  const [{count}]=await query(`select count(*)::integer as count from public.ai_interview_templates where ai_analysis->>'catalog_release'='${release}'`);
+  assert.equal(count,90);
+  const finalize=migration.replace(/\$catalog\$[^]*?\$catalog\$/,()=>'$catalog$[]$catalog$');
+  const checksum=createHash('sha256').update(migration).digest('hex');
+  await query(`begin; set local statement_timeout='45s'; ${finalize}
     insert into supabase_migrations.schema_migrations(version,name,statements)
-      values('20260911000200','expand_interview_library',ARRAY[$migration_text$${migration}$migration_text$]); commit;`);
+      values('20260911000200','expand_interview_library',ARRAY['-- Applied reviewed migration in idempotent template batches; SHA256 ${checksum}']); commit;`);
 }
 assert.deepEqual(await query(snapshotSql),before,'Previous campaign templates changed');
 const summaries=[];
