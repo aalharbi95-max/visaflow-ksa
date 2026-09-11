@@ -39,4 +39,4 @@ jobs:
           node --test src/interviewExpansion.test.mjs src/juniorAccountantCampaign.test.mjs
           npm run validate:migrations
       - name: Read aggregate library counts without mutations
-        run: node scripts/count-interview-library.mjs
+        run: node scripts/audit-field-interviews.mjs
