@@ -13,13 +13,15 @@ export function validateReadinessAnswers(task, answers, submit = false) {
     }
     if (field.type === 'number' && !/^[0-9]{1,9}(\.[0-9]{1,2})?$/.test(String(value))) return 'amount';
     if (field.type === 'select' && !field.options.some(o => o.value === value)) return 'required';
+    if (field.type === 'text' && (typeof value !== 'string' || value.length > (field.maxLength || 1200) || (submit && value.trim().length < (field.minLength || 60)))) return 'explanation';
   }
   if ((answers.rationale || '').length > 2000) return 'explanation';
-  if (submit && (answers.rationale || '').trim().length < 30) return 'explanation';
+  if (submit && (answers.rationale || '').trim().length < (task.definition.rationaleMinLength || 30)) return 'explanation';
   return null;
 }
 
 export function readinessState(task) {
+  if (task.archived) return 'Archived';
   const a = task.attempt;
   if (!a) return 'NotStarted';
   if (a.status !== 'Submitted') return 'Draft';
