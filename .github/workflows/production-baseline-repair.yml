@@ -1,0 +1,54 @@
+name: Production baseline repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_project_ref:
+        description: Exact Production project ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: Production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      PRODUCTION_BASELINE_REPAIR: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate exact Production identity and explicit dispatch input
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_project_ref }}" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Repair reviewed history and verify bounded dry-run
+        run: node scripts/apply-production-baseline-repair.mjs
+      - name: Retry Production Security Advisor read-only
+        run: node scripts/check-production-security-advisor.mjs
+      - name: Upload version-only repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-baseline-repair-evidence
+          path: |
+            production-migration-list-after-repair.txt
+            production-migration-dry-run-after-repair.txt
+          if-no-files-found: warn
+          retention-days: 1
