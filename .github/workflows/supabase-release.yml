@@ -36,7 +36,7 @@ jobs:
       - run: npm ci
       - name: Validate the isolated campaign
         run: |
-          node --test src/fieldInterviewExpansion.test.mjs src/interviewExpansion.test.mjs src/juniorAccountantCampaign.test.mjs
+          node --test src/accountantReadiness.test.mjs src/fieldInterviewExpansion.test.mjs src/interviewExpansion.test.mjs src/juniorAccountantCampaign.test.mjs
           npm run validate:migrations
-      - name: Activate and verify reviewed field interview library
-        run: node scripts/activate-field-interviews.mjs
+      - name: Activate private accountant readiness pilot
+        run: node scripts/activate-accountant-readiness.mjs

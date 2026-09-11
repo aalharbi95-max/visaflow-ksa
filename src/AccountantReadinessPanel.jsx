@@ -1,0 +1,88 @@
+import { useEffect, useState } from 'react';
+import { readinessText, readinessState, validateReadinessAnswers, normalizeReadinessAmount } from './accountantReadiness.mjs';
+import './accountantReadiness.css';
+
+const states = {
+  NotStarted: ['لم تبدأ','Not started'], Draft: ['مسودة محفوظة','Saved draft'],
+  Pending: ['بانتظار المراجعة البشرية','Awaiting human review'],
+  Confirmed: ['حقق معيار المهمة بعد المراجعة','Task standard met after review'],
+  NeedsDevelopment: ['يحتاج تطويرًا','Needs development'],
+};
+function TaskTable({definition,language}) {
+  const t = v => readinessText(v,language);
+  return <div className="ar-table-wrap"><table><caption>{language==='EN'?'Fictional exercise data — SAR':'بيانات تمرين افتراضية — بالريال'}</caption><thead><tr>{definition.columns[language==='EN'?'en':'ar'].map((c,i)=><th key={i} scope="col">{c}</th>)}</tr></thead><tbody>{definition.rows.map((row,i)=><tr key={i}>{row.map((v,j)=><td key={j}>{t(v)}</td>)}</tr>)}</tbody></table></div>;
+}
+export default function AccountantReadinessPanel({client, language='AR', onOpenInterview}) {
+  const en=language==='EN', say=(ar,english)=>en?english:ar, t=v=>readinessText(v,language);
+  const [tasks,setTasks]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[message,setMessage]=useState('');
+  const [selected,setSelected]=useState(null),[answers,setAnswers]=useState({}),[consent,setConsent]=useState(false),[busy,setBusy]=useState(false),[dirty,setDirty]=useState(false);
+  const [confirmSubmit,setConfirmSubmit]=useState(false),[reviewReason,setReviewReason]=useState(''),[interview,setInterview]=useState(null);
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const {data,error:e}=await client.rpc('get_my_accountant_readiness');
+      if(e) throw e;
+      setTasks(data?.tasks||[]);
+      const result=await client.rpc('get_my_talent_campaign_application',{p_slug:'junior-accountants-2026'});
+      setInterview(result.error?null:result.data);
+    } catch { setError(say('تعذر تحميل جاهزيتك. أعد المحاولة؛ لن تعرض الصفحة نتيجة غير مكتملة.','Unable to load readiness. Retry to retrieve the complete record.')); }
+    finally {setLoading(false);}
+  }
+  useEffect(()=>{load();},[client]);
+  useEffect(()=>{if(!dirty)return; const prevent=e=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent);},[dirty]);
+  const task=tasks.find(x=>x.code===selected), submitted=task?.attempt?.status==='Submitted';
+  function open(next) {setSelected(next.code);setAnswers(next.attempt?.answers||{});setConsent(Boolean(next.attempt));setDirty(false);setConfirmSubmit(false);setReviewReason('');setMessage('');setError('');}
+  function change(key,value) {setAnswers(a=>({...a,[key]:value}));setDirty(true);setConfirmSubmit(false);setMessage('');}
+  async function save(submit) {
+    if(busy)return;
+    const invalid=validateReadinessAnswers(task,answers,submit);
+    if(invalid){setError(invalid==='amount'?say('أدخل مبالغ موجبة أو صفرًا، حتى منزلتين عشريتين ودون فواصل آلاف.','Enter nonnegative amounts, up to two decimals, without thousands separators.'):invalid==='explanation'?say('اشرح منهجك من ٣٠ إلى ٢٠٠٠ حرف عند التسليم.','Explain your approach in 30–2000 characters when submitting.'):say('أكمل جميع الإجابات قبل التسليم.','Complete all answers before submitting.'));return;}
+    if(!consent){setError(say('الموافقة مطلوبة لحفظ إجاباتك ومراجعتها.','Consent is required to save and review your answers.'));return;}
+    setBusy(true);setError('');setMessage('');
+    try {
+      const {data,error:e}=await client.rpc('save_accountant_readiness',{p_task_code:task.code,p_answers:answers,p_revision:task.attempt?.revision||0,p_submit:submit,p_consent:consent});
+      if(e)throw e;
+      setTasks(rows=>rows.map(row=>row.code===task.code?{...row,attempt:data}:row));setDirty(false);setConfirmSubmit(false);
+      setMessage(submit?say('تم التسليم. ظهر التصحيح الآلي، والشرح بانتظار المراجعة البشرية.','Submitted. Objective scoring is available; your explanation awaits human review.'):say('تم حفظ المسودة. يمكنك العودة لها من حسابك.','Draft saved. You can resume from your account.'));
+    } catch(e) {setError(e.code==='40001'?say('تغيرت المسودة في نافذة أخرى. انسخ إجاباتك ثم أعد تحميل الصفحة قبل الحفظ.','The draft changed in another window. Copy your answers and reload before saving.'):say('لم نتأكد من الحفظ. إجاباتك باقية هنا؛ أعد المحاولة.','Save could not be confirmed. Your answers remain here; retry.'));}
+    finally {setBusy(false);}
+  }
+  async function requestReview() {
+    setBusy(true);setError('');
+    try {const {error:e}=await client.rpc('request_accountant_readiness_review',{p_attempt_id:task.attempt.id,p_reason:reviewReason});if(e)throw e;
+      setTasks(rows=>rows.map(row=>row.code===task.code?{...row,attempt:{...row.attempt,review_requested_at:new Date().toISOString(),review_status:'Pending'}}:row));setMessage(say('تم إرسال طلب المراجعة.','Review requested.'));
+    } catch {setError(say('تعذر إرسال الطلب. أعد المحاولة.','Unable to send request. Please retry.'));} finally {setBusy(false);}
+  }
+  return <div className="accountant-readiness" dir={en?'ltr':'rtl'}>
+    <header className="ar-hero"><span>{say('تجربة أولى • جاهزيتي للوظيفة','Pilot • My job readiness')}</span><h2>{say('محاسب مبتدئ','Junior accountant')}</h2><p>{say('أثبت مهارتك بمهمتين عمليتين، واعرف ما تحتاج تطويره. النتائج خاصة بك وبإدارة المنصة ولا تُشارك مع الشركات في هذه المرحلة.','Demonstrate your skills in two practical tasks and identify development areas. Results are private to you and platform reviewers; employer sharing is not enabled in this pilot.')}</p></header>
+    <p className="ar-note">{say('التصحيح الآلي يقيس الإجابات المحددة فقط. لا تعني النتيجة اعتمادًا مهنيًا أو قرار توظيف. الشرح يحتاج مراجعة بشرية.','Objective scoring covers structured answers only. Results are not a professional certification or hiring decision. Explanations require human review.')}</p>
+    {error&&<div role="alert" className="ar-error">{error}</div>}{message&&<div role="status" className="ar-success">{message}</div>}
+    {loading?<p role="status">{say('جاري تحميل الجاهزية…','Loading readiness…')}</p>:!tasks.length?<button onClick={load}>{say('إعادة تحميل الجاهزية','Reload readiness')}</button>:!task?<>
+      <div className="ar-step"><div><h3>{say('المقابلة المهنية','Professional interview')}</h3><p>{interview?say(`حالة المقابلة: ${interview.interview_status||interview.status}`,`Interview status: ${interview.interview_status||interview.status}`):say('مقابلة المحاسب المبتدئ متاحة من حملات التالنت.','The junior accountant interview is available in Talent campaigns.')}</p><small>{say('نتيجة المقابلة تبقى مستقلة؛ لا نستنتج منها إتقان مهارة لم تُقَس.','Interview results remain separate; unmeasured skills are not inferred.')}</small></div><button onClick={onOpenInterview}>{say('فتح المقابلة','Open interview')}</button></div>
+      <div className="ar-cards">{tasks.map(row=><article key={row.code} className="ar-card"><span className="ar-badge">{states[readinessState(row)][en?1:0]}</span><h3>{t(row.definition.title)}</h3><p>{say(`حوالي ${row.definition.minutes} دقيقة • الإصدار ${row.version}`,`About ${row.definition.minutes} minutes • Version ${row.version}`)}</p>{row.attempt?.status==='Submitted'&&<strong>{say('نتيجة الإجابات المحددة: ','Structured-answer score: ')}{row.attempt.objective_score}/100</strong>}<button onClick={()=>open(row)}>{row.attempt?.status==='Submitted'?say('عرض الأدلة والنتيجة','View evidence and result'):row.attempt?say('أكمل المسودة','Resume draft'):say('ابدأ المهمة','Start task')}</button></article>)}</div>
+      <div className="ar-step"><div><h3>{say('مهارات لم تُقيّم في هذه النسخة','Not assessed in this pilot')}</h3><p>{say('Excel والمهارات المحاسبية الأخرى: لم تُقيّم. لا يوجد حكم شامل على جاهزيتك المهنية من هاتين المهمتين وحدهما.','Excel and other accounting skills are not assessed. These two tasks alone do not establish overall job readiness.')}</p></div></div>
+    </>:<>
+      <button className="ar-back" disabled={busy||dirty} onClick={()=>{setSelected(null);setMessage('');setError('');}}>{say('العودة إلى بطاقة الجاهزية','Back to readiness card')}</button>{dirty&&<small role="status">{say('لديك تعديلات غير محفوظة. احفظ المسودة قبل العودة.','You have unsaved changes. Save the draft before going back.')}</small>}
+      <h3>{t(task.definition.title)}</h3><p>{t(task.definition.introduction)}</p><TaskTable definition={task.definition} language={language}/>
+      <p>{say('معيار الإجابات المحددة: ٨٠ من ١٠٠، بالإضافة إلى مراجعة الشرح. الوقت إرشادي ولا يخصم درجات.','Structured-answer threshold: 80/100, plus explanation review. Time is advisory and does not affect scoring.')}</p>
+      <form onSubmit={e=>{e.preventDefault();setConfirmSubmit(true);}}><fieldset disabled={submitted||busy}><legend>{say('إجابات المهمة','Task answers')}</legend><div className="ar-fields">{task.definition.fields.map(f=><label key={f.key} htmlFor={`ar-${f.key}`}><span>{t(f.label)} <small>({f.weight} {say('درجة','points')})</small></span>{f.type==='select'?<select id={`ar-${f.key}`} value={answers[f.key]??''} onChange={e=>change(f.key,e.target.value)}><option value="">{say('اختر إجابة','Select an answer')}</option>{f.options.map(o=><option key={o.value} value={o.value}>{t(o)}</option>)}</select>:<input id={`ar-${f.key}`} inputMode="decimal" maxLength={12} autoComplete="off" value={answers[f.key]??''} onChange={e=>change(f.key,normalizeReadinessAmount(e.target.value))}/>}</label>)}</div><label htmlFor="ar-rationale">{t(task.definition.rationale)}<textarea id="ar-rationale" rows={5} maxLength={2000} value={answers.rationale||''} onChange={e=>change('rationale',e.target.value)} /></label><small>{say('٣٠–٢٠٠٠ حرف. اشرح بأسلوبك؛ لا تدخل بيانات مالية أو شخصية حقيقية.','30–2000 characters. Explain in your own words; do not enter real financial or personal data.')}</small>
+      {!task.attempt&&<label className="ar-consent"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/>{say('أوافق على حفظ إجاباتي وتصحيحها ومراجعتها من إدارة VisaFlow لغرض تقييم هذه المهارات. لن تُشارك النتائج مع الشركات في هذه التجربة.','I consent to storing, scoring and VisaFlow staff reviewing my answers for this skills assessment. Results will not be shared with employers in this pilot.')}</label>}</fieldset>
+      {!submitted&&<div className="ar-actions"><button type="button" disabled={busy} onClick={()=>save(false)}>{busy?say('جاري الحفظ…','Saving…'):say('حفظ المسودة','Save draft')}</button><button type="submit" disabled={busy}>{say('مراجعة وتسليم','Review and submit')}</button></div>}
+      {confirmSubmit&&!submitted&&<div className="ar-confirm" role="region" aria-label={say('تأكيد التسليم','Confirm submission')}><p>{say('بعد التسليم تُقفل الإجابات وتظهر نتيجة التصحيح الآلي. تتوفر محاولة واحدة لكل مهمة في هذه النسخة؛ يمكنك طلب مراجعة النتيجة.','Submission locks your answers and reveals objective scoring. This pilot allows one attempt per task; you can request a review.')}</p><button type="button" disabled={busy} onClick={()=>save(true)}>{say('تسليم الإجابات نهائيًا','Submit final answers')}</button><button type="button" disabled={busy} onClick={()=>setConfirmSubmit(false)}>{say('متابعة التحرير','Continue editing')}</button></div>}</form>
+      {submitted&&<section className="ar-results"><h3>{say('بطاقة الأدلة','Evidence card')}</h3><p><strong>{task.attempt.objective_score}/100</strong> — {states[readinessState(task)][en?1:0]}</p><p>{say('تاريخ التسليم: ','Submitted: ')}{new Date(task.attempt.submitted_at).toLocaleString(en?'en-GB':'ar-SA')}</p><ul>{task.attempt.evidence?.map(e=><li key={e.key}>{t(task.definition.fields.find(f=>f.key===e.key)?.label)}: {e.earned}/{e.possible} — {e.correct?say('صحيح','Correct'):say('يحتاج مراجعة','Needs review')}</li>)}</ul><h4>{say('الخطوة التالية','Next step')}</h4><p>{readinessState(task)==='Confirmed'?say('أكمل المهمة الأخرى إن بقيت، أو راجع ملفك ومقابلتك المهنية.','Complete the other task if outstanding, or review your profile and professional interview.'):readinessState(task)==='NeedsDevelopment'||task.attempt.objective_score<80?t(task.definition.guidance):say('راجع شرحك مع مراجع المنصة. تحقيق الدرجة وحده لا يعني اعتماد المهمة.','Your explanation will be reviewed by platform staff. The objective score alone does not confirm the task.')}</p>{task.attempt.review_note&&<div className="ar-note"><strong>{say('ملاحظة المراجع','Reviewer feedback')}</strong><p>{task.attempt.review_note}</p>{task.attempt.review_status==='Pending'&&<small>{say('هذه الملاحظة من مراجعة سابقة؛ توجد مراجعة معلقة الآن.','This note is from an earlier review; a review is now pending.')}</small>}</div>}
+      {task.attempt.review_requested_at?<p>{say('تم تسجيل طلبك للمراجعة.','Your review request is recorded.')}</p>:<div><label htmlFor="ar-review">{say('طلب مراجعة بشرية أو الاعتراض على نتيجة','Request human review or question a result')}<textarea id="ar-review" rows={3} maxLength={1000} value={reviewReason} onChange={e=>setReviewReason(e.target.value)}/></label><button disabled={busy||reviewReason.trim().length<10} onClick={requestReview}>{say('إرسال طلب المراجعة','Send review request')}</button></div>}</section>}
+    </>}
+  </div>;
+}
+
+export function AccountantReadinessReviewPanel({client}) {
+  const [data,setData]=useState({items:[],total:0}),[offset,setOffset]=useState(0),[selected,setSelected]=useState(''),[note,setNote]=useState(''),[outcome,setOutcome]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true);
+  async function load(){setLoading(true);setError('');try{const {data:d,error:e}=await client.rpc('get_accountant_readiness_reviews',{p_offset:offset});if(e)throw e;setData(d);setSelected('');setNote('');setOutcome('');}catch{setData({items:[],total:0});setError('تعذر تحميل قائمة المراجعة. تحقق من صلاحية مالك المنصة وأعد المحاولة.');}finally{setLoading(false);}}
+  useEffect(()=>{load();},[client,offset]);
+  const row=data.items.find(x=>x.id===selected);
+  async function review(){setBusy(true);setError('');try{const {error:e}=await client.rpc('review_accountant_readiness',{p_attempt_id:row.id,p_revision:row.revision,p_outcome:outcome,p_note:note});if(e)throw e;await load();}catch(e){setError(e.code==='40001'?'تغيرت المراجعة. انسخ ملاحظتك وأعد تحميل القائمة.':'تعذر حفظ المراجعة. لم تتغير الإجابات أو درجات التصحيح الآلي.');}finally{setBusy(false);}}
+  return <section className="accountant-readiness" dir="rtl"><h2>مراجعة جاهزية المحاسب المبتدئ</h2><p>تجربة داخلية للمراجعة. النتيجة لا تصدر قرار توظيف ولا تُشارك مع الشركات.</p>{error&&<p role="alert" className="ar-error">{error}</p>}<button disabled={busy||loading} onClick={load}>تحديث قائمة المراجعة</button>{loading?<p role="status">جاري التحميل…</p>:<><p>{data.total} مهمة مسلّمة</p><div className="ar-cards">{data.items.map(x=><button key={x.id} disabled={busy} onClick={()=>{setSelected(x.id);setNote('');setOutcome('');}}>{x.full_name} — {readinessText(x.definition.title)}<br/>{x.objective_score}/100 • {states[readinessState({attempt:x,definition:x.definition})][0]}</button>)}</div><div className="ar-actions"><button disabled={offset===0||busy} onClick={()=>setOffset(Math.max(0,offset-20))}>السابق</button><button disabled={offset+20>=data.total||busy} onClick={()=>setOffset(offset+20)}>التالي</button></div></>}
+    {row&&<article><h3>{row.full_name} — {readinessText(row.definition.title)}</h3><p>{readinessText(row.definition.introduction)}</p><TaskTable definition={row.definition} language="AR"/><div className="ar-note"><strong>دليل المراجع</strong><p>{readinessText(row.review_guide)}</p></div><ul>{row.definition.fields.map(f=><li key={f.key}>{readinessText(f.label)}: <strong>{f.options?readinessText(f.options.find(o=>o.value===row.answers[f.key])):String(row.answers[f.key])}</strong> — المرجع: {f.options?readinessText(f.options.find(o=>o.value===row.answer_key[f.key])):String(row.answer_key[f.key])}</li>)}</ul><h4>شرح المرشح</h4><p className="ar-pre">{row.answers.rationale}</p>{row.review_request_reason&&<p>سبب طلب المراجعة: {row.review_request_reason}</p>}{row.review_note&&<p>الملاحظة السابقة: {row.review_note}</p>}<label>نتيجة مراجعة الشرح<select disabled={busy} value={outcome} onChange={e=>setOutcome(e.target.value)}><option value="">اختر النتيجة</option><option value="Confirmed">الشرح مدعوم ومنهج العمل سليم</option><option value="NeedsDevelopment">الشرح يحتاج تطويرًا أو أدلة إضافية</option></select></label><label>ملاحظات تستند إلى إجابة المرشح (٢٠–٢٠٠٠ حرف)<textarea disabled={busy} rows={5} value={note} maxLength={2000} onChange={e=>setNote(e.target.value)}/></label><p>تُحفظ المراجعة باسم حسابك في سجل مستقل، وتظهر الملاحظة للمرشح. لا تتغير إجابات المرشح أو درجته الآلية.</p><button disabled={busy||!outcome||note.trim().length<20} onClick={review}>{busy?'جاري الحفظ…':'حفظ المراجعة'}</button></article>}
+  </section>;
+}
+
