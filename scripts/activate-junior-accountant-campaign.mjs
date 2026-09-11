@@ -5,7 +5,7 @@ assert.equal(project, 'zeocbftriydodzfgixjv');
 assert.ok(process.env.SUPABASE_ACCESS_TOKEN);
 const file = 'supabase/migrations/20260911000100_talent_junior_accountant_campaign.sql';
 const migration = await readFile(file, 'utf8');
-async function query(sql, readOnly = true) {
+async function query(sql, readOnly = false) {
   const response = await fetch(`https://api.supabase.com/v1/projects/${project}/database/query`, {
     method: 'POST', headers: { Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: sql, read_only: readOnly }), signal: AbortSignal.timeout(60000),
