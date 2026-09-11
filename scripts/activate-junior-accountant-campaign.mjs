@@ -17,7 +17,7 @@ const [definition] = await query("select pg_get_functiondef('public.talent_campa
 assert.ok(definition?.definition);
 // Fail closed if Production has additional eligibility logic not present in the reviewed migration.
 const oldSql = await readFile('supabase/migrations/20260817001200_talent_it_campaign.sql', 'utf8');
-const body = (sql) => sql.match(/as \$\$([^]*?)\$\$/i)?.[1]?.replace(/\s+/g, ' ').trim();
+const body = (sql) => sql.match(/as (\$[a-z_]*\$)([^]*?)\1/i)?.[2]?.replace(/\s+/g, ' ').trim();
 const oldBody = body(oldSql);
 const newBody = body(migration);
 assert.ok(oldBody && newBody);
