@@ -45,6 +45,6 @@ test('90 approved templates execute twice safely, match the catalog and isolate 
     await db.query("update public.ai_interview_templates set approval_status='Approved',company_id=gen_random_uuid() where id=$1",[first.id]);
     assert.equal((await db.query('select public.talent_campaign_template_is_eligible($1,$2) as ok',[c.id,first.id])).rows[0].ok,false);
     assert.equal(EXPANDED_TALENT_CAMPAIGNS.length,6);
-    for(const language of ['AR','EN']) assert.equal(getAvailableTalentCampaigns(language).length,11);
+    for(const language of ['AR','EN']) assert.equal(getAvailableTalentCampaigns(language).length,16);
   }finally{await db.close();}
 });
