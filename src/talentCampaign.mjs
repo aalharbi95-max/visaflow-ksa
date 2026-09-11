@@ -2,8 +2,23 @@ export const ENGINEERING_TALENT_CAMPAIGN_SLUG = "saudi-engineers-2026";
 export const HR_TALENT_CAMPAIGN_SLUG = "saudi-hr-professionals-2026";
 export const FINANCE_TALENT_CAMPAIGN_SLUG = "finance-accounting-professionals-2026";
 export const IT_TALENT_CAMPAIGN_SLUG = "it-digital-professionals-2026";
+export const JUNIOR_ACCOUNTANT_CAMPAIGN_SLUG = "junior-accountants-2026";
 
 const TALENT_CAMPAIGN_CONTENT = {
+  [JUNIOR_ACCOUNTANT_CAMPAIGN_SLUG]: {
+    nameAr: "حملة مقابلات المحاسب المبتدئ",
+    nameEn: "Junior Accountant Interview Campaign",
+    descriptionAr: "محاكاة مقابلة للمحاسبين المبتدئين وحديثي التخرج: ٨ أسئلة في أساسيات المحاسبة خلال نحو ٢٠ دقيقة.",
+    descriptionEn: "An entry-level accounting interview: 8 questions covering accounting fundamentals in about 20 minutes.",
+    professionLabelAr: "اختر مقابلة المحاسب المبتدئ",
+    professionLabelEn: "Select the junior accountant interview",
+    badgeAr: "حملة VisaFlow للمحاسبين المبتدئين",
+    badgeEn: "VisaFlow Junior Accountant Campaign",
+    headlineAr: "ابدأ مسيرتك المحاسبية بمقابلة تدريبية.",
+    headlineEn: "Start your accounting career with a practice interview.",
+    introAr: "لحديثي التخرج والمحاسبين المبتدئين من جميع الجنسيات. أجب بالعربية أو الإنجليزية، ويمكنك استخدام أمثلة من الدراسة أو التدريب دون اشتراط خبرة وظيفية. مشاركة السيرة وبيانات التواصل مع الشركات مطلوبة لدخول الاختبار، ومشاركة النتيجة اختيارية. المشاركة لا تضمن التوظيف.",
+    introEn: "For graduates and junior accountants of all nationalities. Answer in Arabic or English using study or internship examples; employment experience is not required. CV and contact sharing with employers are required; result sharing is optional. Participation does not guarantee employment.",
+  },
   [ENGINEERING_TALENT_CAMPAIGN_SLUG]: {
     nameAr: "حملة المهندسين",
     nameEn: "Engineering Campaign",

@@ -1,49 +1,25 @@
-name: Supabase release
-
+name: Activate junior accountant campaign
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: Protected GitHub Environment to deploy
+      confirm_project_ref:
+        description: Exact production project for this campaign
         required: true
-        type: choice
-        options:
-          - staging
-          - production
-      deploy_functions:
-        description: Deploy the reviewed Agent functions
-        required: true
-        type: boolean
-        default: true
-      apply_migrations:
-        description: Apply reviewed database migrations
-        required: true
-        type: boolean
-        default: true
-
+        type: string
 permissions:
   contents: read
-
 concurrency:
-  group: supabase-${{ inputs.environment }}
+  group: supabase-production
   cancel-in-progress: false
-
 jobs:
-  validate:
-    uses: ./.github/workflows/release-validation.yml
-
-  deploy:
-    needs: validate
+  activate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 10
+    environment: Production
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_CLI_VERSION: 2.109.1
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      CONFIRM_PROJECT_REF: ${{ inputs.confirm_project_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,66 +28,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Validate required deployment configuration
-        shell: bash
+      - name: Verify exact production destination
         run: |
-          set -euo pipefail
+          test "$CONFIRM_PROJECT_REF" = "zeocbftriydodzfgixjv"
+          test "$SUPABASE_PROJECT_REF" = "$CONFIRM_PROJECT_REF"
           test -n "$SUPABASE_ACCESS_TOKEN"
-          test -n "$SUPABASE_DB_PASSWORD"
-          test -n "$SUPABASE_PROJECT_REF"
-          test -n "$SUPABASE_URL"
-          test -n "$SUPABASE_ANON_KEY"
-          if [ "${{ inputs.environment }}" = "production" ]; then
-            test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
-            test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
-          fi
-      - name: Install pinned Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: 2.109.1
-      - name: Validate repository and migrations
+      - run: npm ci
+      - name: Validate the isolated campaign
         run: |
+          node --test src/juniorAccountantCampaign.test.mjs
           npm run validate:migrations
-          npm test
-          npm run test:postgres
-          npm run build
-      - name: Link exact Supabase project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
-      - name: Inspect migration status
-        run: node scripts/supabase-pooler-cli.mjs migration list
-      - name: Database migration dry-run
-        if: ${{ inputs.apply_migrations }}
-        run: node scripts/supabase-pooler-cli.mjs db push --dry-run
-      - name: Verify intentionally skipped Production migration boundary
-        if: ${{ inputs.environment == 'production' && !inputs.apply_migrations }}
-        shell: bash
-        run: |
-          node scripts/supabase-pooler-cli.mjs db push --dry-run --include-all > production-migration-dry-run.txt 2>&1
-          node scripts/validate-production-dry-run.mjs production-migration-dry-run.txt
-      - name: Apply database migrations deterministically
-        if: ${{ inputs.apply_migrations }}
-        run: node scripts/supabase-pooler-cli.mjs db push
-      - name: Verify migration history
-        run: node scripts/supabase-pooler-cli.mjs migration list
-      - name: Deploy reviewed Edge Functions
-        if: ${{ inputs.deploy_functions }}
-        run: |
-          supabase functions deploy visaflow-agent-orchestrator --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy aiagentworker --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy visaflow-ai-commander --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy visaflow-email-dispatcher --project-ref "$SUPABASE_PROJECT_REF"
-      - name: Smoke-test authentication boundaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          for function_name in visaflow-agent-orchestrator aiagentworker visaflow-ai-commander visaflow-email-dispatcher; do
-            status="$(curl --silent --show-error --output /tmp/function-response.json --write-out '%{http_code}' \
-              --request POST "$SUPABASE_URL/functions/v1/$function_name" \
-              --header "apikey: $SUPABASE_ANON_KEY" \
-              --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
-              --header 'Content-Type: application/json' \
-              --data '{}')"
-            test "$status" = "401" || test "$status" = "403"
-          done
+      - name: Apply only the reviewed junior accountant campaign and verify existing campaigns
+        run: node scripts/activate-junior-accountant-campaign.mjs
