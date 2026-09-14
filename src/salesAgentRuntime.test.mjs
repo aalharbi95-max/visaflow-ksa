@@ -4,18 +4,18 @@ import {createSalesHandler} from '../supabase/functions/_shared/salesAgentRuntim
 const id='00000000-0000-0000-0000-000000000001';
 function harness(options={}) {
   const calls=[], updates=[], completions=[];let fetches=0;
-  const actor={id:1,role:'Admin',status:'Active',is_active:true,company_id:id};
+  const actor={id:1,role:'Platform Owner',status:'Active',is_active:true,company_id:null};
   const lead={id,company_id:id,company_name:'Known company',status:'active',contact_email:'test@example.test',...options.lead};
   const client={auth:{getUser:async()=>({data:{user:{id:'auth'}},error:options.authError})},from(table){
     const filters=[];let update=null;
     const q={select(){return q;},eq(key,value){filters.push([key,value]);return q;},limit(){return q;},maybeSingle(){return q;},order(){return q;},gte(){return q;},lte(){return q;},update(value){update=value;return q;},then(resolve){
       calls.push({table,filters});if(update) updates.push(update);
-      const data=table==='users'?(options.actors||[actor]):table==='companies'?{id}:table==='sales_leads'?(options.missingLead?null:lead):[];
+      const data=table==='users'?(options.actors||[actor]):table==='sales_workspaces'?{id}:table==='sales_leads'?(options.missingLead?null:lead):[];
       resolve({data,count:0,error:null});
     }};return q;
   },async rpc(name,args){calls.push({rpc:name,args});if(name==='sales_start_run')return{data:'run',error:null};completions.push(args);return{data:{...args.p_result,status:args.p_result.status},error:options.commitError?{message:'lead_do_not_contact'}:null};}};
   const handler=createSalesHandler({createClient:()=>client,env:key=>options.noAI&&key.startsWith('OPENAI')?'':({SUPABASE_URL:'local',SUPABASE_SERVICE_ROLE_KEY:'local',OPENAI_API_KEY:'test',OPENAI_SALES_AGENT_MODEL:'configured-model'}[key]),fetchImpl:async(url,init)=>{
-    fetches++;assert.equal(url,'https://api.openai.com/v1/responses');assert.equal(JSON.parse(init.body).store,false);
+    fetches++;assert.equal(url,'https://api.openai.com/v1/responses');assert.equal(JSON.parse(init.body).store,false); assert.match(JSON.parse(init.body).instructions,/own platform subscription sales agent/);
     assert.match(JSON.parse(init.body).input,/Return one valid JSON object/);
     return new Response(JSON.stringify({output_text:JSON.stringify(options.ai||{subject:'Review',body:'A draft'})}),{status:options.aiStatus||200});
   }});
@@ -24,7 +24,7 @@ function harness(options={}) {
 test('authenticated draft calls AI once, commits pending, uses tenant filters, never sends mail',async()=>{
   const h=harness(), result=await h.run();assert.equal(result.status,200);assert.equal(result.delivery_enabled,false);assert.equal(h.fetches,1);
   assert.equal(h.completions[0].p_result.status,'pending');
-  assert.ok(h.calls.find(c=>c.table==='sales_leads').filters.some(([k,v])=>k==='company_id'&&v===id));
+  assert.ok(h.calls.find(c=>c.table==='sales_leads').filters.some(([k,v])=>k==='workspace_id'&&v===id));
 });
 test('missing auth and foreign tenant rejected before execution',async()=>{
   const h=harness();assert.equal((await h.run({},{})).status,401);assert.equal((await h.run({company_id:'other'})).status,403);assert.equal(h.fetches,0);assert.equal(h.completions.length,0);
@@ -50,4 +50,12 @@ test('provider authentication failure exposes a safe code and never persists a d
   const h=harness({aiStatus:401});const result=await h.run();
   assert.equal(result.status,502);assert.equal(result.error,'openai_auth_failed');
   assert.equal(h.completions.length,0);assert.equal(h.updates[0].error_message,'openai_auth_failed');
+});
+
+test('customer roles and workspace overrides fail before AI or audit writes',async()=>{
+ for(const role of ['Admin','CEO','Recruitment Manager','Recruitment Officer','Platform Marketing User']) {
+  const h=harness({actors:[{role,company_id:id,status:'Active',is_active:true}]});
+  assert.equal((await h.run()).status,403);assert.equal(h.fetches,0);assert.equal(h.calls.filter(c=>c.rpc).length,0);
+ }
+ const h=harness(); assert.equal((await h.run({workspace_id:'customer-workspace'})).status,403);assert.equal(h.fetches,0);
 });

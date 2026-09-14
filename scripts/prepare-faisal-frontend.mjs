@@ -31,23 +31,17 @@ function replaceOnce(before, after) {
   assert.equal(app.split(before).length - 1, 1, `Expected one integration point: ${before}`);
   app = app.replace(before, after);
 }
-replaceOnce('import { useEffect, useMemo, useRef, useState } from "react";', 'import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";');
-replaceOnce('const UI_DIRECTION = getUiDirection();', 'const SalesCommandCenterLazyPage = lazy(() => import("./SalesCommandCenterLazyPage.jsx"));\n\nconst UI_DIRECTION = getUiDirection();');
-replaceOnce('const PAGES = [', 'const PAGES = [\n  "Sales Command Center",');
-replaceOnce('pages: ["Platform Intelligence", "Executive Dashboard",', 'pages: ["Sales Command Center", "Platform Intelligence", "Executive Dashboard",');
+replaceOnce('const PLATFORM_PAGES = [', 'const PLATFORM_PAGES = [\n  "Sales Command Center",');
 const rolesStart = app.indexOf('const ROLE_PAGES = {');
-assert.ok(rolesStart >= 0, 'Company navigation role map missing');
+assert.ok(rolesStart >= 0);
 const originalRoles = app.slice(rolesStart, app.indexOf('};', rolesStart) + 2);
-let roles = originalRoles;
-for (const role of ['CEO', '"Recruitment Manager"', '"Recruitment Officer"']) {
-  assert.equal(roles.split(`${role}: [`).length - 1, 1, `Missing navigation role ${role}`);
-  roles = roles.replace(`${role}: [`, `${role}: [\n    "Sales Command Center",`);
-}
+const roles = originalRoles.replaceAll('    "Sales Command Center",\r\n','').replaceAll('    "Sales Command Center",\n','');
+assert.notEqual(roles,originalRoles,'Existing tenant navigation not found');
 replaceOnce(originalRoles, roles);
-replaceOnce('{activePage === "AI Agent" && (', '{activePage === "Sales Command Center" && (\n          <Suspense fallback={<div role="status">Loading Sales Command Center...</div>}><SalesCommandCenterLazyPage key={currentCompanyId} companyId={currentCompanyId} currentRole={currentRole} /></Suspense>\n        )}\n        {activePage === "AI Agent" && (');
+replaceOnce('key={currentCompanyId} companyId={currentCompanyId} currentRole={currentRole}', 'key="platform-sales" currentRole={currentRole}');
 await writeFile(appFile, app);
 for (const relative of ['src/SalesCommandCenterLazyPage.jsx', 'src/salesCommandCenter.css']) {
-  assert.ok(!files.includes(relative), `Sales file already present: ${relative}`);
+  assert.ok(files.includes(relative), 'Existing Sales source required');
   await copyFile(relative, resolve(output, relative));
 }
-console.log(JSON.stringify({ preserved_files: files.length - 1, changed: ['src/App.jsx'], added: ['src/SalesCommandCenterLazyPage.jsx', 'src/salesCommandCenter.css'], output }, null, 2));
+console.log(JSON.stringify({ preserved_files: files.length - 3, changed: ['src/App.jsx','src/SalesCommandCenterLazyPage.jsx','src/salesCommandCenter.css'], output }, null, 2));

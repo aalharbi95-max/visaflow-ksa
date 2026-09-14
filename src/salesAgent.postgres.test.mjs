@@ -3,6 +3,59 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 
+test('Platform subscription sales upgrade preserves legacy data and enforces owner-only access', async () => {
+ const db = new PGlite();
+ const company='20000000-0000-0000-0000-000000000001';
+ const owner='30000000-0000-0000-0000-000000000001', customer='30000000-0000-0000-0000-000000000002';
+ try {
+  await db.exec(`create schema auth; create role anon; create role authenticated; create role service_role bypassrls;
+   create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+   grant usage on schema public,auth to authenticated,anon,service_role;
+   create table companies(id uuid primary key,status text);
+   create table users(id bigint primary key,auth_user_id uuid,company_id uuid,role text,status text,is_active boolean);
+   insert into companies values('${company}','Active');
+   insert into users values(1,'${owner}',null,'Platform Owner','Active',true),(2,'${customer}','${company}','Admin','Active',true);`);
+  await db.exec(await readFile(new URL('../supabase/migrations/20260914000100_faisal_sales_agent_mvp.sql',import.meta.url),'utf8'));
+  await db.exec(`insert into sales_leads(company_id,company_name) values('${company}','Existing tenant lead')`);
+  await db.exec(await readFile(new URL('../supabase/migrations/20260914000200_faisal_platform_sales_workspace.sql',import.meta.url),'utf8'));
+  const workspace=(await db.query("select id from sales_workspaces where scope='platform'")).rows[0].id;
+  assert.equal((await db.query('select count(*)::int n from companies')).rows[0].n,1,'No synthetic company created');
+  assert.equal((await db.query(`select count(*)::int n from sales_leads where workspace_id='${company}'`)).rows[0].n,1,'Legacy data preserved');
+  const actor=async id=>db.exec(`reset role;set role authenticated;select set_config('request.jwt.claim.sub','${id}',false)`);
+  await actor(owner);
+  assert.equal((await db.query('select * from sales_workspaces')).rows.length,1);
+  assert.equal((await db.query('select * from sales_leads')).rows.length,0,'Owner cannot silently consume legacy tenant leads');
+  const lead=(await db.query(`insert into sales_leads(workspace_id,company_name,contact_email) values('${workspace}','Potential subscriber','prospect@example.invalid') returning id`)).rows[0].id;
+  await assert.rejects(db.query(`insert into sales_leads(workspace_id,company_name) values('${company}','Forged scope')`),/row-level security/);
+  await actor(customer);
+  for(const table of ['sales_workspaces','sales_leads','sales_tasks','sales_interactions','sales_agent_runs','sales_agent_approvals']) assert.equal((await db.query(`select * from ${table}`)).rows.length,0);
+  await assert.rejects(db.query(`insert into sales_leads(workspace_id,company_name) values('${workspace}','Customer attack')`),/row-level security/);
+  await db.exec('reset role;set role service_role');
+  await assert.rejects(db.query('select sales_start_run($1,$2,$3,$4,$5,false)',[workspace,lead,'draft_outreach',customer,{}]),/forbidden/);
+  await assert.rejects(db.query('select sales_start_run($1,$2,$3,$4,$5,false)',[company,null,'daily_brief',owner,{}]),/workspace_not_found/);
+  const start=async action=>(await db.query('select sales_start_run($1,$2,$3,$4,$5,false) id',[workspace,lead,action,owner,{reply_text:'pricing'}])).rows[0].id;
+  const finish=async(run,result)=>(await db.query('select sales_complete_run($1,$2,$3,null) result',[workspace,run,result])).rows[0].result;
+  const run=await start('draft_outreach'), draft=await finish(run,{subject:'VisaFlow subscription',body:'Draft only'});
+  assert.equal(draft.status,'pending'); assert.equal((await finish(run,{subject:'Replay',body:'Replay'})).approval_id,draft.approval_id);
+  const pricing=await finish(await start('classify_reply'),{classification:'REQUEST_PRICING',requires_ceo_approval:false,follow_up_days:null});
+  await actor(customer);
+  await assert.rejects(db.query('select sales_decide_approval($1,$2,$3)',[pricing.approval_id,'approved','']),/forbidden/);
+  await actor(owner);
+  await assert.rejects(db.query(`update sales_agent_approvals set status='approved'`),/permission denied/);
+  const decision=(await db.query('select sales_decide_approval($1,$2,$3) result',[pricing.approval_id,'approved','Owner reviewed'])).rows[0].result;
+  assert.equal(decision.delivery_enabled,false);
+  await db.exec('reset role;set role service_role');
+  const stale=await start('draft_outreach');
+  await finish(await start('classify_reply'),{classification:'UNSUBSCRIBE',follow_up_days:3});
+  await assert.rejects(finish(stale,{subject:'Stale',body:'Stale'}),/lead_do_not_contact/);
+  assert.equal((await db.query(`select count(*)::int n from sales_agent_approvals where workspace_id='${workspace}' and status in ('pending','approved')`)).rows[0].n,0);
+  await assert.rejects(db.query(`insert into sales_interactions(workspace_id,lead_id,direction,interaction_type) values('${workspace}','${lead}','outbound','email')`),/check constraint/);
+  await actor(owner);await assert.rejects(db.query(`update sales_leads set do_not_contact=false where id='${lead}'`),/cannot_be_cleared/);
+  await db.exec(`reset role;update users set is_active=false where auth_user_id='${owner}'`);
+  await actor(owner);assert.equal((await db.query('select * from sales_leads')).rows.length,0);
+ } finally { await db.close(); }
+});
+
 const A='00000000-0000-0000-0000-000000000001', B='00000000-0000-0000-0000-000000000002';
 const uid=n=>`10000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
 test('Faisal PostgreSQL authorization and transactional safety', async t=>{

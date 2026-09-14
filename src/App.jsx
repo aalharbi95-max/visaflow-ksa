@@ -7665,6 +7665,7 @@ function isPlatformRole(role) {
 }
 
 const PLATFORM_PAGES = [
+  "Sales Command Center",
   "Platform Dashboard",
   "Platform Intelligence",
   "Client Usage Monitor",
@@ -7712,7 +7713,6 @@ const ROLE_PAGES = {
 
   // CEO: executive visibility and read-only reporting.
   CEO: [
-    "Sales Command Center",
     "Executive Dashboard",
     "AI Commander",
     "AI Agent",
@@ -7768,7 +7768,6 @@ const ROLE_PAGES = {
 
   // Recruitment Manager: recruitment control, approvals, recruiter KPI and agency performance.
   "Recruitment Manager": [
-    "Sales Command Center",
     "Executive Dashboard",
     "AI Commander",
     "AI Agent",
@@ -7818,7 +7817,6 @@ const ROLE_PAGES = {
 
   // Recruiter / Recruitment Officer: daily recruitment operation only.
   "Recruitment Officer": [
-    "Sales Command Center",
     "Dashboard",
     "AI Agent",
     "Requests",
@@ -33097,7 +33095,7 @@ if (!currentUser) {
         ))}
 
         {activePage === "Sales Command Center" && (
-          <Suspense fallback={<div role="status">Loading Sales Command Center...</div>}><SalesCommandCenterLazyPage key={currentCompanyId} companyId={currentCompanyId} currentRole={currentRole} /></Suspense>
+          <Suspense fallback={<div role="status">Loading Sales Command Center...</div>}><SalesCommandCenterLazyPage key="platform-sales" currentRole={currentRole} /></Suspense>
         )}
         {activePage === "AI Agent" && (
           <>

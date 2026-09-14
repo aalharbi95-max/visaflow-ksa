@@ -7,7 +7,7 @@ on:
       - 'scripts/faisal-staging-smoke.mjs'
       - 'supabase/functions/visaflow-sales-agent/**'
       - 'supabase/functions/_shared/salesAgent*.mjs'
-      - 'supabase/migrations/20260914000100_faisal_sales_agent_mvp.sql'
+      - 'supabase/migrations/*faisal*.sql'
 permissions:
   contents: read
 concurrency:

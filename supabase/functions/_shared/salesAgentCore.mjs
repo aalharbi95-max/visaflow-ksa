@@ -1,17 +1,10 @@
-export const SALES_ROLES = ["Admin", "Company Admin", "CEO", "Recruitment Manager", "Recruitment Officer"];
 export const REPLY_CLASSES = ["INTERESTED", "REQUEST_DEMO", "REQUEST_PRICING", "NEED_MORE_INFO", "NOT_NOW", "NOT_INTERESTED", "WRONG_CONTACT", "UNSUBSCRIBE", "OUT_OF_OFFICE", "REFERRAL"];
 
-export function resolveSalesTenant(rows, requestedCompanyId = "") {
-  if (!Array.isArray(rows) || rows.length !== 1) throw new Error("forbidden");
+export function assertPlatformSalesActor(rows) {
+  if (!Array.isArray(rows) || rows.length !== 1) throw new Error('forbidden');
   const actor = rows[0];
-  if (actor.status !== "Active" || actor.is_active !== true) throw new Error("forbidden");
-  if (actor.role === "Platform Owner" && !actor.company_id) {
-    if (!requestedCompanyId) throw new Error("company_id_required");
-    return requestedCompanyId;
-  }
-  if (!SALES_ROLES.includes(actor.role) || !actor.company_id) throw new Error("forbidden");
-  if (requestedCompanyId && requestedCompanyId !== actor.company_id) throw new Error("tenant_mismatch");
-  return actor.company_id;
+  if (actor.status !== 'Active' || actor.is_active !== true || actor.role !== 'Platform Owner' || actor.company_id != null) throw new Error('forbidden');
+  return actor;
 }
 
 // Compliance intent is handled before AI. Ambiguity may suppress contact; it never enables sending.

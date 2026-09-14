@@ -53,6 +53,12 @@ async function prepare() {
     assert.equal(stored[0].statements.join('\n').trim(), sql.trim(), 'Recorded migration differs; refusing replay');
     report.checks.push('exact_migration_already_applied');
   }
+  const platformSql = await readFile('supabase/migrations/20260914000200_faisal_platform_sales_workspace.sql', 'utf8');
+  const platformHistory = await query("select statements from supabase_migrations.schema_migrations where version='20260914000200'");
+  if (platformHistory.length) assert.equal(platformHistory[0].statements.join('\n').trim(), platformSql.trim(), 'Platform migration mismatch');
+  else await query(`begin; set local lock_timeout='5s'; ${platformSql}
+insert into supabase_migrations.schema_migrations(version,name,statements) values('20260914000200','faisal_platform_sales_workspace',array[${lit(platformSql)}]); commit;`);
+  report.checks.push('platform_sales_migration_verified');
   await query("notify pgrst, 'reload schema'");
   const names = await management('/secrets');
   report.openai_key_configured = names.some(x => x.name === 'OPENAI_API_KEY');
@@ -68,6 +74,7 @@ async function smoke() {
   const fixtures = { companies: [randomUUID(), randomUUID()], users: [] };
   const [a, b] = fixtures.companies;
   const tag = randomUUID();
+  const workspace = (await query("select id from public.sales_workspaces where scope='platform' and status='Active'"))[0].id;
   report.fixture_tag = tag;
   const edge = (jwt, body) => api('/functions/v1/visaflow-sales-agent', jwt, body);
   const rest = (table, jwt, body, method = 'POST') => api(`/rest/v1/${table}`, jwt, body, method);
@@ -76,7 +83,7 @@ async function smoke() {
     const response = await api('/auth/v1/admin/users', service, { email, password, email_confirm: true }, 'POST', service);
     assert.equal(response.status, 200, `Create test Auth user: HTTP ${response.status}`);
     const id = response.data.id; fixtures.users.push(id);
-    await query(`insert into public.users(name,email,role,status,is_active,company_id,auth_user_id) values('Faisal Staging QA',${lit(email)},${lit(role)},'Active',true,${lit(company)},${lit(id)})`);
+    await query(`insert into public.users(name,email,role,status,is_active,company_id,auth_user_id) values('Faisal Staging QA',${lit(email)},${lit(role)},'Active',true,${company ? lit(company) : 'null'},${lit(id)})`);
     const login = await api('/auth/v1/token?grant_type=password', null, { email, password });
     assert.equal(login.status, 200, 'Test user sign-in failed');
     mask(login.data.access_token); mask(login.data.refresh_token);
@@ -85,16 +92,17 @@ async function smoke() {
   try {
     await query(`insert into public.companies(id,name,status) values(${lit(a)},${lit(`Faisal QA A ${tag}`)},'Active'),(${lit(b)},${lit(`Faisal QA B ${tag}`)},'Active')`);
     report.cleanup = 'pending';
-    const admin = await addUser(a, 'Admin'), other = await addUser(b, 'Admin'), officer = await addUser(a, 'Recruitment Officer'), manager = await addUser(a, 'Recruitment Manager');
+    const admin = await addUser(null, 'Platform Owner'), other = await addUser(b, 'Admin'), officer = await addUser(a, 'Recruitment Officer'), manager = await addUser(a, 'Recruitment Manager');
     report.checks.push('real_auth_password_login');
     const unauthorized = await edge(null, { action: 'daily_brief' });
     assert.ok([401,403].includes(unauthorized.status)); report.checks.push('anonymous_denied');
     expect(await edge(admin.jwt, { action: 'daily_brief', company_id: b }), 403, 'tenant_override_denied');
-    const lead = expect(await rest('sales_leads', admin.jwt, { company_id:a, company_name:'Fictional QA Facilities', contact_name:'QA Contact', industry:'Facility management', contact_email:`prospect-${tag}@example.invalid`, notes:'Synthetic test facts: facilities operations company; recruitment coordination across two locations. No actual customer or project claims.' }), 201, 'own_tenant_lead_insert')[0];
-    expect(await rest('sales_leads', admin.jwt, { company_id:b, company_name:'Forbidden' }), 403, 'cross_tenant_insert_denied');
-    expect(await edge(other.jwt, { action:'qualify_lead', lead_id:lead.id }), 404, 'foreign_lead_hidden');
+    const lead = expect(await rest('sales_leads', admin.jwt, { workspace_id:workspace, company_name:'Fictional QA Facilities', contact_name:'QA Contact', industry:'Facility management', contact_email:`prospect-${tag}@example.invalid`, notes:'Synthetic test facts: facilities operations company; recruitment coordination across two locations. No actual customer or project claims.' }), 201, 'own_tenant_lead_insert')[0];
+    fixtures.lead = lead.id;
+    expect(await rest('sales_leads', admin.jwt, { workspace_id:b, company_name:'Forbidden' }), 403, 'cross_tenant_insert_denied');
+    expect(await edge(other.jwt, { action:'qualify_lead', lead_id:lead.id }), 403, 'customer_cannot_use_platform_agent');
     const brief = expect(await edge(admin.jwt,{ action:'daily_brief' }),200,'daily_brief_real_edge');
-    assert.equal(brief.result.total_active_leads,1); assert.equal(brief.delivery_enabled,false);
+    assert.ok(brief.result.total_active_leads>=1); assert.equal(brief.delivery_enabled,false);
     const qualify = await edge(admin.jwt,{ action:'qualify_lead',lead_id:lead.id });
     let aiFailure = null;
     if (qualify.status === 200) {
@@ -111,23 +119,27 @@ async function smoke() {
     const decision = {p_approval_id:pricing.result.approval_id,p_decision:'approved',p_reason:'Synthetic staging QA'};
     assert.ok((await rest('rpc/sales_decide_approval',officer.jwt,decision)).status>=400); report.checks.push('officer_approval_denied');
     assert.ok((await rest('rpc/sales_decide_approval',manager.jwt,decision)).status>=400); report.checks.push('manager_pricing_approval_denied');
-    const approved=expect(await rest('rpc/sales_decide_approval',admin.jwt,decision),200,'admin_pricing_approval'); assert.equal(approved.delivery_enabled,false);
+    const approved=expect(await rest('rpc/sales_decide_approval',admin.jwt,decision),200,'platform_owner_pricing_approval'); assert.equal(approved.delivery_enabled,false);
     for(const table of ['sales_leads','sales_interactions','sales_agent_runs','sales_agent_approvals','sales_tasks']) {
-      const rows=expect(await rest(`${table}?company_id=eq.${a}`,other.jwt,undefined,'GET'),200,`${table}_tenant_isolation`);assert.deepEqual(rows,[]);
+      const rows=expect(await rest(`${table}?workspace_id=eq.${workspace}`,other.jwt,undefined,'GET'),200,`${table}_tenant_isolation`);assert.deepEqual(rows,[]);
     }
     expect(await edge(admin.jwt,{action:'classify_reply',lead_id:lead.id,reply_text:'UNSUBSCRIBE — إلغاء الاشتراك'}),200,'unsubscribe_real_edge');
     const suppressed=expect(await rest(`sales_leads?id=eq.${lead.id}`,admin.jwt,undefined,'GET'),200,'dnc_readback')[0];assert.equal(suppressed.do_not_contact,true);assert.equal(suppressed.next_follow_up_at,null);
     expect(await edge(admin.jwt,{action:'draft_outreach',lead_id:lead.id}),409,'dnc_draft_rejected');
     assert.ok((await rest(`sales_leads?id=eq.${lead.id}`,admin.jwt,{do_not_contact:false},'PATCH')).status>=400);report.checks.push('dnc_cannot_clear');
-    const pending=await query(`select count(*)::int n from public.sales_agent_approvals where company_id=${lit(a)} and status in ('pending','approved')`);assert.equal(pending[0].n,0);
+    const pending=await query(`select count(*)::int n from public.sales_agent_approvals where lead_id=${lit(lead.id)} and status in ('pending','approved')`);assert.equal(pending[0].n,0);
     report.checks.push('unsubscribe_cancels_approvals');
-    const outbound=await query(`select count(*)::int n from public.sales_interactions where company_id=${lit(a)} and direction='outbound'`);assert.equal(outbound[0].n,0);
+    const outbound=await query(`select count(*)::int n from public.sales_interactions where lead_id=${lit(lead.id)} and direction='outbound'`);assert.equal(outbound[0].n,0);
     const emails=await query(`select count(*)::int n from public.email_logs where company_id in (${lit(a)},${lit(b)})`);assert.equal(emails[0].n,0);
     report.checks.push('zero_outbound_interactions_and_email_logs');
     if (aiFailure) throw new Error(`Live AI acceptance blocked: ${aiFailure}`);
   } finally {
     const companies=fixtures.companies.map(lit).join(',');
-    await query(`begin; delete from public.sales_agent_approvals where company_id in (${companies}); delete from public.sales_interactions where company_id in (${companies}); delete from public.sales_tasks where company_id in (${companies}); delete from public.sales_agent_runs where company_id in (${companies}); delete from public.sales_leads where company_id in (${companies}); delete from public.users where company_id in (${companies}); commit;`);
+    if (fixtures.lead) await query(`begin; delete from public.sales_agent_approvals where lead_id=${lit(fixtures.lead)}; delete from public.sales_interactions where lead_id=${lit(fixtures.lead)}; delete from public.sales_tasks where lead_id=${lit(fixtures.lead)}; delete from public.sales_agent_runs where lead_id=${lit(fixtures.lead)}; delete from public.sales_leads where id=${lit(fixtures.lead)}; commit;`);
+    if(fixtures.users.length) {
+      const userIds=fixtures.users.map(lit).join(',');
+      await query(`begin; delete from public.sales_agent_runs where actor_auth_user_id in (${userIds}); delete from public.users where auth_user_id in (${userIds}); commit;`);
+    }
     for(const id of fixtures.users) {const removed=await api(`/auth/v1/admin/users/${id}`,service,undefined,'DELETE',service);assert.ok([200,204].includes(removed.status),'Auth fixture cleanup failed');}
     await query(`delete from public.companies where id in (${companies})`);
     report.cleanup='completed';

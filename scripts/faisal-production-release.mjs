@@ -9,6 +9,7 @@ assert.ok(process.env.SUPABASE_ACCESS_TOKEN && process.env.SUPABASE_ANON_KEY, 'M
 const mode = process.argv[2];
 assert.ok(['preflight', 'apply', 'verify'].includes(mode), 'Explicit release mode required');
 const sql = await readFile('supabase/migrations/20260914000100_faisal_sales_agent_mvp.sql', 'utf8');
+const platformSql = await readFile('supabase/migrations/20260914000200_faisal_platform_sales_workspace.sql', 'utf8');
 const tables = ['sales_leads', 'sales_tasks', 'sales_interactions', 'sales_agent_runs', 'sales_agent_approvals'];
 const literal = value => `'${value.replaceAll("'", "''")}'`;
 const report = { project_ref: ref, mode, commit: process.env.GITHUB_SHA, started_at: new Date().toISOString(), migration_sha256: createHash('sha256').update(sql).digest('hex'), delivery_enabled: false, checks: [] };
@@ -39,6 +40,14 @@ async function preflight() {
     assert.equal(existing.length, 0, 'Sales function name collision');
     report.checks.push('new_sales_objects_have_no_collisions');
   }
+  const platformHistory = await query("select statements from supabase_migrations.schema_migrations where version='20260914000200'");
+  if(platformHistory.length) {
+    assert.equal(platformHistory[0].statements.join('\n').trim(),platformSql.trim(),'Platform migration differs');
+    report.checks.push('exact_platform_migration_already_applied');
+  } else {
+    assert.equal((await query("select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relname='sales_workspaces'")).length,0,'Platform workspace collision');
+  }
+  report.platform_migration_applied = platformHistory.length > 0;
   const secrets = await management('/secrets');
   assert.ok(secrets.some(x => x.name === 'OPENAI_API_KEY'), 'Production OpenAI key is missing');
   report.openai_key_configured = true;
@@ -52,6 +61,11 @@ try {
       await query(`begin; set local lock_timeout='5s'; set local statement_timeout='60s'; select pg_advisory_xact_lock(hashtext('faisal-production-migration')); ${sql}\ninsert into supabase_migrations.schema_migrations(version,name,statements) values('20260914000100','faisal_sales_agent_mvp',array[${literal(sql)}]); commit;`);
       report.checks.push('only_faisal_migration_applied_atomically');
     }
+    if (!report.platform_migration_applied) {
+      await query(`begin; set local lock_timeout='5s'; set local statement_timeout='60s'; ${platformSql}
+insert into supabase_migrations.schema_migrations(version,name,statements) values('20260914000200','faisal_platform_sales_workspace',array[${literal(platformSql)}]); commit;`);
+      report.checks.push('platform_sales_upgrade_applied_atomically');
+    }
     if (!report.sales_model_configured) {
       await management('/secrets', { method: 'POST', body: JSON.stringify([{ name: 'OPENAI_SALES_AGENT_MODEL', value: 'gpt-4.1-mini-2025-04-14' }]) });
       report.checks.push('staging_validated_sales_model_configured');
@@ -59,7 +73,9 @@ try {
     await query("notify pgrst, 'reload schema'");
   }
   if (mode === 'verify') {
-    assert.ok(state.applied, 'Migration not recorded');
+    assert.ok(state.applied && report.platform_migration_applied, 'Migrations not recorded');
+    assert.equal((await query("select id from public.sales_workspaces where scope='platform' and status='Active'")).length,1);
+    report.checks.push('one_active_platform_sales_workspace');
     const secured = await query(`select relname,relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and relname in (${tables.map(literal).join(',')})`);
     assert.equal(secured.length, 5); assert.ok(secured.every(x => x.relrowsecurity));
     report.checks.push('all_five_sales_tables_have_rls');
