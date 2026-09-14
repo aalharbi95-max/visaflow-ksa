@@ -4,6 +4,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 const ref=process.env.SUPABASE_PROJECT_REF,url=process.env.SUPABASE_URL;
 assert.ok(['iijhdilfzndqlguefipn','zeocbftriydodzfgixjv'].includes(ref));assert.equal(url,`https://${ref}.supabase.co`);
 const mode=process.argv[2];assert.ok(['preflight','prepare','verify','schedule'].includes(mode));
+if(process.env.FAISAL_VERIFY_SEARCH==='false')assert.equal(ref,'iijhdilfzndqlguefipn','Search acceptance can only be skipped for Staging infrastructure checks');
 const report={ref,mode,commit:process.env.GITHUB_SHA,checks:[],ok:false};
 const literal=value=>`'${String(value).replaceAll("'","''")}'`;
 async function api(path,options={}){const response=await fetch(`https://api.supabase.com/v1/projects/${ref}${path}`,{...options,headers:{Authorization:`Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,'Content-Type':'application/json'},signal:AbortSignal.timeout(60000)});assert.ok(response.ok,`Management ${path} HTTP ${response.status}`);const text=await response.text();return text?JSON.parse(text):null;}
@@ -39,10 +40,13 @@ try{
   const invalid=await fetch(`${url}/functions/v1/visaflow-sales-unsubscribe?token=invalid`);assert.equal(invalid.status,400);
   const confirm=await fetch(`${url}/functions/v1/visaflow-sales-unsubscribe?token=${'0'.repeat(64)}`,{redirect:'manual'});assert.equal(confirm.status,302);assert.equal(confirm.headers.get('location'),`https://www.visaflowksa.com/faisal-unsubscribe.html#token=${'0'.repeat(64)}&project=${ref}`);
   report.checks.push('anonymous_sender_denied','authenticated_template_preview','unsubscribe_validation_and_confirmation');
+  const test=await call({'x-faisal-worker-secret':secret},{mode:'test'});assert.equal(test.status,200,'Owner-only SMTP test failed');report.checks.push('fixed_owner_inbox_test_accepted_by_smtp');
+  const source=await call({'x-faisal-worker-secret':secret},{mode:'source_probe'});const sourceResult=await source.json();assert.equal(source.status,200,`Public website reader failed: ${sourceResult.error}`);assert.ok(sourceResult.bytes>0);report.checks.push('public_https_source_reader');
+  if(process.env.FAISAL_VERIFY_SEARCH!=='false'){
   const discovery=await call({'x-faisal-worker-secret':secret},{mode:'discover_preview'});
   const discoveryResult=await discovery.json();assert.equal(discovery.status,200,`Discovery failed: ${discoveryResult.error}`);assert.equal(discoveryResult.sent,0);assert.ok(discoveryResult.prospects.length>0,`No verified business contact found: researched=${discoveryResult.researched}, skipped=${JSON.stringify(discoveryResult.skipped)}`);
   report.verified_business_sources=discoveryResult.prospects.length;report.checks.push('live_search_and_public_source_verification_without_sending');
-  const test=await call({'x-faisal-worker-secret':secret},{mode:'test'});assert.equal(test.status,200,'Owner-only SMTP test failed');report.checks.push('fixed_owner_inbox_test_accepted_by_smtp');
+  }else{report.search_acceptance='BLOCKED: funded search acceptance still required';}
  }
  if(mode==='schedule'){
   assert.equal(ref,'zeocbftriydodzfgixjv','Only Production gets the scheduled worker');

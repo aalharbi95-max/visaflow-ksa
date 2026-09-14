@@ -21,6 +21,11 @@ on:
         options:
           - staging
           - production
+      verify_search:
+        description: Run funded AI search acceptance (false is Staging infrastructure only)
+        required: true
+        type: boolean
+        default: true
       deploy_functions:
         description: Deploy the reviewed Agent functions
         required: true
@@ -182,6 +187,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      FAISAL_VERIFY_SEARCH: ${{ inputs.verify_search }}
     steps:
       - uses: actions/checkout@v4
         with:

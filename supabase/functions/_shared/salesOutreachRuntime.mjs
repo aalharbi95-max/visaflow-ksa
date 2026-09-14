@@ -29,7 +29,11 @@ export function createSalesOutreachHandler({createClient,env,fetchImpl=fetch,rea
     try {assertPlatformSalesActor(await checked(db.from('users').select('role,company_id,status,is_active').eq('auth_user_id',data.user.id).limit(2)));}catch{return response({ok:false,error:'forbidden'},403);}
    }
    const mode=body.mode||'tick';
-   if(!['tick','preview','test','discover_preview'].includes(mode))return response({ok:false,error:'invalid_action'},400);
+   if(!['tick','preview','test','discover_preview','source_probe'].includes(mode))return response({ok:false,error:'invalid_action'},400);
+   if(mode==='source_probe'){
+    try{return response({ok:true,bytes:(await readWebsite('https://example.com/')).length,sent:0});}
+    catch(error){return response({ok:false,error:String(error.message).slice(0,180)},503);}
+   }
    const unsubscribeBase=`${env('SUPABASE_URL')}/functions/v1/visaflow-sales-unsubscribe`;
    if(mode==='preview')return response({ok:true,subject:SALES_INTRO_SUBJECT,text:salesIntroduction(`${unsubscribeBase}?token=${'0'.repeat(64)}`),template_version:SALES_INTRO_VERSION});
    if(mode==='test'){
