@@ -1,6 +1,6 @@
 # Faisal AI Sales Agent MVP
 
-Implemented from the supplied `VisaFlow_Faisal_Sales_Agent_MVP.zip`, reviewed against the existing orchestrator, email dispatcher, company role names, workspace Supabase client and tenant authorization patterns. The archive's deployment commands are reference material; no deployment was performed.
+Implemented from the supplied `VisaFlow_Faisal_Sales_Agent_MVP.zip`, reviewed against the existing orchestrator, email dispatcher, company role names, workspace Supabase client and tenant authorization patterns. The archive's deployment commands are reference material, not authorization. Subsequent user-approved Staging and Production releases are recorded below.
 
 ## Behavior
 
@@ -37,7 +37,7 @@ Implemented from the supplied `VisaFlow_Faisal_Sales_Agent_MVP.zip`, reviewed ag
 
 ## Configuration and local acceptance
 
-Configure `OPENAI_API_KEY` and **an explicitly chosen API-compatible** `OPENAI_SALES_AGENT_MODEL` in a future local/staging environment. No Codex-only model name is assumed as an API default. Supabase supplies its URL/service key. Do not add keys to browser Vite variables. Keep the Edge Function JWT gateway verification enabled; the handler independently verifies the user through Auth.
+For additional environments configure `OPENAI_API_KEY` and **an explicitly chosen API-compatible** `OPENAI_SALES_AGENT_MODEL`. The deployed Staging/Production model is recorded below. No Codex-only model name is assumed as an API default. Supabase supplies its URL/service key. Do not add keys to browser Vite variables. Keep the Edge Function JWT gateway verification enabled; the handler independently verifies the user through Auth.
 
 Use a company Admin/Recruitment Manager/Officer workspace and open **Sales Command Center**. Add a lead with a contact email and source facts, score it, create a draft and inspect its pending approval. Paste `UNSUBSCRIBE` to cancel approvals and prevent further drafts. Use a second tenant and an Agency identity to verify access denial. Use a CEO/Admin for pricing decisions.
 
@@ -71,7 +71,7 @@ The existing interview-token static security test was updated to follow the lazy
 - `eslint.config.mjs`, `package.json`, `package-lock.json` — lint and test integration.
 - `docs/faisal-sales-agent-mvp.md` — review, security, test results and limits.
 
-No existing orchestrator, email dispatcher, production release workflow, or other pending local feature is part of this change. No merge to main or Production deployment is part of this change.
+No existing orchestrator, email dispatcher, or other pending local feature is modified by this feature. The subsequently authorized release adds a separate scope to the existing release workflow; its original release path is preserved. The PR remains unmerged.
 
 ## Authorized live Staging trial
 
@@ -83,4 +83,26 @@ Initial live scoring returned an OpenAI HTTP 400 configuration error. Adding an 
 
 The [final Staging acceptance run](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34848133185), completed at 2026-09-14 13:17 UTC, **passed all 25 checks**, including live OpenAI scoring, live outreach draft creation as `pending`, and denial of direct approval mutation. No email was sent; both outbound interactions and email logs remained zero for the fixture tenants. Cleanup completed. The [application release validation](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34848133266) also passed.
 
-The Staging model was explicitly configured as `gpt-4.1-mini-2025-04-14` using the existing Staging OpenAI key. Machine-readable evidence is in `docs/qa/faisal-staging-20260914.json`. The added workflow is scoped to this same-repository PR branch and Sales files; it never deploys to Production. Full visual/browser walkthrough remains a separate acceptance step; this trial verified live Auth, REST/RLS and Edge/AI behavior. Production remains unapproved.
+The Staging model was explicitly configured as `gpt-4.1-mini-2025-04-14` using the existing Staging OpenAI key. Machine-readable evidence is in `docs/qa/faisal-staging-20260914.json`. The Staging workflow is scoped to this same-repository PR branch and Sales files; it never deploys to Production.
+
+## Authorized Production release — 2026-09-14
+
+Following the user's approval, the [read-only Production preflight](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34850159593) verified the exact healthy project, existing Auth/company column compatibility, absence of conflicting Sales objects, and presence of the existing OpenAI secret. It did not apply SQL or deploy functions. Evidence: `docs/qa/faisal-production-preflight-20260914.json`.
+
+The [isolated Production release](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34850378812) passed on commit `79778e9c381ea6855551aa75b664200bbf0b119b`: 322 application tests, 64 PostgreSQL tests, 11 release-hardening tests, 18 Sales tests, lint and build. Sales tests overlap the application suite. The release applied only migration `20260914000100`, recorded its exact contents atomically, configured the Staging-validated Sales model, and deployed only `visaflow-sales-agent` to `zeocbftriydodzfgixjv`. Verification confirmed RLS on all five tables and rejection of anonymous Edge requests. Evidence: `docs/qa/faisal-production-20260914.json`.
+
+Production execution is an explicit manual `Supabase release` dispatch with environment `production` and scope `faisal-release`. Scope `faisal-preflight` is read-only. The existing deploy job is excluded for both scopes, so unrelated migrations/functions are not run. Migration collisions fail closed; existing migration contents must match; SQL uses a transaction and bounded lock/statement timeouts. Existing gateway authentication stays enabled. No email worker or dispatcher was deployed or invoked.
+
+Visual acceptance exercised the actual Sales component using a local mocked transport with fictional data: lead selection, pending draft display, record-only approval, daily brief, unsubscribe display and disabled drafting after DNC. Desktop and 390px mobile layouts were inspected; scoped summary-card/action layout was improved. This is UI acceptance, separate from the live Staging Auth/AI/RLS tests. Production public landing and company-login pages were also inspected in the browser. Sign-in with the existing saved account succeeded as Platform Owner; the unscoped owner dashboard correctly does not expose company Sales navigation. No Production customer lead/AI action was submitted in this browser check.
+
+The existing Production frontend was a separately deployed snapshot, newer than the PR's main baseline. `scripts/prepare-faisal-frontend.mjs` validates every source file against the Vercel deployment's SHA-1 manifest before adding only the Sales page/CSS and narrowly patching App navigation. It preserved 305 unrelated files byte-for-byte, including existing accounting/interview functionality. The isolated snapshot built locally and on Vercel. No dirty local features were copied.
+
+- Previous deployment: `dpl_B3VYQwiZsoWdW8eyNQ7LgiJJyYLM`.
+- New deployment: `dpl_Ac6t5DSuxtXZXH3TgbdLKUEaPcGp`.
+- Production project: `prj_kRrzSyTXK89zTz5hG3TuLCY0m2dX`.
+- The new deployment was built with automatic custom-domain assignment disabled, then promoted after backend/build checks passed. Both `www.visaflowksa.com` and `visaflowksa.com` were verified to point to the new deployment.
+- Main remains at `6978a358269f432e0a7f67c340eeace9fddff9ea`; PR #55 remains open. Future full frontend releases must retain the independently deployed features rather than overwrite Production with an older main snapshot.
+
+Rollback: promote the previous Vercel deployment in the same Production project to remove the new navigation. Preserve the Sales tables and audit records; do not drop them to roll back a UI issue. If backend disablement is needed, remove only `visaflow-sales-agent` through a separately authorized operation; existing services are independent. No customer records were migrated or removed by this release.
+
+Additional release files: `.github/workflows/supabase-release.yml`, `scripts/faisal-production-release.mjs`, `scripts/prepare-faisal-frontend.mjs`, the dedicated Staging workflow/script, and the QA reports listed above.

@@ -1,0 +1,17 @@
+{
+  "project_ref": "zeocbftriydodzfgixjv",
+  "mode": "preflight",
+  "commit": "79778e9c381ea6855551aa75b664200bbf0b119b",
+  "started_at": "2026-09-14T13:36:24.966Z",
+  "migration_sha256": "36bbfa34adc47d4c03c8417fa01febb119e7f629b2e311268426ad3a90cf7297",
+  "delivery_enabled": false,
+  "checks": [
+    "exact_healthy_production",
+    "existing_auth_and_tenant_columns_compatible",
+    "new_sales_objects_have_no_collisions"
+  ],
+  "openai_key_configured": true,
+  "sales_model_configured": false,
+  "ok": true,
+  "completed_at": "2026-09-14T13:36:29.760Z"
+}
