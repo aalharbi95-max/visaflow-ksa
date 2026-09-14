@@ -5,6 +5,9 @@ import test from "node:test";
 const migration = await readFile(new URL("../supabase/migrations/20260817001300_full_sensitive_table_rls.sql", import.meta.url), "utf8");
 const advisorMigration = await readFile(new URL("../supabase/migrations/20260817001400_security_advisor_high_risk_remediation.sql", import.meta.url), "utf8");
 const app = await readFile(new URL("./App.jsx", import.meta.url), "utf8");
+const interviewPortal = app.includes('import("./AIInterviewCandidatePortalLazyPage.jsx")')
+  ? await readFile(new URL("./AIInterviewCandidatePortalLazyPage.jsx", import.meta.url), "utf8")
+  : app;
 const client = await readFile(new URL("./supabase.js", import.meta.url), "utf8");
 
 test("Security Advisor target tables are RLS enabled and anon grants are reset", () => {
@@ -18,7 +21,7 @@ test("anonymous interview access is bound to the exact URL token header", () => 
   assert.match(migration, /x-ai-interview-token/);
   assert.match(migration, /access_token=public\.current_ai_interview_access_token\(\)/);
   assert.match(client, /'x-ai-interview-token': token/);
-  assert.match(app, /createAIInterviewPortalClient\(accessToken\)/);
+  assert.match(interviewPortal, /createAIInterviewPortalClient\(accessToken\)/);
 });
 
 test("high-impact Advisor findings cannot run with anonymous or view-owner authority", () => {

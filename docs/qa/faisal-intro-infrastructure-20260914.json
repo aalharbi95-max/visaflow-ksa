@@ -1,0 +1,15 @@
+{
+  "ref": "iijhdilfzndqlguefipn",
+  "mode": "verify",
+  "commit": "ad085fc02837b49d949738fabd7ce2164c8b4636",
+  "checks": [
+    "identity_existing_platform_and_provider_configuration",
+    "anonymous_sender_denied",
+    "authenticated_template_preview",
+    "unsubscribe_validation_and_confirmation",
+    "fixed_owner_inbox_test_accepted_by_smtp",
+    "public_https_source_reader"
+  ],
+  "ok": true,
+  "search_acceptance": "BLOCKED: funded search acceptance still required"
+}

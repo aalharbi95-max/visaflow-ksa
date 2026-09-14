@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-14",
+  "deployment_id": "dpl_Fn7WnxgNct81jTba4cCyZ9eNWmVE",
+  "previous_deployment_id": "dpl_Ac6t5DSuxtXZXH3TgbdLKUEaPcGp",
+  "project_id": "prj_kRrzSyTXK89zTz5hG3TuLCY0m2dX",
+  "code_commit": "6ea933ad3fb1cbf8a5e29ebfd440a031700e4d5b",
+  "ready_state": "READY",
+  "verified_domains": ["www.visaflowksa.com", "visaflowksa.com"],
+  "unrelated_source_files_preserved": 305,
+  "browser_checks": [
+    "existing_platform_owner_session_restored",
+    "sales_command_center_visible_in_owner_navigation",
+    "platform_sales_workspace_loaded_without_customer_selection",
+    "daily_brief_completed_and_visible_in_audit"
+  ],
+  "production_test_prospects_created": 0,
+  "delivery_enabled": false,
+  "main_merged": false
+}

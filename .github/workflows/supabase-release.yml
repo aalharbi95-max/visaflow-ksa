@@ -3,6 +3,17 @@ name: Supabase release
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: Existing release, or isolated draft-only Faisal preflight/release
+        required: true
+        type: choice
+        default: existing
+        options:
+          - existing
+          - faisal-preflight
+          - faisal-release
+          - faisal-intro-preflight
+          - faisal-intro-release
       environment:
         description: Protected GitHub Environment to deploy
         required: true
@@ -10,6 +21,11 @@ on:
         options:
           - staging
           - production
+      verify_search:
+        description: Run funded AI search acceptance (false is Staging infrastructure only)
+        required: true
+        type: boolean
+        default: true
       deploy_functions:
         description: Deploy the reviewed Agent functions
         required: true
@@ -33,6 +49,7 @@ jobs:
     uses: ./.github/workflows/release-validation.yml
 
   deploy:
+    if: ${{ inputs.scope == 'existing' || inputs.scope == '' }}
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -115,3 +132,92 @@ jobs:
               --data '{}')"
             test "$status" = "401" || test "$status" = "403"
           done
+
+  faisal:
+    if: ${{ inputs.scope == 'faisal-preflight' || inputs.scope == 'faisal-release' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint && npm run test:sales-agent
+      - name: Inspect exact Production dependencies and collisions
+        run: node scripts/faisal-production-release.mjs preflight
+      - name: Apply only the Faisal migration and configure its model
+        if: ${{ inputs.scope == 'faisal-release' }}
+        run: node scripts/faisal-production-release.mjs apply
+      - uses: supabase/setup-cli@v1
+        if: ${{ inputs.scope == 'faisal-release' }}
+        with:
+          version: 2.109.1
+      - name: Deploy only Faisal; preserve gateway authentication
+        if: ${{ inputs.scope == 'faisal-release' }}
+        run: supabase functions deploy visaflow-sales-agent --project-ref zeocbftriydodzfgixjv
+      - name: Verify Production RLS and reject anonymous requests
+        if: ${{ inputs.scope == 'faisal-release' }}
+        run: node scripts/faisal-production-release.mjs verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faisal-production-result
+          path: faisal-production-result.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  faisal-introductions:
+    if: ${{ inputs.scope == 'faisal-intro-preflight' || inputs.scope == 'faisal-intro-release' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      FAISAL_VERIFY_SEARCH: ${{ inputs.verify_search }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint && npm run test:sales-agent
+      - run: node scripts/faisal-intro-release.mjs preflight
+      - if: ${{ inputs.scope == 'faisal-intro-release' }}
+        run: node scripts/faisal-intro-release.mjs prepare
+      - uses: supabase/setup-cli@v1
+        if: ${{ inputs.scope == 'faisal-intro-release' }}
+        with:
+          version: 2.109.1
+      - name: Deploy isolated introduction sender and token-only unsubscribe endpoint
+        if: ${{ inputs.scope == 'faisal-intro-release' }}
+        run: |
+          supabase functions deploy visaflow-sales-outreach --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy visaflow-sales-unsubscribe --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+      - if: ${{ inputs.scope == 'faisal-intro-release' }}
+        run: node scripts/faisal-intro-release.mjs verify
+      - if: ${{ inputs.scope == 'faisal-intro-release' && inputs.environment == 'production' }}
+        run: node scripts/faisal-intro-release.mjs schedule
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faisal-intro-release-result
+          path: faisal-intro-release-result.json
+          if-no-files-found: ignore
+          retention-days: 30
