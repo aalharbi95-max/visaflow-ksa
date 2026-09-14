@@ -26,22 +26,11 @@ async function copy(nodes, prefix = '') {
 assert.equal(tree[0].name, 'src');
 await copy(tree[0].children);
 const appFile = resolve(output, 'src/App.jsx');
-let app = await readFile(appFile, 'utf8');
-function replaceOnce(before, after) {
-  assert.equal(app.split(before).length - 1, 1, `Expected one integration point: ${before}`);
-  app = app.replace(before, after);
-}
-replaceOnce('const PLATFORM_PAGES = [', 'const PLATFORM_PAGES = [\n  "Sales Command Center",');
-const rolesStart = app.indexOf('const ROLE_PAGES = {');
-assert.ok(rolesStart >= 0);
-const originalRoles = app.slice(rolesStart, app.indexOf('};', rolesStart) + 2);
-const roles = originalRoles.replaceAll('    "Sales Command Center",\r\n','').replaceAll('    "Sales Command Center",\n','');
-assert.notEqual(roles,originalRoles,'Existing tenant navigation not found');
-replaceOnce(originalRoles, roles);
-replaceOnce('key={currentCompanyId} companyId={currentCompanyId} currentRole={currentRole}', 'key="platform-sales" currentRole={currentRole}');
-await writeFile(appFile, app);
-for (const relative of ['src/SalesCommandCenterLazyPage.jsx', 'src/salesCommandCenter.css']) {
+const app = await readFile(appFile, 'utf8');
+assert.ok(app.includes('key="platform-sales" currentRole={currentRole}'), 'Deployed owner Sales integration required');
+const changed = ['src/SalesCommandCenterLazyPage.jsx'];
+for (const relative of changed) {
   assert.ok(files.includes(relative), 'Existing Sales source required');
   await copyFile(relative, resolve(output, relative));
 }
-console.log(JSON.stringify({ preserved_files: files.length - 3, changed: ['src/App.jsx','src/SalesCommandCenterLazyPage.jsx','src/salesCommandCenter.css'], output }, null, 2));
+console.log(JSON.stringify({ preserved_files: files.length - changed.length, changed, output }, null, 2));

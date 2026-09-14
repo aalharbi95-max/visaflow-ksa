@@ -4,6 +4,7 @@ import './salesCommandCenter.css';
 
 export default function SalesCommandCenterLazyPage({ currentRole }) {
   const [workspaceId, setWorkspaceId] = useState('');
+  const [automation, setAutomation] = useState(null), [deliveries, setDeliveries] = useState([]), [introduction, setIntroduction] = useState(null);
   const [leads, setLeads] = useState([]), [approvals, setApprovals] = useState([]), [runs, setRuns] = useState([]);
   const [brief, setBrief] = useState(null), [selected, setSelected] = useState(''), [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -30,11 +31,14 @@ export default function SalesCommandCenterLazyPage({ currentRole }) {
       supabase.from('sales_leads').select('*').eq('workspace_id', workspaceId).order('updated_at', { ascending: false }).limit(200),
       supabase.from('sales_agent_approvals').select('*').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).limit(100),
       supabase.from('sales_agent_runs').select('id,action,status,error_message,created_at').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).limit(25),
+      supabase.from('sales_automation_settings').select('*').eq('workspace_id', workspaceId).maybeSingle(),
+      supabase.from('sales_intro_deliveries').select('id,email,status,sent_at,error_code').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).limit(50),
     ]);
     if (requestGeneration !== generation.current) return;
     const failure = values.find(value => value.error);
     if (failure) throw new Error(failure.error.message);
     setLeads(values[0].data); setApprovals(values[1].data); setRuns(values[2].data);
+    setAutomation(values[3].data); setDeliveries(values[4].data);
   }, [workspaceId]);
   useEffect(() => {
     setLeads([]); setApprovals([]); setRuns([]); setBrief(null); setSelected(''); setReply(''); setError(''); setNotice('');
@@ -60,11 +64,26 @@ export default function SalesCommandCenterLazyPage({ currentRole }) {
   if (!workspaceId) return <div className="table-card" role={error ? 'alert' : 'status'}>{error || 'Loading platform sales workspace...'}</div>;
   return <div className="sales-command-center">
     <div className="table-card"><div className="section-title-row"><div><h2>Faisal · Sales Command Center</h2><p>فيصل — مبيعات اشتراكات VisaFlow · لوحة المالك</p></div><button disabled={busy} onClick={() => perform(load)}>Refresh</button></div>
-      <p className="sales-safety">Sell VisaFlow subscriptions to prospective companies. All outreach stays pending your approval; approving records a decision only. Email delivery remains disabled.</p>
+      <p className="sales-safety">فيصل يعرّف الشركات بمنصة VisaFlow. البحث والإرسال التلقائي يقتصران على الرسالة التعريفية الثابتة عند تشغيلهما. عروض الأسعار والخصومات والالتزامات تحتاج اعتماد المالك؛ ولا تُرسل تلقائيًا.</p>
       {error && <p role="alert" className="sales-error">{error}</p>}{notice && <p role="status">{notice}</p>}
       <button disabled={busy} onClick={() => run('daily_brief')}>Generate Daily Brief</button>
       {brief && <><div className="stats-grid">{[['Active leads', brief.total_active_leads], ['Grade A · contactable', brief.grade_a_leads], ['Pending approvals', brief.pending_approvals], ['Replies today · Riyadh', brief.inbound_replies_today]].map(([label, value]) => <div className="stat-card" key={label}><h3>{label}</h3><strong>{value}</strong></div>)}</div><h3>Follow-ups due</h3>{brief.follow_ups_due.length ? <ul>{brief.follow_ups_due.map(item => <li key={item.id}>{item.company_name} · {new Date(item.next_follow_up_at).toLocaleString()}</li>)}</ul> : <p>No follow-ups due.</p>}</>}
     </div>
+    <section className="table-card"><h3>البحث والإرسال التعريفي</h3>
+      <p>الحالة: {automation?.enabled ? 'مفعّل' : 'متوقف'} · حتى {automation?.daily_limit || 10} شركات يوميًا · شركات السعودية في إدارة المرافق والتشغيل والصيانة والمقاولات.</p>
+      <p>تُستخدم عناوين الأعمال المنشورة على مواقع الشركات الرسمية فقط. ردود الشركات تصل إلى adel@visaflowksa.com. أدخل الرد في خانة Received Reply لتصنيفه وتسجيل طلب التسعير للمراجعة.</p>
+      <div className="actions"><button disabled={busy} onClick={() => perform(async () => {
+        const {error:failure}=await supabase.rpc('sales_configure_automation',{p_enabled:!automation?.enabled,p_daily_limit:automation?.daily_limit||10}); if(failure)throw failure;
+      })}>{automation?.enabled ? 'إيقاف البحث والإرسال' : 'تشغيل البحث والإرسال'}</button>
+      {['preview','test','tick'].map((mode,index)=><button key={mode} disabled={busy} onClick={()=>perform(async()=>{
+        const {data,error:failure}=await supabase.functions.invoke('visaflow-sales-outreach',{body:{mode}});
+        if(failure||!data?.ok)throw new Error(data?.error||failure?.message||'Outreach failed');
+        if(mode==='preview')setIntroduction(data);
+        else setNotice(mode==='test'?'أُرسلت نسخة اختبار إلى بريد المالك المهيأ.':data.paused?'الإرسال متوقف.':`تم العثور على ${data.discovered} شركات جديدة، وإرسال ${data.sent} رسائل، و${data.needs_review} تحتاج مراجعة.`);
+      })}>{['عرض الرسالة الكاملة','إرسال اختبار إلى المالك','تشغيل دورة الآن'][index]}</button>)}</div>
+      {introduction&&<article className="sales-approval"><h4>{introduction.subject}</h4><pre>{introduction.text}</pre></article>}
+      <h4>سجل الرسائل التعريفية · آخر 50</h4>{!deliveries.length?<p>لا توجد رسائل تعريفية بعد.</p>:deliveries.map(item=><p key={item.id}>{item.email} · {item.status}{item.sent_at?` · ${new Date(item.sent_at).toLocaleString()}`:''}{item.error_code?' · تحقق من نتيجة التسليم قبل أي إعادة إرسال.':''}</p>)}
+    </section>
     {canWork && <form className="table-card" onSubmit={event => { event.preventDefault(); perform(async () => {
       const { error: failure } = await supabase.from('sales_leads').insert({ ...form, workspace_id: workspaceId });
       if (failure) throw failure; setForm({ company_name: '', industry: '', contact_name: '', contact_email: '', notes: '' }); setNotice('Lead added.');

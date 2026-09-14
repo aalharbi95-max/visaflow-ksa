@@ -12,6 +12,8 @@ on:
           - existing
           - faisal-preflight
           - faisal-release
+          - faisal-intro-preflight
+          - faisal-intro-release
       environment:
         description: Protected GitHub Environment to deploy
         required: true
@@ -167,5 +169,49 @@ jobs:
         with:
           name: faisal-production-result
           path: faisal-production-result.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  faisal-introductions:
+    if: ${{ inputs.scope == 'faisal-intro-preflight' || inputs.scope == 'faisal-intro-release' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint && npm run test:sales-agent
+      - run: node scripts/faisal-intro-release.mjs preflight
+      - if: ${{ inputs.scope == 'faisal-intro-release' }}
+        run: node scripts/faisal-intro-release.mjs prepare
+      - uses: supabase/setup-cli@v1
+        if: ${{ inputs.scope == 'faisal-intro-release' }}
+        with:
+          version: 2.109.1
+      - name: Deploy isolated introduction sender and token-only unsubscribe endpoint
+        if: ${{ inputs.scope == 'faisal-intro-release' }}
+        run: |
+          supabase functions deploy visaflow-sales-outreach --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+          supabase functions deploy visaflow-sales-unsubscribe --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+      - if: ${{ inputs.scope == 'faisal-intro-release' }}
+        run: node scripts/faisal-intro-release.mjs verify
+      - if: ${{ inputs.scope == 'faisal-intro-release' && inputs.environment == 'production' }}
+        run: node scripts/faisal-intro-release.mjs schedule
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faisal-intro-release-result
+          path: faisal-intro-release-result.json
           if-no-files-found: ignore
           retention-days: 30

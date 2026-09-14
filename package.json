@@ -28,7 +28,7 @@
     "validate:migrations": "node scripts/validate-supabase-migrations.mjs",
     "test:release-hardening": "node --test src/releaseWorkflow.test.mjs src/fullSensitiveRls.test.mjs",
     "test:sales-agent": "node --test src/salesAgent.test.mjs src/salesAgentRuntime.test.mjs src/salesAgent.postgres.test.mjs",
-    "lint": "eslint src/SalesCommandCenterLazyPage.jsx src/salesAgent*.mjs supabase/functions/_shared/salesAgent*.mjs"
+    "lint": "eslint src/SalesCommandCenterLazyPage.jsx src/salesAgent*.mjs supabase/functions/_shared/sales*.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

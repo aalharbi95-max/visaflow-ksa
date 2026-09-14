@@ -3,6 +3,39 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 
+test('automatic introductions enforce owner settings, caps, suppression, deduplication and no quote sending',async()=>{
+ const db=new PGlite();const owner='40000000-0000-0000-0000-000000000001',customer='40000000-0000-0000-0000-000000000002';
+ try {
+  await db.exec(`create schema auth; create role anon; create role authenticated; create role service_role bypassrls;
+   create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+   grant usage on schema public,auth to authenticated,anon,service_role;
+   create table companies(id uuid primary key,status text);create table users(id bigint primary key,auth_user_id uuid,company_id uuid,role text,status text,is_active boolean);
+   insert into users values(1,'${owner}',null,'Platform Owner','Active',true),(2,'${customer}',null,'Admin','Active',true);`);
+  for(const file of ['20260914000100_faisal_sales_agent_mvp','20260914000200_faisal_platform_sales_workspace','20260914000300_faisal_automatic_introductions'])await db.exec(await readFile(new URL(`../supabase/migrations/${file}.sql`,import.meta.url),'utf8'));
+  const w=(await db.query("select id from sales_workspaces where scope='platform'")).rows[0].id;
+  const actor=async id=>db.exec(`reset role;set role authenticated;select set_config('request.jwt.claim.sub','${id}',false)`);
+  await actor(customer);await assert.rejects(db.query('select sales_configure_automation(true,10)'),/forbidden/);
+  await actor(owner);await db.query('select sales_configure_automation(true,10)');
+  await assert.rejects(db.query('select sales_claim_intro_delivery()'),/permission denied/);
+  await assert.rejects(db.query('select unsubscribe_token from sales_intro_deliveries'),/permission denied/);
+  await db.exec('reset role;set role service_role');
+  const register=async email=>(await db.query('select sales_register_discovered_intro($1,$2,$3,$4,$5,$6) id',[w,'Example',email,'https://example.com','https://example.com/contact','FM'])).rows[0].id;
+  assert.ok(await register('a@example.com'));assert.equal(await register('a@example.com'),null);
+  assert.ok(await register('b@example.com'));assert.ok(await register('c@example.com'));
+  const first=(await db.query('select to_jsonb(sales_claim_intro_delivery()) d')).rows[0].d;
+  assert.equal(first.status,'sending');assert.equal((await db.query('select sales_intro_may_send($1) ok',[first.id])).rows[0].ok,true);
+  assert.equal((await db.query('select to_jsonb(sales_claim_intro_delivery()) d')).rows[0].d.status,'sending');
+  assert.equal((await db.query('select to_jsonb(sales_claim_intro_delivery()) d')).rows[0].d,null,'Hourly capacity counts reservations, not only sent rows');
+  await db.query('select sales_intro_suppress($1)',[first.unsubscribe_token]);
+  assert.equal((await db.query('select sales_intro_may_send($1) ok',[first.id])).rows[0].ok,false);
+  assert.equal(await register(first.email),null);
+  await actor(customer);assert.equal((await db.query('select id,email,status from sales_intro_deliveries')).rows.length,0);
+  await actor(owner);await db.query('select sales_configure_automation(false,10)');
+  await db.exec('reset role;set role service_role');assert.equal((await db.query('select to_jsonb(sales_claim_intro_delivery()) d')).rows[0].d,null);
+  await assert.rejects(db.query(`update sales_intro_deliveries set template_version='pricing-quote'`),/check constraint/);
+ }finally{await db.close();}
+});
+
 test('Platform subscription sales upgrade preserves legacy data and enforces owner-only access', async () => {
  const db = new PGlite();
  const company='20000000-0000-0000-0000-000000000001';
