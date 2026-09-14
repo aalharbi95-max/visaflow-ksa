@@ -35,12 +35,12 @@ test('SMTP uncertainty is recorded for human review and is not retried in a cycl
  assert.equal((await response.json()).pricing_auto_send,false);
 });
 test('discovery preview verifies public evidence without queuing or sending, even when live sending is disabled',async()=>{
- let reads=0;
+ let reads=0,fetches=0;
  const handler=createSalesOutreachHandler({createClient:()=>({}),env:name=>({SUPABASE_URL:'https://example.supabase.co',FAISAL_WORKER_SECRET:'worker',OPENAI_API_KEY:'key',OPENAI_SALES_AGENT_MODEL:'configured-model'}[name]||''),
-  fetchImpl:async()=>new Response(JSON.stringify({output_text:JSON.stringify({prospects:[{company_name:'Example',website:'https://example.com',source_url:'https://example.com/contact',email:'info@example.com'},{company_name:'Example',website:'https://example.com',source_url:'https://example.com/contact',email:'person@example.com'}]})})),
+  fetchImpl:async(_url,init)=>{fetches++;if(fetches===1)return new Response(JSON.stringify({output_text:'Public search results with citations: info@example.com, person@example.com (https://example.com/contact)'}));assert.equal(JSON.parse(init.body).text.format.strict,true);return new Response(JSON.stringify({output_text:JSON.stringify({prospects:[{company_name:'Example',website:'https://example.com',source_url:'https://example.com/contact',email:'info@example.com'},{company_name:'Example',website:'https://example.com',source_url:'https://example.com/contact',email:'person@example.com'}]})}));},
   readWebsite:async()=>{reads++;return 'info@example.com person@example.com';},sendMail:async()=>assert.fail('Preview must not send')});
  const result=await handler(new Request('https://test',{method:'POST',headers:{'x-faisal-worker-secret':'worker'},body:'{"mode":"discover_preview"}'}));
- assert.equal(result.status,200);const data=await result.json();assert.equal(data.sent,0);assert.equal(data.prospects.length,1);assert.equal(reads,2);
+ assert.equal(result.status,200);const data=await result.json();assert.equal(data.sent,0);assert.equal(data.prospects.length,1);assert.equal(reads,2);assert.equal(fetches,2);
 });
 test('test recipient and content cannot be overridden, and oversized requests are rejected',async()=>{
  let mail;
