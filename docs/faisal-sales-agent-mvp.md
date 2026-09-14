@@ -53,7 +53,7 @@ Use a company Admin/Recruitment Manager/Officer workspace and open **Sales Comma
 | `npm run build` | Passed | Passed |
 | Migration inventory | 90 unique migrations | 78 unique migrations |
 
-The differing totals come from pre-existing uncommitted features in the working workspace, which are excluded from the PR. PostgreSQL security tests execute the migration in PGlite with real authenticated/anon/service roles and JWT subject settings. Edge tests execute the production handler with mocked Auth, database transport and OpenAI, including failures and a stale DNC commit. No paid model call, remote Supabase migration, Production access, or outbound email was performed. A live staging Auth/gateway/model/UI smoke test remains an operational acceptance step before deployment.
+The differing totals come from pre-existing uncommitted features in the working workspace, which are excluded from the PR. PostgreSQL security tests execute the migration in PGlite with real authenticated/anon/service roles and JWT subject settings. Edge tests execute the production handler with mocked Auth, database transport and OpenAI, including failures and a stale DNC commit. These counts describe initial PR verification, before the subsequently authorized Staging trial below.
 
 ESLint is introduced for the new Sales JavaScript/JSX modules and tests, not the existing monolithic application. Build warnings about existing large bundles remain. Existing dependency versions are unchanged; the lockfile adds ESLint and its development dependencies.
 
@@ -71,4 +71,16 @@ The existing interview-token static security test was updated to follow the lazy
 - `eslint.config.mjs`, `package.json`, `package-lock.json` — lint and test integration.
 - `docs/faisal-sales-agent-mvp.md` — review, security, test results and limits.
 
-No existing orchestrator, email dispatcher, production release workflow, or other pending local feature is part of this change. No merge to main or deployment is authorized by this implementation.
+No existing orchestrator, email dispatcher, production release workflow, or other pending local feature is part of this change. No merge to main or Production deployment is part of this change.
+
+## Authorized live Staging trial
+
+The user subsequently authorized a Staging trial. The dedicated `.github/workflows/faisal-staging-smoke.yml` and `scripts/faisal-staging-smoke.mjs` pin the project to `iijhdilfzndqlguefipn` (`VisaFlow Staging`), verify its management identity, apply only the exact Faisal migration, and deploy only `visaflow-sales-agent`. Recorded migration content is checked before any rerun. No Production project is accessed.
+
+The [first live acceptance run](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34847347862) passed 22 checks: real Auth password sign-in, anonymous denial, cross-tenant override/insert/lead denial, daily brief, pricing classification and role-restricted decisions, isolation for all five tables, unsubscribe/DNC and cancelled approvals. There were zero outbound interactions and zero email logs for the test companies. All temporary companies and Auth/application users were removed.
+
+Initial live scoring returned an OpenAI HTTP 400 configuration error. Adding an explicit JSON instruction to the Responses `input` resolved the failure; the system instruction alone was insufficient for the live request. The input requirement is now covered by a regression assertion. Provider diagnostics return only safe allowlisted categories, never response bodies or credentials (18 Sales tests pass).
+
+The [final Staging acceptance run](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34848133185), completed at 2026-09-14 13:17 UTC, **passed all 25 checks**, including live OpenAI scoring, live outreach draft creation as `pending`, and denial of direct approval mutation. No email was sent; both outbound interactions and email logs remained zero for the fixture tenants. Cleanup completed. The [application release validation](https://github.com/aalharbi95-max/visaflow-ksa/actions/runs/34848133266) also passed.
+
+The Staging model was explicitly configured as `gpt-4.1-mini-2025-04-14` using the existing Staging OpenAI key. Machine-readable evidence is in `docs/qa/faisal-staging-20260914.json`. The added workflow is scoped to this same-repository PR branch and Sales files; it never deploys to Production. Full visual/browser walkthrough remains a separate acceptance step; this trial verified live Auth, REST/RLS and Edge/AI behavior. Production remains unapproved.
