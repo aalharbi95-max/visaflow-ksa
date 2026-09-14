@@ -1,0 +1,87 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {PGlite} from '@electric-sql/pglite';
+
+const A='00000000-0000-0000-0000-000000000001', B='00000000-0000-0000-0000-000000000002';
+const uid=n=>`10000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
+test('Faisal PostgreSQL authorization and transactional safety', async t=>{
+  const db=new PGlite();
+  try {
+    await db.exec(`create schema auth; create role anon; create role authenticated; create role service_role bypassrls;
+      create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+      grant usage on schema public,auth to authenticated,anon,service_role;
+      create table companies(id uuid primary key,status text);
+      create table users(id bigint primary key,auth_user_id uuid,company_id uuid,role text,status text,is_active boolean);
+      insert into companies values('${A}','Active'),('${B}','Active');
+      insert into users values(1,'${uid(1)}','${A}','Admin','Active',true),(2,'${uid(2)}','${B}','Admin','Active',true),
+      (3,'${uid(3)}','${A}','Agency','Active',true),(4,'${uid(4)}','${A}','Recruitment Officer','Active',true),
+      (5,'${uid(5)}','${A}','Recruitment Manager','Active',true),(6,'${uid(6)}','${A}','CEO','Active',true),
+      (7,'${uid(7)}',null,'Platform Owner','Active',true),(8,'${uid(8)}','${A}','Admin','Inactive',false),
+      (9,'${uid(9)}','${A}','Admin','Active',true),(10,'${uid(9)}','${A}','Admin','Inactive',false);`);
+    await db.exec(await readFile(new URL('../supabase/migrations/20260914000100_faisal_sales_agent_mvp.sql',import.meta.url),'utf8'));
+    const leadA=(await db.query(`insert into sales_leads(company_id,company_name,contact_email) values('${A}','Lead A','a@example.test') returning id`)).rows[0].id;
+    const leadB=(await db.query(`insert into sales_leads(company_id,company_name) values('${B}','Lead B') returning id`)).rows[0].id;
+    const actor=async n=>{await db.exec(`reset role; set role authenticated; select set_config('request.jwt.claim.sub','${uid(n)}',false)`);};
+    const root=()=>db.exec('reset role');
+    const start=async(action,lead=leadA,tenant=A)=>{
+      await root();await db.exec('set role service_role');
+      return (await db.query(`select sales_start_run($1,$2,$3,$4,$5,false) id`,[tenant,lead,action,uid(1),{reply_text:'Please send pricing'}])).rows[0].id;
+    };
+    const finish=async(run,result)=>{await root();await db.exec('set role service_role');return (await db.query('select sales_complete_run($1,$2,$3,null) result',[A,run,result])).rows[0].result;};
+    await t.test('all five tables enforce RLS and foreign tenant reads/writes are denied',async()=>{
+      const protectedRows=await db.query("select relname from pg_class where relname in ('sales_leads','sales_tasks','sales_interactions','sales_agent_runs','sales_agent_approvals') and relrowsecurity");assert.equal(protectedRows.rows.length,5);
+      await actor(1);assert.equal((await db.query('select * from sales_leads')).rows.length,1);
+      await assert.rejects(db.query(`insert into sales_leads(company_id,company_name) values('${B}','forged')`),/row-level security/);
+      assert.equal((await db.query(`update sales_leads set company_name='forged' where id='${leadB}' returning id`)).rows.length,0);
+      await assert.rejects(db.query(`update sales_leads set company_id='${B}' where id='${leadA}'`),/permission denied/);
+      await assert.rejects(db.query(`insert into sales_tasks(company_id,lead_id,task_type,title) values('${A}','${leadB}','FOLLOW_UP','forged')`),/foreign key/);
+      for(const n of [3,8,9]) {await actor(n);assert.equal((await db.query('select * from sales_leads')).rows.length,0);}
+      await root();await db.exec('set role anon');await assert.rejects(db.query('select * from sales_leads'),/permission denied/);
+      await actor(7);assert.equal((await db.query('select * from sales_leads')).rows.length,2);
+    });
+    let draftId;
+    await t.test('draft and approval commit atomically, replay is idempotent, cross tenant links rejected',async()=>{
+      const run=await start('draft_outreach');const result=await finish(run,{subject:'Subject',body:'Draft'});draftId=result.approval_id;
+      assert.equal(result.status,'pending');assert.equal((await finish(run,{subject:'Changed',body:'Changed'})).approval_id,draftId);
+      const count=(await db.query('select count(*)::integer n from sales_interactions')).rows[0].n;assert.equal(count,1);
+      await assert.rejects(db.query(`insert into sales_interactions(company_id,lead_id,direction,interaction_type) values('${A}','${leadB}','internal','note')`),/foreign key/);
+      await assert.rejects(db.query(`insert into sales_interactions(company_id,lead_id,direction,interaction_type) values('${A}','${leadA}','outbound','email')`),/check constraint/);
+      await assert.rejects(db.query(`insert into sales_agent_approvals(company_id,lead_id,run_id,approval_type) values('${B}','${leadB}','${run}','PRICING')`),/foreign key/);
+      await actor(2);for(const table of ['sales_interactions','sales_agent_runs','sales_agent_approvals']) assert.equal((await db.query(`select * from ${table}`)).rows.length,0);
+      await actor(1);await assert.rejects(db.query(`update sales_agent_approvals set status='approved' where id='${draftId}'`),/permission denied/);
+      await assert.rejects(db.query(`select sales_complete_run('${A}','${run}','{}',null)`),/permission denied/);
+      await actor(4);await assert.rejects(db.query(`select sales_decide_approval('${draftId}','approved','')`),/forbidden/);
+      await actor(2);await assert.rejects(db.query(`select sales_decide_approval('${draftId}','approved','')`),/forbidden/);
+    });
+    await t.test('pricing always creates approval despite false model flag and only senior roles decide',async()=>{
+      const run=await start('classify_reply');const result=await finish(run,{classification:'REQUEST_PRICING',requires_ceo_approval:false,follow_up_days:null});
+      assert.ok(result.approval_id);assert.equal(result.requires_ceo_approval,true);
+      await actor(5);await assert.rejects(db.query(`select sales_decide_approval('${result.approval_id}','approved','')`),/pricing_approval_forbidden/);
+      await actor(6);const approved=(await db.query(`select sales_decide_approval('${result.approval_id}','approved','Reviewed') result`)).rows[0].result;
+      assert.equal(approved.delivery_enabled,false);
+      await assert.rejects(db.query(`select sales_decide_approval('${result.approval_id}','rejected','')`),/already_decided/);
+    });
+    await t.test('DNC cancels pending/approved work, cannot be cleared, blocks stale AI draft on commit',async()=>{
+      const stale=await start('draft_outreach');const unsub=await start('classify_reply');
+      await db.query(`insert into sales_tasks(company_id,lead_id,task_type,title) values('${A}','${leadA}','FOLLOW_UP','Follow up')`);
+      await finish(unsub,{classification:'UNSUBSCRIBE',follow_up_days:3});
+      const lead=(await db.query(`select * from sales_leads where id='${leadA}'`)).rows[0];assert.equal(lead.do_not_contact,true);assert.equal(lead.next_follow_up_at,null);
+      assert.equal((await db.query(`select status from sales_agent_approvals where id='${draftId}'`)).rows[0].status,'cancelled');
+      assert.equal((await db.query(`select status from sales_tasks where lead_id='${leadA}'`)).rows[0].status,'cancelled');
+      await assert.rejects(finish(stale,{subject:'stale',body:'stale draft'}),/lead_do_not_contact/);
+      assert.equal((await db.query("select count(*)::integer n from sales_interactions where interaction_type='ai_draft'")).rows[0].n,1);
+      await actor(1);await assert.rejects(db.query(`update sales_leads set do_not_contact=false where id='${leadA}'`),/cannot_be_cleared/);
+      await assert.rejects(db.query(`select sales_decide_approval('${draftId}','approved','')`),/already_decided/);
+      await actor(2);assert.equal((await db.query('select * from sales_tasks')).rows.length,0);
+    });
+    await t.test('inactive company access, service-only run start, and budget cap are enforced',async()=>{
+      await actor(1);await assert.rejects(db.query(`select sales_start_run('${A}','${leadA}','qualify_lead','${uid(1)}','{}',false)`),/permission denied/);
+      await root();await db.exec(`update companies set status='Inactive' where id='${A}'`);
+      await actor(1);assert.equal((await db.query('select * from sales_leads')).rows.length,0);
+      await root();await db.exec(`update companies set status='Active' where id='${A}'; insert into sales_agent_runs(company_id,action) select '${A}','daily_brief' from generate_series(1,100)`);
+      await assert.rejects(start('daily_brief',null),/rate_limit/);
+      assert.ok((await db.query(`select sales_start_run('${A}','${leadA}','classify_reply','${uid(1)}','{}',true) id`)).rows[0].id);
+    });
+  } finally {await db.close();}
+});

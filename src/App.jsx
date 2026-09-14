@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import {
@@ -188,10 +188,13 @@ import {
 } from "./recoveryAccount.mjs";
 import "./style.css";
 
+const SalesCommandCenterLazyPage = lazy(() => import("./SalesCommandCenterLazyPage.jsx"));
+
 const UI_DIRECTION = getUiDirection();
 const SHOW_LANGUAGE_TOGGLE = shouldShowLanguageToggle();
 
 const PAGES = [
+  "Sales Command Center",
   "Executive Dashboard",
   "AI Commander",
   "AI Agent",
@@ -250,7 +253,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Command Center",
     icon: "🏠",
-    pages: ["Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Agent", "AI Report Studio", "Dashboard"],
+    pages: ["Sales Command Center", "Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Agent", "AI Report Studio", "Dashboard"],
   },
   {
     title: "Recruitment",
@@ -7709,6 +7712,7 @@ const ROLE_PAGES = {
 
   // CEO: executive visibility and read-only reporting.
   CEO: [
+    "Sales Command Center",
     "Executive Dashboard",
     "AI Commander",
     "AI Agent",
@@ -7764,6 +7768,7 @@ const ROLE_PAGES = {
 
   // Recruitment Manager: recruitment control, approvals, recruiter KPI and agency performance.
   "Recruitment Manager": [
+    "Sales Command Center",
     "Executive Dashboard",
     "AI Commander",
     "AI Agent",
@@ -7813,6 +7818,7 @@ const ROLE_PAGES = {
 
   // Recruiter / Recruitment Officer: daily recruitment operation only.
   "Recruitment Officer": [
+    "Sales Command Center",
     "Dashboard",
     "AI Agent",
     "Requests",
@@ -33090,6 +33096,9 @@ if (!currentUser) {
           </>
         ))}
 
+        {activePage === "Sales Command Center" && (
+          <Suspense fallback={<div role="status">Loading Sales Command Center...</div>}><SalesCommandCenterLazyPage key={currentCompanyId} companyId={currentCompanyId} currentRole={currentRole} /></Suspense>
+        )}
         {activePage === "AI Agent" && (
           <>
             {canManagePlatform && (
