@@ -14,7 +14,8 @@ export function publicIPv4(address) {
 export async function readPublicWebsite(value) {
   const url=new URL(value);
   if(url.protocol!=='https:'||url.username||url.password||url.port&&url.port!=='443'||!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(url.hostname))throw new Error('public_https_source_required');
-  const records=await lookup(url.hostname,{all:true,family:4});
+  let records;
+  try{records=await lookup(url.hostname,{all:true,family:4});}catch(error){throw new Error(`source_dns_failure:${String(error.code||error.message).slice(0,160)}`);}
   if(!records.length||records.some(r=>!publicIPv4(r.address)))throw new Error('private_source_denied');
   const address=records[0].address;
   return new Promise((resolve,reject)=>{
@@ -26,6 +27,6 @@ export async function readPublicWebsite(value) {
       res.on('error',reject);
     });
     req.on('timeout',()=>req.destroy(new Error('source_timeout')));
-    req.on('error',reject);req.end();
+    req.on('error',error=>reject(new Error(`source_connection_failure:${String(error.code||error.message).slice(0,160)}`)));req.end();
   });
 }

@@ -75,7 +75,7 @@ export function createSalesOutreachHandler({createClient,env,fetchImpl=fetch,rea
      }catch(error){
       // Diagnostics reveal only a fixed reason, never a provider response or secret.
       const safe=['public_https_source_required','private_source_denied','source_unavailable','source_too_large','source_timeout','official_business_source_required','business_domain_required','published_role_inbox_required','email_not_published_on_source','invalid_email','invalid_company_name'];
-      skipped.push(safe.includes(error.message)?error.message:'source_verification_failed');
+      skipped.push(safe.includes(error.message)||/^source_(dns|connection)_failure:/.test(error.message)?error.message:'source_verification_failed');
      }
     }
    }
