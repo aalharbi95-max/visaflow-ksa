@@ -82,7 +82,7 @@ export function createSalesHandler({ createClient, env, fetchImpl = fetch }) {
         const aiResponse = await fetchImpl('https://api.openai.com/v1/responses', {
           method: 'POST', signal: AbortSignal.timeout(45000),
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, store: false, instructions: systemPrompt, input: `${prompts[action]}\nDATA: ${JSON.stringify({ lead: { company_name: lead.company_name, industry: lead.industry, website: lead.website, contact_name: lead.contact_name, contact_title: lead.contact_title, has_email: Boolean(lead.contact_email), notes: String(lead.notes || '').slice(0, 6000) }, reply_text: replyText, instruction: String(body.instruction || '').slice(0, 1200) })}`, max_output_tokens: 1800, text: { format: { type: 'json_object' } } }),
+          body: JSON.stringify({ model, store: false, instructions: systemPrompt, input: `Return one valid JSON object.\n${prompts[action]}\nDATA: ${JSON.stringify({ lead: { company_name: lead.company_name, industry: lead.industry, website: lead.website, contact_name: lead.contact_name, contact_title: lead.contact_title, has_email: Boolean(lead.contact_email), notes: String(lead.notes || '').slice(0, 6000) }, reply_text: replyText, instruction: String(body.instruction || '').slice(0, 1200) })}`, max_output_tokens: 1800, text: { format: { type: 'json_object' } } }),
         });
         if (!aiResponse.ok) {
           // Return only allowlisted diagnostic codes, never provider bodies or credentials.
@@ -93,6 +93,7 @@ export function createSalesHandler({ createClient, env, fetchImpl = fetch }) {
             : providerCode === 'model_not_found' ? 'openai_model_unavailable'
             : aiResponse.status === 429 ? 'openai_rate_limited'
             : aiResponse.status === 403 ? 'openai_access_denied'
+            : aiResponse.status === 400 && ['input', 'model', 'text.format', 'max_output_tokens'].includes(failure?.error?.param) ? `openai_configuration_error_${failure.error.param.replaceAll('.', '_')}`
             : aiResponse.status === 400 ? 'openai_configuration_error' : 'openai_request_failed';
           throw new SalesError(code, 502);
         }

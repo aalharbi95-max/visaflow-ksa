@@ -16,6 +16,7 @@ function harness(options={}) {
   },async rpc(name,args){calls.push({rpc:name,args});if(name==='sales_start_run')return{data:'run',error:null};completions.push(args);return{data:{...args.p_result,status:args.p_result.status},error:options.commitError?{message:'lead_do_not_contact'}:null};}};
   const handler=createSalesHandler({createClient:()=>client,env:key=>options.noAI&&key.startsWith('OPENAI')?'':({SUPABASE_URL:'local',SUPABASE_SERVICE_ROLE_KEY:'local',OPENAI_API_KEY:'test',OPENAI_SALES_AGENT_MODEL:'configured-model'}[key]),fetchImpl:async(url,init)=>{
     fetches++;assert.equal(url,'https://api.openai.com/v1/responses');assert.equal(JSON.parse(init.body).store,false);
+    assert.match(JSON.parse(init.body).input,/Return one valid JSON object/);
     return new Response(JSON.stringify({output_text:JSON.stringify(options.ai||{subject:'Review',body:'A draft'})}),{status:options.aiStatus||200});
   }});
   return{calls,updates,completions,get fetches(){return fetches;},async run(body={},headers={authorization:'Bearer user'}){const response=await handler(new Request('http://localhost',{method:'POST',headers,body:JSON.stringify({action:'draft_outreach',lead_id:id,...body})}));return{status:response.status,...await response.json()};}};
