@@ -18,8 +18,8 @@ function mask(value) { if (process.env.GITHUB_ACTIONS) console.log(`::add-mask::
 async function management(path, options = {}) {
   const response = await fetch(`https://api.supabase.com/v1/projects/${STAGING}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`Staging management ${path.split('?')[0]} HTTP ${response.status}`);
-  if (response.status === 204) return null;
-  return response.json();
+  const body = await response.text();
+  return body ? JSON.parse(body) : null;
 }
 async function query(sql) {
   return management('/database/query', { method: 'POST', body: JSON.stringify({ query: sql }) });
