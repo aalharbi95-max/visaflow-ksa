@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
+import {URLSearchParams} from 'node:url';
 import {createSalesHandler} from '../supabase/functions/_shared/salesAgentRuntime.mjs';
 import {createSalesOutreachHandler} from '../supabase/functions/_shared/salesOutreachRuntime.mjs';
 import {salesIntroduction,validateProspectSource} from '../supabase/functions/_shared/salesIntroduction.mjs';
