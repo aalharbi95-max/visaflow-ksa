@@ -40,7 +40,7 @@ try{
   const confirm=await fetch(`${url}/functions/v1/visaflow-sales-unsubscribe?token=${'0'.repeat(64)}`);assert.equal(confirm.status,200);assert.ok((await confirm.text()).includes('method="post"'));
   report.checks.push('anonymous_sender_denied','authenticated_template_preview','unsubscribe_validation_and_confirmation');
   const discovery=await call({'x-faisal-worker-secret':secret},{mode:'discover_preview'});
-  const discoveryResult=await discovery.json();assert.equal(discovery.status,200,`Discovery failed: ${discoveryResult.error}`);assert.equal(discoveryResult.sent,0);assert.ok(discoveryResult.prospects.length>0,'No verified business contact found');
+  const discoveryResult=await discovery.json();assert.equal(discovery.status,200,`Discovery failed: ${discoveryResult.error}`);assert.equal(discoveryResult.sent,0);assert.ok(discoveryResult.prospects.length>0,`No verified business contact found: researched=${discoveryResult.researched}, skipped=${JSON.stringify(discoveryResult.skipped)}`);
   report.verified_business_sources=discoveryResult.prospects.length;report.checks.push('live_search_and_public_source_verification_without_sending');
   const test=await call({'x-faisal-worker-secret':secret},{mode:'test'});assert.equal(test.status,200,'Owner-only SMTP test failed');report.checks.push('fixed_owner_inbox_test_accepted_by_smtp');
  }

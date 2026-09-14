@@ -44,7 +44,7 @@ export function createSalesOutreachHandler({createClient,env,fetchImpl=fetch,rea
    const settings=dryRun?{workspace_id:'preview'}:one(await checked(db.rpc('sales_automation_claim',{p_discovery:false})));
    if(!settings?.workspace_id)return response({ok:true,paused:true});
    let discovered=0,sent=0,needsReview=0;
-   const verifiedProspects=[];
+   const verifiedProspects=[],skipped=[];let researched=0;
    const discovery=dryRun?settings:one(await checked(db.rpc('sales_automation_claim',{p_discovery:true})));
    if(discovery?.workspace_id){
     const key=env('OPENAI_API_KEY'),model=env('OPENAI_SALES_AGENT_MODEL');
@@ -65,16 +65,21 @@ export function createSalesOutreachHandler({createClient,env,fetchImpl=fetch,rea
      try{prospects=JSON.parse(content).prospects;}catch{throw new Error('invalid_search_result');}
     }
     if(!Array.isArray(prospects))throw new Error('invalid_search_result');
+    researched=prospects.length;
     for(const candidate of prospects.slice(0,5)){
      try {
       const verified=validateProspectSource(candidate,await readWebsite(candidate.source_url));
       if(dryRun){verifiedProspects.push(verified);continue;}
       const id=await checked(db.rpc('sales_register_discovered_intro',{p_workspace:settings.workspace_id,p_name:verified.company_name,p_email:verified.contact_email,p_website:verified.website,p_source:verified.source_url,p_industry:verified.industry}));
       if(id)discovered++;
-     }catch{/* Unverified public contact data is skipped, never sent. */}
+     }catch(error){
+      // Diagnostics reveal only a fixed reason, never a provider response or secret.
+      const safe=['public_https_source_required','private_source_denied','source_unavailable','source_too_large','source_timeout','official_business_source_required','business_domain_required','published_role_inbox_required','email_not_published_on_source','invalid_email','invalid_company_name'];
+      skipped.push(safe.includes(error.message)?error.message:'source_verification_failed');
+     }
     }
    }
-   if(dryRun)return response({ok:true,dry_run:true,prospects:verifiedProspects,sent:0});
+   if(dryRun)return response({ok:true,dry_run:true,prospects:verifiedProspects,researched,skipped,sent:0});
    for(let i=0;i<settings.hourly_limit;i++){
     const delivery=one(await checked(db.rpc('sales_claim_intro_delivery')));
     if(!delivery?.id)break;
