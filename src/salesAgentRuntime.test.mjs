@@ -45,3 +45,8 @@ test('provider failures, missing configuration, malformed results fail closed an
 test('request limit and unsupported actions fail before model or database writes',async()=>{
   const h=harness();assert.equal((await h.run({instruction:'x'.repeat(17000)})).status,413);assert.equal((await h.run({action:'send_email'})).status,400);assert.equal(h.fetches,0);
 });
+test('provider authentication failure exposes a safe code and never persists a draft',async()=>{
+  const h=harness({aiStatus:401});const result=await h.run();
+  assert.equal(result.status,502);assert.equal(result.error,'openai_auth_failed');
+  assert.equal(h.completions.length,0);assert.equal(h.updates[0].error_message,'openai_auth_failed');
+});

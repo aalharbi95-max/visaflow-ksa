@@ -84,7 +84,18 @@ export function createSalesHandler({ createClient, env, fetchImpl = fetch }) {
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ model, store: false, instructions: systemPrompt, input: `${prompts[action]}\nDATA: ${JSON.stringify({ lead: { company_name: lead.company_name, industry: lead.industry, website: lead.website, contact_name: lead.contact_name, contact_title: lead.contact_title, has_email: Boolean(lead.contact_email), notes: String(lead.notes || '').slice(0, 6000) }, reply_text: replyText, instruction: String(body.instruction || '').slice(0, 1200) })}`, max_output_tokens: 1800, text: { format: { type: 'json_object' } } }),
         });
-        if (!aiResponse.ok) throw new SalesError('openai_request_failed', 502);
+        if (!aiResponse.ok) {
+          // Return only allowlisted diagnostic codes, never provider bodies or credentials.
+          const failure = await aiResponse.json().catch(() => ({}));
+          const providerCode = failure?.error?.code;
+          const code = providerCode === 'insufficient_quota' ? 'openai_quota_exceeded'
+            : aiResponse.status === 401 ? 'openai_auth_failed'
+            : providerCode === 'model_not_found' ? 'openai_model_unavailable'
+            : aiResponse.status === 429 ? 'openai_rate_limited'
+            : aiResponse.status === 403 ? 'openai_access_denied'
+            : aiResponse.status === 400 ? 'openai_configuration_error' : 'openai_request_failed';
+          throw new SalesError(code, 502);
+        }
         const ai = await aiResponse.json();
         const output = ai.output_text || (ai.output || []).flatMap(x => x.content || []).filter(x => x.type === 'output_text').map(x => x.text).join('');
         try { result = normalizeSalesResult(action, JSON.parse(output), replyText); } catch { throw new SalesError('invalid_ai_output', 502); }
