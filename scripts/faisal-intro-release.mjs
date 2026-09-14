@@ -37,7 +37,7 @@ try{
   assert.ok([401,403].includes((await call({},{mode:'tick'})).status));
   const preview=await call({'x-faisal-worker-secret':secret},{mode:'preview'});assert.equal(preview.status,200);const text=await preview.json();assert.ok(text.text.includes('التأشيرات')&&text.text.includes('السكن'));assert.equal(text.template_version,'visaflow-platform-introduction-ar-v1');
   const invalid=await fetch(`${url}/functions/v1/visaflow-sales-unsubscribe?token=invalid`);assert.equal(invalid.status,400);
-  const confirm=await fetch(`${url}/functions/v1/visaflow-sales-unsubscribe?token=${'0'.repeat(64)}`);assert.equal(confirm.status,200);assert.ok((await confirm.text()).includes('method="post"'));
+  const confirm=await fetch(`${url}/functions/v1/visaflow-sales-unsubscribe?token=${'0'.repeat(64)}`,{redirect:'manual'});assert.equal(confirm.status,302);assert.equal(confirm.headers.get('location'),`https://www.visaflowksa.com/faisal-unsubscribe.html#token=${'0'.repeat(64)}&project=${ref}`);
   report.checks.push('anonymous_sender_denied','authenticated_template_preview','unsubscribe_validation_and_confirmation');
   const discovery=await call({'x-faisal-worker-secret':secret},{mode:'discover_preview'});
   const discoveryResult=await discovery.json();assert.equal(discovery.status,200,`Discovery failed: ${discoveryResult.error}`);assert.equal(discoveryResult.sent,0);assert.ok(discoveryResult.prospects.length>0,`No verified business contact found: researched=${discoveryResult.researched}, skipped=${JSON.stringify(discoveryResult.skipped)}`);

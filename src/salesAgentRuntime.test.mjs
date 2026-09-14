@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {runInNewContext} from 'node:vm';
 import {createSalesHandler} from '../supabase/functions/_shared/salesAgentRuntime.mjs';
 import {createSalesOutreachHandler} from '../supabase/functions/_shared/salesOutreachRuntime.mjs';
 import {salesIntroduction,validateProspectSource} from '../supabase/functions/_shared/salesIntroduction.mjs';
 import {publicIPv4} from '../supabase/functions/_shared/salesPublicWebsite.mjs';
+
+test('unsubscribe page waits for a click, removes token from URL and allows only known backends',async()=>{
+ const source=await readFile(new URL('../public/faisal-unsubscribe.js',import.meta.url),'utf8');
+ for(const project of ['zeocbftriydodzfgixjv','attacker.example']){
+  let click,cleaned=false,calls=0;const button={disabled:true,addEventListener(_event,callback){click=callback;}},message={};
+  runInNewContext(source,{URLSearchParams,location:{hash:`#token=${'a'.repeat(64)}&project=${project}`,pathname:'/faisal-unsubscribe.html'},history:{replaceState(){cleaned=true;}},document:{getElementById:id=>id==='confirm'?button:message},fetch:async url=>{calls++;assert.ok(url.startsWith('https://zeocbftriydodzfgixjv.supabase.co/'));return{ok:true};}});
+  assert.equal(calls,0);assert.equal(cleaned,true);
+  if(project==='attacker.example'){assert.equal(button.disabled,true);assert.equal(click,undefined);}else{await click();assert.equal(calls,1);assert.equal(button.hidden,true);}
+ }
+});
 
 test('automatic introduction is comprehensive, fixed, and never includes a price offer',()=>{
  const text=salesIntroduction('https://example.com/unsubscribe?token=abc');

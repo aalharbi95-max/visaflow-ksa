@@ -33,4 +33,6 @@ for (const relative of changed) {
   assert.ok(files.includes(relative), 'Existing Sales source required');
   await copyFile(relative, resolve(output, relative));
 }
-console.log(JSON.stringify({ preserved_files: files.length - changed.length, changed, output }, null, 2));
+const added=['public/faisal-unsubscribe.html','public/faisal-unsubscribe.js'];
+for(const relative of added){assert.ok(!files.includes(relative),'New unsubscribe asset already exists');await copyFile(relative,resolve(output,relative));}
+console.log(JSON.stringify({ preserved_files: files.length - changed.length, changed, added, output }, null, 2));

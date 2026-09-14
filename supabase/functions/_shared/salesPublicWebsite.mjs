@@ -28,5 +28,5 @@ export async function readPublicWebsite(value) {
     });
     req.on('timeout',()=>req.destroy(new Error('source_timeout')));
     req.on('error',error=>reject(new Error(`source_connection_failure:${String(error.code||error.message).slice(0,160)}`)));req.end();
-  });
+  }).catch(error=>{if(error.message.startsWith('source_'))throw error;throw new Error(`source_connection_failure:${String(error.code||error.message).slice(0,160)}`);});
 }
