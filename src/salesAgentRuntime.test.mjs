@@ -6,7 +6,14 @@ import {URLSearchParams} from 'node:url';
 import {createSalesHandler} from '../supabase/functions/_shared/salesAgentRuntime.mjs';
 import {createSalesOutreachHandler} from '../supabase/functions/_shared/salesOutreachRuntime.mjs';
 import {salesIntroduction,validateProspectSource} from '../supabase/functions/_shared/salesIntroduction.mjs';
-import {publicIPv4} from '../supabase/functions/_shared/salesPublicWebsite.mjs';
+import {publicIPv4,parsePublicHttpResponse} from '../supabase/functions/_shared/salesPublicWebsite.mjs';
+
+test('native TLS reader accepts framed text and rejects redirects, truncation and ambiguous framing',()=>{
+ const response=(headers,body)=>new TextEncoder().encode(`HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n${headers}\r\n\r\n${body}`);
+ assert.equal(parsePublicHttpResponse(response('Content-Length: 4\r\nSet-Cookie: a\r\nSet-Cookie: b','test')),'test');
+ assert.equal(parsePublicHttpResponse(response('Transfer-Encoding: chunked','4\r\ntest\r\n0\r\n\r\n')),'test');
+ for(const bytes of [response('Content-Length: 5','test'),response('Content-Length: 4\r\nTransfer-Encoding: chunked','test'),response('Content-Encoding: gzip','test'),new TextEncoder().encode('HTTP/1.1 302 Found\r\nContent-Type: text/html\r\n\r\nredirect')])assert.throws(()=>parsePublicHttpResponse(bytes));
+});
 
 test('unsubscribe page waits for a click, removes token from URL and allows only known backends',async()=>{
  const source=await readFile(new URL('../public/faisal-unsubscribe.js',import.meta.url),'utf8');
