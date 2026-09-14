@@ -1,0 +1,52 @@
+name: Faisal Staging acceptance
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/faisal-staging-smoke.yml'
+      - 'scripts/faisal-staging-smoke.mjs'
+      - 'supabase/functions/visaflow-sales-agent/**'
+      - 'supabase/functions/_shared/salesAgent*.mjs'
+      - 'supabase/migrations/20260914000100_faisal_sales_agent_mvp.sql'
+permissions:
+  contents: read
+concurrency:
+  group: faisal-staging-acceptance
+  cancel-in-progress: false
+jobs:
+  acceptance:
+    if: github.head_ref == 'codex/faisal-sales-agent-mvp' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint && npm run test:sales-agent
+      - name: Validate Staging and apply only Faisal migration
+        run: node scripts/faisal-staging-smoke.mjs prepare
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+      - name: Deploy only the draft-only Faisal function
+        run: supabase functions deploy visaflow-sales-agent --project-ref iijhdilfzndqlguefipn
+      - name: Exercise real Auth, RLS, AI and approval boundaries
+        run: node scripts/faisal-staging-smoke.mjs smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faisal-staging-acceptance
+          path: faisal-staging-result.json
+          if-no-files-found: ignore
+          retention-days: 14
