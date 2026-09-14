@@ -1,5 +1,7 @@
 # Faisal AI Sales Agent MVP
 
+**Current scope correction:** Faisal now sells VisaFlow subscriptions from the Platform Owner dashboard. The company-scoped access design below describes the initial implementation and is superseded by [the platform sales guide](faisal-platform-sales.md) and migration `20260914000200_faisal_platform_sales_workspace.sql`. Company roles no longer have Sales access.
+
 Implemented from the supplied `VisaFlow_Faisal_Sales_Agent_MVP.zip`, reviewed against the existing orchestrator, email dispatcher, company role names, workspace Supabase client and tenant authorization patterns. The archive's deployment commands are reference material, not authorization. Subsequent user-approved Staging and Production releases are recorded below.
 
 ## Behavior

@@ -37,8 +37,12 @@ test('Platform subscription sales upgrade preserves legacy data and enforces own
   const finish=async(run,result)=>(await db.query('select sales_complete_run($1,$2,$3,null) result',[workspace,run,result])).rows[0].result;
   const run=await start('draft_outreach'), draft=await finish(run,{subject:'VisaFlow subscription',body:'Draft only'});
   assert.equal(draft.status,'pending'); assert.equal((await finish(run,{subject:'Replay',body:'Replay'})).approval_id,draft.approval_id);
+  await db.query(`insert into sales_tasks(workspace_id,lead_id,task_type,title) values('${workspace}','${lead}','FOLLOW_UP','Review subscription interest')`);
+  const legacyLead=(await db.query(`select id from sales_leads where workspace_id='${company}'`)).rows[0].id;
+  await assert.rejects(db.query(`insert into sales_tasks(workspace_id,lead_id,task_type,title) values('${workspace}','${legacyLead}','FOLLOW_UP','Cross workspace')`),/foreign key/);
   const pricing=await finish(await start('classify_reply'),{classification:'REQUEST_PRICING',requires_ceo_approval:false,follow_up_days:null});
   await actor(customer);
+  for(const table of ['sales_leads','sales_tasks','sales_interactions','sales_agent_runs','sales_agent_approvals']) assert.equal((await db.query(`select * from ${table}`)).rows.length,0,'Customer cannot read populated platform sales tables');
   await assert.rejects(db.query('select sales_decide_approval($1,$2,$3)',[pricing.approval_id,'approved','']),/forbidden/);
   await actor(owner);
   await assert.rejects(db.query(`update sales_agent_approvals set status='approved'`),/permission denied/);
