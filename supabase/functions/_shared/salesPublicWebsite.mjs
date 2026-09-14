@@ -1,6 +1,7 @@
 import {request} from 'node:https';
 import {lookup} from 'node:dns/promises';
 import {Buffer} from 'node:buffer';
+import {setTimeout,clearTimeout} from 'node:timers';
 
 export function publicIPv4(address) {
   const parts=String(address).split('.').map(Number);
@@ -19,14 +20,17 @@ export async function readPublicWebsite(value) {
   if(!records.length||records.some(r=>!publicIPv4(r.address)))throw new Error('private_source_denied');
   const address=records[0].address;
   return new Promise((resolve,reject)=>{
-    const req=request(url,{method:'GET',servername:url.hostname,lookup:(_host,options,callback)=>options.all?callback(null,[{address,family:4}]):callback(null,address,4),headers:{'User-Agent':'VisaFlow-Faisal/1.0 (business contact verification)','Accept':'text/html,text/plain'},timeout:12000},res=>{
+    // Connect directly to the validated IP while verifying TLS for the original
+    // hostname. Older Edge runtimes do not implement custom Node lookup hooks.
+    const req=request({protocol:'https:',hostname:address,port:443,path:url.pathname+url.search,method:'GET',servername:url.hostname,agent:false,headers:{Host:url.hostname,'User-Agent':'VisaFlow-Faisal/1.0 (business contact verification)','Accept':'text/html,text/plain'}},res=>{
       if(res.statusCode!==200||!/text\/(html|plain)/i.test(String(res.headers['content-type']||''))){res.resume();reject(new Error('source_unavailable'));return;}
       const chunks=[];let size=0;
       res.on('data',chunk=>{size+=chunk.length;if(size>512000){req.destroy(new Error('source_too_large'));return;}chunks.push(chunk);});
       res.on('end',()=>resolve(Buffer.concat(chunks).toString('utf8')));
       res.on('error',reject);
     });
-    req.on('timeout',()=>req.destroy(new Error('source_timeout')));
-    req.on('error',error=>reject(new Error(`source_connection_failure:${String(error.code||error.message).slice(0,160)}`)));req.end();
-  }).catch(error=>{if(error.message.startsWith('source_'))throw error;throw new Error(`source_connection_failure:${String(error.code||error.message).slice(0,160)}`);});
+    const timer=setTimeout(()=>req.destroy(new Error('source_timeout')),12000);
+    req.on('close',()=>clearTimeout(timer));
+    req.on('error',error=>reject(new Error(`source_connection_failure:${String(error.message).slice(0,160)}`)));req.end();
+  }).catch(error=>{if(error.message.startsWith('source_'))throw error;throw new Error(`source_connection_failure:${String(error.message).slice(0,160)}`);});
 }
