@@ -1,4 +1,7 @@
 .sales-command-center { display: grid; gap: 18px; }
+.sales-command-center .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 16px; }
+.sales-command-center .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.sales-command-center .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .sales-command-center h3 small { font-size: 12px; font-weight: normal; color: #475569; }
 .sales-safety { padding: 14px; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 12px; color: #115e59; }
 .sales-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px; }
