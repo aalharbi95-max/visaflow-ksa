@@ -5,6 +5,7 @@ import {
   getCandidateUploadValidationSummary,
   isAgencyRequestAssignmentInWorkspace,
   resolveAgencyUploadWorkspace,
+  resolveCompanyCandidateUploadRequest,
   secureAgencyCandidatePayload,
 } from "./candidateExcelUpload.mjs";
 
@@ -127,4 +128,32 @@ test("candidate upload path has no out-of-scope currentCompanyId reference", asy
   assert.match(source, /resolveAgencyUploadWorkspace/);
   assert.match(source, /secureAgencyCandidatePayload/);
   assert.match(source, /uploadGeneration !== workspaceDataGenerationRef\.current/);
+});
+
+test("company uploads with no request number stay in the general candidate list", () => {
+  assert.deepEqual(
+    resolveCompanyCandidateUploadRequest({ rowRequestNos: ["", "   "] }),
+    { ok: true, requestNo: "" },
+  );
+});
+
+test("company uploads preserve an explicit or consistently supplied request", () => {
+  assert.deepEqual(
+    resolveCompanyCandidateUploadRequest({ selectedRequestNo: "REQ-1", rowRequestNos: ["", "REQ-1"] }),
+    { ok: true, requestNo: "REQ-1" },
+  );
+  assert.deepEqual(
+    resolveCompanyCandidateUploadRequest({ rowRequestNos: [" REQ-1 ", "REQ-1"] }),
+    { ok: true, requestNo: "REQ-1" },
+  );
+});
+
+test("conflicting or mixed request numbers do not silently assign company candidates", () => {
+  for (const args of [
+    { selectedRequestNo: "REQ-1", rowRequestNos: ["REQ-2"] },
+    { rowRequestNos: ["", "REQ-1"] },
+    { rowRequestNos: ["REQ-1", "REQ-2"] },
+  ]) {
+    assert.equal(resolveCompanyCandidateUploadRequest(args).ok, false);
+  }
 });

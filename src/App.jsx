@@ -81,6 +81,7 @@ import {
   getCandidateUploadValidationSummary,
   isAgencyRequestAssignmentInWorkspace,
   resolveAgencyUploadWorkspace,
+  resolveCompanyCandidateUploadRequest,
   secureAgencyCandidatePayload,
 } from "./candidateExcelUpload.mjs";
 import {
@@ -7506,6 +7507,7 @@ const [ownerFinanceTalentCampaign, setOwnerFinanceTalentCampaign] = useState(nul
 const [ownerItTalentCampaign, setOwnerItTalentCampaign] = useState(null);
 const [ownerTalentProspectStats, setOwnerTalentProspectStats] = useState({ total: 0, awaiting_candidate: 0, queued: 0, invited: 0, failed: 0, claimed: 0 });
 const [ownerTalentInviteBusy, setOwnerTalentInviteBusy] = useState(false);
+const [ownerTalentImportBusy, setOwnerTalentImportBusy] = useState(false);
 const [talentEntitlement, setTalentEntitlement] = useState({ enabled: false, tier: "None", profile_limit: 0 });
 const [companyTalentProfiles, setCompanyTalentProfiles] = useState([]);
 const [companyTalentLoading, setCompanyTalentLoading] = useState(false);
@@ -11298,6 +11300,63 @@ async function loadProfessionAliases() {
       setCompanyTalentMessage(error?.message || "Unable to load the AI candidate analysis.");
     } finally {
       setCompanyTalentAnalysisBusyId("");
+    }
+  }
+
+  async function importOwnerTalentExcel(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || currentRole !== "Platform Owner" || ownerTalentImportBusy) return;
+
+    setOwnerTalentImportBusy(true);
+    setOwnerTalentMessage("");
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer());
+      const uploadSheet = workbook.Sheets["Candidates Upload"];
+      if (!uploadSheet) throw new Error("Use the Candidate Upload Template with a Candidates Upload sheet.");
+
+      const rows = XLSX.utils.sheet_to_json(uploadSheet, { defval: "" });
+      const prospectsByEmail = new Map();
+      let missingContact = 0;
+      for (const row of rows) {
+        const email = getRowValue(row, ["Email", "email"]).trim().toLowerCase();
+        const fullName = getRowValue(row, ["Candidate Name", "Name", "full_name"]);
+        if (!fullName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          missingContact += 1;
+          continue;
+        }
+        if (prospectsByEmail.has(email)) continue;
+
+        prospectsByEmail.set(email, {
+          source: "Owner Excel Import",
+          email,
+          full_name: fullName,
+          phone: getRowValue(row, ["Mobile", "Phone", "phone"]),
+          source_job_title: getRowValue(row, ["Profession", "Job", "Position"]),
+          current_title: getRowValue(row, ["Last Job Title", "current_title"]),
+          current_company: getRowValue(row, ["Last Employer", "current_company"]),
+          education_degree: getRowValue(row, ["Qualification", "education_degree"]),
+          education_institution: getRowValue(row, ["Institution Name", "education_institution"]),
+        });
+      }
+
+      if (!prospectsByEmail.size) throw new Error("No rows contain both a candidate name and a valid email.");
+      const { data, error } = await supabase.rpc("import_talent_prospects", {
+        p_rows: [...prospectsByEmail.values()],
+        p_source_file: file.name,
+      });
+      if (error) throw error;
+
+      await loadOwnerTalentDashboard();
+      const duplicates = rows.length - missingContact - prospectsByEmail.size;
+      setOwnerTalentMessage(
+        `Imported ${Number(data?.inserted || 0)} new private prospects and updated ${Number(data?.updated || 0)} existing prospects. `
+        + `Skipped ${missingContact} rows without a name or valid email and ${duplicates} repeated emails.`
+      );
+    } catch (error) {
+      setOwnerTalentMessage(`Unable to import candidates: ${error?.message || "Unknown error"}`);
+    } finally {
+      setOwnerTalentImportBusy(false);
     }
   }
 
@@ -16792,10 +16851,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     return [
       {
         "Field": "Request No",
-        "Required": currentRole === "Agency" ? "No" : "Yes",
+        "Required": "No",
         "Notes": currentRole === "Agency"
           ? "Office Portal upload can work without Request No. Candidates will be saved in Agency Talent Pool if no assigned request is selected."
-          : "Use the exact request number assigned by the company, for example REQ-2026-0001.",
+          : "Leave Request No blank in all rows to import into the general candidate list. For a request import, use the same approved Request No in all rows.",
       },
       {
         "Field": "Candidate Name",
@@ -16805,7 +16864,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       {
         "Field": "Profession / Nationality / Gender",
         "Required": "Yes",
-        "Notes": "Must match the company request line. This prevents uploading candidates to the wrong requirement.",
+        "Notes": "For a general import, use the values from the dropdown lists. For a request import, these values must match the request line.",
       },
       {
         "Field": "Passport No",
@@ -17144,16 +17203,13 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
     return data;
   }
 
-  async function handleAgencyTalentPoolExcelUpload(rows = [], uploadWorkspace, uploadGeneration, uploadFile) {
-    if (currentRole !== "Agency") {
-      return alert("Please select Request No before uploading candidate Excel.");
+  async function handleUnassignedCandidateExcelUpload(rows, uploadWorkspace, uploadGeneration, uploadFile) {
+    const agencyUpload = currentRole === "Agency";
+    if (agencyUpload ? !uploadWorkspace?.ok : !canManageCandidates || !uploadWorkspace?.companyId) {
+      return alert("You do not have permission to import candidates into this workspace.");
     }
 
-    if (!uploadWorkspace?.ok) {
-      return alert(uploadWorkspace?.message || "Company Workspace and Agency identity are required before upload.");
-    }
-
-    const { companyId: uploadCompanyId, agencyId: uploadAgencyId, agencyName } = uploadWorkspace;
+    const { companyId: uploadCompanyId, agencyId: uploadAgencyId = null, agencyName } = uploadWorkspace;
 
     const payloads = [];
     const candidateTechnicalImportMeta = [];
@@ -17170,11 +17226,16 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       }
 
       const rowProfession = getRowValue(row, ["Profession", "Job", "Position", "profession", "المهنة"]);
-      const rowNationality = getRowValue(row, ["Nationality", "nationality", "الجنسية"]) || "India";
+      const rowNationality = getRowValue(row, ["Nationality", "nationality", "الجنسية"]) || (agencyUpload ? "India" : "");
       const rowGender = getRowValue(row, ["Gender", "gender", "الجنس"]);
 
       if (!rowProfession) {
         errors.push(`Row ${rowNo} / ${candidateName}: Profession is missing.`);
+        continue;
+      }
+
+      if (!agencyUpload && (!rowNationality || !GENDERS.includes(rowGender))) {
+        errors.push(`Row ${rowNo} / ${candidateName}: Nationality and a valid gender are required.`);
         continue;
       }
 
@@ -17220,7 +17281,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       const medicalDate = parseExcelDateValue(row["Medical Date"] || row["medical_date"] || row["تاريخ الفحص"]);
       const rawMedicalStatus = getRowValue(row, ["Medical Status", "medical_status", "حالة الفحص"]);
       const contractStatus = getRowValue(row, ["Contract Status", "contract_status", "حالة العقد"]) || "Pending";
-      const rawStatus = getRowValue(row, ["Status", "status", "الحالة"]) || "Candidate Submitted";
+      const rawStatus = getRowValue(row, ["Status", "status", "الحالة"]) || (agencyUpload ? "Candidate Submitted" : "New");
 
       let autoStatus = rawStatus;
       if (arrivalDate) autoStatus = "Arrived KSA";
@@ -17236,36 +17297,37 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
         ? buildCandidateTechnicalScores(technicalFormFromExcel, professionIntelligence)
         : null;
 
-      payloads.push(
-        secureAgencyCandidatePayload(withCreateActor({
-          candidate_name: candidateName,
-          profession: rowProfession,
-          nationality: rowNationality,
-          gender: rowGender,
-          project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || "Agency Talent Pool",
-          passport_no: isSaudiNationality(rowNationality) ? "" : passportNo,
-          civil_id_no: isSaudiNationality(rowNationality) ? String(civilIdNo || "").trim() : "",
-          civil_id_expiry_date: isSaudiNationality(rowNationality) ? civilIdExpiryDate : null,
-          mobile: getRowValue(row, ["Mobile", "Phone", "mobile", "الجوال"]),
-          email: getRowValue(row, ["Email", "email", "البريد"]),
-          notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
-          status: autoStatus,
-          medical_status: rawMedicalStatus || "Pending",
-          medical_date: medicalDate,
-          ticket_no: ticketNo,
-          flight_date: flightDate,
-          arrival_date: arrivalDate,
-          contract_status: contractStatus,
-          technical_profile_required: Boolean(professionIntelligence.enabled),
-          technical_profile_completed: technicalScores?.profile_completed || false,
-          ai_score: technicalScores?.final_ai_score || 0,
-          ai_priority: technicalScores?.interview_priority || (professionIntelligence.enabled ? "Pending Review" : ""),
-          ai_recommendation: technicalScores?.ai_recommendation || "",
-          ai_reasoning: technicalScores?.ai_reasoning || "",
-          final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
-          updated_at: new Date().toISOString(),
-        }), uploadWorkspace)
-      );
+      const payload = withCreateActor({
+        candidate_name: candidateName,
+        profession: rowProfession,
+        nationality: rowNationality,
+        gender: rowGender,
+        project: getRowValue(row, ["Project", "Project Name", "project", "المشروع"]) || (agencyUpload ? "Agency Talent Pool" : ""),
+        passport_no: isSaudiNationality(rowNationality) ? "" : passportNo,
+        civil_id_no: isSaudiNationality(rowNationality) ? String(civilIdNo || "").trim() : "",
+        civil_id_expiry_date: isSaudiNationality(rowNationality) ? civilIdExpiryDate : null,
+        mobile: getRowValue(row, ["Mobile", "Phone", "mobile", "الجوال"]),
+        email: getRowValue(row, ["Email", "email", "البريد"]),
+        notes: getRowValue(row, ["Notes", "Note", "ملاحظات"]),
+        status: autoStatus,
+        medical_status: rawMedicalStatus || "Pending",
+        medical_date: medicalDate,
+        ticket_no: ticketNo,
+        flight_date: flightDate,
+        arrival_date: arrivalDate,
+        contract_status: contractStatus,
+        technical_profile_required: Boolean(professionIntelligence.enabled),
+        technical_profile_completed: technicalScores?.profile_completed || false,
+        ai_score: technicalScores?.final_ai_score || 0,
+        ai_priority: technicalScores?.interview_priority || (professionIntelligence.enabled ? "Pending Review" : ""),
+        ai_recommendation: technicalScores?.ai_recommendation || "",
+        ai_reasoning: technicalScores?.ai_reasoning || "",
+        final_company_decision: professionIntelligence.enabled ? "Pending Company Review" : "",
+        updated_at: new Date().toISOString(),
+      });
+      payloads.push(agencyUpload
+        ? secureAgencyCandidatePayload(payload, uploadWorkspace)
+        : { ...payload, company_id: uploadCompanyId, request_no: "", request_line_id: null });
 
       candidateTechnicalImportMeta.push(
         shouldCreateTechnicalProfile
@@ -17319,7 +17381,7 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
       }
     }
 
-    if (secureLogFeaturesAvailable) {
+    if (agencyUpload && secureLogFeaturesAvailable) {
       try {
         await triggerExternalNotification("AGENCY_TALENT_POOL_UPLOAD", {
           company_id: uploadCompanyId,
@@ -17344,10 +17406,10 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     await loadCandidates();
     await loadCandidateTechnicalProfiles();
-    setActivePage("Office Portal");
+    setActivePage(agencyUpload ? "Office Portal" : "Candidates");
 
     alert(
-      `Uploaded to Agency Talent Pool: ${payloads.length} candidate(s)\n` +
+      `Uploaded to ${agencyUpload ? "Agency Talent Pool" : "the general candidate list"}: ${payloads.length} candidate(s)\n` +
         `Accepted rows: ${validation.accepted}\n` +
         `Rejected rows: ${validation.rejected}\n` +
         `Candidate Intelligence profiles: ${technicalProfilePayloads.length}\n` +
@@ -17483,19 +17545,24 @@ if (requestRemaining <= 0 && !isReplacementStatus(autoStatus)) {
 
     if (!rows.length) return alert("Excel file is empty.");
 
-    const requestNoFromExcel = getRowValue(rows[0], ["Request No", "RequestNo", "request_no", "رقم الطلب"]);
-    let requestNo = excelRequestNo || requestNoFromExcel || candidateForm.request_no || "";
-
-    if (!requestNo) {
-      requestNo = await inferCandidateUploadRequestNo(rows, uploadCompanyId);
+    const requestAliases = ["Request No", "RequestNo", "request_no", "رقم الطلب"];
+    let requestNo;
+    if (currentRole === "Agency") {
+      requestNo = excelRequestNo || getRowValue(rows[0], requestAliases) || candidateForm.request_no || "";
+      if (!requestNo) requestNo = await inferCandidateUploadRequestNo(rows, uploadCompanyId);
+    } else {
+      const assignment = resolveCompanyCandidateUploadRequest({
+        selectedRequestNo: excelRequestNo,
+        rowRequestNos: rows.map((row) => getRowValue(row, requestAliases)),
+      });
+      if (!assignment.ok) return alert(assignment.message);
+      requestNo = assignment.requestNo;
     }
 
-    if (!requestNo && currentRole === "Agency") {
-      return await handleAgencyTalentPoolExcelUpload(rows, uploadWorkspace, uploadGeneration, uploadFile);
-    }
-
     if (!requestNo) {
-      return alert("Please select Request No once before uploading, or upload from an assigned request/authorization card.");
+      return await handleUnassignedCandidateExcelUpload(
+        rows, uploadWorkspace || { companyId: uploadCompanyId }, uploadGeneration, uploadFile
+      );
     }
 
     const agencyRequestAccess = currentRole === "Agency"
@@ -40952,7 +41019,17 @@ onClick={() => setActiveReport("activityLog")}>
           <h2>Imported Talent Counter / عداد المرشحين المستوردين</h2>
           <p>Email-only invitations. Imported prospects remain private until they complete their profile and grant consent.</p>
         </div>
-        {currentRole === "Platform Owner" && <button type="button" onClick={queueOwnerTalentEmailInvitations} disabled={ownerTalentInviteBusy || !ownerTalentProspectStats.awaiting_candidate}>{ownerTalentInviteBusy ? "Queuing..." : "Queue Email Invitations / إرسال دعوات البريد"}</button>}
+        {currentRole === "Platform Owner" && (
+          <div className="hero-actions">
+            <label>
+              {ownerTalentImportBusy ? "Importing... / جارٍ الاستيراد" : "Import Candidate Excel / استيراد Excel"}
+              <input type="file" accept=".xlsx,.xls" disabled={ownerTalentImportBusy} onChange={importOwnerTalentExcel} />
+            </label>
+            <button type="button" onClick={queueOwnerTalentEmailInvitations} disabled={ownerTalentInviteBusy || !ownerTalentProspectStats.awaiting_candidate}>
+              {ownerTalentInviteBusy ? "Queuing..." : "Queue Email Invitations / إرسال دعوات البريد"}
+            </button>
+          </div>
+        )}
       </div>
       <div className="stats-grid" style={{ marginTop: 14 }}>
         <div className="stat-card"><h3>Imported Total</h3><strong>{ownerTalentProspectStats.total.toLocaleString()}</strong><span>إجمالي المستوردين</span></div>

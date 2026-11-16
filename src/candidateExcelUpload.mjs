@@ -2,6 +2,25 @@ function clean(value) {
   return String(value || "").trim();
 }
 
+export function resolveCompanyCandidateUploadRequest({ selectedRequestNo, rowRequestNos = [] } = {}) {
+  const selected = clean(selectedRequestNo);
+  const requestNos = rowRequestNos.map(clean);
+  const first = requestNos.find(Boolean) || "";
+
+  if (selected) {
+    if (requestNos.some((requestNo) => requestNo && requestNo !== selected)) {
+      return { ok: false, message: "The Excel Request No must match the request selected for this upload." };
+    }
+    return { ok: true, requestNo: selected };
+  }
+
+  if (first && requestNos.some((requestNo) => requestNo !== first)) {
+    return { ok: false, message: "Use the same Request No in every row, or leave it blank in every row for the general candidate list." };
+  }
+
+  return { ok: true, requestNo: first };
+}
+
 export function resolveAgencyUploadWorkspace({
   currentUser,
   activeAgencyCompanyId,
