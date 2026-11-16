@@ -1,0 +1,18 @@
+{
+  "project_ref": "zeocbftriydodzfgixjv",
+  "mode": "preflight",
+  "commit": "6ea933ad3fb1cbf8a5e29ebfd440a031700e4d5b",
+  "started_at": "2026-09-14T14:14:06.749Z",
+  "migration_sha256": "36bbfa34adc47d4c03c8417fa01febb119e7f629b2e311268426ad3a90cf7297",
+  "delivery_enabled": false,
+  "checks": [
+    "exact_healthy_production",
+    "existing_auth_and_tenant_columns_compatible",
+    "exact_migration_already_applied"
+  ],
+  "platform_migration_applied": false,
+  "openai_key_configured": true,
+  "sales_model_configured": true,
+  "ok": true,
+  "completed_at": "2026-09-14T14:14:11.575Z"
+}

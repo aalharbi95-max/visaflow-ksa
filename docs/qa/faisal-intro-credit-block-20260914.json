@@ -1,0 +1,13 @@
+{
+  "ref": "iijhdilfzndqlguefipn",
+  "mode": "verify",
+  "commit": "3c9e239dbf433e20ffa40deb5b2f5e6300e6b867",
+  "checks": [
+    "identity_existing_platform_and_provider_configuration",
+    "anonymous_sender_denied",
+    "authenticated_template_preview",
+    "unsubscribe_validation_and_confirmation"
+  ],
+  "ok": false,
+  "error": "Discovery failed: prospect_extraction_failed:429:credit_balance_exhausted:\n\n503 !== 200\n"
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import {
@@ -189,10 +189,13 @@ import {
 } from "./recoveryAccount.mjs";
 import "./style.css";
 
+const SalesCommandCenterLazyPage = lazy(() => import("./SalesCommandCenterLazyPage.jsx"));
+
 const UI_DIRECTION = getUiDirection();
 const SHOW_LANGUAGE_TOGGLE = shouldShowLanguageToggle();
 
 const PAGES = [
+  "Sales Command Center",
   "Executive Dashboard",
   "AI Commander",
   "AI Agent",
@@ -251,7 +254,7 @@ const SIDEBAR_GROUPS = [
   {
     title: "Command Center",
     icon: "🏠",
-    pages: ["Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Agent", "AI Report Studio", "Dashboard"],
+    pages: ["Sales Command Center", "Platform Intelligence", "Executive Dashboard", "AI Commander", "AI Agent", "AI Report Studio", "Dashboard"],
   },
   {
     title: "Recruitment",
@@ -7664,6 +7667,7 @@ function isPlatformRole(role) {
 }
 
 const PLATFORM_PAGES = [
+  "Sales Command Center",
   "Platform Dashboard",
   "Platform Intelligence",
   "Client Usage Monitor",
@@ -33157,6 +33161,9 @@ if (!currentUser) {
           </>
         ))}
 
+        {activePage === "Sales Command Center" && (
+          <Suspense fallback={<div role="status">Loading Sales Command Center...</div>}><SalesCommandCenterLazyPage key="platform-sales" currentRole={currentRole} /></Suspense>
+        )}
         {activePage === "AI Agent" && (
           <>
             {canManagePlatform && (

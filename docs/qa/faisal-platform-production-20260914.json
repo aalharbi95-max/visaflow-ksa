@@ -1,0 +1,22 @@
+{
+  "project_ref": "zeocbftriydodzfgixjv",
+  "mode": "verify",
+  "commit": "6ea933ad3fb1cbf8a5e29ebfd440a031700e4d5b",
+  "started_at": "2026-09-14T14:17:08.714Z",
+  "migration_sha256": "36bbfa34adc47d4c03c8417fa01febb119e7f629b2e311268426ad3a90cf7297",
+  "delivery_enabled": false,
+  "checks": [
+    "exact_healthy_production",
+    "existing_auth_and_tenant_columns_compatible",
+    "exact_migration_already_applied",
+    "exact_platform_migration_already_applied",
+    "one_active_platform_sales_workspace",
+    "all_five_sales_tables_have_rls",
+    "deployed_function_rejects_anonymous_requests"
+  ],
+  "platform_migration_applied": true,
+  "openai_key_configured": true,
+  "sales_model_configured": true,
+  "ok": true,
+  "completed_at": "2026-09-14T14:17:17.603Z"
+}
