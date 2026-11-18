@@ -7284,6 +7284,8 @@ const [professionForm, setProfessionForm] = useState({ name_ar: "", name_en: "",
 const [professionScopeCompanyId, setProfessionScopeCompanyId] = useState("");
 const [professionSearch, setProfessionSearch] = useState("");
 const [professionPage, setProfessionPage] = useState(0);
+const [professionSaving, setProfessionSaving] = useState(false);
+const [professionFeedback, setProfessionFeedback] = useState("");
 const [professionImportReviewRows, setProfessionImportReviewRows] = useState([]);
 const [professionImportSummary, setProfessionImportSummary] = useState("");
 const [selectedVisa,setSelectedVisa] = useState(null);
@@ -8957,6 +8959,16 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
   }
 
   async function saveProfession() {
+    if (professionSaving) return;
+    setProfessionSaving(true);
+    setProfessionFeedback("");
+    try { await persistProfession(); }
+    catch (error) { setProfessionFeedback(error?.message || "Profession save failed."); }
+    finally { setProfessionSaving(false); }
+  }
+
+  async function persistProfession() {
+    const alert = (message) => setProfessionFeedback(message);
     if (!canManageMasterData) return alert("You do not have permission to manage master data.");
 
     const name = String(professionForm.name_ar || professionForm.name_en || "").trim();
@@ -42518,9 +42530,10 @@ onClick={() => setActiveReport("activityLog")}>
           <p>The system checks exact duplicates and similar job titles caused by hamza, taa marbuta, yaa/alif maqsurah, spelling or spacing differences.</p>
         </div>
         <div className="actions-line">
-          <button className="save-btn" onClick={saveProfession}>Save Profession</button>
+          <button className="save-btn" disabled={professionSaving} onClick={saveProfession}>{professionSaving ? "Saving…" : "Save Profession"}</button>
           <button className="light-btn" onClick={safeClearProfessionForm}>Clear</button>
         </div>
+        {professionFeedback && <p role="status">{professionFeedback}</p>}
       </FormCard>
     )}
 
