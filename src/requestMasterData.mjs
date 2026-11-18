@@ -1,3 +1,9 @@
+import { buildNationalityOptions } from './nationality.mjs';
+
+export function buildRequestNationalityOptions(countries = []) {
+  return [{ value: 'Any', label: 'أي جنسية — Any nationality' }, ...buildNationalityOptions(countries)];
+}
+
 function normalize(value) {
   return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("en");
 }
@@ -69,6 +75,7 @@ export function resolveApprovedProfession(value, professions = []) {
 }
 
 export function resolveApprovedNationality(value, countries = [], resolveNationality) {
+  if (normalize(value) === 'any') return 'Any';
   const canonical = resolveNationality(value, countries);
   if (!canonical) return "";
   const exists = countries.some((country) => {

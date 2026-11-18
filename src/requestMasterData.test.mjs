@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   buildProfessionOptions,
+  buildRequestNationalityOptions,
   isApprovedRequestLine,
   loadAllProfessionPages,
   resolveApprovedNationality,
@@ -20,6 +21,15 @@ const countries = [
   { id: 2, name: "Saudi Arabia", name_ar: "السعودية", nationality: "Saudi", nationality_ar: "سعودي", active: true },
   { id: 3, name: "Inactive", nationality: "Inactive", active: false },
 ];
+
+test('unrestricted nationality is an explicit request choice and never a candidate nationality', () => {
+  assert.deepEqual(buildRequestNationalityOptions(countries)[0], {value:'Any', label:'أي جنسية — Any nationality'});
+  assert.equal(resolveApprovedNationality('Any', countries, resolveCanonicalNationality), 'Any');
+  assert.equal(resolveApprovedNationality('Many', countries, resolveCanonicalNationality), '');
+  assert.equal(resolveCanonicalNationality('Any', countries), '');
+  assert.equal(buildNationalityOptions(countries).some(option => option.value === 'Any'), false);
+  assert.equal(isApprovedRequestLine({profession:'Civil Engineer', nationality:'Any'}, professions, countries, resolveCanonicalNationality), true);
+});
 
 function createProfessionClient(rows, { onRange } = {}) {
   const ranges = [];

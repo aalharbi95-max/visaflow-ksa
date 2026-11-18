@@ -89,7 +89,7 @@ import {
   getOperationalCandidates,
 } from "./candidateOperationalMetrics.mjs";
 import { buildBulkAssignmentPreview, getBatchCandidateIds, getMatchingCandidateIds } from "./bulkAssignment.mjs";
-import { buildProfessionOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
+import { buildProfessionOptions, buildRequestNationalityOptions, isApprovedRequestLine, loadAllProfessionPages, resolveApprovedNationality, resolveApprovedProfession } from "./requestMasterData.mjs";
 import Select from "./Select";
 import UserGuide from "./UserGuide";
 import CvBuilder from "./CvBuilder.jsx";
@@ -34480,7 +34480,7 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
                     value={requestLineForm}
                     onFieldChange={(field, value) => updateForm(setRequestLineForm, field, value)}
                     professionOptions={buildProfessionOptions(professions)}
-                    nationalityOptions={buildNationalityOptions(countries)}
+                    nationalityOptions={buildRequestNationalityOptions(countries)}
                     loading={requestMasterDataLoading}
                     error={requestMasterDataError}
                   />
