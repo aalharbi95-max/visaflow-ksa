@@ -7281,6 +7281,7 @@ const [requestMasterDataLoading, setRequestMasterDataLoading] = useState(false);
 const [requestMasterDataError, setRequestMasterDataError] = useState("");
 const [professionAliases, setProfessionAliases] = useState([]);
 const [professionForm, setProfessionForm] = useState({ name_ar: "", name_en: "", category: "" });
+const [professionScopeCompanyId, setProfessionScopeCompanyId] = useState("");
 const [professionImportReviewRows, setProfessionImportReviewRows] = useState([]);
 const [professionImportSummary, setProfessionImportSummary] = useState("");
 const [selectedVisa,setSelectedVisa] = useState(null);
@@ -7664,6 +7665,7 @@ function isPlatformRole(role) {
 }
 
 const PLATFORM_PAGES = [
+  "Master Data",
   "Platform Dashboard",
   "Platform Intelligence",
   "Client Usage Monitor",
@@ -7707,7 +7709,7 @@ const ROLE_PAGES = {
 "Platform Marketing User": PLATFORM_MARKETING_PAGES,
 
   // Company Admin: full tenant administration and all company operations, excluding SaaS platform screens.
-  Admin: getCompanyAdminPages(PAGES, PLATFORM_PAGES),
+  Admin: getCompanyAdminPages(PAGES, PLATFORM_PAGES.filter((page) => page !== "Master Data")),
 
   // CEO: executive visibility and read-only reporting.
   CEO: [
@@ -8872,6 +8874,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     if (!target) return null;
 
     return professions.find((profession) =>
+      (!isPlatformOwner || !profession.company_id || profession.company_id === professionScopeCompanyId) &&
       getProfessionSearchValues(profession).some((item) => normalizeMatchText(item) === target)
     ) || null;
   }
@@ -8881,6 +8884,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     if (!target) return [];
 
     return professions
+      .filter((profession) => !isPlatformOwner || !profession.company_id || profession.company_id === professionScopeCompanyId)
       .map((profession) => {
         const values = getProfessionSearchValues(profession);
         const bestScore = values.reduce((max, item) => Math.max(max, getTextSimilarity(target, item)), 0);
@@ -8907,6 +8911,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
     if (existingAlias) return { ok: true, skipped: true };
 
     const { error } = await supabase.from("profession_aliases").insert([{
+      company_id: isPlatformOwner ? (professionScopeCompanyId || null) : currentCompanyId,
       profession_id: professionId,
       alias_name: cleanAlias,
       normalized_alias: normalizeMatchText(cleanAlias),
@@ -8928,6 +8933,7 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
 
     const professionPayload = {
       ...payload,
+      company_id: isPlatformOwner ? (professionScopeCompanyId || null) : currentCompanyId,
       name_ar: extra.name_ar !== undefined ? String(extra.name_ar || "").trim() : payload.name_ar,
       name_en: extra.name_en !== undefined ? String(extra.name_en || "").trim() : payload.name_en,
     };
@@ -8953,6 +8959,18 @@ const [allocationEditingId, setAllocationEditingId] = useState(null);
 
     const name = String(professionForm.name_ar || professionForm.name_en || "").trim();
     if (!name) return alert("Profession name is required.");
+
+    if (professionForm.id) {
+      const { data, error } = await supabase.from("professions").update({
+        name_ar: String(professionForm.name_ar || name).trim(),
+        name_en: String(professionForm.name_en || "").trim(),
+        profession_category: String(professionForm.category || "General").trim(),
+      }).eq("id", professionForm.id).select("id").single();
+      if (error || !data) return alert(error?.message || "Profession update was not saved.");
+      await loadProfessions();
+      resetProfessionForm();
+      return alert("Profession updated successfully.");
+    }
 
     const exact = getProfessionExactMatch(name);
     if (exact) {
@@ -9058,16 +9076,17 @@ Cancel = إضافتها كوظيفة مستقلة`
       });
 
       let added = 0;
+      const failures = [];
       for (const name of toAdd) {
         const result = await insertProfessionRecordFromName(name);
         if (result.ok) added += 1;
-        else console.warn("profession import add failed", name, result.error?.message);
+        else failures.push(`${name}: ${result.error?.message || "Save failed"}`);
       }
 
       await loadProfessions();
       await loadProfessionAliases();
       setProfessionImportReviewRows(reviewRows);
-      setProfessionImportSummary(`Added: ${added} | Skipped duplicates: ${skipped} | Needs review: ${reviewRows.length}`);
+      setProfessionImportSummary(`Added: ${added} | Skipped duplicates: ${skipped} | Needs review: ${reviewRows.length} | Failed: ${failures.length}${failures.length ? ` — ${failures.join("; ")}` : ""}`);
 
       if (professionExcelInputRef.current) professionExcelInputRef.current.value = "";
     } catch (error) {
@@ -9317,6 +9336,11 @@ Cancel = إضافتها كوظيفة مستقلة`
     setPenaltyAgencyForm({ penaltyId: "", mode: "justification", reason: "", file: null, busy: false, message: "", error: "" });
     setCountries([]);
     setProfessions([]);
+    setProfessionAliases([]);
+    resetProfessionForm();
+    setProfessionImportReviewRows([]);
+    setProfessionImportSummary("");
+    setProfessionScopeCompanyId("");
     setRequestMasterDataLoading(false);
     setRequestMasterDataError("");
     setMarketplaceRequests([]);
@@ -9994,24 +10018,7 @@ Cancel = إضافتها كوظيفة مستقلة`
   }
 
 const loadProfessions = async () => {
-  const { data: part1, error: error1 } = await supabase
-    .from("professions")
-    .select("*")
-    .range(0, 999);
-
-  const { data: part2, error: error2 } = await supabase
-    .from("professions")
-    .select("*")
-    .range(1000, 3000);
-
-  if (error1 || error2) {
-    alert(`professions: ${error1?.message || error2?.message}`);
-    return;
-  }
-
-  const allProfessions = [...(part1 || []), ...(part2 || [])];
-console.log("professions total", allProfessions.length);
-setProfessions(allProfessions);
+  await loadRequestMasterData({ force: true });
 };
 
 async function loadRequestMasterData({ force = false } = {}) {
@@ -42488,7 +42495,14 @@ onClick={() => setActiveReport("activityLog")}>
     </div>
 
     {allowMasterDataManage && (
-      <FormCard title="Add New Profession / إضافة وظيفة جديدة">
+      <FormCard title={professionForm.id ? "Edit Profession / تعديل المهنة" : "Add New Profession / إضافة وظيفة جديدة"}>
+        <p>{isPlatformOwner ? "Choose a shared catalogue entry or a private company entry. Editing preserves the original scope." : "New professions are private to your company. Shared professions can only be edited by the platform owner."}</p>
+        {isPlatformOwner && !professionForm.id && <label>Profession scope / نطاق المهنة
+          <select value={professionScopeCompanyId} onChange={(event) => { setProfessionScopeCompanyId(event.target.value); resetProfessionForm(); setProfessionImportReviewRows([]); setProfessionImportSummary(""); }}>
+            <option value="">Shared with all companies / عامة لكل الشركات</option>
+            {Array.from(new Map(platformClients.filter((client) => client.operational_company_id || client.company_id).map((client) => [client.operational_company_id || client.company_id, client])).entries()).map(([id, client]) => <option key={id} value={id}>{client.company_name} — Private / خاصة</option>)}
+          </select>
+        </label>}
         <div className="form-grid">
           <Input placeholder="Arabic Profession Name / اسم الوظيفة بالعربي" value={professionForm?.name_ar || ""} onChange={(v) => updateForm(setProfessionForm, "name_ar", v)} />
           <Input placeholder="English Profession Name" value={professionForm?.name_en || ""} onChange={(v) => updateForm(setProfessionForm, "name_en", v)} />
@@ -42584,6 +42598,8 @@ onClick={() => setActiveReport("activityLog")}>
             <th>Profession</th>
             <th>Aliases / أسماء موحدة</th>
             <th>Candidate Intelligence</th>
+            <th>Scope / النطاق</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -42594,6 +42610,8 @@ onClick={() => setActiveReport("activityLog")}>
                 <td>{safeGetProfessionLabel(item)}</td>
                 <td>{aliases.length ? aliases.map((alias) => alias.alias_name).join(", ") : "-"}</td>
                 <td>{item.candidate_intelligence_level || (item.technical_profile_required ? "Technical" : "None")}</td>
+                <td>{item.company_id ? (companies.find((company) => company.id === item.company_id)?.name || platformClients.find((client) => (client.operational_company_id || client.company_id) === item.company_id)?.company_name || (isPlatformOwner ? item.company_id : "Your company / شركتك")) : "Shared / عامة"}</td>
+                <td>{allowMasterDataManage && (isPlatformOwner || (item.company_id && item.company_id === currentCompanyId)) && <button onClick={() => { setProfessionScopeCompanyId(item.company_id || ""); setProfessionForm({ id: item.id, name_ar: item.name_ar || "", name_en: item.name_en || "", category: item.profession_category || item.category || "" }); }}>Edit / تعديل</button>}</td>
               </tr>
             );
           })}

@@ -1,0 +1,26 @@
+name: Profession management release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: supabase-production
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --test src/professionTenant.postgres.test.mjs src/requestMasterData.test.mjs src/workspacePermissions.test.mjs
+      - run: npm run validate:migrations
+      - name: Apply only the reviewed profession migration and verify
+        run: node scripts/deploy-profession-management.mjs
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
