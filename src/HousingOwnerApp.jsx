@@ -16,6 +16,7 @@ function OwnerLogin({ onLogin, busy, error }) {
     <label>البريد الإلكتروني<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
     <label>كلمة المرور<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
     {error && <div className="housing-owner-error">{error}</div>}<button disabled={busy}>{busy ? 'جاري الدخول...' : 'تسجيل الدخول'}</button>
+    <a href="/housing/forgot-password?owner=1">نسيت كلمة المرور؟</a>
     <a href="/housing">العودة إلى منصة السكنات</a>
   </form></main>
 }

@@ -7,6 +7,14 @@ const root = ReactDOM.createRoot(document.getElementById('root'))
 
 async function startApplication() {
   try {
+    if (['/housing/forgot-password', '/housing/reset-password'].includes(window.location.pathname)) {
+      const { default: HousingPasswordRecovery } = await import('./HousingPasswordRecovery.jsx')
+      document.documentElement.lang = 'ar'
+      document.documentElement.dir = 'rtl'
+      document.title = 'استعادة كلمة المرور | سكن'
+      root.render(<HousingPasswordRecovery />)
+      return
+    }
     const isHousingOwnerApplication = window.location.pathname.startsWith('/housing-owner')
     const isHousingApplication = window.location.pathname.startsWith('/housing')
       || new URLSearchParams(window.location.search).get('app') === 'housing'
