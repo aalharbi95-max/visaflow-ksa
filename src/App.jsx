@@ -7282,6 +7282,8 @@ const [requestMasterDataError, setRequestMasterDataError] = useState("");
 const [professionAliases, setProfessionAliases] = useState([]);
 const [professionForm, setProfessionForm] = useState({ name_ar: "", name_en: "", category: "" });
 const [professionScopeCompanyId, setProfessionScopeCompanyId] = useState("");
+const [professionSearch, setProfessionSearch] = useState("");
+const [professionPage, setProfessionPage] = useState(0);
 const [professionImportReviewRows, setProfessionImportReviewRows] = useState([]);
 const [professionImportSummary, setProfessionImportSummary] = useState("");
 const [selectedVisa,setSelectedVisa] = useState(null);
@@ -42460,6 +42462,10 @@ onClick={() => setActiveReport("activityLog")}>
     : PROFESSIONS.map((item) => ({ id: item, name_en: item }));
 
   const masterAliases = Array.isArray(professionAliases) ? professionAliases : [];
+  const filteredMasterProfessions = masterProfessions.filter((item) =>
+    `${item.name_ar || ""} ${item.name_en || ""}`.toLocaleLowerCase().includes(professionSearch.trim().toLocaleLowerCase())
+  );
+  const masterProfessionPage = Math.min(professionPage, Math.max(0, Math.ceil(filteredMasterProfessions.length / 100) - 1));
   const masterReviewRows = Array.isArray(professionImportReviewRows) ? professionImportReviewRows : [];
   const allowMasterDataManage = currentRole === "Admin" || currentRole === "Platform Owner";
 
@@ -42592,6 +42598,12 @@ onClick={() => setActiveReport("activityLog")}>
     </TableCard>
 
     <TableCard title="Professions / الوظائف">
+      <Input placeholder="Search professions / بحث المهن" value={professionSearch} onChange={(value) => { setProfessionSearch(value); setProfessionPage(0); }} />
+      <div className="actions-line">
+        <button disabled={masterProfessionPage === 0} onClick={() => setProfessionPage(masterProfessionPage - 1)}>Previous</button>
+        <span>{masterProfessionPage + 1} / {Math.max(1, Math.ceil(filteredMasterProfessions.length / 100))} — {filteredMasterProfessions.length} professions</span>
+        <button disabled={(masterProfessionPage + 1) * 100 >= filteredMasterProfessions.length} onClick={() => setProfessionPage(masterProfessionPage + 1)}>Next</button>
+      </div>
       <table>
         <thead>
           <tr>
@@ -42603,7 +42615,7 @@ onClick={() => setActiveReport("activityLog")}>
           </tr>
         </thead>
         <tbody>
-          {masterProfessions.map((item) => {
+          {filteredMasterProfessions.slice(masterProfessionPage * 100, (masterProfessionPage + 1) * 100).map((item) => {
             const aliases = masterAliases.filter((alias) => String(alias.profession_id || "") === String(item.id || ""));
             return (
               <tr key={item.id || safeGetProfessionLabel(item)}>
