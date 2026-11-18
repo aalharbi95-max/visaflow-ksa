@@ -10268,32 +10268,34 @@ async function loadProfessionAliases() {
       return [];
     }
 
-    let query = supabase
-      .from("ai_interview_questions")
-      .select("*")
-      .order("question_order", { ascending: true })
-      .range(0, 10000);
-
-    if (isPlatformOwner) {
-      query = query.or(
-        `company_id.eq.${GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID},is_global.eq.true`
-      );
-    } else if (isCurrentPlatformUser || !currentCompanyId) {
-      setAIInterviewQuestions([]);
-      return [];
-    } else {
-      query = query.or(`company_id.eq.${currentCompanyId},is_global.eq.true`);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.warn("ai_interview_questions:", error.message);
+    if (!isPlatformOwner && (isCurrentPlatformUser || !currentCompanyId)) {
       setAIInterviewQuestions([]);
       return [];
     }
-
-    const rows = data || [];
+    const scope = isPlatformOwner
+      ? `company_id.eq.${GLOBAL_ENGINEERING_LIBRARY_OWNER_COMPANY_ID},is_global.eq.true`
+      : `company_id.eq.${currentCompanyId},is_global.eq.true`;
+    const rows = [];
+    // PostgREST caps each response at 1,000 rows, even for a larger range.
+    // A stable unique order keeps complete templates together across pages.
+    const pageSize = 500;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from("ai_interview_questions")
+        .select("*")
+        .or(scope)
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        console.warn("ai_interview_questions:", error.message);
+        setAIInterviewQuestions([]);
+        return [];
+      }
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+    rows.sort((a, b) => Number(a.question_order || 0) - Number(b.question_order || 0));
     setAIInterviewQuestions(rows);
     return rows;
   }
