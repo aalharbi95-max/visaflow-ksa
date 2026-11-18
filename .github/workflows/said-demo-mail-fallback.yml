@@ -1,0 +1,44 @@
+name: Stop duplicate delivery for Said demo
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  stop-retry:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 3
+    steps:
+      - name: Stop only the failed demo invitation retry
+        env:
+          PGHOST: aws-1-eu-central-1.pooler.supabase.com
+          PGPORT: '5432'
+          PGDATABASE: postgres
+          PGUSER: postgres.zeocbftriydodzfgixjv
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGSSLMODE: require
+          PGCONNECT_TIMEOUT: '20'
+        run: |
+          psql -X -v ON_ERROR_STOP=1 <<'SQL'
+          begin;
+          do $$
+          declare target uuid; n integer;
+          begin
+            select id into strict target from public.ai_interview_campaigns
+            where campaign_name='MEEM – Said Gomaa – Mechanical Expert LIVE DEMO – 18 Nov 2026';
+            select count(*) into n from public.ai_interview_campaign_candidates
+            where campaign_id=target and candidate_email='sgomaa@meem-fm.com';
+            if n<>1 then raise exception 'Expected one demo participant'; end if;
+            if exists(select 1 from public.ai_interview_invitation_jobs
+              where campaign_id=target and recipient_email='sgomaa@meem-fm.com' and status in ('Sent','Processing'))
+            then raise exception 'Delivery already sent or processing; inspect before fallback'; end if;
+            update public.ai_interview_invitation_jobs
+            set status='Skipped',last_error='Automatic delivery rejected message type. Work-mail fallback; do not retry automatically.',locked_at=null,locked_by='',updated_at=now()
+            where campaign_id=target and recipient_email='sgomaa@meem-fm.com'
+              and job_type='Invitation' and status in ('Queued','Failed');
+            if not exists(select 1 from public.ai_interview_invitation_jobs
+              where campaign_id=target and recipient_email='sgomaa@meem-fm.com' and status='Skipped')
+            then raise exception 'Demo retry was not stopped'; end if;
+          end $$;
+          commit;
+          SQL
