@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
+import RequestShortlist from "./RequestShortlist.jsx";
 import {
   clearTalentRecoveryProof,
   clearWorkspaceRecoveryProof,
@@ -8773,6 +8774,7 @@ async function saveSelectedAllocations() {
   const [requestLinesDraft, setRequestLinesDraft] = useState([]);
   const [requestLineEditingIndex, setRequestLineEditingIndex] = useState(null);
   const [requestEditingId, setRequestEditingId] = useState(null);
+  const [shortlistRequest, setShortlistRequest] = useState(null);
   const [requestAgencyNotification, setRequestAgencyNotification] = useState(null);
   const [requestAgencyNotificationSending, setRequestAgencyNotificationSending] = useState(false);
   const [requestAgencyNotificationMessage, setRequestAgencyNotificationMessage] = useState("");
@@ -9328,6 +9330,7 @@ Cancel = إضافتها كوظيفة مستقلة`
     requestMasterDataLoadRef.current = { key: "", promise: null };
     setRequests([]);
     setRequestLines([]);
+    setShortlistRequest(null);
     setVisaRecords([]);
     setVisaBatchLines([]);
     setVisaAuthorizations([]);
@@ -34728,6 +34731,11 @@ onChange={(v) => updateForm(setRequestForm, "project_start", v)}
               </TableCard>
             )}
 
+            {canManageCandidates && shortlistRequest && currentCompanyId && (
+              <RequestShortlist key={`${currentCompanyId}:${shortlistRequest.id}`} supabase={supabase}
+                companyId={currentCompanyId} request={shortlistRequest}
+                lines={getRequestLinesForRequest(shortlistRequest)} onClose={() => setShortlistRequest(null)} />
+            )}
             <TableCard title="Requests List">
               <SmartTableToolbar
                 searchValue={requestTableFilters.query}
@@ -34860,6 +34868,7 @@ item.created_at
 
                      <td className="table-actions">
   {canEditRequest && <button onClick={() => editRequest(item)}>Edit</button>}
+  {canManageCandidates && <button onClick={() => setShortlistRequest(item)}>Shortlist / قائمة الفرز</button>}
 
   {canApproveRequest && <button onClick={() => approveRequest(item)}>Approve</button>}
 

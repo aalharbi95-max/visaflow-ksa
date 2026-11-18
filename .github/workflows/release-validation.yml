@@ -37,6 +37,8 @@ jobs:
         run: npm run test:postgres
       - name: Profession tenant isolation
         run: npm run test:profession-management
+      - name: Shortlist isolation and headcount preservation
+        run: npm run test:shortlists
       - name: Build
         run: npm run build
       - name: Verify clean generated diff
