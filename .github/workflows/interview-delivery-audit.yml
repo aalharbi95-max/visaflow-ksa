@@ -1,0 +1,21 @@
+name: Audit interview result delivery capabilities
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 3
+    steps:
+      - name: Inspect function names only
+        env:
+          MANAGEMENT_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          const r=await fetch('https://api.supabase.com/v1/projects/zeocbftriydodzfgixjv/functions',{headers:{Authorization:`Bearer ${process.env.MANAGEMENT_TOKEN}`}});
+          if(!r.ok) throw Error(`Function inventory failed ${r.status}`);
+          const rows=await r.json();
+          console.log(JSON.stringify(rows.filter(x=>/interview|evaluation|email/.test(x.slug||x.name)).map(x=>({slug:x.slug||x.name,status:x.status})),null,2));
+          JS
