@@ -8,12 +8,16 @@ export default function HousingPasswordRecovery() {
   const reset = window.location.pathname === '/housing/reset-password'
   const owner = new URLSearchParams(window.location.search).get('owner') === '1'
   const loginPath = owner ? '/housing-owner' : '/housing'
+  const [hasRecoveryCallback] = useState(() => {
+    const hash = new URLSearchParams(window.location.hash.slice(1))
+    return hash.get('type') === 'recovery' && Boolean(hash.get('access_token') && hash.get('refresh_token'))
+  })
   // Isolate recovery tokens from the normal workspace session and localStorage.
   const [client] = useState(() => {
     const { url, publishableKey } = getViteHousingSupabaseConfig()
     return createClient(url, publishableKey, { auth: { storageKey: 'housing-password-recovery', persistSession: false, autoRefreshToken: false, detectSessionInUrl: reset, flowType: 'implicit' } })
   })
-  const [phase, setPhase] = useState(reset ? 'checking' : 'request')
+  const [phase, setPhase] = useState(reset ? (hasRecoveryCallback ? 'checking' : 'invalid') : 'request')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -25,7 +29,7 @@ export default function HousingPasswordRecovery() {
   const saving = useRef(false)
 
   useEffect(() => {
-    if (!reset) return
+    if (!reset || !hasRecoveryCallback) return
     let alive = true
     const timer = window.setTimeout(() => { if (alive && !proof.current) setPhase('invalid') }, 10000)
     const { data } = client.auth.onAuthStateChange((event, session) => {
@@ -46,7 +50,7 @@ export default function HousingPasswordRecovery() {
       if (alive && sessionError && !proof.current) { window.clearTimeout(timer); setPhase('invalid') }
     }).catch(() => { if (alive) setPhase('invalid') })
     return () => { alive = false; window.clearTimeout(timer); data.subscription.unsubscribe() }
-  }, [client, reset])
+  }, [client, reset, hasRecoveryCallback])
 
   async function submit(event) {
     event.preventDefault()
