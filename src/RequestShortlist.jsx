@@ -53,7 +53,7 @@ export default function RequestShortlist({ supabase, companyId, request, lines, 
       || !files.some(file => file.name === row.cv_file_name));
     if (invalid) { setMessage(`Check candidate name, request line and selected CV file: ${invalid.cv_file_name || '(missing file name)'}`); return; }
     running.current = true; setBusy(true); setMessage('Saving shortlist…');
-    let added = 0, skipped = 0; const failures = [];
+    let added = 0, skipped = 0, updated = 0; const failures = [];
     try {
       const known = await supabase.from('request_candidate_shortlists').select('cv_sha256,cv_storage_path')
         .eq('company_id', companyId);
@@ -69,7 +69,17 @@ export default function RequestShortlist({ supabase, companyId, request, lines, 
           const bytes = await file.arrayBuffer();
           const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
           const key = `${draft.request_line_no}:${hash}`;
-          if (seen.has(key)) { skipped++; continue; }
+          if (seen.has(key)) {
+            const existing = rows.find(row => `${row.request_line_no}:${row.cv_sha256}` === key);
+            if (existing && ['candidate_name','email','mobile','notes'].some(field => (existing[field] || '') !== (draft[field] || '').trim())) {
+              const refresh = await supabase.from('request_candidate_shortlists').update({candidate_name: draft.candidate_name.trim(), email: draft.email.trim(), mobile: draft.mobile.trim(), notes: draft.notes.trim()})
+                .eq('id',existing.id).eq('company_id',companyId).eq('request_id',request.id).select('id');
+              if (refresh.error) throw refresh.error;
+              if (refresh.data?.length !== 1) throw new Error('Existing review entry could not be updated.');
+              updated++;
+            } else skipped++;
+            continue;
+          }
           let path = stored.get(hash) || `${companyId}/${hash}.${extension}`;
           if (!stored.has(hash)) {
             const mime = extension === 'pdf' ? 'application/pdf' : extension === 'doc' ? 'application/msword' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -91,7 +101,7 @@ export default function RequestShortlist({ supabase, companyId, request, lines, 
       }
       await load();
       if (active.current) {
-        setMessage(`Saved: ${added} | Duplicates skipped: ${skipped} | Failed: ${failures.length}${failures.length ? ` — ${failures.join('; ')}` : ''}`);
+        setMessage(`Saved: ${added} | Review details updated: ${updated} | Duplicates skipped: ${skipped} | Failed: ${failures.length}${failures.length ? ` — ${failures.join('; ')}` : ''}`);
         if (!failures.length) { setDrafts([]); setFiles([]); if (cvsInput.current) cvsInput.current.value = ''; }
       }
     } catch (error) { if (active.current) setMessage(error.message); }
@@ -119,7 +129,7 @@ export default function RequestShortlist({ supabase, companyId, request, lines, 
       <input ref={cvsInput} type="file" multiple accept=".pdf,.doc,.docx" style={{ display: 'none' }} onChange={readFiles} />
       <input ref={listInput} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }} onChange={readList} />
     </div>
-    <p>Candidate list columns: Candidate Name, CV File, Line No, Email, Mobile, Notes. CV File must match a selected file name. Identity documents and hiring approval are not required for this review list.</p>
+    <p>Candidate list columns: Candidate Name, CV File, Line No, Email, Mobile, Notes. CV File must match a selected file name. Reimporting the same CV and line updates review notes and contact details without creating a duplicate. Identity documents and hiring approval are not required for this review list.</p>
     {message && <p role="status">{message}</p>}
     {!!drafts.length && <>
       <h3>Preview — {drafts.length} candidate(s), {files.length} CV file(s)</h3>
