@@ -32440,7 +32440,12 @@ if (!currentUser) {
 
       <aside className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""}`} style={{ maxHeight: "100vh", overflowY: "auto", overflowX: "hidden" }}>
         <div className="logo">
-          <div className="logo-icon">VF</div>
+          {currentCompanyId === "038fdb37-5989-4233-b6bd-8c17af359548" ? (
+            <img className="logo-icon" src="/meem-company-logo.jpg" alt="MEEM Facility Management"
+              style={{ objectFit: "contain", backgroundColor: "#fff" }} />
+          ) : (
+            <div className="logo-icon">VF</div>
+          )}
           <div>
             <h2>VisaFlow KSA</h2>
             <p>Recruitment & Visa Operations</p>
@@ -39276,6 +39281,13 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
 {activePage === "Company Management" && canManageUsers && (
   <>
+    {currentCompanyId === "038fdb37-5989-4233-b6bd-8c17af359548" && (
+      <section className="panel" aria-label="Company logo">
+        <h2>Company logo</h2>
+        <img src="/meem-company-logo.jpg" alt="MEEM Facility Management"
+          style={{ width: 96, height: "auto", borderRadius: 6 }} />
+      </section>
+    )}
     <div className="dashboard-grid">
       <Stat title="Current Company" value={companies[0]?.name || "-"} />
       <Stat title="Subscription Plan" value={companies[0]?.subscription_plan || "Trial"} className="passed" />
