@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+const RestoredComplianceReports = lazy(() => import("./RestoredComplianceReports.jsx"));
+const isComplianceReport = (id) => ["tawteen_localization", "saudi_workforce"].includes(id);
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import RequestShortlist from "./RequestShortlist.jsx";
@@ -1535,6 +1537,8 @@ async function triggerExternalNotification(type, data = {}) {
 
 
 const REPORT_STUDIO_TEMPLATES = [
+  { id: "tawteen_localization", icon: "⚖️", title: "Tawteen & Occupation Localization Report", category: "Executive", description: "تقرير توطين المهن والقرارات: الأهلية والأجور والفجوات والمراحل القادمة." },
+  { id: "saudi_workforce", icon: "🇸🇦", title: "Saudi Workforce & Saudization Report", category: "Executive", description: "تقرير السعودة ونطاقات: الأوزان ومحاكاة الانتقال للنطاق الأعلى." },
   { id: "ceo_monthly", icon: "👔", title: "CEO Executive Report", category: "Executive", description: "High-level summary, KPIs, risks and executive actions." },
   { id: "board_presentation", icon: "📊", title: "Executive Board Presentation", category: "Executive", description: "Board-ready presentation structure with highlights and decisions." },
   { id: "weekly_recruitment", icon: "👥", title: "Weekly Recruitment Report", category: "Recruitment", description: "Pipeline, candidate gaps, interviews and recruiter follow-up." },
@@ -7469,6 +7473,7 @@ const [reportStudioForm, setReportStudioForm] = useState({
   aiRecommendations: true,
   comparePreviousPeriod: false,
 });
+const complianceReportRef = useRef(null);
 const [reportStudioResult, setReportStudioResult] = useState("");
 const [reportStudioLastRun, setReportStudioLastRun] = useState("");
 
@@ -29411,6 +29416,7 @@ async function buildReportStudioPptx(fileName) {
 }
 
 async function exportAIReportStudio() {
+  if (isComplianceReport(reportStudioForm.templateId)) return complianceReportRef.current?.exportReport();
   const data = buildAIReportStudioDataset();
   const safeName = sanitizeReportFileName(reportStudioForm.reportName || "VisaFlow_AI_Report");
   const format = reportStudioForm.outputFormat;
@@ -34126,6 +34132,11 @@ if (!currentUser) {
                 </div>
               </TableCard>
 
+              {isComplianceReport(reportStudioForm.templateId) ? (
+                <Suspense fallback={<p role="status">جارٍ تحميل التقرير…</p>}>
+                  <RestoredComplianceReports key={`${currentCompanyId}:${currentRole}`} ref={complianceReportRef} currentRole={currentRole} client={supabase} companyId={currentCompanyId} templateId={reportStudioForm.templateId} occupationCatalog={professions} />
+                </Suspense>
+              ) : (<>
               <div className="grid">
                 <TableCard title="2) Report Details">
                   <div className="form-grid">
@@ -34197,6 +34208,7 @@ if (!currentUser) {
 
                 {reportStudioLastRun && <p style={{ color: "#64748b", marginTop: "10px" }}>Last generated: {reportStudioLastRun}</p>}
               </TableCard>
+              </>)}
             </>
           );
         })()}

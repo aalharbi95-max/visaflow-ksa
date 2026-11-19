@@ -31,6 +31,8 @@ jobs:
         run: npm run validate:migrations
       - name: Release hardening tests
         run: npm run test:release-hardening
+      - name: Compliance report regression tests
+        run: npm run test:compliance
       - name: Application tests
         run: npm test
       - name: PostgreSQL tests
