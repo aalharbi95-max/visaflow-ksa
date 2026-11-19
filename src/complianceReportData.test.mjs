@@ -31,6 +31,13 @@ test('Nitaqat fails closed for excerpts, duplicates, missing wage/nationality an
     const altered=input();change(altered);assert.equal(buildComplianceSnapshot(altered,options).simulation.status,'review');
   }
 });
+test('90-day risk counts an employee once across events and ignores cancelled departures',()=>{
+  const data=input();data.employees[0].contract_end_date='2026-12-01';
+  data.demobilizations=[{employee_id:0,demob_date:'2026-12-02',status:'Pending'},{employee_id:1,demob_date:'2026-12-02',status:'Cancelled'}];
+  const result=buildComplianceSnapshot(data,{asOf:'2026-11-19'});
+  assert.equal(result.events.length,2);assert.equal(result.affectedCount,1);assert.equal(result.affectedSaudiCount,1);
+  assert.equal(result.distributions.projects.reduce((sum,row)=>sum+row.total,0),12);
+});
 test('Excel, HTML and real PPTX preserve unknown eligibility in three languages',async()=>{
   const data=input();delete data.employees[0].gosi_salary;
   const snapshot=buildComplianceSnapshot(data,{asOf:'2026-11-19'});

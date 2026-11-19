@@ -29,9 +29,14 @@ function workforceRows(snapshot) {
     ['التوظيف الإضافي / Additional hires', s.hires],
     ['تكلفة الرواتب الشهرية / Monthly salary cost', s.monthly],
     ['تكلفة الرواتب السنوية / Annual salary cost', s.annual],
+    ['أحداث خلال 90 يومًا / 90-day recorded events', snapshot.events.length],
+    ['الموظفون المتأثرون دون تكرار / Distinct affected employees', snapshot.affectedCount],
+    ['السعوديون المتأثرون / Affected Saudi employees', snapshot.affectedSaudiCount],
+    ['النسبة الموزونة بافتراض مغادرة المتأثرين / Weighted rate if all affected leave', snapshot.projected.rate == null ? null : `${snapshot.projected.rate.toFixed(2)}%`],
+    ...Object.entries(snapshot.distributions).flatMap(([type, rows]) => rows.map(row => [`${type} · ${row.label}`, `${row.saudi} / ${row.total} Saudi / total · ${(row.saudi / row.total * 100).toFixed(2)}%`])),
   ];
 }
-const disclaimer = 'تقديرات تخطيطية داخلية، وليست نتيجة رسمية من قوى. النطاقات تستخدم منحنيات 2026 ونموذجًا لحظيًا؛ التكاليف رواتب فقط. / Internal planning estimates, not official Qiwa results. 2026 curves and instantaneous workforce model; salary costs only.';
+const disclaimer = 'تقديرات تخطيطية داخلية، وليست نتيجة رسمية من قوى. منحنيات 2026؛ التكاليف رواتب فقط. أحداث 90 يومًا تشمل نهاية العقد والمغادرة المجدولة، وليست توقعًا مؤكدًا بالمغادرة. / Internal estimates, not official Qiwa results. 2026 curves; salary costs only. 90-day contract and scheduled departure events are a scenario, not confirmed departures.';
 function workforceHtml(snapshot) {
   return `<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>Saudi Workforce & Nitaqat</title><style>body{font:16px Arial;margin:32px;color:#123}td,th{padding:12px;border:1px solid #ccc}table{border-collapse:collapse;width:100%}</style><h1>تقرير السعودة ونطاقات / Saudi Workforce & Nitaqat</h1><p>${esc(snapshot.asOf)} · ${esc(snapshot.scope)}</p><p>${esc(disclaimer)}</p><p>${esc(snapshot.reviewReason)}</p><table>${workforceRows(snapshot).map(([k,v]) => `<tr><th>${esc(k)}</th><td>${esc(display(v))}</td></tr>`).join('')}</table></html>`;
 }

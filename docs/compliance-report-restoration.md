@@ -19,7 +19,7 @@ AI Report Studio again includes `tawteen_localization` and `saudi_workforce`. Th
 
 ## Validation
 
-`npm run test:compliance`: 34 tests, including wage boundaries, accounting phase applicability, replacement versus additive hiring, unknown eligibility, duplicates, tenant isolation, pagination, project/year guards, actual XLSX/PPTX generation in three languages, and a headless Chrome component test of both report previews and Excel downloads.
+`npm run test:compliance`: 35 tests, including wage boundaries, accounting phase applicability, replacement versus additive hiring, unknown eligibility, duplicates, tenant isolation, pagination, project/year guards, deduplicated 90-day contract/departure scenarios, branch/project/profession distributions, actual XLSX/PPTX generation in three languages, and a headless Chrome component test of both report previews and Excel downloads.
 
 `npm test`: 312 passing application regression tests. `npm run build`: successful; existing large application/housing chunk warnings remain. CI now runs the compliance suite.
 
