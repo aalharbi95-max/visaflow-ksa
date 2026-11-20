@@ -14,7 +14,9 @@ const aliases={
   basic:['basic_salary','base_salary','Basic Salary','الراتب الأساسي'],
   allowances:['allowances','Allowances','البدلات'],
   total:['total_salary','Total Salary','إجمالي الراتب'],
-  gosi:['gosi_salary','GOSI Salary','أجر الاشتراك في التأمينات'],
+  // Explicit contributory-wage columns imported from GOSI. Payroll and total wage
+  // remain separate bases; multiple valid GOSI observations must agree.
+  gosi:['gosi_salary','GOSI Salary','أجر الاشتراك في التأمينات','contributory_wage','CONTRIBUTORY WAGE','الأجر الخاضع للاشتراك'],
 };
 export function salaryEvidence(employee) {
   employee={...(employee.salary_source_fields||{}),...employee};

@@ -38,6 +38,22 @@ test('90-day risk counts an employee once across events and ignores cancelled de
   assert.equal(result.events.length,2);assert.equal(result.affectedCount,1);assert.equal(result.affectedSaudiCount,1);
   assert.equal(result.distributions.projects.reduce((sum,row)=>sum+row.total,0),12);
 });
+test('both reports use the imported GOSI wage while scope and conflicts still block approval',()=>{
+  const data=input();
+  data.employees=data.employees.map(({gosi_salary,...e})=>({...e,salary:12000,salary_source_fields:{contributory_wage:gosi_salary,total_wage:12000}}));
+  const options={asOf:'2026-11-20'},snapshot=buildComplianceSnapshot(data,options);
+  assert.equal(snapshot.people[0].gosi_salary,4000);
+  assert.equal(snapshot.simulation.weightedSaudis,4);
+  assert.equal(snapshot.report.current[0].eligibleSaudiCount,4);
+  assert.equal(snapshot.report.current[0].eligibility[0].wage,4000);
+  data.entityScopeComplete=false;
+  assert.equal(buildComplianceSnapshot(data,options).simulation.status,'review');
+  data.entityScopeComplete=true;
+  data.employeeAttributes=[{employee_id:0,company_id:'A',gosi_salary:5000}];
+  const conflict=buildComplianceSnapshot(data,options);
+  assert.equal(conflict.simulation.status,'review');
+  assert.equal(conflict.report.current[0].eligibility[0].wage,null);
+});
 test('Excel, HTML and real PPTX preserve unknown eligibility in three languages',async()=>{
   const data=input();delete data.employees[0].gosi_salary;
   const snapshot=buildComplianceSnapshot(data,{asOf:'2026-11-19'});
