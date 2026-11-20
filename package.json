@@ -29,7 +29,7 @@
     "scan:protected-writes": "node scripts/protected-write-scan.mjs",
     "validate:migrations": "node scripts/validate-supabase-migrations.mjs",
     "test:release-hardening": "node --test src/releaseWorkflow.test.mjs src/fullSensitiveRls.test.mjs",
-    "test:compliance": "node --test src/compliancePlanning.test.mjs src/occupationLocalization.test.mjs src/occupationSalary.test.mjs src/complianceReportData.test.mjs src/complianceReport.browser.test.mjs"
+    "test:compliance": "node --test src/compliancePlanning.test.mjs src/occupationLocalization.test.mjs src/occupationSalary.test.mjs src/complianceReportData.test.mjs src/tawteenExecutive.test.mjs src/complianceReport.browser.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

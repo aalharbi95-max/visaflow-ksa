@@ -1,9 +1,10 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { loadComplianceReportData, buildComplianceSnapshot } from './complianceReportData.mjs';
-import { localizedReportHtml, localizedAuditSheets } from './tawteenReportLocale.mjs';
+import { localizedAuditSheets } from './tawteenReportLocale.mjs';
 import { writeTawteenPptx } from './tawteenMultilingualPptx.mjs';
 import { BAND_NAMES } from './compliancePlanning.mjs';
-import OccupationDecisionPanel from './OccupationDecisionPanel.jsx';
+import TawteenExecutiveReport from './TawteenExecutiveReport.jsx';
+import {executiveReportHtml} from './tawteenExecutive.mjs';
 import './complianceExecutive.css';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -75,7 +76,7 @@ export default forwardRef(function RestoredComplianceReports({ client, companyId
   }, [client, companyId, currentRole]);
   const snapshot = useMemo(() => state.data && state.companyId === companyId ? buildComplianceSnapshot({ ...state.data, occupationCatalog }, { project, hireSalary: hireSalary === '' ? null : Number(hireSalary) }) : null, [state, companyId, occupationCatalog, project, hireSalary]);
   const tawteen = templateId === 'tawteen_localization';
-  const html = snapshot ? tawteen ? localizedReportHtml(snapshot.report, { language, mode, asOf: snapshot.asOf }) : workforceHtml(snapshot) : '';
+  const html = snapshot ? tawteen ? executiveReportHtml(snapshot.report, { language, mode, asOf: snapshot.asOf, scope:snapshot.scope }) : workforceHtml(snapshot) : '';
   async function exportReport() {
     if (!snapshot || busy) return;
     // Open the print window synchronously so the browser does not block it after imports.
@@ -117,7 +118,6 @@ export default forwardRef(function RestoredComplianceReports({ client, companyId
     {exportError && <p role="alert">{exportError}</p>}
     <p>تاريخ التقرير: {snapshot?.asOf} · النطاق: {project || 'بيانات الشركة المصرح بها'}. المقتطف لا يثبت امتثال الكيان.</p>
     {!tawteen && <p>{snapshot?.reviewReason}</p>}
-    <iframe title="معاينة التقرير" sandbox="" srcDoc={html} style={{ width: '100%', height: 650, border: '1px solid #cbd5e1', background: 'white' }} />
-    {tawteen && snapshot && <OccupationDecisionPanel report={snapshot.report} />}
+    {tawteen && snapshot ? <TawteenExecutiveReport report={snapshot.report} language={language} asOf={snapshot.asOf} scope={snapshot.scope} /> : <iframe title="معاينة التقرير" sandbox="" srcDoc={html} style={{ width: '100%', height: 650, border: '1px solid #cbd5e1', background: 'white' }} />}
   </section>;
 });
