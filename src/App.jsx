@@ -34026,6 +34026,16 @@ if (!currentUser) {
 
 
         {activePage === "AI Report Studio" && (() => {
+          if (isComplianceReport(reportStudioForm.templateId)) return <>
+            <label style={{display:'block',marginBottom:16}}>التقرير
+              <select aria-label="اختيار التقرير" value={reportStudioForm.templateId} onChange={e=>selectReportStudioTemplate(REPORT_STUDIO_TEMPLATES.find(t=>t.id===e.target.value))} style={{display:'block',padding:12,marginTop:8,maxWidth:'100%',border:'1px solid #c8d5d3',borderRadius:8}}>
+                {REPORT_STUDIO_TEMPLATES.map(t=><option key={t.id} value={t.id}>{t.id==='tawteen_localization'?'التقرير التنفيذي للتوطين':t.id==='saudi_workforce'?'السعودة ونطاقات':t.title}</option>)}
+              </select>
+            </label>
+            <Suspense fallback={<p role="status">جارٍ تحميل التقرير…</p>}>
+              <RestoredComplianceReports key={`${currentCompanyId}:${currentRole}`} ref={complianceReportRef} currentRole={currentRole} client={supabase} companyId={currentCompanyId} companyName={companies.find(company=>String(company.id)===String(currentCompanyId))?.name||''} templateId={reportStudioForm.templateId} occupationCatalog={professions}/>
+            </Suspense>
+          </>;
           const reportViz = getReportStudioVisualModel();
           return (
             <>
@@ -34140,7 +34150,7 @@ if (!currentUser) {
 
               {isComplianceReport(reportStudioForm.templateId) ? (
                 <Suspense fallback={<p role="status">جارٍ تحميل التقرير…</p>}>
-                  <RestoredComplianceReports key={`${currentCompanyId}:${currentRole}`} ref={complianceReportRef} currentRole={currentRole} client={supabase} companyId={currentCompanyId} templateId={reportStudioForm.templateId} occupationCatalog={professions} />
+                  <RestoredComplianceReports key={`${currentCompanyId}:${currentRole}`} ref={complianceReportRef} currentRole={currentRole} client={supabase} companyId={currentCompanyId} companyName={companies.find(company => String(company.id) === String(currentCompanyId))?.name || ''} templateId={reportStudioForm.templateId} occupationCatalog={professions} />
                 </Suspense>
               ) : (<>
               <div className="grid">
