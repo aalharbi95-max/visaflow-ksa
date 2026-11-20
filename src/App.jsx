@@ -4,6 +4,7 @@ const isComplianceReport = (id) => ["tawteen_localization", "saudi_workforce"].i
 import * as XLSX from "xlsx";
 import pptxgen from "pptxgenjs";
 import RequestShortlist from "./RequestShortlist.jsx";
+import CompanyActivitySettings from "./CompanyActivitySettings.jsx";
 import {
   clearTalentRecoveryProof,
   clearWorkspaceRecoveryProof,
@@ -39281,6 +39282,7 @@ onChange={(v) => updateForm(setCandidateForm, "medical_date", v)}
 
 {activePage === "Company Management" && canManageUsers && (
   <>
+    <CompanyActivitySettings key={currentCompanyId} client={supabase} companyId={currentCompanyId} />
     {currentCompanyId === "038fdb37-5989-4233-b6bd-8c17af359548" && (
       <section className="panel" aria-label="Company logo">
         <h2>Company logo</h2>
