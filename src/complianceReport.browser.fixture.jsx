@@ -12,9 +12,16 @@ const downloads=[];HTMLAnchorElement.prototype.click=function(){downloads.push(t
 async function run(){
   for(const templateId of ['tawteen_localization','saudi_workforce']){
     root.render(<Reports client={client} companyId="A" currentRole="Admin" templateId={templateId}/>);
-    for(let i=0;i<100&&!document.querySelector('iframe');i++)await wait(50);
+    for(let i=0;i<100&&!document.querySelector(templateId==='tawteen_localization'?'.tx':'iframe');i++)await wait(50);
     await wait(200);
-    assert(document.querySelector('iframe')?.srcdoc.includes('<html'),'Preview missing');
+    if(templateId==='tawteen_localization'){
+      assert(document.querySelector('.tx'),'Executive preview missing');
+      for(const key of ['people','plan','quality','summary']){
+        document.getElementById('tx-tab-'+key).click();await wait(25);
+        assert(!document.getElementById('tx-panel-'+key).hidden,'Tab did not open: '+key);
+      }
+      assert(document.querySelector('[role=img]'),'Charts missing');
+    }else assert(document.querySelector('iframe')?.srcdoc.includes('<html'),'Preview missing');
     assert(!document.querySelector('[role=alert]'),'Render error');
     select('الصيغة','Excel');await wait(100);document.querySelector('button').click();
     for(let i=0;i<100&&document.querySelector('button').disabled;i++)await wait(50);
@@ -26,4 +33,5 @@ async function run(){
   assert(downloads.length===2,'Both Excel exports must download');
   document.documentElement.dataset.testResult=btoa(JSON.stringify({downloads,preview:true}));
 }
-run().catch(error=>{document.documentElement.dataset.testError=btoa(unescape(encodeURIComponent(error.stack)))});
+if(new URLSearchParams(location.search).has('manual'))root.render(<Reports client={client} companyId="A" currentRole="Admin" templateId="tawteen_localization"/>);
+else run().catch(error=>{document.documentElement.dataset.testError=btoa(unescape(encodeURIComponent(error.stack)))});
