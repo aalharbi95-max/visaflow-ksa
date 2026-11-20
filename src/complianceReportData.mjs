@@ -1,7 +1,7 @@
 import { buildTawteenReport } from './tawteenReport.mjs';
 import { simulateNitaqat, activeEmployee, saudiEmployee, riyadhDate, daysUntil } from './compliancePlanning.mjs';
 import activities from './data/hrsdNitaqatRates2026.json' with { type: 'json' };
-import { normalizeSalary } from './occupationSalary.mjs';
+import { salaryEvidence } from './occupationSalary.mjs';
 
 export const COMPLIANCE_REPORT_IDS = ['tawteen_localization', 'saudi_workforce'];
 export async function readAllRows(makeQuery, pageSize = 500) {
@@ -50,7 +50,9 @@ export function buildComplianceSnapshot(input, { asOf = riyadhDate(), project = 
     if (e.id == null) return true;
     if (seen.has(e.id)) { duplicates = true; return false; }
     seen.add(e.id); return true;
-  }).map(e => ({ ...e, gosi_salary: normalizeSalary(attributes.get(e.id)?.gosi_salary ?? e.gosi_salary).value }));
+  }).map(e => ({ ...e, gosi_salary: salaryEvidence({ ...e,
+    gosi_salary: attributes.get(e.id)?.gosi_salary ?? e.gosi_salary,
+  }).fields.gosi.value }));
   const activity = activities.find(a => String(a.code) === String(input.activityCode));
   // An excerpt, unknown nationality, duplicate roster, or another year cannot establish a band.
   const missingNationality = people.some(e => !String(e.nationality || '').trim());

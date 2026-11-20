@@ -24,6 +24,16 @@ test('eligibility states distinguish recorded payroll from legal wage and requir
   assert.equal(assessEligibility({gosi_salary:8000},{...p,employeeRequirements:['credential']},{},'2026-11-06').decisionState,'UNKNOWN_MISSING_REQUIREMENT');
   assert.equal(assessEligibility({gosi_salary:8000,credential:false},{...p,employeeRequirements:['credential']},{},'2026-11-06').decisionState,'INELIGIBLE_OTHER_REASON');
 });
+test('GOSI source contributory wage is recognized without substituting payroll or total wage',()=>{
+  const employee={salary:10000,salary_source_fields:{contributory_wage:'7200.00',total_wage:'10000.00'}};
+  assert.equal(salaryEvidence(employee).fields.gosi.value,7200);
+  assert.equal(salaryEvidence(employee).fields.monthly.value,10000);
+  assert.equal(salaryEvidence({salary:10000,salary_source_fields:{total_wage:10000}}).fields.gosi.status,'MISSING');
+  assert.equal(salaryEvidence({...employee,gosi_salary:8000}).fields.gosi.status,'CONFLICT');
+  assert.equal(salaryEvidence({...employee,gosi_salary:'bad'}).fields.gosi.status,'INVALID');
+  assert.equal(salaryEvidence({salary_source_fields:{contributory_wage:0}}).fields.gosi.value,0);
+  assert.equal(salaryEvidence({salary_source_fields:{contributory_wage:'bad'}}).fields.gosi.value,null);
+});
 test('rounding is specific to decision and missing metadata never defaults to ceil',()=>{
   assert.equal(requiredEligibleCount(41,.3,'nearest'),12);
   assert.equal(requiredEligibleCount(41,.3,'ceil'),13);
