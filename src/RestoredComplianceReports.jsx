@@ -5,6 +5,8 @@ import { writeTawteenPptx } from './tawteenMultilingualPptx.mjs';
 import { BAND_NAMES } from './compliancePlanning.mjs';
 import TawteenExecutiveReport from './TawteenExecutiveReport.jsx';
 import {executiveReportHtml} from './tawteenExecutive.mjs';
+import {buildLocalizationBoard,boardStyles,localizationBoardBody,localizationBoardHtml} from './localizationBoard.mjs';
+import {writeLocalizationBoardPptx} from './localizationBoardPptx.mjs';
 import './complianceExecutive.css';
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -56,7 +58,7 @@ async function workforcePptx(snapshot, filename) {
   await pptx.writeFile({ fileName: filename });
 }
 
-export default forwardRef(function RestoredComplianceReports({ client, companyId, templateId, occupationCatalog = [], currentRole }, ref) {
+export default forwardRef(function RestoredComplianceReports({ client, companyId, companyName = '', templateId, occupationCatalog = [], currentRole }, ref) {
   const [state, setState] = useState({ companyId: null, data: null, error: '', loading: true });
   const [language, setLanguage] = useState('Arabic');
   const [mode, setMode] = useState('executive');
@@ -76,7 +78,8 @@ export default forwardRef(function RestoredComplianceReports({ client, companyId
   }, [client, companyId, currentRole]);
   const snapshot = useMemo(() => state.data && state.companyId === companyId ? buildComplianceSnapshot({ ...state.data, occupationCatalog }, { project, hireSalary: hireSalary === '' ? null : Number(hireSalary) }) : null, [state, companyId, occupationCatalog, project, hireSalary]);
   const tawteen = templateId === 'tawteen_localization';
-  const html = snapshot ? tawteen ? executiveReportHtml(snapshot.report, { language, mode, asOf: snapshot.asOf, scope:snapshot.scope }) : workforceHtml(snapshot) : '';
+  const board = useMemo(()=>snapshot?buildLocalizationBoard(snapshot,{companyName,language}):null,[snapshot,companyName,language]);
+  const html = snapshot ? tawteen ? mode==='executive' ? localizationBoardHtml(board) : executiveReportHtml(snapshot.report, { language, mode, asOf: snapshot.asOf, scope:snapshot.scope }) : workforceHtml(snapshot) : '';
   async function exportReport() {
     if (!snapshot || busy) return;
     // Open the print window synchronously so the browser does not block it after imports.
@@ -85,7 +88,8 @@ export default forwardRef(function RestoredComplianceReports({ client, companyId
     const name = tawteen ? 'Tawteen_Occupation_Localization_Report' : 'Saudi_Workforce_Nitaqat_Report';
     try {
       if (format === 'PowerPoint') {
-        if (tawteen) await writeTawteenPptx(`${name}.pptx`, { language, report_mode: mode, generated_date: snapshot.asOf, tawteen_localization: snapshot.report }, { loadPptxgen: () => import('pptxgenjs') });
+        if (tawteen && mode==='executive') await writeLocalizationBoardPptx(`${name}.pptx`,board);
+        else if (tawteen) await writeTawteenPptx(`${name}.pptx`, { language, report_mode: mode, generated_date: snapshot.asOf, tawteen_localization: snapshot.report }, { loadPptxgen: () => import('pptxgenjs') });
         else await workforcePptx(snapshot, `${name}.pptx`);
       } else if (format === 'Excel') {
         const XLSX = await import('xlsx'); const book = XLSX.utils.book_new();
@@ -105,19 +109,19 @@ export default forwardRef(function RestoredComplianceReports({ client, companyId
   if (state.error) return <p role="alert">تعذر تجهيز التقرير: {state.error}</p>;
   return <section className="compliance-executive" dir="rtl">
     <h2>{tawteen ? 'تقرير توطين المهن والقرارات' : 'تقرير السعودة ونطاقات'}</h2>
-    <p>{disclaimer}</p>
+    {!tawteen && <p>{disclaimer}</p>}
     <div className="ce-controls">
       {tawteen && <label>اللغة<select value={language} onChange={e => setLanguage(e.target.value)}>{['Arabic','English','Bilingual'].map(v => <option key={v}>{v}</option>)}</select></label>}
       {!tawteen && <p>التقرير بالعربية والإنجليزية / Bilingual report</p>}
-      {tawteen && <label>التفاصيل<select value={mode} onChange={e => setMode(e.target.value)}><option value="executive">تنفيذي</option><option value="detailed">تفصيلي</option></select></label>}
+      {tawteen && <label>التفاصيل<select value={mode} onChange={e => setMode(e.target.value)}><option value="executive">تقرير الإدارة التنفيذية</option><option value="detailed">ملحق التدقيق والموظفين</option></select></label>}
       <label>المشروع<select value={project} onChange={e => setProject(e.target.value)}><option value="">كل بيانات الشركة المصرح بها</option>{[...new Set(state.data.employees.map(e => e.project_name).filter(Boolean))].sort().map(v => <option key={v}>{v}</option>)}</select></label>
       {!tawteen && <label>راتب التوظيف السعودي المفترض<input type="number" min="0" value={hireSalary} onChange={e => setHireSalary(e.target.value)} /></label>}
       <label>الصيغة<select value={format} onChange={e => setFormat(e.target.value)}>{['PowerPoint','Excel','Word','PDF','HTML'].map(v => <option key={v}>{v}</option>)}</select></label>
       <button type="button" disabled={!snapshot || busy} onClick={exportReport}>{busy ? 'جارٍ التصدير…' : `تصدير ${format}`}</button>
     </div>
     {exportError && <p role="alert">{exportError}</p>}
-    <p>تاريخ التقرير: {snapshot?.asOf} · النطاق: {project || 'بيانات الشركة المصرح بها'}. المقتطف لا يثبت امتثال الكيان.</p>
+    {mode!=='executive' && <p>تاريخ التقرير: {snapshot?.asOf} · النطاق: {project || 'بيانات الشركة المصرح بها'}. المقتطف لا يثبت امتثال الكيان.</p>}
     {!tawteen && <p>{snapshot?.reviewReason}</p>}
-    {tawteen && snapshot ? <TawteenExecutiveReport report={snapshot.report} language={language} asOf={snapshot.asOf} scope={snapshot.scope} /> : <iframe title="معاينة التقرير" sandbox="" srcDoc={html} style={{ width: '100%', height: 650, border: '1px solid #cbd5e1', background: 'white' }} />}
+    {tawteen && snapshot ? mode==='executive' ? <div className="localization-board"><style>{boardStyles}</style><div dangerouslySetInnerHTML={{__html:localizationBoardBody(board)}}/></div> : <TawteenExecutiveReport report={snapshot.report} language={language} asOf={snapshot.asOf} scope={snapshot.scope} /> : <iframe title="معاينة التقرير" sandbox="" srcDoc={html} style={{ width: '100%', height: 650, border: '1px solid #cbd5e1', background: 'white' }} />}
   </section>;
 });

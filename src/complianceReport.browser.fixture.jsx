@@ -12,9 +12,12 @@ const downloads=[];HTMLAnchorElement.prototype.click=function(){downloads.push(t
 async function run(){
   for(const templateId of ['tawteen_localization','saudi_workforce']){
     root.render(<Reports client={client} companyId="A" currentRole="Admin" templateId={templateId}/>);
-    for(let i=0;i<100&&!document.querySelector(templateId==='tawteen_localization'?'.tx':'iframe');i++)await wait(50);
+    for(let i=0;i<100&&!document.querySelector(templateId==='tawteen_localization'?'.lb':'iframe');i++)await wait(50);
     await wait(200);
     if(templateId==='tawteen_localization'){
+      assert(document.querySelector('.lb'),'Board report missing');
+      assert(document.querySelector('.lb [role=img]'),'Board chart missing');
+      select('التفاصيل','detailed');await wait(100);
       assert(document.querySelector('.tx'),'Executive preview missing');
       for(const key of ['people','plan','quality','summary']){
         document.getElementById('tx-tab-'+key).click();await wait(25);
