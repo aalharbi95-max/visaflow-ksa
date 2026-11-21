@@ -1,49 +1,34 @@
 name: Supabase release
-
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Protected GitHub Environment to deploy
-        required: true
         type: choice
-        options:
-          - staging
-          - production
-      deploy_functions:
-        description: Deploy the reviewed Agent functions
+        options: [staging, production]
         required: true
-        type: boolean
-        default: true
       apply_migrations:
-        description: Apply reviewed database migrations
-        required: true
         type: boolean
-        default: true
-
+        default: false
+      deploy_functions:
+        type: boolean
+        default: false
+      scope:
+        type: string
+        default: existing
 permissions:
   contents: read
-
 concurrency:
   group: supabase-${{ inputs.environment }}
   cancel-in-progress: false
-
 jobs:
-  validate:
-    uses: ./.github/workflows/release-validation.yml
-
-  deploy:
-    needs: validate
+  guest-cv:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     environment: ${{ inputs.environment }}
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_CLI_VERSION: 2.109.1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,66 +37,22 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Validate required deployment configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$SUPABASE_ACCESS_TOKEN"
-          test -n "$SUPABASE_DB_PASSWORD"
-          test -n "$SUPABASE_PROJECT_REF"
-          test -n "$SUPABASE_URL"
-          test -n "$SUPABASE_ANON_KEY"
-          if [ "${{ inputs.environment }}" = "production" ]; then
-            test "$SUPABASE_PROJECT_REF" = "zeocbftriydodzfgixjv"
-            test "$SUPABASE_URL" = "https://zeocbftriydodzfgixjv.supabase.co"
-          fi
-      - name: Install pinned Supabase CLI
-        uses: supabase/setup-cli@v1
+      - run: npm ci
+      - run: node --test src/guestCvUpload.postgres.test.mjs
+      - name: Inspect exact backend and storage size
+        run: node scripts/guest-cv-release.mjs
+      - name: Apply only the guest CV migration
+        if: ${{ inputs.apply_migrations }}
+        run: node scripts/guest-cv-release.mjs --apply
+      - uses: supabase/setup-cli@v1
+        if: ${{ inputs.deploy_functions }}
         with:
           version: 2.109.1
-      - name: Validate repository and migrations
-        run: |
-          npm run validate:migrations
-          npm test
-          npm run test:postgres
-          npm run build
-      - name: Link exact Supabase project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
-      - name: Inspect migration status
-        run: node scripts/supabase-pooler-cli.mjs migration list
-      - name: Database migration dry-run
-        if: ${{ inputs.apply_migrations }}
-        run: node scripts/supabase-pooler-cli.mjs db push --dry-run
-      - name: Verify intentionally skipped Production migration boundary
-        if: ${{ inputs.environment == 'production' && !inputs.apply_migrations }}
-        shell: bash
-        run: |
-          node scripts/supabase-pooler-cli.mjs db push --dry-run --include-all > production-migration-dry-run.txt 2>&1
-          node scripts/validate-production-dry-run.mjs production-migration-dry-run.txt
-      - name: Apply database migrations deterministically
-        if: ${{ inputs.apply_migrations }}
-        run: node scripts/supabase-pooler-cli.mjs db push
-      - name: Verify migration history
-        run: node scripts/supabase-pooler-cli.mjs migration list
-      - name: Deploy reviewed Edge Functions
-        if: ${{ inputs.deploy_functions }}
-        run: |
-          supabase functions deploy visaflow-agent-orchestrator --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy aiagentworker --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy visaflow-ai-commander --project-ref "$SUPABASE_PROJECT_REF"
-          supabase functions deploy visaflow-email-dispatcher --project-ref "$SUPABASE_PROJECT_REF"
-      - name: Smoke-test authentication boundaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          for function_name in visaflow-agent-orchestrator aiagentworker visaflow-ai-commander visaflow-email-dispatcher; do
-            status="$(curl --silent --show-error --output /tmp/function-response.json --write-out '%{http_code}' \
-              --request POST "$SUPABASE_URL/functions/v1/$function_name" \
-              --header "apikey: $SUPABASE_ANON_KEY" \
-              --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
-              --header 'Content-Type: application/json' \
-              --data '{}')"
-            test "$status" = "401" || test "$status" = "403"
-          done
+      - name: Deploy anonymous guest upload endpoint
+        if: ${{ inputs.deploy_functions && inputs.apply_migrations }}
+        run: supabase functions deploy visaflow-guest-cv --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: guest-cv-release-report
+          path: guest-cv-release-report.json
