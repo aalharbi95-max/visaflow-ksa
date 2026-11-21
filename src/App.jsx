@@ -1,3 +1,4 @@
+import GuestCvUpload from './GuestCvUpload.jsx';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 const RestoredComplianceReports = lazy(() => import("./RestoredComplianceReports.jsx"));
 const isComplianceReport = (id) => ["tawteen_localization", "saudi_workforce"].includes(id);
@@ -6398,6 +6399,7 @@ const PUBLIC_LANDING_COPY = {
       promise: "من الطلب إلى المباشرة… رحلة توظيف واحدة، ذكية ومتكاملة.",
       company: "ابدأ تجربة شركتك",
       candidate: "سجّل كباحث عن عمل",
+      uploadCv: "ارفع سيرتك الذاتية",
       housing: "فتح برنامج السكنات",
       trust: ["صلاحيات حسب الدور", "عزل بيانات الشركات", "قرار بشري مدعوم بالذكاء الاصطناعي"],
     },
@@ -6492,6 +6494,7 @@ const PUBLIC_LANDING_COPY = {
       promise: "From request to joining—one connected, intelligent hiring journey.",
       company: "Start your company journey",
       candidate: "Register as a job seeker",
+      uploadCv: "Upload your CV",
       housing: "Open Housing",
       trust: ["Role-based access", "Company data isolation", "Human decisions supported by AI"],
     },
@@ -6633,6 +6636,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHo
           <a href="#home" onClick={handleAnchorClick}>{copy.nav.home}</a>
           <a href="#solutions" onClick={handleAnchorClick}>{copy.nav.companies}</a>
           <a href="#talent" onClick={handleAnchorClick}>{copy.nav.talent}</a>
+          <a href="#upload-cv" onClick={handleAnchorClick}>{copy.hero.uploadCv}</a>
           <button type="button" onClick={() => { handleAnchorClick(); onCvBuilder(); }}>Free CV Builder</button>
           <a href="/housing" onClick={handleAnchorClick}>{copy.nav.housing}</a>
           <a href="#interviews" onClick={handleAnchorClick}>{copy.nav.interviews}</a>
@@ -6664,6 +6668,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHo
               <div className="vf-public-button-row">
                 <a className="vf-public-primary" href={demoHref}>{copy.hero.company}</a>
                 <button type="button" className="vf-public-secondary" onClick={onTalent}>{copy.hero.candidate}</button>
+                <a className="vf-public-secondary" href="#upload-cv">{copy.hero.uploadCv}</a>
                 <button type="button" className="vf-public-secondary" onClick={onCvBuilder}>Build CV for Free</button>
                 <button type="button" className="vf-public-secondary" onClick={onHousing}>{copy.hero.housing}</button>
               </div>
@@ -6696,6 +6701,7 @@ function PublicLandingPage({ language, onLanguageChange, onLogin, onTalent, onHo
           </div>
         </section>
 
+        <GuestCvUpload language={effectiveLanguage} />
         <section className="vf-public-section vf-public-paths" id="solutions">
           <div className="vf-public-container">
             <div className="vf-public-section-heading">
@@ -35996,7 +36002,7 @@ disabled={authorizationWorkflowBusy === "create"}
                   <label><span>Minimum experience</span><input type="number" min="0" max="60" placeholder="Years" value={companyTalentFilters.minExperience} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, minExperience: event.target.value }))} /></label>
                   <label><span>Maximum experience</span><input type="number" min="0" max="60" placeholder="Years" value={companyTalentFilters.maxExperience} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, maxExperience: event.target.value }))} /></label>
                   <label><span>Availability</span><select value={companyTalentFilters.availability} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, availability: event.target.value }))}><option>All</option>{companyTalentFacets.availability.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
-                  <label><span>Profile source</span><select value={companyTalentFilters.profileSource} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, profileSource: event.target.value }))}><option>All</option><option value="Registered">Registered candidates</option><option value="Imported">Imported CVs</option></select></label>
+                  <label><span>Profile source</span><select value={companyTalentFilters.profileSource} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, profileSource: event.target.value }))}><option>All</option><option value="Registered">Registered candidates</option><option value="Guest">Guest CV uploads</option><option value="Imported">Imported CVs</option></select></label>
                   <label><span>Contact access</span><select value={companyTalentFilters.contactAccess} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, contactAccess: event.target.value }))}><option>All</option><option value="Shared">Contact shared</option><option value="Pending">Approval pending</option><option value="Private">Private</option><option value="Declined">Declined</option></select></label>
                   <label><span>Sort results</span><select value={companyTalentFilters.sort} onChange={(event) => setCompanyTalentFilters((current) => ({ ...current, sort: event.target.value }))}><option>Newest</option><option>Experience: high to low</option><option>Profile completeness</option></select></label>
                   <div className="talent-marketplace-filter-actions">

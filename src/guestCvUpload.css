@@ -1,0 +1,14 @@
+.vf-guest-cv { scroll-margin-top: 100px; background: #f5f8fc; }
+.vf-guest-form, .vf-guest-success { max-width: 850px; margin: 24px auto 0; padding: 28px; border: 1px solid #dce4ef; border-radius: 20px; background: white; }
+.vf-guest-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 20px; min-width: 0; }
+.vf-guest-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
+.vf-guest-form label { display: grid; gap: 8px; font-weight: 600; }
+.vf-guest-form input:not([type=checkbox]) { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #b8c6d8; border-radius: 10px; font: inherit; min-width: 0; }
+.vf-guest-form .vf-guest-consent { display: flex; align-items: flex-start; gap: 12px; line-height: 1.7; font-weight: 400; }
+.vf-guest-consent input { margin-top: 7px; flex-shrink: 0; }
+.vf-guest-form .vf-guest-honeypot { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+.vf-public .vf-public-trial-honeypot { left: auto !important; clip-path: inset(50%); overflow: hidden; }
+.vf-guest-error { color: #b42318; }
+.vf-guest-form button { justify-self: start; cursor: pointer; }
+.vf-guest-form fieldset:disabled { opacity: .65; }
+@media(max-width:600px) { .vf-guest-grid { grid-template-columns: 1fr; } .vf-guest-form { padding: 18px; } }

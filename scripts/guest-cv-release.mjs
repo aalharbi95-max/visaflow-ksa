@@ -21,7 +21,7 @@ const size=await query(`select pg_database_size(current_database())::text databa
 const report={project:ref,priorMigration:history.length>0,size,functions:functions.map(f=>f.proname),applied:false};
 if(process.argv.includes('--apply')&&!history.length){
   const literal=s=>`'${s.replaceAll("'","''")}'`;
-  const sql=migration.replace(/commit;\s*$/i,`insert into supabase_migrations.schema_migrations(version,name,statements) values ('${version}','guest_cv_upload',array[${literal(migration)}]);\ncommit;`);
+  const sql=migration.replace(/commit;\s*$/i,()=>`insert into supabase_migrations.schema_migrations(version,name,statements) values ('${version}','guest_cv_upload',array[${literal(migration)}]);\ncommit;`);
   await query(sql);report.applied=true;
 }
 await writeFile('guest-cv-release-report.json',JSON.stringify(report,null,2));
