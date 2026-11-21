@@ -2,60 +2,38 @@ name: Supabase release
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        type: choice
-        options: [staging, production]
-        required: true
       apply_migrations:
         type: boolean
         default: false
-      deploy_functions:
-        type: boolean
-        default: false
-      scope:
-        type: string
-        default: existing
 permissions:
   contents: read
 concurrency:
-  group: supabase-${{ inputs.environment }}
+  group: supabase-production
   cancel-in-progress: false
 jobs:
-  guest-cv:
+  owner-cv-counter:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 10
+    environment: production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: node --test src/guestCvUpload.postgres.test.mjs
-      - name: Inspect exact backend and storage size
-        run: node scripts/guest-cv-release.mjs
-      - name: Correct authorized CV experience from visual review
-        if: ${{ inputs.scope == 'correct-guest-experience' }}
-        run: node scripts/guest-cv-release.mjs --correct-cv-experience
-      - name: Apply only the guest CV migration
+      - run: node --test src/ownerGuestCvStats.postgres.test.mjs
+      - name: Inspect owner CV counter
+        run: node scripts/owner-cv-counter-release.mjs
+      - name: Apply owner CV counter migration only
         if: ${{ inputs.apply_migrations }}
-        run: node scripts/guest-cv-release.mjs --apply
-      - uses: supabase/setup-cli@v1
-        if: ${{ inputs.deploy_functions }}
-        with:
-          version: 2.109.1
-      - name: Deploy anonymous guest upload endpoint
-        if: ${{ inputs.deploy_functions && inputs.apply_migrations }}
-        run: supabase functions deploy visaflow-guest-cv --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+        run: node scripts/owner-cv-counter-release.mjs --apply
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: guest-cv-release-report
-          path: guest-cv-release-report.json
+          name: owner-cv-counter-report
+          path: owner-cv-counter-report.json

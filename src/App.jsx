@@ -1,3 +1,4 @@
+import OwnerGuestCvStats from './OwnerGuestCvStats.jsx';
 import GuestCvUpload from './GuestCvUpload.jsx';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 const RestoredComplianceReports = lazy(() => import("./RestoredComplianceReports.jsx"));
@@ -40927,6 +40928,8 @@ onClick={() => setActiveReport("activityLog")}>
           </>
         )}
 
+
+{isPlatformOwner && ["Platform Dashboard", "Talent Dashboard"].includes(activePage) && <OwnerGuestCvStats client={supabase} />}
 
 {activePage === "Talent Dashboard" && isCurrentPlatformUser && (
   <div className="page-section">
