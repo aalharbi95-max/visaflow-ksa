@@ -41,6 +41,9 @@ jobs:
       - run: node --test src/guestCvUpload.postgres.test.mjs
       - name: Inspect exact backend and storage size
         run: node scripts/guest-cv-release.mjs
+      - name: Correct authorized CV experience from visual review
+        if: ${{ inputs.scope == 'correct-guest-experience' }}
+        run: node scripts/guest-cv-release.mjs --correct-cv-experience
       - name: Apply only the guest CV migration
         if: ${{ inputs.apply_migrations }}
         run: node scripts/guest-cv-release.mjs --apply
