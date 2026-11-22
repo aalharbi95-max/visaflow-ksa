@@ -1,12 +1,17 @@
 const norm = (value) => String(value ?? "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
 
+function matchesOptionalRequirement(candidateValue, requiredValue) {
+  const requirement = norm(requiredValue);
+  return ["", "any", "-", "–", "—"].includes(requirement) || norm(candidateValue) === requirement;
+}
+
 export function candidateMatchesRequestLine(candidate, line) {
   const reasons = [];
   if (candidate?.deleted_at) reasons.push("Candidate is deleted");
   if (candidate?.request_line_id || String(candidate?.request_no || "").trim()) reasons.push("Already assigned to an active request");
   if (norm(candidate?.profession) !== norm(line?.profession)) reasons.push("Profession mismatch");
-  if (norm(candidate?.nationality) !== norm(line?.nationality)) reasons.push("Nationality mismatch");
-  if (norm(candidate?.gender) !== norm(line?.gender)) reasons.push("Gender mismatch");
+  if (!matchesOptionalRequirement(candidate?.nationality, line?.nationality)) reasons.push("Nationality mismatch");
+  if (!matchesOptionalRequirement(candidate?.gender, line?.gender)) reasons.push("Gender mismatch");
   return { matches: reasons.length === 0, reasons };
 }
 
