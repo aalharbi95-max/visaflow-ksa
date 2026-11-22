@@ -27,3 +27,10 @@ test("capacity and upload batch selection are deterministic and side-effect free
   assert.equal(buildBulkAssignmentPreview([candidate(1), candidate(2)], { ...line, quantity: 1 }, 0).capacityValid, false);
   assert.deepEqual(getBatchCandidateIds([candidate(1, { upload_batch_id: "a" }), candidate(2, { upload_batch_id: "b" }), candidate(3, { upload_batch_id: "a", deleted_at: "x" })], "a"), ["1"]);
 });
+
+test("an open nationality and unspecified gender accept an otherwise matching candidate", () => {
+  for (const gender of [null, "", "-", "–", "—", "Any"]) {
+    assert.equal(candidateMatchesRequestLine(candidate(1), { ...line, nationality: " Any ", gender }).matches, true);
+  }
+  assert.deepEqual(candidateMatchesRequestLine(candidate(1), { ...line, nationality: "Any", gender: "Female" }).reasons, ["Gender mismatch"]);
+});
